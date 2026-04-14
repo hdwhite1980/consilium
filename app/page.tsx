@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect, Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import {
   TrendingUp, TrendingDown, Minus, Clock, AlertTriangle,
   BarChart2, Globe, DollarSign, Activity, Shield, Zap
@@ -156,7 +157,7 @@ function Think({ label, color }: { label: string; color: string }) {
   )
 }
 
-export default function Home() {
+function HomeInner() {
   const [ticker, setTicker]     = useState('AAPL')
   const [tf, setTf]             = useState<TF>('1W')
   const [stage, setStage]       = useState<Stage>('idle')
@@ -167,21 +168,30 @@ export default function Home() {
   const [gpt, setGpt]           = useState<GptResult | null>(null)
   const [jud, setJud]           = useState<JudgeResult | null>(null)
   const [err, setErr]           = useState<string | null>(null)
+  const [cached, setCached]     = useState<{ at: string; ageMinutes: number } | null>(null)
 
+  const router = useRouter()
+  const searchParams = useSearchParams()
   const debateRef = useRef<HTMLDivElement>(null)
   const abortRef  = useRef<AbortController | null>(null)
   const scroll    = useCallback(() => setTimeout(() => debateRef.current?.scrollTo({ top: 99999, behavior: 'smooth' }), 80), [])
 
+  // Auto-populate ticker from URL param (e.g. from news page)
+  useEffect(() => {
+    const t = searchParams.get('ticker')
+    if (t) setTicker(t.toUpperCase())
+  }, [searchParams])
+
   const run = useCallback(async () => {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
-    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setJud(null); setErr(null)
+    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setJud(null); setErr(null); setCached(null)
 
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticker: ticker.toUpperCase(), timeframe: tf }),
+        body: JSON.stringify({ ticker: ticker.toUpperCase(), timeframe: tf, forceRefresh: false }),
         signal: abortRef.current.signal,
       })
 
@@ -189,6 +199,51 @@ export default function Home() {
       const dec = new TextDecoder()
       let buf = ''
 
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += dec.decode(value, { stream: true })
+        const parts = buf.split('\n\n'); buf = parts.pop() || ''
+        for (const part of parts) {
+          const ev   = part.split('\n').find(l => l.startsWith('event:'))?.replace('event:', '').trim()
+          const data = (() => { try { return JSON.parse(part.split('\n').find(l => l.startsWith('data:'))?.replace('data:', '').trim() || '{}') } catch { return {} } })()
+          switch (ev) {
+            case 'status':       setStatus(data.message); break
+            case 'market_data':  setMd(data); break
+            case 'gemini_start': setStage('gemini'); scroll(); break
+            case 'gemini_done':  setGem(data); scroll(); break
+            case 'claude_start': setStage('claude'); scroll(); break
+            case 'claude_done':  setCla(data); scroll(); break
+            case 'gpt_start':    setStage('gpt'); scroll(); break
+            case 'gpt_done':     setGpt(data); scroll(); break
+            case 'judge_start':  setStage('judge'); scroll(); break
+            case 'judge_done':   setJud(data); scroll(); break
+            case 'complete':     setStage('done'); if (data.cached) setCached({ at: data.cachedAt, ageMinutes: data.ageMinutes }); scroll(); break
+            case 'error':        setStage('error'); setErr(data.message); break
+          }
+        }
+      }
+    } catch (e: unknown) {
+      if ((e as Error).name !== 'AbortError') { setStage('error'); setErr((e as Error).message) }
+    }
+  }, [ticker, tf, scroll])
+
+  const running = !['idle', 'done', 'error'].includes(stage)
+
+  const forceRun = useCallback(async () => {
+    abortRef.current?.abort()
+    abortRef.current = new AbortController()
+    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setJud(null); setErr(null); setCached(null)
+    try {
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker: ticker.toUpperCase(), timeframe: tf, forceRefresh: true }),
+        signal: abortRef.current.signal,
+      })
+      const reader = res.body!.getReader()
+      const dec = new TextDecoder()
+      let buf = ''
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
@@ -217,8 +272,6 @@ export default function Home() {
       if ((e as Error).name !== 'AbortError') { setStage('error'); setErr((e as Error).message) }
     }
   }, [ticker, tf, scroll])
-
-  const running = !['idle', 'done', 'error'].includes(stage)
   const finalSig = jud?.signal ?? cla?.signal ?? md?.conviction.direction
 
   return (
@@ -260,7 +313,28 @@ export default function Home() {
           {running ? 'Analyzing…' : 'Analyze'}
         </button>
 
+        <button onClick={() => router.push('/news')}
+          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-sm font-semibold transition-all hover:opacity-80"
+          style={{ background: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)' }}>
+          <Zap size={13} />
+          Today&apos;s Movers
+        </button>
+
         {running && <span className="text-xs font-mono text-white/25 truncate flex-1">{statusMsg}</span>}
+        {cached && !running && (
+          <div className="flex items-center gap-2 ml-2">
+            <span className="flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 rounded-full"
+              style={{ background: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)' }}>
+              <span>⏱</span>
+              Cached · {cached.ageMinutes}m ago
+            </span>
+            <button onClick={forceRun} disabled={running}
+              className="text-[10px] font-mono px-2.5 py-1 rounded-full transition-all hover:opacity-80"
+              style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.1)' }}>
+              ↻ Refresh
+            </button>
+          </div>
+        )}
 
         <div className="flex items-center gap-2 ml-auto shrink-0">
           {finalSig && <SBadge s={finalSig} />}
@@ -453,6 +527,23 @@ export default function Home() {
         <main className="flex-1 flex flex-col overflow-hidden">
 
           <div ref={debateRef} className="flex-1 overflow-y-auto p-5 space-y-4">
+
+            {cached && stage === 'done' && (
+              <div className="flex items-center justify-between px-4 py-2.5 rounded-xl mb-1"
+                style={{ background: 'rgba(251,191,36,0.07)', border: '1px solid rgba(251,191,36,0.18)' }}>
+                <div className="flex items-center gap-2">
+                  <span style={{ color: '#fbbf24' }}>⏱</span>
+                  <span className="text-xs text-white/60">
+                    Showing cached analysis from <strong style={{ color: '#fbbf24' }}>{cached.ageMinutes} minute{cached.ageMinutes === 1 ? '' : 's'} ago</strong> — no AI credits used
+                  </span>
+                </div>
+                <button onClick={forceRun}
+                  className="text-[10px] font-mono px-3 py-1 rounded-full transition-all hover:opacity-80 shrink-0"
+                  style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.3)' }}>
+                  ↻ Run fresh analysis
+                </button>
+              </div>
+            )}
 
             {stage === 'idle' && (
               <div className="flex flex-col items-center justify-center h-full gap-4 text-center">
@@ -735,5 +826,13 @@ export default function Home() {
         </main>
       </div>
     </div>
+  )
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={<div style={{ background: '#0a0d12', minHeight: '100vh' }} />}>
+      <HomeInner />
+    </Suspense>
   )
 }
