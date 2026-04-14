@@ -125,29 +125,30 @@ export async function fetchOptionsFlow(ticker: string, currentPrice: number): Pr
   const unusualActivity: UnusualOption[] = []
 
   if (chain?.options?.length) {
-    const calls = chain.options.filter((o: Record<string, string>) => o.option_type === 'call')
-    const puts  = chain.options.filter((o: Record<string, string>) => o.option_type === 'put')
+    type OptionContract = Record<string, unknown> & { greeks?: Record<string, unknown> }
+    const calls = chain.options.filter((o: OptionContract) => o.option_type === 'call')
+    const puts  = chain.options.filter((o: OptionContract) => o.option_type === 'put')
 
-    totalCallOI  = calls.reduce((s: number, o: Record<string, string>) => s + (Number(o.open_interest) || 0), 0)
-    totalPutOI   = puts.reduce((s: number, o: Record<string, string>) => s + (Number(o.open_interest) || 0), 0)
-    totalCallVol = calls.reduce((s: number, o: Record<string, string>) => s + (Number(o.volume) || 0), 0)
-    totalPutVol  = puts.reduce((s: number, o: Record<string, string>) => s + (Number(o.volume) || 0), 0)
+    totalCallOI  = calls.reduce((s: number, o: OptionContract) => s + (Number(o.open_interest) || 0), 0)
+    totalPutOI   = puts.reduce((s: number, o: OptionContract) => s + (Number(o.open_interest) || 0), 0)
+    totalCallVol = calls.reduce((s: number, o: OptionContract) => s + (Number(o.volume) || 0), 0)
+    totalPutVol  = puts.reduce((s: number, o: OptionContract) => s + (Number(o.volume) || 0), 0)
 
     putCallRatio = totalCallVol > 0 ? totalPutVol / totalCallVol : null
 
-    const callIVs = calls.map((o: Record<string, string>) => Number(o.greeks?.mid_iv) || 0).filter(Boolean)
-    const putIVs  = puts.map((o: Record<string, string>) => Number(o.greeks?.mid_iv) || 0).filter(Boolean)
+    const callIVs = calls.map((o: OptionContract) => Number(o.greeks?.mid_iv) || 0).filter(Boolean)
+    const putIVs  = puts.map((o: OptionContract) => Number(o.greeks?.mid_iv) || 0).filter(Boolean)
     avgIVCall = callIVs.length ? callIVs.reduce((a, b) => a + b, 0) / callIVs.length : null
     avgIVPut  = putIVs.length ? putIVs.reduce((a, b) => a + b, 0) / putIVs.length : null
 
     // Unusual sweeps: volume > 3x open interest is a flag
-    for (const opt of chain.options) {
+    for (const opt of chain.options as OptionContract[]) {
       const vol = Number(opt.volume) || 0
       const oi  = Number(opt.open_interest) || 1
       const ratio = vol / oi
       if (ratio > 3 && vol > 500) {
         unusualActivity.push({
-          type: opt.option_type,
+          type: String(opt.option_type),
           strike: Number(opt.strike),
           expiry: chain.expiry,
           volume: vol,
@@ -162,15 +163,15 @@ export async function fetchOptionsFlow(ticker: string, currentPrice: number): Pr
     unusualActivity.splice(5) // keep top 5
 
     // Max pain: strike where total options value is minimized
-    const strikes = [...new Set(chain.options.map((o: Record<string, string>) => Number(o.strike)))].sort((a: number, b: number) => a - b)
+    const strikes = [...new Set((chain.options as OptionContract[]).map((o) => Number(o.strike)))].sort((a: number, b: number) => a - b)
     let minPain = Infinity
     for (const strike of strikes) {
       const callPain = calls
-        .filter((o: Record<string, string>) => Number(o.strike) < strike)
-        .reduce((s: number, o: Record<string, string>) => s + (strike - Number(o.strike)) * (Number(o.open_interest) || 0), 0)
+        .filter((o: OptionContract) => Number(o.strike) < strike)
+        .reduce((s: number, o: OptionContract) => s + (strike - Number(o.strike)) * (Number(o.open_interest) || 0), 0)
       const putPain = puts
-        .filter((o: Record<string, string>) => Number(o.strike) > strike)
-        .reduce((s: number, o: Record<string, string>) => s + (Number(o.strike) - strike) * (Number(o.open_interest) || 0), 0)
+        .filter((o: OptionContract) => Number(o.strike) > strike)
+        .reduce((s: number, o: OptionContract) => s + (Number(o.strike) - strike) * (Number(o.open_interest) || 0), 0)
       const total = callPain + putPain
       if (total < minPain) { minPain = total; maxPainStrike = strike }
     }
