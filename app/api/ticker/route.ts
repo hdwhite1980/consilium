@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { fetchQuote, fetchBars } from '@/app/lib/alpaca'
+import { fetchQuote, fetchBars } from '@/app/lib/data/alpaca'
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
