@@ -22,9 +22,17 @@ interface MarketData {
   currentPrice: number
   technicals: {
     rsi: number; technicalBias: Signal; technicalScore: number
-    sma50: number; sma200: number; support: number; resistance: number
-    goldenCross: boolean; macdHistogram: number; bbSignal: string
-    bbPosition: number; volumeRatio: number; priceChange1D: number
+    sma50: number; sma200: number; ema9: number; ema20: number
+    support: number; support2: number; resistance: number; resistance2: number
+    goldenCross: boolean; ema9CrossEma20: string
+    macdLine: number; macdSignal: number; macdHistogram: number; macdCrossover: string
+    bbSignal: string; bbPosition: number; bbUpper: number; bbMiddle: number; bbLower: number
+    stochK: number; stochD: number; stochSignal: string; stochCrossover: string
+    vwap: number; priceVsVwap: number; vwapSignal: string
+    obv: number; obvTrend: string; obvDivergence: string
+    volumeRatio: number; priceChange1D: number
+    fibLevels: Array<{ level: number; price: number; label: string; type: string }>
+    nearestFibLevel: { level: number; price: number; label: string; type: string } | null
   }
   conviction: {
     direction: Signal; conviction: string; convergenceScore: number
@@ -593,13 +601,12 @@ function HomeInner() {
             )}
 
             {/* Gemini */}
-            {stage === 'gemini' && !gem && <Think label="Gemini" color="#60a5fa" />}
+            {stage === 'gemini' && !gem && <Think label="News Scout" color="#60a5fa" />}
             {gem && (
               <div className="animate-slide-up rounded-xl p-4 border" style={{ background: 'rgba(96,165,250,0.04)', borderColor: 'rgba(96,165,250,0.16)' }}>
                 <div className="flex items-center gap-2 mb-3">
-                  <div className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold" style={{ background: 'rgba(96,165,250,0.18)', color: '#60a5fa' }}>G</div>
-                  <span className="text-xs font-semibold" style={{ color: '#60a5fa' }}>Gemini</span>
-                  <Chip label="News Scout" color="#60a5fa" />
+                  <div className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold" style={{ background: 'rgba(96,165,250,0.18)', color: '#60a5fa' }}>N</div>
+                  <span className="text-xs font-semibold" style={{ color: '#60a5fa' }}>News Scout</span>
                   <span className="ml-auto text-[10px] font-mono text-white/20">Stage 1</span>
                 </div>
                 <p className="text-sm text-white/70 leading-relaxed mb-3">{gem.summary}</p>
@@ -621,13 +628,12 @@ function HomeInner() {
             )}
 
             {/* Claude */}
-            {stage === 'claude' && !cla && <Think label="Claude" color="#a78bfa" />}
+            {stage === 'claude' && !cla && <Think label="Lead Analyst" color="#a78bfa" />}
             {cla && (
               <div className="animate-slide-up rounded-xl p-4 border" style={{ background: 'rgba(167,139,250,0.04)', borderColor: 'rgba(167,139,250,0.16)' }}>
                 <div className="flex items-center gap-2 mb-3">
-                  <div className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold" style={{ background: 'rgba(167,139,250,0.18)', color: '#a78bfa' }}>C</div>
-                  <span className="text-xs font-semibold" style={{ color: '#a78bfa' }}>Claude</span>
-                  <Chip label="Lead Analyst" color="#a78bfa" />
+                  <div className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold" style={{ background: 'rgba(167,139,250,0.18)', color: '#a78bfa' }}>L</div>
+                  <span className="text-xs font-semibold" style={{ color: '#a78bfa' }}>Lead Analyst</span>
                   <SBadge s={cla.signal} sm />
                   <span className="ml-auto text-[10px] font-mono text-white/20">Stage 2</span>
                 </div>
@@ -646,13 +652,12 @@ function HomeInner() {
             )}
 
             {/* GPT */}
-            {stage === 'gpt' && !gpt && <Think label="GPT-4o" color="#34d399" />}
+            {stage === 'gpt' && !gpt && <Think label="Devil's Advocate" color="#34d399" />}
             {gpt && (
               <div className="animate-slide-up rounded-xl p-4 border" style={{ background: 'rgba(52,211,153,0.04)', borderColor: 'rgba(52,211,153,0.16)' }}>
                 <div className="flex items-center gap-2 mb-3">
-                  <div className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold" style={{ background: 'rgba(52,211,153,0.18)', color: '#34d399' }}>G</div>
-                  <span className="text-xs font-semibold" style={{ color: '#34d399' }}>GPT-4o</span>
-                  <Chip label="Devil's Advocate" color="#34d399" />
+                  <div className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold" style={{ background: 'rgba(52,211,153,0.18)', color: '#34d399' }}>D</div>
+                  <span className="text-xs font-semibold" style={{ color: '#34d399' }}>Devil's Advocate</span>
                   <SBadge s={gpt.signal} sm />
                   <span className="text-[10px] font-mono ml-1" style={{ color: gpt.agrees ? '#34d399' : '#fbbf24' }}>
                     {gpt.agrees ? '✓ agrees' : '⚡ challenges'}
@@ -677,7 +682,7 @@ function HomeInner() {
             )}
 
             {/* Judge */}
-            {stage === 'judge' && !jud && <Think label="Judge" color="#fbbf24" />}
+            {stage === 'judge' && !jud && <Think label="Council" color="#fbbf24" />}
             {jud && (
               <div className="animate-slide-up rounded-xl p-5 border-2 space-y-4"
                 style={{ background: 'rgba(251,191,36,0.03)', borderColor: 'rgba(251,191,36,0.28)' }}>
@@ -818,21 +823,44 @@ function HomeInner() {
             {stage === 'done' && md && (
               <TechnicalCharts
                 ticker={ticker}
-                technicals={{
-                  rsi: md!.technicals?.rsi ?? 50,
-                  technicalBias: md!.technicals?.technicalBias ?? 'NEUTRAL',
-                  technicalScore: md!.technicals?.technicalScore ?? 0,
-                  sma50: md!.technicals?.sma50 ?? 0,
-                  sma200: md!.technicals?.sma200 ?? 0,
-                  goldenCross: md!.technicals?.goldenCross ?? false,
-                  macdHistogram: md!.technicals?.macdHistogram ?? 0,
-                  bbPosition: md!.technicals?.bbPosition ?? 0.5,
-                  bbSignal: md!.technicals?.bbSignal ?? 'normal',
-                  volumeRatio: md!.technicals?.volumeRatio ?? 1,
-                  support: md!.technicals?.support ?? 0,
-                  resistance: md!.technicals?.resistance ?? 0,
+                technicals={md!.technicals ? {
+                  rsi: md!.technicals.rsi,
+                  technicalBias: md!.technicals.technicalBias,
+                  technicalScore: md!.technicals.technicalScore,
+                  sma50: md!.technicals.sma50,
+                  sma200: md!.technicals.sma200,
+                  ema9: md!.technicals.ema9 ?? 0,
+                  ema20: md!.technicals.ema20 ?? 0,
+                  support: md!.technicals.support,
+                  support2: md!.technicals.support2 ?? md!.technicals.support,
+                  resistance: md!.technicals.resistance,
+                  resistance2: md!.technicals.resistance2 ?? md!.technicals.resistance,
+                  goldenCross: md!.technicals.goldenCross,
+                  ema9CrossEma20: md!.technicals.ema9CrossEma20 ?? 'none',
+                  macdLine: md!.technicals.macdLine ?? 0,
+                  macdSignal: md!.technicals.macdSignal ?? 0,
+                  macdHistogram: md!.technicals.macdHistogram,
+                  macdCrossover: md!.technicals.macdCrossover ?? 'none',
+                  bbPosition: md!.technicals.bbPosition,
+                  bbSignal: md!.technicals.bbSignal,
+                  bbUpper: md!.technicals.bbUpper ?? 0,
+                  bbMiddle: md!.technicals.bbMiddle ?? 0,
+                  bbLower: md!.technicals.bbLower ?? 0,
+                  stochK: md!.technicals.stochK ?? 50,
+                  stochD: md!.technicals.stochD ?? 50,
+                  stochSignal: md!.technicals.stochSignal ?? 'neutral',
+                  stochCrossover: md!.technicals.stochCrossover ?? 'none',
+                  vwap: md!.technicals.vwap ?? 0,
+                  priceVsVwap: md!.technicals.priceVsVwap ?? 0,
+                  vwapSignal: md!.technicals.vwapSignal ?? 'above',
+                  obv: md!.technicals.obv ?? 0,
+                  obvTrend: md!.technicals.obvTrend ?? 'flat',
+                  obvDivergence: md!.technicals.obvDivergence ?? 'none',
+                  volumeRatio: md!.technicals.volumeRatio,
                   currentPrice: md!.currentPrice ?? 0,
-                }}
+                  fibLevels: md!.technicals.fibLevels ?? [],
+                  nearestFibLevel: md!.technicals.nearestFibLevel ?? null,
+                } : null}
               />
             )}
 
