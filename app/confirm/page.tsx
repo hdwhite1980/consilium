@@ -12,37 +12,56 @@ function ConfirmInner() {
 
   useEffect(() => {
     const token_hash = searchParams.get('token_hash')
-    const type = searchParams.get('type')
-    const next = searchParams.get('next') ?? '/'
+    const type       = searchParams.get('type')
+    const code       = searchParams.get('code')
+    const next       = searchParams.get('next') ?? '/'
 
-    if (!token_hash || !type) {
-      // Might be a hash-based callback (older Supabase flow)
-      const hash = window.location.hash
-      if (hash.includes('access_token')) {
-        setStatus('success')
-        setTimeout(() => router.push('/'), 1500)
-        return
-      }
-      setStatus('error')
-      setMessage('Invalid confirmation link. Please request a new one.')
+    const supabase = createClient()
+
+    // Flow 1: PKCE code exchange (newer Supabase default)
+    if (code) {
+      supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
+        if (error) {
+          setStatus('error')
+          setMessage('This confirmation link has expired or already been used. Please sign up again.')
+        } else {
+          setStatus('success')
+          setTimeout(() => router.push(next), 1500)
+        }
+      })
       return
     }
 
-    const verify = async () => {
-      const supabase = createClient()
-      const { error } = await supabase.auth.verifyOtp({ token_hash, type: type as 'signup' | 'recovery' | 'email' })
-      if (error) {
-        setStatus('error')
-        setMessage(error.message.includes('expired')
-          ? 'This confirmation link has expired. Please sign up again or request a new link.'
-          : 'Confirmation failed. The link may have already been used.')
-      } else {
-        setStatus('success')
-        setTimeout(() => router.push(next), 1500)
-      }
+    // Flow 2: token_hash OTP (email templates using ConfirmationURL)
+    if (token_hash && type) {
+      supabase.auth.verifyOtp({
+        token_hash,
+        type: type as 'signup' | 'recovery' | 'email' | 'magiclink'
+      }).then(({ error }) => {
+        if (error) {
+          setStatus('error')
+          setMessage(error.message.includes('expired')
+            ? 'This confirmation link has expired. Please sign up again.'
+            : 'This link has already been used. Try signing in, or sign up again.')
+        } else {
+          setStatus('success')
+          setTimeout(() => router.push(next), 1500)
+        }
+      })
+      return
     }
 
-    verify()
+    // Flow 3: Hash fragment (legacy)
+    const hash = window.location.hash
+    if (hash.includes('access_token')) {
+      setStatus('success')
+      setTimeout(() => router.push('/'), 1500)
+      return
+    }
+
+    // Nothing matched
+    setStatus('error')
+    setMessage('Invalid confirmation link. Please sign up again or contact support.')
   }, [searchParams, router])
 
   return (
