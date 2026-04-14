@@ -105,8 +105,9 @@ export async function syncSubscription(stripeSubId: string) {
   const stripe = getStripe()
   const admin = getAdmin()
 
-  const sub = await stripe.subscriptions.retrieve(stripeSubId)
-  const customerId = sub.customer as string
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sub = await stripe.subscriptions.retrieve(stripeSubId) as any
+  const customerId = (sub.customer?.id ?? sub.customer) as string
 
   // Find user by customer ID
   const { data: subRow } = await admin
@@ -117,12 +118,17 @@ export async function syncSubscription(stripeSubId: string) {
 
   if (!subRow) return
 
+  const periodEnd = sub.current_period_end ?? sub.billing_cycle_anchor
+  const trialEnd = sub.trial_end ?? null
+
   await admin.from('subscriptions').update({
     stripe_sub_id: sub.id,
     status: sub.status,
-    current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
-    trial_ends_at: sub.trial_end
-      ? new Date(sub.trial_end * 1000).toISOString()
+    current_period_end: periodEnd
+      ? new Date(periodEnd * 1000).toISOString()
+      : null,
+    trial_ends_at: trialEnd
+      ? new Date(trialEnd * 1000).toISOString()
       : null,
     updated_at: new Date().toISOString(),
   }).eq('user_id', subRow.user_id)
