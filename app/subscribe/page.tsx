@@ -44,11 +44,17 @@ function SubscribeInner() {
       }
 
       const res = await fetch('/api/stripe/checkout', { method: 'POST' })
-      const data = await res.json()
+      const text = await res.text()
+      let data: { url?: string; error?: string } = {}
+      try { data = JSON.parse(text) } catch { 
+        setError(`Server error (${res.status}): ${text.slice(0, 200)}`)
+        setLoading(false)
+        return
+      }
       if (data.url) {
         window.location.href = data.url
       } else {
-        setError(data.error || 'Something went wrong')
+        setError(data.error || `Checkout failed (${res.status})`)
         setLoading(false)
       }
     } catch {
@@ -60,6 +66,13 @@ function SubscribeInner() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-4 py-12"
       style={{ background: '#0a0d12' }}>
+
+      {/* Back button */}
+      <a href="/login"
+        className="flex items-center gap-1.5 text-xs text-white/30 hover:text-white/60 transition-colors mb-8"
+        style={{ alignSelf: 'flex-start' }}>
+        ← Back to sign in
+      </a>
 
       {/* Logo */}
       <div className="flex items-center gap-3 mb-10">
