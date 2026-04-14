@@ -255,7 +255,7 @@ export default function OptionsRecommendations({
 
           {!data.hasLiveData && (
             <div className="text-[10px] text-white/25 px-1 leading-relaxed">
-              Live options chain data unavailable. Add <span className="font-mono text-white/40">TRADIER_API_KEY</span> to Railway for real-time contract data with Greeks.
+              Live options chain data is currently unavailable for this ticker. The AI strategy recommendation above is still valid.
             </div>
           )}
 
