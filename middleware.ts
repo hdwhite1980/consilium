@@ -30,35 +30,36 @@ export async function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl
 
-  // Always allow these paths
-  const publicPaths = ['/login', '/auth/callback', '/subscribe', '/disclaimer']
-  if (publicPaths.some(p => pathname.startsWith(p))) {
+  // ── Always public — no auth needed ───────────────────────────
+  const alwaysPublic = ['/login', '/auth/callback', '/subscribe']
+  if (alwaysPublic.some(p => pathname.startsWith(p))) {
+    // Logged-in users on /login → send them home (only if they have access)
     if (user && pathname === '/login') {
       return NextResponse.redirect(new URL('/', request.url))
     }
     return supabaseResponse
   }
 
-  // Allow API routes — they handle their own auth
+  // ── API routes handle their own auth ─────────────────────────
   if (pathname.startsWith('/api/')) {
     return supabaseResponse
   }
 
-  // Not logged in
+  // ── Not logged in → /login ────────────────────────────────────
   if (!user || !session) {
     const loginUrl = new URL('/login', request.url)
     loginUrl.searchParams.set('redirect', pathname)
     return NextResponse.redirect(loginUrl)
   }
 
-  // Single session check
+  const admin = createAdmin(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  )
+
+  // ── Single session check ──────────────────────────────────────
   const sessionToken = session.access_token?.slice(-32) ?? null
   if (sessionToken) {
-    const admin = createAdmin(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    )
-
     const { data: activeSession } = await admin
       .from('active_sessions')
       .select('session_token')
@@ -74,23 +75,23 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  // Check disclaimer acceptance
-  const admin = createAdmin(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  )
+  // ── Disclaimer ────────────────────────────────────────────────
+  if (pathname !== '/disclaimer') {
+    const { data: disclaimer } = await admin
+      .from('disclaimer_accepted')
+      .select('user_id')
+      .eq('user_id', user.id)
+      .single()
 
-  const { data: disclaimer } = await admin
-    .from('disclaimer_accepted')
-    .select('user_id')
-    .eq('user_id', user.id)
-    .single()
-
-  if (!disclaimer && pathname !== '/disclaimer') {
-    return NextResponse.redirect(new URL('/disclaimer', request.url))
+    if (!disclaimer) {
+      return NextResponse.redirect(new URL('/disclaimer', request.url))
+    }
   }
 
-  // Check subscription / trial access
+  // ── Subscription / trial check ────────────────────────────────
+  // Skip for disclaimer page
+  if (pathname === '/disclaimer') return supabaseResponse
+
   const { data: sub } = await admin
     .from('subscriptions')
     .select('status, trial_ends_at, current_period_end, is_exempt')
@@ -98,11 +99,10 @@ export async function middleware(request: NextRequest) {
     .single()
 
   const now = new Date()
-
   let hasAccess = false
 
   if (!sub) {
-    // First time — create trial and allow through
+    // First login — create 7-day trial
     const trialEndsAt = new Date()
     trialEndsAt.setDate(trialEndsAt.getDate() + 7)
     await admin.from('subscriptions').insert({
@@ -113,16 +113,16 @@ export async function middleware(request: NextRequest) {
     })
     hasAccess = true
   } else if (sub.is_exempt) {
-    hasAccess = true // exempt users always have access
+    hasAccess = true
   } else if (sub.status === 'trialing') {
     hasAccess = sub.trial_ends_at ? new Date(sub.trial_ends_at) > now : false
   } else if (sub.status === 'active') {
     hasAccess = true
   } else if (sub.status === 'past_due') {
-    hasAccess = true // grace period — Stripe will retry
+    hasAccess = true // grace period
   }
 
-  if (!hasAccess && pathname !== '/subscribe') {
+  if (!hasAccess) {
     return NextResponse.redirect(new URL('/subscribe', request.url))
   }
 
