@@ -86,8 +86,13 @@ function parseJSON<T>(text: string): T {
 }
 
 export async function runGemini(bundle: SignalBundle): Promise<GeminiResult> {
-  const model = getGenAI().getGenerativeModel({ model: 'gemini-2.5-flash' })
-  const result = await model.generateContent(`You are the News Scout and Macro Analyst for an elite AI stock council.
+  // Try primary model, fall back if unavailable
+  const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
+  let lastError: Error | null = null
+  for (const modelName of GEMINI_MODELS) {
+    try {
+      const model = getGenAI().getGenerativeModel({ model: modelName })
+      const result = await model.generateContent(`You are the News Scout and Macro Analyst for an elite AI stock council.
 
 Analyze all news, macro, and market context for ${bundle.ticker}. You go first. Be specific.
 
@@ -97,7 +102,15 @@ ${bundle.aiContext.marketSection}
 
 Respond JSON ONLY (no fences):
 {"summary":"3 sentence overview","headlines":["top 4-5 headlines"],"sentiment":"positive|negative|neutral|mixed","confidence":<0-100>,"keyEvents":["2-4 near-term catalysts"],"macroFactors":["2-3 macro conditions"],"regimeAssessment":"1 sentence on regime impact"}`)
-  return parseJSON<GeminiResult>(result.response.text())
+      return parseJSON<GeminiResult>(result.response.text())
+    } catch (e) {
+      lastError = e as Error
+      const msg = (e as Error).message ?? ''
+      if (!msg.includes('503') && !msg.includes('overload') && !msg.includes('high demand')) throw e
+      console.warn(`Gemini ${modelName} unavailable, trying next...`)
+    }
+  }
+  throw lastError ?? new Error('All Gemini models unavailable')
 }
 
 export async function runClaude(bundle: SignalBundle, gemini: GeminiResult): Promise<ClaudeResult> {
