@@ -31,7 +31,7 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   // ── Always public — no auth needed, no redirects ────────────
-  const alwaysPublic = ['/login', '/auth/callback', '/subscribe']
+  const alwaysPublic = ['/login', '/auth/callback', '/subscribe', '/signup', '/confirm']
   if (alwaysPublic.some(p => pathname.startsWith(p))) {
     return supabaseResponse
   }

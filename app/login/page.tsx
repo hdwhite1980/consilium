@@ -50,17 +50,7 @@ function LoginPageInner() {
       }
 
       if (mode === 'signup') {
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: { emailRedirectTo: `${window.location.origin}/auth/callback` }
-        })
-        if (error) throw error
-        setError(null)
-        // Show confirmation message
-        setMode('login')
-        setError('Check your email to confirm your account, then log in.')
-        setLoading(false)
+        router.push('/signup')
         return
       }
 
@@ -239,9 +229,9 @@ function LoginPageInner() {
               {mode === 'login' ? (
                 <p className="text-xs text-white/30">
                   Don&apos;t have an account?{' '}
-                  <button type="button" onClick={() => { setMode('signup'); setError(null) }}
+                  <button type="button" onClick={() => router.push('/signup')}
                     className="text-white/60 hover:text-white transition-colors underline">
-                    Sign up
+                    Sign up free
                   </button>
                 </p>
               ) : (
