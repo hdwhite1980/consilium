@@ -34,7 +34,8 @@ function SignupInner() {
       email,
       password,
       options: {
-        emailRedirectTo: `${window.location.origin}/confirm`,
+        // Use token_hash flow — works across browsers and email clients
+        emailRedirectTo: `${process.env.NEXT_PUBLIC_APP_URL || window.location.origin}/auth/callback`,
       }
     })
 

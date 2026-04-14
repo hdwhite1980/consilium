@@ -17,19 +17,27 @@ function ConfirmInner() {
     const next       = searchParams.get('next') ?? '/'
     const error_code = searchParams.get('error_code')
     const error_desc = searchParams.get('error_description')
+    const verified   = searchParams.get('verified')
 
-    // Show any Supabase error params directly
-    if (error_code || error_desc) {
-      setStatus('error')
-      setMessage(error_desc?.replace(/\+/g, ' ') ?? 'Confirmation failed.')
+    // Already verified by auth/callback — just show success
+    if (verified === 'true') {
+      setStatus('success')
+      setTimeout(() => router.push(next), 1500)
       return
     }
 
-    console.log('Confirm params:', { token_hash: !!token_hash, type, code: !!code, url: window.location.href })
+    // Supabase error passed through from callback
+    if (error_code || error_desc) {
+      setStatus('error')
+      setMessage(error_desc
+        ? decodeURIComponent(error_desc.replace(/\+/g, ' '))
+        : 'Confirmation failed. Please try again.')
+      return
+    }
 
     const supabase = createClient()
 
-    // Flow 1: PKCE code exchange (newer Supabase default)
+    // Flow 1: PKCE code exchange (fallback if code lands here directly)
     if (code) {
       supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
         if (error) {
@@ -43,22 +51,50 @@ function ConfirmInner() {
       return
     }
 
-    // Flow 2: token_hash OTP (email templates using ConfirmationURL)
+    // Flow 2: token_hash — handle both PKCE (pkce_ prefix) and OTP tokens
     if (token_hash && type) {
-      supabase.auth.verifyOtp({
-        token_hash,
-        type: type as 'signup' | 'recovery' | 'email' | 'magiclink'
-      }).then(({ error }) => {
-        if (error) {
-          setStatus('error')
-          setMessage(error.message.includes('expired')
-            ? 'This confirmation link has expired. Please sign up again.'
-            : 'This link has already been used. Try signing in, or sign up again.')
-        } else {
-          setStatus('success')
-          setTimeout(() => router.push(next), 1500)
-        }
-      })
+      const isPKCE = token_hash.startsWith('pkce_')
+
+      if (isPKCE) {
+        // PKCE token — exchange using exchangeCodeForSession
+        supabase.auth.exchangeCodeForSession(token_hash).then(({ error }) => {
+          if (error) {
+            console.error('PKCE exchange error:', error.message)
+            // Try verifyOtp as fallback
+            supabase.auth.verifyOtp({
+              token_hash,
+              type: type as 'signup' | 'recovery' | 'email' | 'magiclink'
+            }).then(({ error: otpError }) => {
+              if (otpError) {
+                setStatus('error')
+                setMessage('This confirmation link has expired or already been used. Please sign up again.')
+              } else {
+                setStatus('success')
+                setTimeout(() => router.push(next), 1500)
+              }
+            })
+          } else {
+            setStatus('success')
+            setTimeout(() => router.push(next), 1500)
+          }
+        })
+      } else {
+        // Regular OTP token
+        supabase.auth.verifyOtp({
+          token_hash,
+          type: type as 'signup' | 'recovery' | 'email' | 'magiclink'
+        }).then(({ error }) => {
+          if (error) {
+            setStatus('error')
+            setMessage(error.message.includes('expired')
+              ? 'This confirmation link has expired. Please sign up again.'
+              : 'This link has already been used. Try signing in, or sign up again.')
+          } else {
+            setStatus('success')
+            setTimeout(() => router.push(next), 1500)
+          }
+        })
+      }
       return
     }
 
