@@ -211,7 +211,7 @@ export async function GET(req: NextRequest) {
             { onConflict: 'cache_date' }
           )
 
-        send('complete', { ...result, cached: false, ageMinutes: 0 })
+        send('complete', { ...(result as Record<string, unknown>), cached: false, ageMinutes: 0 })
 
       } catch (err) {
         console.error('News error:', err)
