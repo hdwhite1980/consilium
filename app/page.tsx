@@ -7,7 +7,7 @@ import TechnicalCharts from '@/app/components/TechnicalCharts'
 import OptionsRecommendations from '@/app/components/OptionsRecommendations'
 import {
   TrendingUp, TrendingDown, Minus, Clock, AlertTriangle,
-  BarChart2, Globe, DollarSign, Activity, Shield, Zap, LogOut
+  BarChart2, Globe, DollarSign, Activity, Shield, Zap, LogOut, BookOpen
 } from 'lucide-react'
 
 type Signal = 'BULLISH' | 'BEARISH' | 'NEUTRAL'
@@ -405,6 +405,13 @@ function HomeInner() {
           style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.25)' }}>
           <span className="text-xs">📅</span>
           <span className="hidden sm:inline">Tomorrow</span>
+        </button>
+
+        <button onClick={() => router.push('/guide')}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm transition-all hover:opacity-80"
+          style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.08)' }}
+          title="Help & FAQ">
+          <BookOpen size={13} />
         </button>
 
         {running && <span className="text-xs font-mono text-white/25 truncate flex-1">{statusMsg}</span>}
