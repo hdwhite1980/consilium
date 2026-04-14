@@ -22,19 +22,20 @@ export async function middleware(request: NextRequest) {
     }
   )
 
+  const { pathname } = request.nextUrl
+
+  // ── Short-circuit for auth routes BEFORE touching the session ──
+  // This prevents the middleware from consuming PKCE tokens
+  const alwaysPublic = ['/login', '/auth/callback', '/subscribe', '/signup', '/confirm']
+  if (alwaysPublic.some(p => pathname.startsWith(p))) {
+    return supabaseResponse
+  }
+
   const { data: { user, session } } = await supabase.auth.getUser()
     .then(async u => {
       const s = await supabase.auth.getSession()
       return { data: { user: u.data.user, session: s.data.session } }
     })
-
-  const { pathname } = request.nextUrl
-
-  // ── Always public — no auth needed, no redirects ────────────
-  const alwaysPublic = ['/login', '/auth/callback', '/subscribe', '/signup', '/confirm']
-  if (alwaysPublic.some(p => pathname.startsWith(p))) {
-    return supabaseResponse
-  }
 
   // ── API routes handle their own auth ─────────────────────────
   if (pathname.startsWith('/api/')) {
