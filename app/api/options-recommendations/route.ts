@@ -53,6 +53,55 @@ async function fetchExpirations(ticker: string): Promise<string[]> {
   } catch { return [] }
 }
 
+// Yahoo Finance fallback — no API key needed
+async function fetchYahooOptions(ticker: string, currentPrice: number): Promise<OptionsContract[]> {
+  try {
+    const res = await fetch(
+      `https://query1.finance.yahoo.com/v7/finance/options/${ticker}`,
+      { headers: { 'User-Agent': 'Mozilla/5.0' }, next: { revalidate: 900 } }
+    )
+    if (!res.ok) return []
+    const data = await res.json()
+    const result = data?.optionChain?.result?.[0]
+    if (!result) return []
+
+    const expiry = result.expirationDates?.[1] ?? result.expirationDates?.[0]
+    if (!expiry) return []
+
+    const expiryDate = new Date(expiry * 1000)
+    const expiryStr = expiryDate.toISOString().split('T')[0]
+    const daysToExpiry = Math.ceil((expiryDate.getTime() - Date.now()) / 86400000)
+
+    const calls = (result.options?.[0]?.calls ?? []).slice(0, 10)
+    const puts  = (result.options?.[0]?.puts  ?? []).slice(0, 10)
+
+    const toContract = (o: Record<string, unknown>, type: 'call' | 'put'): OptionsContract => ({
+      symbol: String(o.contractSymbol ?? ''),
+      type,
+      strike: Number(o.strike ?? 0),
+      expiry: expiryStr,
+      last: o.lastPrice ? Number(o.lastPrice) : null,
+      bid: o.bid ? Number(o.bid) : null,
+      ask: o.ask ? Number(o.ask) : null,
+      volume: Number(o.volume ?? 0),
+      openInterest: Number(o.openInterest ?? 0),
+      iv: o.impliedVolatility ? Number(o.impliedVolatility) * 100 : null,
+      delta: null, theta: null, gamma: null,
+      daysToExpiry,
+      moneyness: Math.abs(Number(o.strike ?? 0) - currentPrice) / currentPrice < 0.02
+        ? 'ATM'
+        : type === 'call'
+          ? Number(o.strike ?? 0) < currentPrice ? 'ITM' : 'OTM'
+          : Number(o.strike ?? 0) > currentPrice ? 'ITM' : 'OTM',
+    })
+
+    return [
+      ...calls.map((o: Record<string, unknown>) => toContract(o, 'call')),
+      ...puts.map((o: Record<string, unknown>) => toContract(o, 'put')),
+    ]
+  } catch { return [] }
+}
+
 async function fetchChain(ticker: string, expiry: string): Promise<OptionsContract[]> {
   try {
     const res = await fetch(
@@ -138,16 +187,22 @@ export async function POST(req: NextRequest) {
     // ── Fetch options chain ───────────────────────────────────
     let contracts: OptionsContract[] = []
     let expiriesUsed: string[] = []
+    let dataSource = 'none'
 
     if (TRADIER_KEY()) {
       const expiries = await fetchExpirations(ticker)
-      // Get 2-3 nearby expiries
       const targetExpiries = expiries.slice(0, 4)
       expiriesUsed = targetExpiries
-
       const chains = await Promise.all(targetExpiries.map(exp => fetchChain(ticker, exp)))
       const allContracts = chains.flat()
       contracts = labelMoneyness(allContracts, currentPrice)
+      if (contracts.length > 0) dataSource = 'Tradier'
+    }
+
+    // Fallback to Yahoo Finance if no Tradier data
+    if (contracts.length === 0) {
+      contracts = await fetchYahooOptions(ticker, currentPrice)
+      if (contracts.length > 0) dataSource = 'Yahoo Finance'
     }
 
     const bestContracts = selectBestContracts(contracts, signal, currentPrice, timeHorizon || '30 days')
@@ -207,6 +262,7 @@ Based on this analysis, provide a specific options recommendation in JSON only (
       contracts: bestContracts,
       expiriesAvailable: expiriesUsed,
       hasLiveData: bestContracts.length > 0,
+      dataSource,
     })
 
   } catch (err) {

@@ -84,11 +84,13 @@ function ContractCard({ c }: { c: OptionsContract }) {
         </div>
         <div className="rounded-md p-1.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
           <div className="text-white/25 mb-0.5">Delta</div>
-          <div className="text-white/70">{sf(c.delta, 3)}</div>
+          <div className="text-white/70">{c.delta !== null ? sf(c.delta, 3) : 'N/A'}</div>
         </div>
         <div className="rounded-md p-1.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
           <div className="text-white/25 mb-0.5">Theta / day</div>
-          <div style={{ color: '#f87171' }}>{sf(c.theta, 3)}</div>
+          <div style={{ color: c.theta !== null ? '#f87171' : 'rgba(255,255,255,0.3)' }}>
+            {c.theta !== null ? sf(c.theta, 3) : 'N/A'}
+          </div>
         </div>
         <div className="rounded-md p-1.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
           <div className="text-white/25 mb-0.5">IV</div>
@@ -103,7 +105,7 @@ export default function OptionsRecommendations({
   ticker, currentPrice, signal, timeHorizon, target, technicals, verdict
 }: OptionsRecommendationsProps) {
   const [loading, setLoading] = useState(false)
-  const [data, setData] = useState<{ recommendation: OptionsRec; contracts: OptionsContract[]; hasLiveData: boolean } | null>(null)
+  const [data, setData] = useState<{ recommendation: OptionsRec; contracts: OptionsContract[]; hasLiveData: boolean; dataSource?: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
 
@@ -233,8 +235,14 @@ export default function OptionsRecommendations({
           {/* Live contracts */}
           {data.hasLiveData && data.contracts.length > 0 && (
             <div>
-              <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2">
-                Recommended contracts — live data
+              <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2 flex items-center gap-2">
+                <span>Recommended contracts</span>
+                {data.dataSource && (
+                  <span className="px-1.5 py-0.5 rounded text-[9px]"
+                    style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399' }}>
+                    via {data.dataSource}
+                  </span>
+                )}
               </div>
               <div className="space-y-2">
                 {data.contracts.map((c, i) => <ContractCard key={i} c={c} />)}
@@ -246,8 +254,8 @@ export default function OptionsRecommendations({
           )}
 
           {!data.hasLiveData && (
-            <div className="text-[10px] text-white/25 px-1">
-              Live options chain unavailable — add TRADIER_API_KEY to Railway for specific contract data.
+            <div className="text-[10px] text-white/25 px-1 leading-relaxed">
+              Live options chain data unavailable. Add <span className="font-mono text-white/40">TRADIER_API_KEY</span> to Railway for real-time contract data with Greeks.
             </div>
           )}
 
