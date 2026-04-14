@@ -29,6 +29,9 @@ interface NewsPageData {
   sectorMovers: Array<{ sector: string; direction: string; reason: string }>
   cryptoAlert: string | null
   summary: string
+  cached?: boolean
+  cachedAt?: string
+  ageMinutes?: number
 }
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -155,11 +158,15 @@ export default function NewsPage() {
   const [statusMsg, setStatusMsg] = useState('Loading today\'s market intelligence...')
   const [error, setError] = useState<string | null>(null)
   const [generatedAt, setGeneratedAt] = useState<string | null>(null)
+  const [isCached, setIsCached]       = useState(false)
+  const [cacheAge, setCacheAge]       = useState<number | null>(null)
 
   const load = useCallback(async (refresh = false) => {
     setLoading(true)
     setError(null)
     setData(null)
+    setIsCached(false)
+    setCacheAge(null)
     setStatusMsg('Scanning today\'s financial news...')
 
     try {
@@ -181,7 +188,9 @@ export default function NewsPage() {
           if (ev === 'status') setStatusMsg(d.message)
           if (ev === 'complete') {
             setData(d as NewsPageData)
-            setGeneratedAt(d.generatedAt)
+            setGeneratedAt(d.cachedAt || d.generatedAt)
+            setIsCached(d.cached === true)
+            setCacheAge(typeof d.ageMinutes === 'number' ? d.ageMinutes : 0)
             setLoading(false)
           }
           if (ev === 'error') {
@@ -225,15 +234,29 @@ export default function NewsPage() {
         </div>
         <div className="ml-auto flex items-center gap-3">
           {timeAgo !== null && !loading && (
-            <span className="text-[10px] font-mono text-white/30">
-              Updated {timeAgo}m ago
+            data?.cached
+              ? (
+                <span className="flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 rounded-full"
+                  style={{ background: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)' }}>
+                  ⏱ Cached today · {timeAgo}m ago
+                </span>
+              ) : (
+                <span className="text-[10px] font-mono text-white/30">
+                  Updated {timeAgo}m ago
+                </span>
+              )
+          )}
+          {isCached && !loading && (
+            <span className="flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 rounded-full"
+              style={{ background: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)' }}>
+              ⏱ Cached · {cacheAge === 0 ? 'just now' : `${cacheAge}m ago`}
             </span>
           )}
           <button onClick={() => load(true)} disabled={loading}
             className="flex items-center gap-1.5 text-[11px] font-mono px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40"
             style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)', border: '1px solid rgba(255,255,255,0.1)' }}>
             <RefreshCw size={11} className={loading ? 'animate-spin' : ''} />
-            {loading ? 'Loading...' : 'Refresh'}
+            {loading ? 'Loading...' : isCached ? '↻ Fresh run' : 'Refresh'}
           </button>
         </div>
       </header>
@@ -269,6 +292,19 @@ export default function NewsPage() {
           {/* Market summary banner */}
           <div className="px-5 py-4 border-b" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
             <div className="max-w-4xl mx-auto">
+            {isCached && (
+              <div className="flex items-center justify-between px-3 py-2 rounded-lg mb-3"
+                style={{ background: 'rgba(251,191,36,0.07)', border: '1px solid rgba(251,191,36,0.15)' }}>
+                <span className="text-[11px] text-white/50">
+                  ⏱ Showing today&apos;s cached analysis — refreshes automatically each day
+                </span>
+                <button onClick={() => load(true)}
+                  className="text-[10px] font-mono px-2.5 py-1 rounded-full transition-all hover:opacity-80"
+                  style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.3)' }}>
+                  ↻ Force refresh
+                </button>
+              </div>
+            )}
               <div className="flex items-start gap-3">
                 <Globe size={16} className="shrink-0 mt-0.5" style={{ color: '#fbbf24' }} />
                 <div>
