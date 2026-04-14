@@ -297,7 +297,7 @@ function HomeInner() {
       if ((e as Error).name !== 'AbortError') { setStage('error'); setErr((e as Error).message) }
     }
   }, [ticker, tf, scroll])
-  const finalSig = jud?.signal ?? cla?.signal ?? md?.conviction.direction
+  const finalSig = jud?.signal ?? cla?.signal ?? md?.conviction?.direction
 
   return (
     <div className="flex flex-col h-screen overflow-hidden" style={{ background: '#0a0d12' }}>
@@ -406,20 +406,20 @@ function HomeInner() {
             <div className="rounded-xl border p-3 space-y-2" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.07)' }}>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
-                  <Zap size={11} style={{ color: SIG_COLOR[md!.conviction.direction] }} />
-                  <span className="text-[10px] font-mono font-semibold" style={{ color: SIG_COLOR[md!.conviction.direction] }}>
-                    {md!.conviction.direction}
+                  <Zap size={11} style={{ color: SIG_COLOR[(md!.conviction?.direction ?? 'NEUTRAL') as Signal] }} />
+                  <span className="text-[10px] font-mono font-semibold" style={{ color: SIG_COLOR[(md!.conviction?.direction ?? 'NEUTRAL') as Signal] }}>
+                    {md!.conviction?.direction ?? ''}
                   </span>
                 </div>
-                <span className="text-[10px] font-mono text-white/30 capitalize">{md!.conviction.conviction.replace('_',' ')}</span>
+                <span className="text-[10px] font-mono text-white/30 capitalize">{md!.conviction?.conviction?.replace('_',' ')}</span>
               </div>
               <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.07)' }}>
                 <div className="h-full rounded-full transition-all duration-1000"
-                  style={{ width: `${(md!.conviction.convergenceScore + 100) / 2}%`, background: SIG_COLOR[md!.conviction.direction] }} />
+                  style={{ width: `${((md!.conviction?.convergenceScore ?? 0) + 100) / 2}%`, background: SIG_COLOR[(md!.conviction?.direction ?? 'NEUTRAL') as Signal] }} />
               </div>
               <div className="flex justify-between text-[10px] font-mono">
-                <span style={{ color: '#34d399' }}>{md!.conviction.convergingSignals} converging</span>
-                <span style={{ color: '#f87171' }}>{md!.conviction.divergingSignals} diverging</span>
+                <span style={{ color: '#34d399' }}>{md!.conviction?.convergingSignals ?? 0} converging</span>
+                <span style={{ color: '#f87171' }}>{md!.conviction?.divergingSignals ?? 0} diverging</span>
               </div>
             </div>
           )}
@@ -859,9 +859,9 @@ function HomeInner() {
             {stage === 'done' && (md?.conviction?.signals?.length ?? 0) > 0 && (
               <div className="animate-slide-up rounded-xl p-4 border"
                 style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.06)' }}>
-                <div className="text-[10px] font-mono uppercase tracking-widest text-white/20 mb-3">Signal matrix — {md!.conviction.signals.length} signals analyzed</div>
+                <div className="text-[10px] font-mono uppercase tracking-widest text-white/20 mb-3">Signal matrix — {md!.conviction?.signals?.length ?? 0} signals analyzed</div>
                 <div className="space-y-1">
-                  {md!.conviction.signals.map((s, i) => (
+                  {(md!.conviction?.signals ?? []).map((s, i) => (
                     <div key={i} className="flex items-center gap-2">
                       <span className="w-1.5 h-1.5 rounded-full shrink-0"
                         style={{ background: s.direction === 'bullish' ? '#34d399' : s.direction === 'bearish' ? '#f87171' : '#fbbf24' }} />
