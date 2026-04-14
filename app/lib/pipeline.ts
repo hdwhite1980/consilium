@@ -117,22 +117,22 @@ Respond JSON ONLY (no fences):
       lastError = e as Error
       const msg = (e as Error).message ?? ''
       if (!msg.includes('503') && !msg.includes('overload') && !msg.includes('high demand')) throw e
-      console.warn(`Gemini ${modelName} unavailable, trying next...`)
+      console.warn(`News Scout model ${modelName} unavailable, trying next...`)
     }
   }
-  throw lastError ?? new Error('All Gemini models unavailable')
+  throw lastError ?? new Error('News Scout unavailable — all models failed')
 }
 
 export async function runClaude(bundle: SignalBundle, gemini: GeminiResult): Promise<ClaudeResult> {
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 1000,
-    system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. Synthesize ALL signals into a clear directional call. Be specific and data-driven. Your analysis will be challenged by GPT-4o.`,
+    system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. Synthesize ALL signals into a clear directional call. Be specific and data-driven. Your analysis will be challenged by the Devil's Advocate.`,
     messages: [{
       role: 'user',
       content: `TICKER: ${bundle.ticker} | TIMEFRAME: ${bundle.timeframe} | PRICE: $${bundle.currentPrice.toFixed(2)}
 
-GEMINI'S MACRO BRIEF:
+NEWS SCOUT BRIEF:
 ${gemini.summary}
 Sentiment: ${gemini.sentiment} | Regime: ${gemini.regimeAssessment}
 Events: ${gemini.keyEvents.join('; ')}
@@ -158,13 +158,13 @@ export async function runGPT(bundle: SignalBundle, gemini: GeminiResult, claude:
     model: 'gpt-4o',
     max_tokens: 1000,
     messages: [
-      { role: 'system', content: `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. Challenge Claude's conclusions with data. Do NOT simply agree.` },
+      { role: 'system', content: `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. Challenge the Lead Analyst's conclusions with data. Do NOT simply agree.` },
       { role: 'user', content: `TICKER: ${bundle.ticker} | PRICE: $${bundle.currentPrice.toFixed(2)}
 
-GEMINI: ${gemini.sentiment} sentiment, ${gemini.confidence}% confidence
+NEWS SCOUT: ${gemini.sentiment} sentiment, ${gemini.confidence}% confidence
 ${gemini.summary}
 
-CLAUDE (${claude.signal}, ${claude.confidence}%): ${claude.reasoning}
+LEAD ANALYST (${claude.signal}, ${claude.confidence}%): ${claude.reasoning}
 Target: ${claude.target} | Risks: ${claude.keyRisks.join('; ')}
 
 SIGNAL DATA:
@@ -173,7 +173,7 @@ ${bundle.aiContext.optionsSection}
 ${bundle.aiContext.convictionSection}
 
 JSON ONLY:
-{"agrees":<true|false>,"signal":"BULLISH|BEARISH|NEUTRAL","reasoning":"4 sentences","confidence":<0-100>,"challenges":["2-4 specific data-backed challenges"],"alternateScenario":"scenario Claude underweights","strongestCounterArgument":"single most compelling counter"}` }
+{"agrees":<true|false>,"signal":"BULLISH|BEARISH|NEUTRAL","reasoning":"4 sentences","confidence":<0-100>,"challenges":["2-4 specific data-backed challenges"],"alternateScenario":"scenario the Lead Analyst underweights","strongestCounterArgument":"single most compelling counter"}` }
     ]
   })
   return parseJSON<GptResult>(completion.choices[0].message.content!)
@@ -189,20 +189,21 @@ export async function runJudge(
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 2000,
-    system: `You are the Judge of an elite AI stock council for ${bundle.ticker}. You hold NO prior position. Weigh argument QUALITY not vote count. Be decisive. Name the winning argument explicitly.`,
+    system: `You are the Judge of an elite AI stock council for ${bundle.ticker}. The council has three roles: News Scout, Lead Analyst, and Devil's Advocate. You hold NO prior position. Weigh argument QUALITY not vote count. Be decisive. Refer to council members by their role names only.`,
     messages: [{
       role: 'user',
       content: `TICKER: ${bundle.ticker} | PRICE: $${bundle.currentPrice.toFixed(2)} | ROUND: ${round}
 
-GEMINI (${gemini.sentiment}, ${gemini.confidence}%): ${gemini.summary}
+NEWS SCOUT: ${gemini.sentiment} sentiment, ${gemini.confidence}% confidence
+${gemini.summary}
 Regime: ${gemini.regimeAssessment}
 
-CLAUDE (${claude.signal}, ${claude.confidence}%): ${claude.reasoning}
+LEAD ANALYST (${claude.signal}, ${claude.confidence}%): ${claude.reasoning}
 Technical: ${claude.technicalBasis}
 Fundamental: ${claude.fundamentalBasis}
 Target: ${claude.target}
 
-GPT-4o (${gpt.signal}, ${gpt.confidence}%, ${gpt.agrees ? 'AGREES' : 'DISAGREES'}): ${gpt.reasoning}
+DEVIL'S ADVOCATE (${gpt.signal}, ${gpt.confidence}%, ${gpt.agrees ? 'AGREES' : 'DISAGREES'}): ${gpt.reasoning}
 Challenges: ${gpt.challenges.join('; ')}
 Counter: ${gpt.strongestCounterArgument}
 
