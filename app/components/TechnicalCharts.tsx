@@ -405,12 +405,150 @@ function ICard({ title, children }: { title: string; children: React.ReactNode }
   )
 }
 
+// ── Explanation Box ───────────────────────────────────────────
+function Explain({ color, what, means }: { color: string; what: string; means: string }) {
+  return (
+    <div className="mt-2 rounded-lg overflow-hidden text-xs"
+      style={{ border: `1px solid ${color}18` }}>
+      <div className="px-3 py-2" style={{ background: `${color}06` }}>
+        <div className="text-[9px] font-mono uppercase tracking-widest mb-1" style={{ color: `${color}90` }}>
+          What is this?
+        </div>
+        <p className="leading-relaxed" style={{ color: 'rgba(255,255,255,0.5)' }}>{what}</p>
+      </div>
+      <div className="px-3 py-2" style={{ background: `${color}10`, borderTop: `1px solid ${color}15` }}>
+        <div className="text-[9px] font-mono uppercase tracking-widest mb-1" style={{ color }}>
+          What it means for this stock right now
+        </div>
+        <p className="leading-relaxed font-medium" style={{ color: 'rgba(255,255,255,0.75)' }}>{means}</p>
+      </div>
+    </div>
+  )
+}
+
 // ── Main Component ────────────────────────────────────────────
 export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsProps) {
   const [showTV, setShowTV] = useState(false)
   if (!technicals) return null
 
   const t = technicals
+  const p = t.currentPrice ?? 0
+
+  // Pre-compute contextual explanations — two parts each: WHAT IT IS + WHAT IT MEANS NOW
+  const rsiColor = t.rsi >= 70 ? '#f87171' : t.rsi <= 30 ? '#34d399' : '#fbbf24'
+  const rsiWhat = `The RSI (Relative Strength Index) measures how fast a stock's price has been moving, on a scale from 0 to 100. Think of it like a speedometer for buying and selling pressure. Below 30 means the stock has been sold so hard it may be oversold — like a rubber band stretched too far down. Above 70 means it has been bought so aggressively it may be overbought — like a rubber band stretched too far up. Around 50 is neutral, with buyers and sellers roughly balanced.`
+  const rsiMeans = t.rsi >= 80
+    ? `RSI is ${sf(t.rsi,1)} — extremely overbought. The stock has been bought so aggressively that this level is rarely sustained. Think of a runner who has been sprinting — they usually need to slow down or rest. This doesn't mean the stock will drop tomorrow, but buying here carries more risk than usual. Many traders wait for RSI to drop back below 70 before taking a position.`
+    : t.rsi >= 70
+    ? `RSI is ${sf(t.rsi,1)} — entering overbought territory. Buyers have been in strong control. The risk here is that the stock may have gotten ahead of itself. Watch if RSI starts curling downward — that's often the first sign momentum is fading. Not a reason to panic, but a reason to be careful about buying more right now.`
+    : t.rsi <= 20
+    ? `RSI is ${sf(t.rsi,1)} — extremely oversold. The stock has been sold relentlessly. At this level, even bad stocks tend to get a bounce because so many sellers have already sold. This is often a good time to watch closely — not necessarily to buy immediately, but to look for any sign of recovery.`
+    : t.rsi <= 30
+    ? `RSI is ${sf(t.rsi,1)} — oversold. The selling pressure has been significant. Historically, stocks at these RSI levels tend to recover because many sellers have already exited. This can be an early signal of a potential reversal. Look for the price to stop making new lows and for volume to dry up.`
+    : t.rsi > 55
+    ? `RSI is ${sf(t.rsi,1)} — bullish momentum zone. Buyers currently have the upper hand without the stock being stretched. This is a healthy reading for an uptrend — strong enough to show conviction, not so high it's at risk of reversal. It supports the case for continued upward movement.`
+    : t.rsi > 45
+    ? `RSI is ${sf(t.rsi,1)} — right in the middle, perfectly neutral. There's no clear edge for buyers or sellers right now. The stock is waiting for a catalyst to push it one way or the other. Watch other indicators for direction.`
+    : `RSI is ${sf(t.rsi,1)} — bearish momentum zone. Sellers have slightly more control than buyers. Not extreme, but the path of least resistance appears to be downward. Combined with other bearish signals, this adds weight to the bear case.`
+
+  const stochColor = t.stochK >= 80 ? '#f87171' : t.stochK <= 20 ? '#34d399' : '#fbbf24'
+  const stochWhat = `The Stochastic Oscillator compares where a stock closed relative to its price range over the past 14 days. It has two lines: %K (the fast line, currently ${sf(t.stochK,1)}) and %D (the slow line, currently ${sf(t.stochD,1)}). When both lines are above 80, the stock has been closing near its highs — that's overbought. Below 20, it's been closing near its lows — oversold. The key signal is when the fast line (%K) crosses the slow line (%D) — that crossover often marks a turning point.`
+  const stochMeans = t.stochCrossover === 'bullish'
+    ? `%K just crossed above %D — a bullish crossover just happened. This is one of the clearest momentum signals: the fast line overtook the slow line, suggesting buyers have just taken control from sellers. When this happens in oversold territory (below 20), it's an especially strong buy signal. Many traders use this exact moment as their entry point.`
+    : t.stochCrossover === 'bearish'
+    ? `%K just crossed below %D — a bearish crossover just happened. The fast line dropped below the slow confirmation line. This tells us the short-term momentum has just flipped from bullish to bearish. When this happens in overbought territory (above 80), it's considered a strong sell signal. Traders often tighten stop-losses when they see this.`
+    : t.stochSignal === 'overbought'
+    ? `Both lines are above 80 (overbought zone). The stock has been closing near its highest prices for the measured period. This is a warning: the stock is running hot. It doesn't mean a crash is coming, but it does mean a pullback is increasingly likely. The key moment to watch for is %K crossing below %D while still above 80 — that's when many traders start selling.`
+    : t.stochSignal === 'oversold'
+    ? `Both lines are below 20 (oversold zone). The stock has been closing near its lowest prices. This is a potential setup for a reversal. Savvy traders watch for %K to cross above %D while both are below 20 — that crossover in oversold territory is considered one of the highest-probability buy signals in technical analysis.`
+    : `Both lines are in the middle zone — no extreme reading. %K is ${sf(t.stochK,1)} and %D is ${sf(t.stochD,1)}. ${t.stochK > t.stochD ? 'The fast line is above the slow line — mild upward momentum.' : 'The fast line is below the slow line — mild downward pressure.'} Neither bulls nor bears have a strong edge right now based on this indicator alone. Wait for a crossover or for the lines to move toward an extreme zone.`
+
+  const macdColor = t.macdHistogram >= 0 ? '#34d399' : '#f87171'
+  const macdWhat = `MACD (Moving Average Convergence Divergence) measures the difference between a 12-day and 26-day moving average of the price. The "histogram" bars you see show how much distance there is between those two averages. When the bars are positive (above zero), it means short-term momentum is stronger than the medium-term trend — bullish. When negative, the opposite. The most important signal is a "crossover" — when the MACD line crosses its signal line, it often marks the beginning of a new trend.`
+  const macdMeans = t.macdCrossover === 'bullish'
+    ? `A bullish MACD crossover just occurred — this is a major signal. The MACD line crossed above its signal line, meaning short-term momentum has overtaken the medium-term average. This is the kind of signal that many professional traders act on. Historically, bullish MACD crossovers are most reliable when they happen after a prolonged downtrend. The fact that it's happening now adds significant weight to the bullish case.`
+    : t.macdCrossover === 'bearish'
+    ? `A bearish MACD crossover just occurred — a significant warning signal. The MACD line dropped below its signal line, telling us that short-term momentum has turned negative. This is when many traders start reducing positions or tightening stop losses. The most reliable bearish crossovers happen after a prolonged uptrend — if the stock has been rising, this is a real warning sign.`
+    : t.macdHistogram >= 0
+    ? `The MACD histogram is positive at ${sf(t.macdHistogram,3)} — buying momentum is stronger than selling momentum right now. Think of the histogram bars like a thermometer for momentum: the higher they are, the more heat there is behind the buying. No crossover has happened yet, but the positive reading tells us buyers are currently in control of the pace.`
+    : `The MACD histogram is negative at ${sf(t.macdHistogram,3)} — selling momentum is stronger than buying momentum. The stock is losing steam. The further the histogram goes negative, the stronger the selling pressure. No crossover yet, but momentum is clearly leaning bearish. Watch for the bars to start getting shorter (less negative) — that would be the first sign of momentum shifting.`
+
+  const bbColor = t.bbPosition > 0.8 ? '#f87171' : t.bbPosition < 0.2 ? '#34d399' : '#fbbf24'
+  const bbWhat = `Bollinger Bands draw a channel around the stock's price based on how much it normally moves. The middle band is the 20-day average price. The upper band ($${sf(t.bbUpper)}) is where the price would be if it moved unusually high. The lower band ($${sf(t.bbLower)}) is unusually low territory. Most of the time (about 95%), the price stays within these bands. When price touches or breaks a band, it's a signal that something unusual is happening. The width of the bands also tells you about volatility — narrow bands (squeeze) mean a big move is coming.`
+  const bbMeans = t.bbSignal === 'squeeze'
+    ? `The bands are in a squeeze — they're unusually narrow right now. This is one of the most important setups in technical analysis. A squeeze means the stock has been moving in a very tight range, and that kind of calm almost always precedes a storm. The price is building energy for a big move. We just don't know yet if that move will be up or down. Watch for the price to break out of the current range — whichever direction it breaks with conviction is likely the start of a significant move.`
+    : t.bbPosition > 0.9
+    ? `Price ($${sf(p)}) is at ${sf(t.bbPosition*100,0)}% of the band — touching the upper band ($${sf(t.bbUpper)}). The stock has moved unusually far above its average. This is like being at the edge of a rubber band — it can stretch a little further, but the tension is high. Statistically, price tends to snap back toward the middle band ($${sf(t.bbMiddle)}) from here. Not a guaranteed reversal, but a sign to be cautious about buying.`
+    : t.bbPosition < 0.1
+    ? `Price ($${sf(p)}) is at ${sf(t.bbPosition*100,0)}% of the band — touching the lower band ($${sf(t.bbLower)}). The stock has moved unusually far below its average. Like a rubber band stretched down, there's tension for a snap back upward toward the middle ($${sf(t.bbMiddle)}). This is a classic setup that value-oriented traders look for. Combined with other bullish signals, touching the lower band can be a strong buy indicator.`
+    : t.bbPosition > 0.6
+    ? `Price ($${sf(p)}) is at ${sf(t.bbPosition*100,0)}% of the band — in the upper half, above the 20-day average ($${sf(t.bbMiddle)}). The stock is holding above its average price, which is the definition of an uptrend. There's still room before hitting the upper band ($${sf(t.bbUpper)}), meaning the stock isn't stretched yet. This is a comfortable, healthy bullish position.`
+    : t.bbPosition < 0.4
+    ? `Price ($${sf(p)}) is at ${sf(t.bbPosition*100,0)}% of the band — in the lower half, below the 20-day average ($${sf(t.bbMiddle)}). The stock has been spending time below its average, which is a bearish characteristic. The lower band is at $${sf(t.bbLower)}. In a strong downtrend, prices can "walk" down the lower band for weeks. Look for other confirming signals before assuming this is a buy.`
+    : `Price ($${sf(p)}) is right in the middle of the bands at ${sf(t.bbPosition*100,0)}% — sitting right at the 20-day average ($${sf(t.bbMiddle)}). This is a neutral position, exactly balanced between bulls and bears. The next direction is uncertain. Watch which side the price moves away from this midpoint — with volume — to get the next directional signal.`
+
+  const maColor = t.goldenCross ? '#34d399' : '#f87171'
+  const maWhat = `Moving averages smooth out daily price fluctuations to show the overall trend. The SMA50 ($${sf(t.sma50)}) is the average price over the last 50 trading days (about 10 weeks). The SMA200 ($${sf(t.sma200)}) is the average over 200 days (about 10 months). When the 50-day crosses above the 200-day, it's called a "Golden Cross" — widely considered a major bullish signal. When it crosses below, it's a "Death Cross" — a major bearish signal. The short-term EMAs (9 and 20 day) react faster to recent price changes and give earlier signals for shorter-term traders.`
+  const maMeans = t.goldenCross
+    ? `Golden Cross confirmed — SMA50 ($${sf(t.sma50)}) is above SMA200 ($${sf(t.sma200)}). This is the single most watched long-term technical signal by institutional investors. It means the 10-week trend is stronger than the 10-month trend — a sign that the stock has rebuilt sustained upward momentum. Many large funds have rules that require a Golden Cross before they'll buy. The fact that one is in effect is a significant tailwind.${
+        t.ema9CrossEma20 === 'bullish' ? ' On top of that, the short-term EMA9/EMA20 also just crossed bullish — momentum is aligning on multiple timeframes simultaneously. This is a strong setup.' 
+        : t.ema9 > t.ema20 ? ' The short-term EMA9 ($' + sf(t.ema9) + ') is above EMA20 ($' + sf(t.ema20) + '), confirming that near-term momentum also supports the bullish picture.' 
+        : ' However, the short-term EMA9 ($' + sf(t.ema9) + ') has dipped below EMA20 ($' + sf(t.ema20) + '). This means there may be a temporary pullback happening within the larger uptrend. Not unusual — these short-term dips within a Golden Cross environment can be buying opportunities.'}`
+    : `Death Cross confirmed — SMA50 ($${sf(t.sma50)}) is below SMA200 ($${sf(t.sma200)}). This is one of the most bearish long-term signals in investing. It means selling pressure has been strong enough — for long enough — to drag the medium-term trend below the long-term trend. When this happens, many institutional funds sell or reduce positions automatically. It's not a signal to panic, but it is a signal to be very cautious. Recoveries from Death Crosses can take months.${
+        t.ema9CrossEma20 === 'bearish' ? ' The short-term EMA9/EMA20 also just crossed bearish — the sell signal is appearing across all timeframes at once. This is a strong confirmation of downward momentum.' 
+        : t.ema9 < t.ema20 ? ' The short-term EMA9 ($' + sf(t.ema9) + ') is also below EMA20 ($' + sf(t.ema20) + ') — near-term momentum confirms the bearish picture at every timeframe.' 
+        : ' The short-term EMA9 ($' + sf(t.ema9) + ') is above EMA20 ($' + sf(t.ema20) + ') — there may be a short-term bounce happening inside the larger downtrend. Be careful: bounces within Death Cross environments often fail. Many experienced traders use these bounces as selling opportunities rather than buying ones.'}`
+
+  const vwapColor = t.vwapSignal === 'above' ? '#34d399' : '#f87171'
+  const vwapWhat = `VWAP (Volume Weighted Average Price) is the average price of every trade made today, weighted by how many shares were traded at each price. It's like asking: "What is the true average price that real money paid today?" It resets to zero every morning. VWAP ($${sf(t.vwap)}) is one of the most important intraday levels used by professional traders and institutions. Staying above VWAP is bullish. Falling below is bearish.`
+  const vwapMeans = t.vwapSignal === 'above'
+    ? `Price ($${sf(p)}) is ${sf(t.priceVsVwap,2)}% above VWAP ($${sf(t.vwap)}). Being above VWAP means that if you bought right now, you're paying more than the average price paid today — but it also signals that buyers are currently in control of the market. Institutions often only buy stocks that are above VWAP, treating it as a filter for direction. A stock holding above VWAP throughout the day is showing sustained buying interest.`
+    : `Price ($${sf(p)}) is ${sf(Math.abs(t.priceVsVwap ?? 0),2)}% below VWAP ($${sf(t.vwap)}). The stock is trading at a discount to today's average — but that's not necessarily a bargain. It means sellers have dominated all day. Professional traders treat VWAP as a key battleground: a stock that can't reclaim VWAP is weak. Many short sellers use a failure to reclaim VWAP as their entry signal. Watch to see if the price can push back above $${sf(t.vwap)} — if it can, that would flip the intraday bias bullish.`
+
+  const obvColor = t.obvTrend === 'rising' ? '#34d399' : t.obvTrend === 'falling' ? '#f87171' : '#fbbf24'
+  const obvWhat = `OBV (On-Balance Volume) is a running total that adds volume on days the stock goes up and subtracts volume on days it goes down. The idea is that volume precedes price. If big money is quietly buying a stock, the OBV will start rising even before the price moves much. OBV is one of the best indicators for detecting accumulation (institutions quietly buying) or distribution (institutions quietly selling) before those moves become obvious in the price.`
+  const obvMeans = t.obvDivergence === 'bullish'
+    ? `Bullish OBV divergence detected — this is a significant hidden signal. The price has been falling, but OBV is rising. Translation: even as the stock looks weak on the surface, more money is coming in on the up-days than leaving on the down-days. This is often what it looks like when smart money quietly accumulates a position — they buy on dips, keeping their buying somewhat hidden. Historically, bullish OBV divergence often precedes a price reversal upward. This is one of the most bullish hidden signals you can find.`
+    : t.obvDivergence === 'bearish'
+    ? `Bearish OBV divergence detected — a hidden warning sign. The price has been rising, but OBV is falling. Translation: the price rally is happening on weak volume — more money is leaving on down-days than entering on up-days. This often means institutions are quietly selling into the rally while retail investors push the price up. It's a sign the move may not be sustainable. When OBV diverges from price like this, the price usually follows the OBV eventually — which would mean a drop is coming.`
+    : t.obvTrend === 'rising'
+    ? `OBV is trending upward — volume is confirming the price move. This is healthy. It means that on the days the stock goes up, significantly more shares are traded than on days it goes down. Big money (institutions, funds) is participating in the buying, not just individual retail investors. Volume confirmation like this is what separates a strong, sustainable move from a weak one.`
+    : t.obvTrend === 'falling'
+    ? `OBV is trending downward — volume is confirming selling pressure. More shares are trading hands on down-days than up-days. Even if the price hasn't dropped dramatically yet, the underlying volume pattern is bearish. OBV often leads price — meaning the price may catch down to where OBV is pointing. This is an early warning to pay attention to.`
+    : `OBV is flat — volume is balanced. An equal amount of money is going into up-days and down-days. This often happens during consolidation — when a stock is building energy before its next big move. The direction OBV breaks out of this flat pattern will give the first clue about where price is headed.`
+
+  const volColor = t.volumeRatio > 1.5 ? '#fbbf24' : t.volumeRatio < 0.5 ? '#94a3b8' : '#60a5fa'
+  const volWhat = `Volume is simply how many shares were traded. The number itself doesn't mean much — what matters is how it compares to the average. If a stock normally trades 1 million shares a day and today it trades 3 million, something significant is happening. Volume validates price moves: a big price move on huge volume is meaningful. The same price move on tiny volume is suspicious and often reverses.`
+  const volMeans = t.volumeRatio > 2
+    ? `Volume is ${sf(t.volumeRatio,1)}x the 20-day average — extremely high. Something significant is happening today. This level of activity almost always means institutions (big funds, banks, hedge funds) are actively buying or selling. High volume on an up day is very bullish — it means real money is behind the move. High volume on a down day is very bearish — real money is selling. Check the price direction alongside this volume reading.`
+    : t.volumeRatio > 1.5
+    ? `Volume is ${sf(t.volumeRatio,1)}x above average — elevated and meaningful. More participants than usual are in this stock today. This gives credibility to today's price move — whatever direction the stock is going, more people agree with it than on a typical day. A breakout on above-average volume is a much more reliable signal than one on thin volume.`
+    : t.volumeRatio < 0.3
+    ? `Volume is only ${sf(t.volumeRatio,1)}x the average — extremely thin. Barely anyone is trading this stock right now. This is important: price moves on very low volume are unreliable and can be reversed easily. A 2% gain on 0.3x volume means very few people participated in that gain. Don't read too much into today's action until volume returns to normal.`
+    : t.volumeRatio < 0.5
+    ? `Volume is ${sf(t.volumeRatio,1)}x average — below normal. Thin participation. Today's price action should be taken with a grain of salt. Low-volume moves tend to fade when normal trading activity resumes. No major players are making big moves today based on this reading.`
+    : `Volume is ${sf(t.volumeRatio,1)}x the 20-day average — roughly normal. Standard participation today. Nothing unusual in terms of buying or selling pressure from a volume perspective. Today's price move reflects typical market activity.`
+
+  const nearFib = t.nearestFibLevel
+  const fibWhat = `Fibonacci retracements are a tool borrowed from mathematics. The key levels — 23.6%, 38.2%, 50%, 61.8%, and 78.6% — are used to identify where a stock tends to pause or reverse after a big move. They work because so many traders use them that they become self-fulfilling: when price approaches a Fibonacci level, traders expect a reaction there and act accordingly. The levels shown are calculated from the most recent significant high to low (or low to high) in the price data.`
+  const fibMeans = nearFib
+    ? `The nearest Fibonacci level to current price ($${sf(p)}) is the ${nearFib.label} level at $${sf(nearFib.price)} — currently acting as ${nearFib.type}. ${
+        nearFib.type === 'support'
+          ? `This is a support level — price has already moved down from a peak and this is where technical analysis suggests buyers may step in. If the stock falls to $${sf(nearFib.price)}, watch closely: a bounce from this exact level would confirm it as strong support and could be a buying opportunity. A break below this level with momentum would suggest the stock wants to fall further to the next Fibonacci level.`
+          : `This is a resistance level — price is recovering upward and is approaching a zone where sellers have historically appeared. If the stock rises to $${sf(nearFib.price)}, expect some resistance or a temporary slowdown. A clean break above this level on good volume would be a bullish breakout signal. A rejection here would suggest the recovery is stalling.`
+      }`
+    : `The Fibonacci levels shown are calculated from the measured price range. Look at the nearest starred level (★) to current price — that's your most relevant reference point right now.`
+
+  const s1Dist = p && t.support ? ((p - t.support) / p * 100) : 0
+  const r1Dist = p && t.resistance ? ((t.resistance - p) / p * 100) : 0
+  const levelsWhat = `Pivot point levels (S1, S2, R1, R2) are calculated from the previous period's high, low, and close prices. They're used by traders worldwide to identify key price zones where the stock is likely to slow down, bounce, or reverse. Support levels (S1 at $${sf(t.support)}, S2 at $${sf(t.support2)}) are floors where buyers tend to step in. Resistance levels (R1 at $${sf(t.resistance)}, R2 at $${sf(t.resistance2)}) are ceilings where sellers tend to appear.`
+  const levelsMeans = s1Dist < 1
+    ? `⚠ The stock is dangerously close to S1 support at $${sf(t.support)} — only ${sf(s1Dist,1)}% away. This is a critical moment. If the price breaks below $${sf(t.support)} with momentum, it could accelerate downward as stop-loss orders trigger automatically. Watch this level closely. A hold and bounce from here would be bullish. A break below signals further weakness toward S2 at $${sf(t.support2)}.`
+    : r1Dist < 1
+    ? `⚠ The stock is testing R1 resistance at $${sf(t.resistance)} — only ${sf(r1Dist,1)}% away. This is a key moment. Resistance levels often cause price to stall or pull back. A breakout above $${sf(t.resistance)} on strong volume would be a bullish signal and open the door to R2 at $${sf(t.resistance2)}. A rejection here (price turns back down) would be a bearish sign.`
+    : r1Dist < s1Dist
+    ? `Price ($${sf(p)}) is closer to resistance ($${sf(t.resistance)}, ${sf(r1Dist,1)}% away) than to support ($${sf(t.support)}, ${sf(s1Dist,1)}% below). The next meaningful test is whether the stock can push through R1. If it does on volume, that's bullish. If it gets rejected, watch for a pullback toward support. S2 deeper support sits at $${sf(t.support2)} if S1 breaks.`
+    : `Price ($${sf(p)}) has more room to run before hitting resistance ($${sf(t.resistance)}) at ${sf(r1Dist,1)}% above than it does before hitting support ($${sf(t.support)}) at ${sf(s1Dist,1)}% below. The stock has breathing room on the upside. S2 deeper support at $${sf(t.support2)} provides a secondary safety net if the stock pulls back.`
 
   return (
     <div className="space-y-4 mt-4">
@@ -424,7 +562,7 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
 
       {/* Finviz chart */}
       <div>
-        <div className="text-[10px] font-mono text-white/20 mb-1.5">Daily candlestick chart (SMA50 / SMA200)</div>
+        <div className="text-[10px] font-mono text-white/20 mb-1.5">Daily candlestick chart — SMA50 (blue) and SMA200 (red) overlaid. The cross of these two lines is the death/golden cross.</div>
         <FinvizChart ticker={ticker} />
       </div>
 
@@ -432,26 +570,23 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
       <div className="grid grid-cols-2 gap-3">
         <ICard title="RSI (14)">
           <RSIGauge rsi={t.rsi} />
-          <p className="text-[10px] text-white/30 mt-1 text-center leading-tight">
-            {t.rsi >= 70 ? 'Overbought — may pull back' : t.rsi <= 30 ? 'Oversold — may bounce' : 'No extreme reading'}
-          </p>
+          <Explain color={rsiColor} what={rsiWhat} means={rsiMeans} />
         </ICard>
 
         <ICard title="Stochastic (14,3,3)">
           <StochasticGauge k={t.stochK} d={t.stochD} signal={t.stochSignal} crossover={t.stochCrossover} />
-          <p className="text-[10px] text-white/30 mt-1 text-center leading-tight">
-            {t.stochSignal === 'overbought' ? 'Momentum stretched high' :
-             t.stochSignal === 'oversold' ? 'Momentum stretched low' : 'Momentum in neutral zone'}
-          </p>
+          <Explain color={stochColor} what={stochWhat} means={stochMeans} />
         </ICard>
 
         <ICard title="MACD (12,26,9)">
           <MACDVisual histogram={t.macdHistogram} macdLine={t.macdLine} signalLine={t.macdSignal} crossover={t.macdCrossover} />
+          <Explain color={macdColor} what={macdWhat} means={macdMeans} />
         </ICard>
 
         <ICard title="Bollinger bands">
           <BollingerVisual position={t.bbPosition} signal={t.bbSignal}
             upper={t.bbUpper} middle={t.bbMiddle} lower={t.bbLower} current={t.currentPrice} />
+          <Explain color={bbColor} what={bbWhat} means={bbMeans} />
         </ICard>
       </div>
 
@@ -459,21 +594,25 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
       <ICard title="Moving average alignment">
         <MACrossVisual goldenCross={t.goldenCross} sma50={t.sma50} sma200={t.sma200}
           ema9={t.ema9} ema20={t.ema20} ema9Cross={t.ema9CrossEma20} />
+        <Explain color={maColor} what={maWhat} means={maMeans} />
       </ICard>
 
       {/* VWAP */}
       <ICard title="VWAP — volume weighted average price">
         <VWAPVisual vwap={t.vwap} current={t.currentPrice} priceVsVwap={t.priceVsVwap} signal={t.vwapSignal} />
+        <Explain color={vwapColor} what={vwapWhat} means={vwapMeans} />
       </ICard>
 
       {/* OBV */}
       <ICard title="OBV — on-balance volume">
         <OBVVisual trend={t.obvTrend} divergence={t.obvDivergence} />
+        <Explain color={obvColor} what={obvWhat} means={obvMeans} />
       </ICard>
 
       {/* Volume */}
       <ICard title="Volume">
         <VolumeBar ratio={t.volumeRatio} />
+        <Explain color={volColor} what={volWhat} means={volMeans} />
       </ICard>
 
       {/* Support / Resistance */}
@@ -481,18 +620,17 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
         <div className="flex justify-center mb-2">
           <KeyLevels s1={t.support} s2={t.support2} r1={t.resistance} r2={t.resistance2} current={t.currentPrice} />
         </div>
-        <div className="text-[10px] text-white/25 text-center">
-          S1 ${sf(t.support)} · S2 ${sf(t.support2)} · R1 ${sf(t.resistance)} · R2 ${sf(t.resistance2)}
+        <div className="text-[10px] text-white/25 text-center mb-2">
+          S2 ${sf(t.support2)} · S1 ${sf(t.support)} · NOW ${sf(p)} · R1 ${sf(t.resistance)} · R2 ${sf(t.resistance2)}
         </div>
+        <Explain color="#fbbf24" what={levelsWhat} means={levelsMeans} />
       </ICard>
 
       {/* Fibonacci */}
-      {t.fibLevels.length > 0 && (
+      {t.fibLevels && t.fibLevels.length > 0 && (
         <ICard title="Fibonacci retracement levels">
           <FibTable levels={t.fibLevels} current={t.currentPrice} nearest={t.nearestFibLevel} />
-          <p className="text-[10px] text-white/25 mt-2 leading-relaxed">
-            Fibonacci levels show where price tends to pause or reverse. The nearest level to current price is the most relevant for short-term trades.
-          </p>
+          <Explain color="#a78bfa" what={fibWhat} means={fibMeans} />
         </ICard>
       )}
 
