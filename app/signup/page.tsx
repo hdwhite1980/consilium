@@ -30,12 +30,15 @@ function SignupInner() {
     setError(null)
 
     const supabase = createClient()
+    const redirectUrl = 'https://consilium-production-d8e6.up.railway.app/auth/callback'
+    console.log('Signing up with redirectTo:', redirectUrl)
+    alert('Debug - redirectTo: ' + redirectUrl) // temporary
+
     const { error } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        // Use token_hash flow — works across browsers and email clients
-        emailRedirectTo: `${process.env.NEXT_PUBLIC_APP_URL || window.location.origin}/auth/callback`,
+        emailRedirectTo: redirectUrl,
       }
     })
 
