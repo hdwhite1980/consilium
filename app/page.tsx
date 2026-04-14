@@ -95,7 +95,7 @@ const SIG_COLOR: Record<Signal, string> = { BULLISH: '#34d399', BEARISH: '#f8717
 const SIG_BG: Record<Signal, string> = {
   BULLISH: 'rgba(52,211,153,0.1)', BEARISH: 'rgba(248,113,113,0.1)', NEUTRAL: 'rgba(251,191,36,0.1)'
 }
-const pct = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
+const pct = (n: number | undefined | null) => { const v = Number(n ?? 0); return `${v >= 0 ? '+' : ''}${v.toFixed(1)}%` }
 
 function SBadge({ s, sm }: { s: Signal; sm?: boolean }) {
   const Icon = s === 'BULLISH' ? TrendingUp : s === 'BEARISH' ? TrendingDown : Minus
@@ -392,7 +392,7 @@ function HomeInner() {
           {md && (
             <div className="rounded-xl border p-3" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.07)' }}>
               <div className="flex items-baseline gap-2 mb-1.5">
-                <span className="text-lg font-bold font-mono">${md!.currentPrice.toFixed(2)}</span>
+                <span className="text-lg font-bold font-mono">${(md!.currentPrice ?? 0).toFixed(2)}</span>
                 <span className="text-xs font-mono" style={{ color: md!.technicals?.priceChange1D >= 0 ? '#34d399' : '#f87171' }}>
                   {pct(md!.technicals?.priceChange1D)}
                 </span>
