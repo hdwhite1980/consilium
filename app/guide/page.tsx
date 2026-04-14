@@ -115,7 +115,7 @@ const FAQ_SIGNALS: FAQItem[] = [
   { q: 'What is the Conviction Score?', a: 'The Conviction Score (-100 to +100) measures how many of the 50+ signals agree with the directional verdict. A score above +50 means strong signal convergence — most indicators point the same way. Near zero means mixed signals. The score helps you gauge how confident the overall analysis is.' },
   { q: 'What is Smart Money?', a: 'Smart Money refers to large, informed investors — corporate insiders (executives and directors), members of Congress who trade stocks, and large institutional holders. When insiders buy their own company\'s stock, it\'s often a bullish signal. Congressional trades are tracked because elected officials sometimes have access to material non-public information.' },
   { q: 'What does Options Flow tell me?', a: 'The put/call ratio measures how many puts (bearish bets) vs calls (bullish bets) are being traded. A low ratio means more calls = bullish sentiment. A high ratio means more puts = bearish. Unusual sweeps are large options orders that exceed normal volume — these often signal that a big player is making a directional bet ahead of a news event.' },
-  { q: 'Why are fundamentals sometimes missing?', a: 'Fundamental data (P/E ratio, analyst ratings, earnings dates) comes from Finnhub. If your Finnhub API key isn\'t configured, or if the stock doesn\'t have coverage (e.g., very small caps, crypto), those sections will be empty. The AI will still analyze based on the technical and market signals it does have.' },
+  { q: 'Why are fundamentals sometimes missing?', a: 'Fundamental data (P/E ratio, analyst ratings, earnings dates) may not be available for every stock. Very small cap stocks, newer companies, and most crypto assets have limited analyst coverage. If the fundamentals section is empty for a stock, the AI will still analyze based on the technical and market signals it does have.' },
 ]
 
 const FAQ_OPTIONS: FAQItem[] = [
@@ -273,7 +273,7 @@ const SECTIONS: GuideSection[] = [
         <P><strong className="text-white/80">Analyst Consensus</strong> — the aggregate recommendation from Wall Street analysts (Strong Buy, Buy, Hold, Sell). This reflects institutional research opinions. Upside % shows how far the average analyst price target is above the current price.</P>
         <P><strong className="text-white/80">Earnings Date & Risk</strong> — stocks often make their biggest moves around earnings reports. "High" earnings risk means the report is close and could significantly move the stock in either direction.</P>
         <P><strong className="text-white/80">EPS Record</strong> — whether the company consistently beats earnings estimates ("beater") or misses. Consistent beaters often get rewarded with premium valuations. Consistent misses get punished.</P>
-        <Warn>Fundamental data requires a Finnhub API key. If the fundamentals section appears empty, check that FINNHUB_API_KEY is set in Railway.</Warn>
+
       </>
     ),
   },
