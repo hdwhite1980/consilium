@@ -138,8 +138,8 @@ export async function fetchOptionsFlow(ticker: string, currentPrice: number): Pr
 
     const callIVs = calls.map((o: OptionContract) => Number(o.greeks?.mid_iv) || 0).filter(Boolean)
     const putIVs  = puts.map((o: OptionContract) => Number(o.greeks?.mid_iv) || 0).filter(Boolean)
-    avgIVCall = callIVs.length ? callIVs.reduce((a, b) => a + b, 0) / callIVs.length : null
-    avgIVPut  = putIVs.length ? putIVs.reduce((a, b) => a + b, 0) / putIVs.length : null
+    avgIVCall = callIVs.length ? (callIVs as number[]).reduce((a: number, b: number) => a + b, 0) / callIVs.length : null
+    avgIVPut  = putIVs.length ? (putIVs as number[]).reduce((a: number, b: number) => a + b, 0) / putIVs.length : null
 
     // Unusual sweeps: volume > 3x open interest is a flag
     for (const opt of chain.options as OptionContract[]) {
