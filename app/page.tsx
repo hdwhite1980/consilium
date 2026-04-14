@@ -21,7 +21,7 @@ interface MarketData {
   bars: Bar[]
   currentPrice: number
   technicals: {
-    rsi: number; technicalBias: Signal; technicalScore: number
+    rsi: number; technicalBias: string; technicalScore: number
     sma50: number; sma200: number; ema9: number; ema20: number
     support: number; support2: number; resistance: number; resistance2: number
     goldenCross: boolean; ema9CrossEma20: string
