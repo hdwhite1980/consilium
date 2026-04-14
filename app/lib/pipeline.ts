@@ -86,7 +86,7 @@ function parseJSON<T>(text: string): T {
 }
 
 export async function runGemini(bundle: SignalBundle): Promise<GeminiResult> {
-  const model = getGenAI().getGenerativeModel({ model: 'gemini-2.5-flash-preview-05-20' })
+  const model = getGenAI().getGenerativeModel({ model: 'gemini-2.5-flash' })
   const result = await model.generateContent(`You are the News Scout and Macro Analyst for an elite AI stock council.
 
 Analyze all news, macro, and market context for ${bundle.ticker}. You go first. Be specific.
