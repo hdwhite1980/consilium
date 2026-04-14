@@ -397,7 +397,14 @@ function HomeInner() {
           className="flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 rounded-lg text-sm font-semibold transition-all hover:opacity-80"
           style={{ background: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)' }}>
           <Zap size={13} />
-          <span className="hidden sm:inline">Today&apos;s Movers</span>
+          <span className="hidden sm:inline">Today</span>
+        </button>
+
+        <button onClick={() => router.push('/tomorrow')}
+          className="flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 rounded-lg text-sm font-semibold transition-all hover:opacity-80"
+          style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.25)' }}>
+          <span className="text-xs">📅</span>
+          <span className="hidden sm:inline">Tomorrow</span>
         </button>
 
         {running && <span className="text-xs font-mono text-white/25 truncate flex-1">{statusMsg}</span>}

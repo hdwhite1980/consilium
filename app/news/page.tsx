@@ -240,6 +240,13 @@ export default function NewsPage() {
         <div className="flex items-center gap-2">
           <Zap size={14} style={{ color: '#fbbf24' }} />
           <span className="text-sm font-bold">Today&apos;s Movers</span>
+        </div>
+        <button onClick={() => router.push('/tomorrow')}
+          className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-lg transition-all hover:opacity-80"
+          style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)' }}>
+          📅 Tomorrow
+        </button>
+        <div className="flex items-center gap-2">
           <span className="text-[10px] font-mono text-white/25">AI-powered market intelligence</span>
         </div>
         <div className="ml-auto flex items-center gap-3">
