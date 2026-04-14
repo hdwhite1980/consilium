@@ -87,7 +87,7 @@ function parseJSON<T>(text: string): T {
 
 export async function runGemini(bundle: SignalBundle): Promise<GeminiResult> {
   // Try primary model, fall back if unavailable
-  const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
+  const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro']
   let lastError: Error | null = null
   for (const modelName of GEMINI_MODELS) {
     try {
