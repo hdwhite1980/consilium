@@ -1,6 +1,13 @@
 // ─────────────────────────────────────────────────────────────
-// PHASE 1 — Technical Indicators
+// PHASE 1 — Full Technical Indicators Suite
 // All calculated from raw OHLCV bars. Zero extra API calls.
+//
+// Includes:
+//   Trend:      SMA 20/50/200, EMA 9/20, MACD (12,26,9)
+//   Momentum:   RSI (14), Stochastic Oscillator (14,3,3)
+//   Volume:     VWAP, OBV, Volume ratio
+//   Volatility: Bollinger Bands (20,2σ)
+//   Levels:     Support/Resistance, Fibonacci Retracements
 // ─────────────────────────────────────────────────────────────
 
 export interface Bar {
@@ -13,120 +20,153 @@ export interface Bar {
 }
 
 export interface TechnicalSignals {
-  // Price
+  // ── Price ─────────────────────────────────────────────────
   currentPrice: number
-  priceChange1D: number   // %
-  priceChangePeriod: number // %
+  priceChange1D: number
+  priceChangePeriod: number
   high52w: number
   low52w: number
-  distFromHigh: number    // % below 52w high
-  distFromLow: number     // % above 52w low
+  distFromHigh: number
+  distFromLow: number
 
-  // Moving averages
+  // ── Moving Averages ───────────────────────────────────────
   sma20: number
   sma50: number
   sma200: number
+  ema9: number
+  ema20: number
   ema12: number
   ema26: number
-  priceVsSma20: number    // % above/below
+  priceVsSma20: number
   priceVsSma50: number
   priceVsSma200: number
-  goldenCross: boolean    // sma50 > sma200
-  deathCross: boolean     // sma50 < sma200
+  goldenCross: boolean
+  deathCross: boolean
+  ema9CrossEma20: 'bullish' | 'bearish' | 'none'  // fast EMA cross
 
-  // RSI (14)
-  rsi: number
-  rsiSignal: 'oversold' | 'overbought' | 'neutral'
-
-  // MACD (12,26,9)
+  // ── MACD (12, 26, 9) ──────────────────────────────────────
   macdLine: number
   macdSignal: number
   macdHistogram: number
   macdCrossover: 'bullish' | 'bearish' | 'none'
 
-  // Bollinger Bands (20, 2σ)
+  // ── RSI (14) ──────────────────────────────────────────────
+  rsi: number
+  rsiSignal: 'oversold' | 'overbought' | 'neutral'
+
+  // ── Stochastic Oscillator (14, 3, 3) ──────────────────────
+  stochK: number          // %K line
+  stochD: number          // %D line (signal)
+  stochSignal: 'oversold' | 'overbought' | 'neutral'
+  stochCrossover: 'bullish' | 'bearish' | 'none'
+
+  // ── Bollinger Bands (20, 2σ) ──────────────────────────────
   bbUpper: number
   bbMiddle: number
   bbLower: number
-  bbWidth: number         // (upper-lower)/middle — volatility measure
-  bbPosition: number      // 0-1 where price sits in the band
+  bbWidth: number
+  bbPosition: number
   bbSignal: 'squeeze' | 'expansion' | 'normal'
 
-  // Volume
+  // ── VWAP ──────────────────────────────────────────────────
+  vwap: number
+  priceVsVwap: number     // % above/below VWAP
+  vwapSignal: 'above' | 'below'
+
+  // ── OBV (On-Balance Volume) ───────────────────────────────
+  obv: number
+  obvTrend: 'rising' | 'falling' | 'flat'
+  obvDivergence: 'bullish' | 'bearish' | 'none'  // price vs OBV direction
+
+  // ── Volume ────────────────────────────────────────────────
   avgVolume20: number
   lastVolume: number
-  volumeRatio: number     // lastVolume / avgVolume
+  volumeRatio: number
   volumeSignal: 'high' | 'low' | 'normal'
 
-  // Support / Resistance (simple pivot)
+  // ── Support / Resistance ──────────────────────────────────
   support: number
   resistance: number
+  support2: number        // secondary support
+  resistance2: number     // secondary resistance
 
-  // Overall technical score -100 to +100
+  // ── Fibonacci Retracements ────────────────────────────────
+  fibLevels: FibLevel[]
+  nearestFibLevel: FibLevel | null
+
+  // ── Overall Score ─────────────────────────────────────────
   technicalScore: number
   technicalBias: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
-
-  // Human readable summary
   summary: string
 }
 
-// ── SMA ───────────────────────────────────────────────────────
-function sma(closes: number[], period: number): number {
-  if (closes.length < period) return closes[closes.length - 1] ?? 0
-  const slice = closes.slice(-period)
-  return slice.reduce((a, b) => a + b, 0) / period
+export interface FibLevel {
+  level: number        // 0, 0.236, 0.382, 0.5, 0.618, 0.786, 1
+  price: number
+  label: string
+  type: 'support' | 'resistance'
 }
 
-// ── EMA ───────────────────────────────────────────────────────
-function ema(closes: number[], period: number): number {
-  if (closes.length < period) return closes[closes.length - 1] ?? 0
+// ── Math Helpers ──────────────────────────────────────────────
+
+function sma(values: number[], period: number): number {
+  const n = Math.min(period, values.length)
+  return values.slice(-n).reduce((a, b) => a + b, 0) / n
+}
+
+function ema(values: number[], period: number): number {
+  if (values.length < period) return values[values.length - 1] ?? 0
   const k = 2 / (period + 1)
-  let val = closes.slice(0, period).reduce((a, b) => a + b, 0) / period
-  for (let i = period; i < closes.length; i++) {
-    val = closes[i] * k + val * (1 - k)
+  let val = values.slice(0, period).reduce((a, b) => a + b, 0) / period
+  for (let i = period; i < values.length; i++) {
+    val = values[i] * k + val * (1 - k)
   }
   return val
 }
 
-// ── RSI (14) ──────────────────────────────────────────────────
-function rsi(closes: number[], period = 14): number {
+function emaArray(values: number[], period: number): number[] {
+  const k = 2 / (period + 1)
+  const result: number[] = []
+  let val = values.slice(0, period).reduce((a, b) => a + b, 0) / period
+  for (let i = 0; i < values.length; i++) {
+    if (i < period - 1) { result.push(NaN); continue }
+    if (i === period - 1) { result.push(val); continue }
+    val = values[i] * k + val * (1 - k)
+    result.push(val)
+  }
+  return result
+}
+
+function calcRSI(closes: number[], period = 14): number {
   if (closes.length < period + 1) return 50
   let gains = 0, losses = 0
   for (let i = 1; i <= period; i++) {
     const diff = closes[i] - closes[i - 1]
-    if (diff > 0) gains += diff
-    else losses -= diff
+    if (diff > 0) gains += diff; else losses -= diff
   }
-  let avgGain = gains / period
-  let avgLoss = losses / period
+  let avgGain = gains / period, avgLoss = losses / period
   for (let i = period + 1; i < closes.length; i++) {
     const diff = closes[i] - closes[i - 1]
     avgGain = (avgGain * (period - 1) + Math.max(diff, 0)) / period
     avgLoss = (avgLoss * (period - 1) + Math.max(-diff, 0)) / period
   }
   if (avgLoss === 0) return 100
-  const rs = avgGain / avgLoss
-  return 100 - 100 / (1 + rs)
+  return 100 - 100 / (1 + avgGain / avgLoss)
 }
 
-// ── MACD (12, 26, 9) ──────────────────────────────────────────
-function macd(closes: number[]): { line: number; signal: number; histogram: number } {
-  const ema12 = ema(closes, 12)
-  const ema26 = ema(closes, 26)
-  const line = ema12 - ema26
-  // Signal = 9-period EMA of MACD line (approximate)
-  const macdValues: number[] = []
-  for (let i = 26; i <= closes.length; i++) {
-    const e12 = ema(closes.slice(0, i), 12)
-    const e26 = ema(closes.slice(0, i), 26)
-    macdValues.push(e12 - e26)
-  }
-  const signalLine = ema(macdValues, 9)
+function calcMACD(closes: number[]): { line: number; signal: number; histogram: number } {
+  const ema12arr = emaArray(closes, 12)
+  const ema26arr = emaArray(closes, 26)
+  const macdArr = ema12arr.map((v, i) =>
+    isNaN(v) || isNaN(ema26arr[i]) ? NaN : v - ema26arr[i]
+  ).filter(v => !isNaN(v))
+
+  const line = macdArr[macdArr.length - 1] ?? 0
+  const signalLine = ema(macdArr, 9)
   return { line, signal: signalLine, histogram: line - signalLine }
 }
 
-// ── Bollinger Bands (20, 2σ) ──────────────────────────────────
-function bollingerBands(closes: number[], period = 20): { upper: number; middle: number; lower: number } {
+function calcBollinger(closes: number[], period = 20) {
   const middle = sma(closes, period)
   const slice = closes.slice(-period)
   const variance = slice.reduce((s, c) => s + Math.pow(c - middle, 2), 0) / period
@@ -134,15 +174,113 @@ function bollingerBands(closes: number[], period = 20): { upper: number; middle:
   return { upper: middle + 2 * stddev, middle, lower: middle - 2 * stddev }
 }
 
+// ── Stochastic Oscillator (14, 3, 3) ──────────────────────────
+function calcStochastic(bars: Bar[], kPeriod = 14, dPeriod = 3): { k: number; d: number } {
+  if (bars.length < kPeriod) return { k: 50, d: 50 }
+  const kValues: number[] = []
+  for (let i = kPeriod - 1; i < bars.length; i++) {
+    const slice = bars.slice(i - kPeriod + 1, i + 1)
+    const high = Math.max(...slice.map(b => b.h))
+    const low  = Math.min(...slice.map(b => b.l))
+    const close = bars[i].c
+    const k = high === low ? 50 : ((close - low) / (high - low)) * 100
+    kValues.push(k)
+  }
+  // %D = 3-period SMA of %K
+  const k = kValues[kValues.length - 1]
+  const d = sma(kValues, dPeriod)
+  return { k, d }
+}
+
+// ── VWAP ──────────────────────────────────────────────────────
+function calcVWAP(bars: Bar[]): number {
+  // Use all available bars (intraday VWAP uses session, we approximate with period)
+  let totalTPV = 0, totalVol = 0
+  for (const bar of bars) {
+    const typicalPrice = (bar.h + bar.l + bar.c) / 3
+    totalTPV += typicalPrice * bar.v
+    totalVol += bar.v
+  }
+  return totalVol > 0 ? totalTPV / totalVol : bars[bars.length - 1]?.c ?? 0
+}
+
+// ── OBV ───────────────────────────────────────────────────────
+function calcOBV(bars: Bar[]): { obv: number; trend: 'rising' | 'falling' | 'flat'; divergence: 'bullish' | 'bearish' | 'none' } {
+  if (bars.length < 2) return { obv: 0, trend: 'flat', divergence: 'none' }
+  let obv = 0
+  const obvArr: number[] = [0]
+  for (let i = 1; i < bars.length; i++) {
+    if (bars[i].c > bars[i-1].c)      obv += bars[i].v
+    else if (bars[i].c < bars[i-1].c) obv -= bars[i].v
+    obvArr.push(obv)
+  }
+  // Trend: compare last 5 OBV values
+  const recent = obvArr.slice(-5)
+  const obvChange = recent[recent.length-1] - recent[0]
+  const trend: 'rising' | 'falling' | 'flat' = Math.abs(obvChange) < 1000
+    ? 'flat' : obvChange > 0 ? 'rising' : 'falling'
+
+  // Divergence: price up but OBV down = bearish divergence (and vice versa)
+  const priceChange = bars[bars.length-1].c - bars[Math.max(0, bars.length-5)].c
+  let divergence: 'bullish' | 'bearish' | 'none' = 'none'
+  if (priceChange < 0 && obvChange > 0) divergence = 'bullish'
+  else if (priceChange > 0 && obvChange < 0) divergence = 'bearish'
+
+  return { obv, trend, divergence }
+}
+
+// ── Fibonacci Retracements ────────────────────────────────────
+function calcFibLevels(bars: Bar[]): FibLevel[] {
+  const highs = bars.map(b => b.h)
+  const lows  = bars.map(b => b.l)
+  const swingHigh = Math.max(...highs)
+  const swingLow  = Math.min(...lows)
+  const range = swingHigh - swingLow
+  const current = bars[bars.length - 1].c
+  const trending = current > (swingHigh + swingLow) / 2 ? 'up' : 'down'
+
+  const FIB_LEVELS = [
+    { level: 0,     label: '0% (swing low)' },
+    { level: 0.236, label: '23.6%' },
+    { level: 0.382, label: '38.2%' },
+    { level: 0.500, label: '50%' },
+    { level: 0.618, label: '61.8% (golden ratio)' },
+    { level: 0.786, label: '78.6%' },
+    { level: 1,     label: '100% (swing high)' },
+  ]
+
+  return FIB_LEVELS.map(({ level, label }) => {
+    const price = trending === 'up'
+      ? swingLow + level * range           // retracement from low
+      : swingHigh - level * range          // retracement from high
+    return {
+      level,
+      price,
+      label,
+      type: (price < current ? 'support' : 'resistance') as 'support' | 'resistance',
+    }
+  })
+}
+
+function nearestFib(fibs: FibLevel[], current: number): FibLevel | null {
+  if (!fibs.length) return null
+  return fibs.reduce((best, f) =>
+    Math.abs(f.price - current) < Math.abs(best.price - current) ? f : best
+  )
+}
+
 // ── Pivot Support / Resistance ────────────────────────────────
-function pivotLevels(bars: Bar[]): { support: number; resistance: number } {
+function calcPivots(bars: Bar[]): { s1: number; s2: number; r1: number; r2: number } {
   const recent = bars.slice(-20)
-  const highs = recent.map(b => b.h)
-  const lows = recent.map(b => b.l)
-  const pivot = (Math.max(...highs) + Math.min(...lows) + recent[recent.length - 1].c) / 3
+  const high = Math.max(...recent.map(b => b.h))
+  const low  = Math.min(...recent.map(b => b.l))
+  const close = recent[recent.length - 1].c
+  const pivot = (high + low + close) / 3
   return {
-    resistance: 2 * pivot - Math.min(...lows),
-    support: 2 * pivot - Math.max(...highs),
+    r1: 2 * pivot - low,
+    r2: pivot + (high - low),
+    s1: 2 * pivot - high,
+    s2: pivot - (high - low),
   }
 }
 
@@ -150,114 +288,176 @@ function pivotLevels(bars: Bar[]): { support: number; resistance: number } {
 export function calculateTechnicals(bars: Bar[]): TechnicalSignals {
   if (!bars.length) return emptyTechnicals()
 
-  const closes = bars.map(b => b.c)
+  const closes  = bars.map(b => b.c)
+  const highs   = bars.map(b => b.h)
+  const lows    = bars.map(b => b.l)
   const volumes = bars.map(b => b.v)
   const current = closes[closes.length - 1]
-  const prev = closes[closes.length - 2] ?? current
-  const first = closes[0]
+  const prev    = closes[closes.length - 2] ?? current
+  const first   = closes[0]
 
-  // Price stats
+  // ── Price stats ───────────────────────────────────────────
   const priceChange1D = ((current - prev) / prev) * 100
   const priceChangePeriod = ((current - first) / first) * 100
-  const high52w = Math.max(...bars.map(b => b.h))
-  const low52w = Math.min(...bars.map(b => b.l))
+  const high52w = Math.max(...highs)
+  const low52w  = Math.min(...lows)
   const distFromHigh = ((high52w - current) / high52w) * 100
-  const distFromLow = ((current - low52w) / low52w) * 100
+  const distFromLow  = ((current - low52w) / low52w) * 100
 
-  // Moving averages
-  const s20 = sma(closes, Math.min(20, closes.length))
-  const s50 = sma(closes, Math.min(50, closes.length))
+  // ── Moving averages ───────────────────────────────────────
+  const s20  = sma(closes, Math.min(20, closes.length))
+  const s50  = sma(closes, Math.min(50, closes.length))
   const s200 = sma(closes, Math.min(200, closes.length))
-  const e12 = ema(closes, Math.min(12, closes.length))
-  const e26 = ema(closes, Math.min(26, closes.length))
+  const e9   = ema(closes, Math.min(9, closes.length))
+  const e20  = ema(closes, Math.min(20, closes.length))
+  const e12  = ema(closes, Math.min(12, closes.length))
+  const e26  = ema(closes, Math.min(26, closes.length))
 
-  // RSI
-  const rsiVal = rsi(closes)
-  const rsiSignal = rsiVal >= 70 ? 'overbought' : rsiVal <= 30 ? 'oversold' : 'neutral'
+  // EMA 9/20 crossover (using previous values to detect cross)
+  const prevE9  = ema(closes.slice(0, -1), Math.min(9, closes.length - 1))
+  const prevE20 = ema(closes.slice(0, -1), Math.min(20, closes.length - 1))
+  const ema9CrossEma20: 'bullish' | 'bearish' | 'none' =
+    e9 > e20 && prevE9 <= prevE20 ? 'bullish' :
+    e9 < e20 && prevE9 >= prevE20 ? 'bearish' : 'none'
 
-  // MACD
-  const { line: macdLine, signal: macdSig, histogram: macdHist } = macd(closes)
-  const prevMacdHist = closes.length > 2 ? (() => {
-    const { histogram } = macd(closes.slice(0, -1))
-    return histogram
-  })() : 0
-  const macdCrossover = macdHist > 0 && prevMacdHist <= 0 ? 'bullish'
-    : macdHist < 0 && prevMacdHist >= 0 ? 'bearish' : 'none'
+  // ── MACD ──────────────────────────────────────────────────
+  const { line: macdLine, signal: macdSig, histogram: macdHist } = calcMACD(closes)
+  const { histogram: prevMacdHist } = calcMACD(closes.slice(0, -1))
+  const macdCrossover: 'bullish' | 'bearish' | 'none' =
+    macdHist > 0 && prevMacdHist <= 0 ? 'bullish' :
+    macdHist < 0 && prevMacdHist >= 0 ? 'bearish' : 'none'
 
-  // Bollinger
-  const { upper: bbU, middle: bbM, lower: bbL } = bollingerBands(closes)
+  // ── RSI ───────────────────────────────────────────────────
+  const rsiVal = calcRSI(closes)
+  const rsiSignal: TechnicalSignals['rsiSignal'] =
+    rsiVal >= 70 ? 'overbought' : rsiVal <= 30 ? 'oversold' : 'neutral'
+
+  // ── Stochastic ────────────────────────────────────────────
+  const { k: stochK, d: stochD } = calcStochastic(bars)
+  const prevStoch = calcStochastic(bars.slice(0, -1))
+  const stochSignal: TechnicalSignals['stochSignal'] =
+    stochK >= 80 ? 'overbought' : stochK <= 20 ? 'oversold' : 'neutral'
+  const stochCrossover: TechnicalSignals['stochCrossover'] =
+    stochK > stochD && prevStoch.k <= prevStoch.d ? 'bullish' :
+    stochK < stochD && prevStoch.k >= prevStoch.d ? 'bearish' : 'none'
+
+  // ── Bollinger Bands ───────────────────────────────────────
+  const { upper: bbU, middle: bbM, lower: bbL } = calcBollinger(closes)
   const bbWidth = (bbU - bbL) / bbM
-  const bbPosition = (current - bbL) / (bbU - bbL)
-  const bbSignal = bbWidth < 0.05 ? 'squeeze' : bbWidth > 0.15 ? 'expansion' : 'normal'
+  const bbPosition = (bbU > bbL) ? (current - bbL) / (bbU - bbL) : 0.5
+  const bbSignal: TechnicalSignals['bbSignal'] =
+    bbWidth < 0.05 ? 'squeeze' : bbWidth > 0.15 ? 'expansion' : 'normal'
 
-  // Volume
+  // ── VWAP ──────────────────────────────────────────────────
+  const vwap = calcVWAP(bars)
+  const priceVsVwap = ((current - vwap) / vwap) * 100
+  const vwapSignal: TechnicalSignals['vwapSignal'] = current >= vwap ? 'above' : 'below'
+
+  // ── OBV ───────────────────────────────────────────────────
+  const { obv, trend: obvTrend, divergence: obvDivergence } = calcOBV(bars)
+
+  // ── Volume ────────────────────────────────────────────────
   const avgVol = volumes.slice(-20).reduce((a, b) => a + b, 0) / Math.min(20, volumes.length)
   const lastVol = volumes[volumes.length - 1]
   const volRatio = lastVol / avgVol
-  const volumeSignal = volRatio > 1.5 ? 'high' : volRatio < 0.5 ? 'low' : 'normal'
+  const volumeSignal: TechnicalSignals['volumeSignal'] =
+    volRatio > 1.5 ? 'high' : volRatio < 0.5 ? 'low' : 'normal'
 
-  // Pivot levels
-  const { support, resistance } = pivotLevels(bars)
+  // ── Fibonacci ─────────────────────────────────────────────
+  const fibLevels = calcFibLevels(bars)
+  const nearestFibLevel = nearestFib(fibLevels, current)
 
-  // ── Score: -100 to +100 ───────────────────────────────────
+  // ── Pivots ────────────────────────────────────────────────
+  const { s1, s2, r1, r2 } = calcPivots(bars)
+
+  // ── Technical Score (-100 to +100) ───────────────────────
   let score = 0
-  // Trend (40 pts)
-  if (current > s50) score += 15
-  else score -= 15
-  if (current > s200) score += 15
-  else score -= 15
-  if (s50 > s200) score += 10
-  else score -= 10
-  // Momentum (30 pts)
-  if (rsiVal > 50 && rsiVal < 70) score += 15
-  else if (rsiVal >= 70) score += 5
-  else if (rsiVal < 50 && rsiVal > 30) score -= 10
-  else score -= 20
-  if (macdHist > 0) score += 15
-  else score -= 15
-  // Volume (15 pts)
-  if (priceChange1D > 0 && volumeSignal === 'high') score += 15
-  else if (priceChange1D < 0 && volumeSignal === 'high') score -= 15
-  else score += 0
-  // Bollinger (15 pts)
-  if (bbPosition > 0.6 && bbPosition < 0.9) score += 10
-  else if (bbPosition >= 0.9) score -= 5
-  else if (bbPosition < 0.2) score -= 10
-  if (bbSignal === 'squeeze') score += 5 // coiled spring
 
-  score = Math.max(-100, Math.min(100, score))
+  // Trend (35 pts)
+  if (current > s50)  score += 12; else score -= 12
+  if (current > s200) score += 12; else score -= 12
+  if (s50 > s200)     score += 11; else score -= 11
+
+  // EMA signals (15 pts)
+  if (current > e9)           score += 5
+  if (e9 > e20)               score += 5
+  if (ema9CrossEma20 === 'bullish') score += 5
+  else if (ema9CrossEma20 === 'bearish') score -= 5
+
+  // MACD (15 pts)
+  if (macdHist > 0)                    score += 8; else score -= 8
+  if (macdCrossover === 'bullish')     score += 7
+  else if (macdCrossover === 'bearish') score -= 7
+
+  // RSI (10 pts)
+  if (rsiVal > 50 && rsiVal < 70) score += 7
+  else if (rsiVal >= 70)          score += 2
+  else if (rsiVal > 30)           score -= 5
+  else                            score -= 10
+
+  // Stochastic (10 pts)
+  if (stochK > stochD && stochSignal !== 'overbought') score += 5
+  else if (stochK < stochD && stochSignal !== 'oversold') score -= 5
+  if (stochCrossover === 'bullish') score += 5
+  else if (stochCrossover === 'bearish') score -= 5
+
+  // VWAP (10 pts)
+  if (vwapSignal === 'above') score += 10; else score -= 10
+
+  // OBV (10 pts)
+  if (obvTrend === 'rising')       score += 7
+  else if (obvTrend === 'falling') score -= 7
+  if (obvDivergence === 'bullish') score += 3
+  else if (obvDivergence === 'bearish') score -= 3
+
+  // Bollinger (5 pts)
+  if (bbSignal === 'squeeze') score += 3
+  if (bbPosition > 0.5 && bbPosition < 0.9) score += 2
+  else if (bbPosition >= 0.9) score -= 3
+
+  score = Math.max(-100, Math.min(100, Math.round(score)))
   const technicalBias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' =
     score > 25 ? 'BULLISH' : score < -25 ? 'BEARISH' : 'NEUTRAL'
 
   // ── Summary string for AI ─────────────────────────────────
-  const pricePct = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
-  const parts: string[] = [
-    `Price: $${current.toFixed(2)} (${pricePct(priceChange1D)} today, ${pricePct(priceChangePeriod)} period)`,
+  const p = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
+  const summary = [
+    `Price: $${current.toFixed(2)} (${p(priceChange1D)} today, ${p(priceChangePeriod)} period)`,
+    `EMAs: EMA9 $${e9.toFixed(2)} / EMA20 $${e20.toFixed(2)} — ${ema9CrossEma20 !== 'none' ? ema9CrossEma20 + ' crossover!' : e9 > e20 ? 'bullish alignment' : 'bearish alignment'}`,
+    `MAs: SMA50 ${p((current/s50-1)*100)} / SMA200 ${p((current/s200-1)*100)} — ${s50 > s200 ? 'golden cross' : 'death cross'} in effect`,
+    `MACD: histogram ${macdHist >= 0 ? 'positive' : 'negative'}${macdCrossover !== 'none' ? ' — ' + macdCrossover + ' crossover!' : ''}`,
     `RSI(14): ${rsiVal.toFixed(1)} — ${rsiSignal}`,
-    `MACD: histogram ${macdHist >= 0 ? 'positive' : 'negative'} (${macdCrossover !== 'none' ? macdCrossover + ' crossover!' : 'no crossover'})`,
-    `vs MAs: SMA20 ${pricePct((current/s20-1)*100)}, SMA50 ${pricePct((current/s50-1)*100)}, SMA200 ${pricePct((current/s200-1)*100)}`,
-    `${s50 > s200 ? 'Golden cross in effect' : 'Death cross in effect'} (SMA50 ${s50 > s200 ? '>' : '<'} SMA200)`,
-    `Bollinger: price at ${(bbPosition * 100).toFixed(0)}% of band, band ${bbSignal}`,
+    `Stochastic(14,3,3): %K ${stochK.toFixed(1)} / %D ${stochD.toFixed(1)} — ${stochSignal}${stochCrossover !== 'none' ? ', ' + stochCrossover + ' crossover' : ''}`,
+    `VWAP: $${vwap.toFixed(2)} — price is ${p(priceVsVwap)} ${vwapSignal} VWAP`,
+    `OBV trend: ${obvTrend}${obvDivergence !== 'none' ? ' — ' + obvDivergence + ' divergence detected!' : ''}`,
+    `Bollinger: ${bbSignal} band, price at ${(bbPosition * 100).toFixed(0)}% of band`,
     `Volume: ${volRatio.toFixed(1)}x average — ${volumeSignal}`,
-    `Support: $${support.toFixed(2)}, Resistance: $${resistance.toFixed(2)}`,
+    `Fibonacci: nearest level is ${nearestFibLevel?.label ?? 'N/A'} at $${nearestFibLevel?.price.toFixed(2) ?? 'N/A'} (${nearestFibLevel?.type ?? ''})`,
+    `Key levels: Support $${s1.toFixed(2)} / $${s2.toFixed(2)}, Resistance $${r1.toFixed(2)} / $${r2.toFixed(2)}`,
     `Technical score: ${score}/100 → ${technicalBias}`,
-  ]
+  ].join('\n')
 
   return {
     currentPrice: current, priceChange1D, priceChangePeriod,
     high52w, low52w, distFromHigh, distFromLow,
-    sma20: s20, sma50: s50, sma200: s200, ema12: e12, ema26: e26,
+    sma20: s20, sma50: s50, sma200: s200,
+    ema9: e9, ema20: e20, ema12: e12, ema26: e26,
     priceVsSma20: (current/s20-1)*100,
     priceVsSma50: (current/s50-1)*100,
     priceVsSma200: (current/s200-1)*100,
     goldenCross: s50 > s200, deathCross: s50 < s200,
-    rsi: rsiVal, rsiSignal,
+    ema9CrossEma20,
     macdLine, macdSignal: macdSig, macdHistogram: macdHist, macdCrossover,
+    rsi: rsiVal, rsiSignal,
+    stochK, stochD, stochSignal, stochCrossover,
     bbUpper: bbU, bbMiddle: bbM, bbLower: bbL, bbWidth, bbPosition, bbSignal,
+    vwap, priceVsVwap, vwapSignal,
+    obv, obvTrend, obvDivergence,
     avgVolume20: avgVol, lastVolume: lastVol, volumeRatio: volRatio, volumeSignal,
-    support, resistance,
+    support: s1, resistance: r1, support2: s2, resistance2: r2,
+    fibLevels, nearestFibLevel,
     technicalScore: score, technicalBias,
-    summary: parts.join('\n'),
+    summary,
   }
 }
 
@@ -266,15 +466,66 @@ function emptyTechnicals(): TechnicalSignals {
   return {
     currentPrice: z, priceChange1D: z, priceChangePeriod: z,
     high52w: z, low52w: z, distFromHigh: z, distFromLow: z,
-    sma20: z, sma50: z, sma200: z, ema12: z, ema26: z,
+    sma20: z, sma50: z, sma200: z,
+    ema9: z, ema20: z, ema12: z, ema26: z,
     priceVsSma20: z, priceVsSma50: z, priceVsSma200: z,
-    goldenCross: false, deathCross: false,
-    rsi: 50, rsiSignal: 'neutral',
+    goldenCross: false, deathCross: false, ema9CrossEma20: 'none',
     macdLine: z, macdSignal: z, macdHistogram: z, macdCrossover: 'none',
+    rsi: 50, rsiSignal: 'neutral',
+    stochK: 50, stochD: 50, stochSignal: 'neutral', stochCrossover: 'none',
     bbUpper: z, bbMiddle: z, bbLower: z, bbWidth: z, bbPosition: 0.5, bbSignal: 'normal',
+    vwap: z, priceVsVwap: z, vwapSignal: 'above',
+    obv: z, obvTrend: 'flat', obvDivergence: 'none',
     avgVolume20: z, lastVolume: z, volumeRatio: 1, volumeSignal: 'normal',
-    support: z, resistance: z,
+    support: z, resistance: z, support2: z, resistance2: z,
+    fibLevels: [], nearestFibLevel: null,
     technicalScore: 0, technicalBias: 'NEUTRAL',
     summary: 'No price data available.',
+  }
+}
+
+// ── Export helper for API route ───────────────────────────────
+// Returns a plain object with all fields needed for the frontend.
+// Using this avoids TypeScript cache issues with ReturnType inference.
+export function technicalsToPayload(t: TechnicalSignals, currentPrice: number): Record<string, unknown> {
+  return {
+    rsi: t.rsi,
+    technicalBias: t.technicalBias,
+    technicalScore: t.technicalScore,
+    sma20: t.sma20,
+    sma50: t.sma50,
+    sma200: t.sma200,
+    ema9: t.ema9,
+    ema20: t.ema20,
+    support: t.support,
+    support2: t.support2,
+    resistance: t.resistance,
+    resistance2: t.resistance2,
+    goldenCross: t.goldenCross,
+    ema9CrossEma20: t.ema9CrossEma20,
+    macdLine: t.macdLine,
+    macdSignal: t.macdSignal,
+    macdHistogram: t.macdHistogram,
+    macdCrossover: t.macdCrossover,
+    bbPosition: t.bbPosition,
+    bbSignal: t.bbSignal,
+    bbUpper: t.bbUpper,
+    bbMiddle: t.bbMiddle,
+    bbLower: t.bbLower,
+    stochK: t.stochK,
+    stochD: t.stochD,
+    stochSignal: t.stochSignal,
+    stochCrossover: t.stochCrossover,
+    vwap: t.vwap,
+    priceVsVwap: t.priceVsVwap,
+    vwapSignal: t.vwapSignal,
+    obv: t.obv,
+    obvTrend: t.obvTrend,
+    obvDivergence: t.obvDivergence,
+    volumeRatio: t.volumeRatio,
+    priceChange1D: t.priceChange1D,
+    fibLevels: t.fibLevels,
+    nearestFibLevel: t.nearestFibLevel,
+    currentPrice,
   }
 }
