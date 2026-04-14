@@ -8,9 +8,9 @@ import OpenAI from 'openai'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import type { SignalBundle } from './aggregator'
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-const openai    = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-const genAI     = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
+function getAnthropic() { return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) }
+function getOpenAI()    { return new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) }
+function getGenAI()     { return new GoogleGenerativeAI(process.env.GEMINI_API_KEY!) }
 
 export type Signal = 'BULLISH' | 'BEARISH' | 'NEUTRAL'
 
@@ -86,7 +86,7 @@ function parseJSON<T>(text: string): T {
 }
 
 export async function runGemini(bundle: SignalBundle): Promise<GeminiResult> {
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
+  const model = getGenAI().getGenerativeModel({ model: 'gemini-2.0-flash' })
   const result = await model.generateContent(`You are the News Scout and Macro Analyst for an elite AI stock council.
 
 Analyze all news, macro, and market context for ${bundle.ticker}. You go first. Be specific.
@@ -101,7 +101,7 @@ Respond JSON ONLY (no fences):
 }
 
 export async function runClaude(bundle: SignalBundle, gemini: GeminiResult): Promise<ClaudeResult> {
-  const msg = await anthropic.messages.create({
+  const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 1000,
     system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. Synthesize ALL signals into a clear directional call. Be specific and data-driven. Your analysis will be challenged by GPT-4o.`,
@@ -131,7 +131,7 @@ JSON ONLY:
 }
 
 export async function runGPT(bundle: SignalBundle, gemini: GeminiResult, claude: ClaudeResult): Promise<GptResult> {
-  const completion = await openai.chat.completions.create({
+  const completion = await getOpenAI().chat.completions.create({
     model: 'gpt-4o',
     max_tokens: 1000,
     messages: [
@@ -163,7 +163,7 @@ export async function runJudge(
   gpt: GptResult,
   round = 1
 ): Promise<JudgeResult> {
-  const msg = await anthropic.messages.create({
+  const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 1200,
     system: `You are the Judge of an elite AI stock council for ${bundle.ticker}. You hold NO prior position. Weigh argument QUALITY not vote count. Be decisive. Name the winning argument explicitly.`,
