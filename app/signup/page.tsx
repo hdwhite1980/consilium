@@ -6,12 +6,12 @@ import { createClient } from '@/app/lib/auth/client'
 import { Eye, EyeOff, Check, TrendingUp, BarChart2, Brain, Shield, Zap, Calendar } from 'lucide-react'
 
 const BENEFITS = [
-  { icon: <Brain size={16} />,      color: '#a78bfa', text: 'AI council debates every stock — 4 roles, one verdict' },
-  { icon: <BarChart2 size={16} />,  color: '#60a5fa', text: 'Full technical suite with plain English explanations' },
-  { icon: <Shield size={16} />,     color: '#34d399', text: 'Smart money — congressional trades, SEC filings, options flow' },
-  { icon: <Zap size={16} />,        color: '#fbbf24', text: "Today's & Tomorrow's Movers — AI-scanned daily catalysts" },
-  { icon: <TrendingUp size={16} />, color: '#f87171', text: 'Options strategy recommendations with live contract data' },
-  { icon: <Calendar size={16} />,   color: '#a78bfa', text: 'Earnings calendar, analyst ratings, insider activity' },
+  { icon: <Brain size={16} />,      color: '#a78bfa', text: 'Get a clear buy, sell, or hold verdict on any stock — with a price target and exact entry and exit levels' },
+  { icon: <BarChart2 size={16} />,  color: '#60a5fa', text: 'Every signal explained in plain English — no experience required to understand what the data is saying' },
+  { icon: <Shield size={16} />,     color: '#34d399', text: 'See what insiders, institutions, and lawmakers are doing with their own money before you decide' },
+  { icon: <Zap size={16} />,        color: '#fbbf24', text: "Know which stocks could move today and which setups are building for tomorrow — before the market opens" },
+  { icon: <TrendingUp size={16} />, color: '#f87171', text: 'Get specific options strategies matched to the outlook — with real contracts, real prices, and plain English risk breakdowns' },
+  { icon: <Calendar size={16} />,   color: '#a78bfa', text: 'Never get caught off guard by earnings, analyst changes, or market events that move your positions' },
 ]
 
 function SignupInner() {
@@ -112,10 +112,10 @@ function SignupInner() {
           </div>
 
           <h1 className="text-3xl font-bold text-white mb-3 leading-tight">
-            Your AI stock<br />analysis council.
+            Stop guessing.<br />Start knowing.
           </h1>
           <p className="text-white/50 text-base mb-10 leading-relaxed">
-            Three AI roles debate every stock. One judge delivers the verdict — with price target, entry/exit levels, and plain English explanations for every signal.
+            Consilium analyzes any stock and tells you exactly what to do — with a clear signal, a price target, and entry and exit levels explained in plain English.
           </p>
 
           <div className="space-y-4">
