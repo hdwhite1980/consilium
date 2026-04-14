@@ -24,7 +24,7 @@ interface MarketData {
     rsi: number; technicalBias: Signal; technicalScore: number
     sma50: number; sma200: number; support: number; resistance: number
     goldenCross: boolean; macdHistogram: number; bbSignal: string
-    volumeRatio: number; priceChange1D: number
+    bbPosition: number; volumeRatio: number; priceChange1D: number
   }
   conviction: {
     direction: Signal; conviction: string; convergenceScore: number
