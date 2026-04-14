@@ -32,24 +32,21 @@ export async function fetchNews(ticker: string, limit = 15): Promise<AlpacaNewsI
 // ── OHLCV Bars ─────────────────────────────────────────────────
 export async function fetchBars(ticker: string, timeframe: string): Promise<AlpacaBar[]> {
   try {
-    // Always fetch 300 daily bars going back from today for accurate SMA200
-    // Use date range instead of limit — more reliable across feeds
+    const { tf, daysBack } = barParams(timeframe)
     const end = new Date()
     const start = new Date()
-    start.setDate(start.getDate() - 420) // ~420 calendar days = ~300 trading days
-
+    start.setDate(start.getDate() - daysBack)
     const startStr = start.toISOString().split('T')[0]
     const endStr   = end.toISOString().split('T')[0]
 
-    // Try sip feed first (most complete), fall back to iex
     for (const feed of ['sip', 'iex']) {
       try {
-        const url = `${BASE}/v2/stocks/${ticker}/bars?timeframe=1Day&start=${startStr}&end=${endStr}&limit=300&adjustment=split&feed=${feed}`
+        const url = `${BASE}/v2/stocks/${ticker}/bars?timeframe=${tf}&start=${startStr}&end=${endStr}&limit=1000&adjustment=split&feed=${feed}`
         const res = await fetch(url, { headers: alpacaHeaders(), next: { revalidate: 300 } })
         if (!res.ok) continue
         const data = await res.json()
         const bars = (data.bars || []) as AlpacaBar[]
-        if (bars.length >= 20) return bars  // accept if we got something meaningful
+        if (bars.length >= 20) return bars
       } catch {
         continue
       }
@@ -78,16 +75,17 @@ export async function fetchQuote(ticker: string): Promise<AlpacaQuote | null> {
 // ── Multi-ticker bars (for competitors + market context) ───────
 export async function fetchMultiBars(tickers: string[], timeframe: string): Promise<Record<string, AlpacaBar[]>> {
   try {
+    const { tf, daysBack } = barParams(timeframe)
     const symbols = tickers.join(',')
     const end = new Date()
     const start = new Date()
-    start.setDate(start.getDate() - 420)
+    start.setDate(start.getDate() - daysBack)
     const startStr = start.toISOString().split('T')[0]
     const endStr   = end.toISOString().split('T')[0]
 
     for (const feed of ['sip', 'iex']) {
       try {
-        const url = `${BASE}/v2/stocks/bars?symbols=${symbols}&timeframe=1Day&start=${startStr}&end=${endStr}&limit=300&adjustment=split&feed=${feed}`
+        const url = `${BASE}/v2/stocks/bars?symbols=${symbols}&timeframe=${tf}&start=${startStr}&end=${endStr}&limit=1000&adjustment=split&feed=${feed}`
         const res = await fetch(url, { headers: alpacaHeaders(), next: { revalidate: 300 } })
         if (!res.ok) continue
         const data = await res.json()
@@ -126,15 +124,15 @@ export function formatBarsForAI(bars: AlpacaBar[], timeframe: string): string {
 
 // ── Helpers ────────────────────────────────────────────────────
 function barParams(timeframe: string) {
+  // Different bar resolutions per timeframe so indicators reflect that view.
+  // 1D and 1W use hourly bars — RSI/MACD on hourly tells a different story.
+  // 1M and 3M use daily bars with enough history for accurate SMA200.
   switch (timeframe) {
-    // Always fetch 250+ daily bars so SMA200 is accurate.
-    // The display timeframe controls what the AI focuses on,
-    // but the technical indicators need the full history.
-    case '1D': return { tf: '1Day',  limit: 250 }
-    case '1W': return { tf: '1Day',  limit: 250 }
-    case '1M': return { tf: '1Day',  limit: 250 }
-    case '3M': return { tf: '1Day',  limit: 250 }
-    default:   return { tf: '1Day',  limit: 250 }
+    case '1D': return { tf: '1Hour', daysBack: 30  }   // 30 days of hourly = ~480 bars
+    case '1W': return { tf: '1Hour', daysBack: 60  }   // 60 days of hourly = ~960 bars
+    case '1M': return { tf: '1Day',  daysBack: 420 }   // 420 calendar days = ~290 trading days
+    case '3M': return { tf: '1Day',  daysBack: 420 }   // same — need SMA200
+    default:   return { tf: '1Day',  daysBack: 420 }
   }
 }
 

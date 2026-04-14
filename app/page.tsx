@@ -201,6 +201,40 @@ function HomeInner() {
   const abortRef  = useRef<AbortController | null>(null)
   const scroll    = useCallback(() => setTimeout(() => debateRef.current?.scrollTo({ top: 99999, behavior: 'smooth' }), 80), [])
 
+  // Persist last result to sessionStorage so navigation away and back restores it
+  useEffect(() => {
+    if (stage === 'done' && md && gem && jud) {
+      try {
+        sessionStorage.setItem('consilium_last', JSON.stringify({
+          ticker, tf, stage, md, gem, cla, gpt, jud, cached
+        }))
+      } catch { /* storage full or unavailable */ }
+    }
+  }, [stage, md, gem, cla, gpt, jud, ticker, tf, cached])
+
+  // Restore last result on mount (if no ticker param in URL)
+  useEffect(() => {
+    const urlTicker = searchParams.get('ticker')
+    if (!urlTicker) {
+      try {
+        const saved = sessionStorage.getItem('consilium_last')
+        if (saved) {
+          const s = JSON.parse(saved)
+          setTicker(s.ticker ?? 'AAPL')
+          setTf(s.tf ?? '1W')
+          setStage(s.stage ?? 'idle')
+          setMd(s.md ?? null)
+          setGem(s.gem ?? null)
+          setCla(s.cla ?? null)
+          setGpt(s.gpt ?? null)
+          setJud(s.jud ?? null)
+          setCached(s.cached ?? null)
+        }
+      } catch { /* ignore parse errors */ }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // Auto-populate ticker from URL param (e.g. from news page)
   useEffect(() => {
     const t = searchParams.get('ticker')
