@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Suspense } from 'react'
 import { Check, Zap, Shield, TrendingUp, BarChart2, Brain } from 'lucide-react'
@@ -20,11 +20,29 @@ function SubscribeInner() {
   const canceled = searchParams.get('canceled') === 'true'
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [checking, setChecking] = useState(true)
+
+  // If already logged in, show the page normally — don't auto-redirect
+  // User came here intentionally to see pricing
+  useEffect(() => {
+    setChecking(false)
+  }, [])
 
   const handleSubscribe = async () => {
     setLoading(true)
     setError(null)
     try {
+      // Check if logged in first
+      const { createClient } = await import('@/app/lib/auth/client')
+      const supabase = createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+
+      if (!user) {
+        // Not logged in — send to login with redirect back to subscribe
+        router.push('/login?redirect=/subscribe')
+        return
+      }
+
       const res = await fetch('/api/stripe/checkout', { method: 'POST' })
       const data = await res.json()
       if (data.url) {
@@ -107,7 +125,7 @@ function SubscribeInner() {
             <button onClick={handleSubscribe} disabled={loading}
               className="w-full py-3.5 rounded-xl font-bold text-white transition-all hover:opacity-90 active:scale-98 disabled:opacity-50 text-base"
               style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
-              {loading ? 'Loading…' : 'Start free trial'}
+              {loading ? 'Redirecting to checkout…' : 'Start free trial'}
             </button>
 
             <p className="text-[11px] text-white/25 text-center leading-relaxed">
