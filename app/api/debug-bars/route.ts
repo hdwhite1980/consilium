@@ -9,12 +9,26 @@ export async function GET(req: NextRequest) {
     'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY!,
   }
 
-  const res = await fetch(
-    `https://data.alpaca.markets/v2/stocks/${ticker}/bars?timeframe=1Day&limit=250&adjustment=raw&feed=iex`,
-    { headers }
-  )
-  const data = await res.json()
-  const bars = data.bars || []
+  const end = new Date()
+  const start = new Date()
+  start.setDate(start.getDate() - 420)
+  const startStr = start.toISOString().split('T')[0]
+  const endStr = end.toISOString().split('T')[0]
+
+  let bars: { t: string; o: number; h: number; l: number; c: number; v: number }[] = []
+  let feedUsed = 'none'
+  for (const feed of ['sip', 'iex']) {
+    const res = await fetch(
+      `https://data.alpaca.markets/v2/stocks/${ticker}/bars?timeframe=1Day&start=${startStr}&end=${endStr}&limit=300&adjustment=split&feed=${feed}`,
+      { headers }
+    )
+    const data = await res.json()
+    if (data.bars && data.bars.length >= 20) {
+      bars = data.bars
+      feedUsed = feed
+      break
+    }
+  }
 
   if (!bars.length) return NextResponse.json({ error: 'no bars', raw: data })
 
@@ -60,6 +74,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     ticker,
     barsReturned: bars.length,
+    feedUsed,
     dateRange: { first: bars[0].t, last: bars[bars.length - 1].t },
     currentPrice: closes[closes.length - 1],
     rsi: rsi.toFixed(2),
