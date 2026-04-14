@@ -824,25 +824,16 @@ function HomeInner() {
               <TechnicalCharts
                 ticker={ticker}
                 technicals={md!.technicals ? {
-                  rsi: md!.technicals.rsi,
-                  technicalBias: md!.technicals.technicalBias,
-                  technicalScore: md!.technicals.technicalScore,
-                  sma50: md!.technicals.sma50,
-                  sma200: md!.technicals.sma200,
+                  ...md!.technicals,
+                  currentPrice: md!.currentPrice ?? 0,
                   ema9: md!.technicals.ema9 ?? 0,
                   ema20: md!.technicals.ema20 ?? 0,
-                  support: md!.technicals.support,
                   support2: md!.technicals.support2 ?? md!.technicals.support,
-                  resistance: md!.technicals.resistance,
                   resistance2: md!.technicals.resistance2 ?? md!.technicals.resistance,
-                  goldenCross: md!.technicals.goldenCross,
                   ema9CrossEma20: md!.technicals.ema9CrossEma20 ?? 'none',
                   macdLine: md!.technicals.macdLine ?? 0,
                   macdSignal: md!.technicals.macdSignal ?? 0,
-                  macdHistogram: md!.technicals.macdHistogram,
                   macdCrossover: md!.technicals.macdCrossover ?? 'none',
-                  bbPosition: md!.technicals.bbPosition,
-                  bbSignal: md!.technicals.bbSignal,
                   bbUpper: md!.technicals.bbUpper ?? 0,
                   bbMiddle: md!.technicals.bbMiddle ?? 0,
                   bbLower: md!.technicals.bbLower ?? 0,
@@ -856,11 +847,10 @@ function HomeInner() {
                   obv: md!.technicals.obv ?? 0,
                   obvTrend: md!.technicals.obvTrend ?? 'flat',
                   obvDivergence: md!.technicals.obvDivergence ?? 'none',
-                  volumeRatio: md!.technicals.volumeRatio,
-                  currentPrice: md!.currentPrice ?? 0,
                   fibLevels: md!.technicals.fibLevels ?? [],
                   nearestFibLevel: md!.technicals.nearestFibLevel ?? null,
-                } : null}
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                } as any : null}
               />
             )}
 
