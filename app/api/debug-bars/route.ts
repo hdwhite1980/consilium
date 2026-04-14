@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  if (!bars.length) return NextResponse.json({ error: 'no bars', raw: data })
+  if (!bars.length) return NextResponse.json({ error: 'no bars', feedsTried: ['sip','iex'] })
 
   const closes = bars.map((b: { c: number }) => b.c)
 
