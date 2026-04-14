@@ -67,14 +67,6 @@ function SubscribeInner() {
     <div className="min-h-screen flex flex-col px-4 py-8"
       style={{ background: '#0a0d12' }}>
 
-      {/* Back button */}
-      <div className="w-full max-w-md mx-auto mb-6">
-        <button onClick={() => router.push('/login')}
-          className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/70 transition-colors">
-          ← Back to sign in
-        </button>
-      </div>
-
       <div className="flex flex-col items-center flex-1 justify-center">
 
       {/* Logo */}
@@ -148,6 +140,14 @@ function SubscribeInner() {
               Your 7-day trial starts immediately. No payment needed until your trial ends.
               Cancel anytime before then and you won&apos;t be charged.
             </p>
+
+            <div className="text-center pt-1">
+              <button
+                onClick={() => { window.location.href = '/login' }}
+                className="text-xs text-white/30 hover:text-white/60 transition-colors">
+                ← Back to sign in
+              </button>
+            </div>
           </div>
         </div>
 
