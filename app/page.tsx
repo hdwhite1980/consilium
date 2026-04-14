@@ -626,7 +626,7 @@ export default function Home() {
             )}
 
             {/* Signal matrix */}
-            {stage === 'done' && md?.conviction?.signals?.length > 0 && (
+            {stage === 'done' && (md?.conviction?.signals?.length ?? 0) > 0 && (
               <div className="animate-slide-up rounded-xl p-4 border"
                 style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.06)' }}>
                 <div className="text-[10px] font-mono uppercase tracking-widest text-white/20 mb-3">Signal matrix — {md.conviction.signals.length} signals analyzed</div>
