@@ -782,6 +782,33 @@ function HomeInner() {
 
                 <p className="text-sm text-white/75 leading-relaxed">{jud.summary}</p>
 
+                {/* ── TRADE PLAN — prominent, right under verdict ── */}
+                {jud.entryPrice && (
+                  <div className="rounded-2xl p-4 mt-1"
+                    style={{ background: 'rgba(251,191,36,0.08)', border: '2px solid rgba(251,191,36,0.3)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-widest mb-3" style={{ color: '#fbbf24' }}>
+                      ⚡ Trade Plan
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      {([
+                        { label: 'Entry',        val: jud.entryPrice,   color: '#34d399',  icon: '▶',  bg: 'rgba(52,211,153,0.1)',   border: 'rgba(52,211,153,0.25)' },
+                        { label: 'Stop Loss',    val: jud.stopLoss,     color: '#f87171',  icon: '✕',  bg: 'rgba(248,113,113,0.1)',  border: 'rgba(248,113,113,0.25)' },
+                        { label: 'Take Profit',  val: jud.takeProfit,   color: '#fbbf24',  icon: '★',  bg: 'rgba(251,191,36,0.1)',   border: 'rgba(251,191,36,0.25)' },
+                        { label: 'Time Horizon', val: jud.timeHorizon,  color: '#a78bfa',  icon: '◷',  bg: 'rgba(167,139,250,0.1)',  border: 'rgba(167,139,250,0.25)' },
+                      ] as Array<{label:string;val:string;color:string;icon:string;bg:string;border:string}>).map(({ label, val, color, icon, bg, border }) => (
+                        <div key={label} className="rounded-xl p-3 flex flex-col gap-1"
+                          style={{ background: bg, border: `1px solid ${border}` }}>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-sm" style={{ color }}>{icon}</span>
+                            <span className="text-[10px] font-mono uppercase tracking-widest" style={{ color: `${color}99` }}>{label}</span>
+                          </div>
+                          <div className="text-sm font-bold leading-snug" style={{ color }}>{val}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="text-xs italic text-white/35 border-l-2 pl-3" style={{ borderColor: 'rgba(251,191,36,0.35)' }}>
                   {jud.winningArgument}
                 </div>
@@ -873,28 +900,7 @@ function HomeInner() {
                   </div>
                 )}
 
-                {/* Trade plan */}
-                {jud.entryPrice && (
-                  <div className="space-y-2 mt-3">
-                    <div className="text-[10px] font-mono uppercase tracking-widest text-white/25">Trade plan</div>
-                    <div className="grid grid-cols-2 gap-2">
-                      {([
-                        { label: 'Entry', val: jud.entryPrice, color: '#34d399', icon: '▶' },
-                        { label: 'Stop Loss', val: jud.stopLoss, color: '#f87171', icon: '✕' },
-                        { label: 'Take Profit', val: jud.takeProfit, color: '#fbbf24', icon: '★' },
-                        { label: 'Time Horizon', val: jud.timeHorizon, color: '#a78bfa', icon: '◷' },
-                      ] as Array<{label:string;val:string;color:string;icon:string}>).map(({ label, val, color, icon }) => (
-                        <div key={label} className="rounded-lg p-3 border" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.08)' }}>
-                          <div className="flex items-center gap-1 mb-1">
-                            <span style={{ color, fontSize: 10 }}>{icon}</span>
-                            <span className="text-[9px] font-mono uppercase tracking-widest text-white/30">{label}</span>
-                          </div>
-                          <div className="text-xs font-semibold leading-snug" style={{ color }}>{val}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+
 
                 {/* Action plan */}
                 {jud.actionPlan && (
