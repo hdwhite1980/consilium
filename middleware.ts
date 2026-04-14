@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
-import { validateSession } from '@/app/lib/auth/session'
+import { createClient as createAdmin } from '@supabase/supabase-js'
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
@@ -22,7 +22,6 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  // Refresh session
   const { data: { user, session } } = await supabase.auth.getUser()
     .then(async u => {
       const s = await supabase.auth.getSession()
@@ -31,8 +30,8 @@ export async function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl
 
-  // Always allow public paths
-  const publicPaths = ['/login', '/auth/callback']
+  // Always allow these paths
+  const publicPaths = ['/login', '/auth/callback', '/subscribe', '/disclaimer']
   if (publicPaths.some(p => pathname.startsWith(p))) {
     if (user && pathname === '/login') {
       return NextResponse.redirect(new URL('/', request.url))
@@ -45,32 +44,86 @@ export async function middleware(request: NextRequest) {
     return supabaseResponse
   }
 
-  // Not logged in — redirect to login
+  // Not logged in
   if (!user || !session) {
     const loginUrl = new URL('/login', request.url)
     loginUrl.searchParams.set('redirect', pathname)
     return NextResponse.redirect(loginUrl)
   }
 
-  // ── Single session check ───────────────────────────────────
-  // The session token is the access_token from Supabase
-  // We store a hash of it so even if intercepted it's not the raw JWT
-  const sessionToken = session.access_token
-    ? session.access_token.slice(-32) // last 32 chars as identifier
-    : null
-
+  // Single session check
+  const sessionToken = session.access_token?.slice(-32) ?? null
   if (sessionToken) {
-    const isValid = await validateSession(user.id, sessionToken)
+    const admin = createAdmin(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    )
 
-    if (!isValid) {
-      // This session was displaced by a login on another device
-      // Sign them out and redirect to login with a message
+    const { data: activeSession } = await admin
+      .from('active_sessions')
+      .select('session_token')
+      .eq('user_id', user.id)
+      .single()
+
+    if (activeSession && activeSession.session_token !== sessionToken) {
       await supabase.auth.signOut()
       const loginUrl = new URL('/login', request.url)
       loginUrl.searchParams.set('error', 'session_displaced')
       loginUrl.searchParams.set('message', 'You were signed out because your account was accessed from another device.')
       return NextResponse.redirect(loginUrl)
     }
+  }
+
+  // Check disclaimer acceptance
+  const admin = createAdmin(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  )
+
+  const { data: disclaimer } = await admin
+    .from('disclaimer_accepted')
+    .select('user_id')
+    .eq('user_id', user.id)
+    .single()
+
+  if (!disclaimer && pathname !== '/disclaimer') {
+    return NextResponse.redirect(new URL('/disclaimer', request.url))
+  }
+
+  // Check subscription / trial access
+  const { data: sub } = await admin
+    .from('subscriptions')
+    .select('status, trial_ends_at, current_period_end, is_exempt')
+    .eq('user_id', user.id)
+    .single()
+
+  const now = new Date()
+
+  let hasAccess = false
+
+  if (!sub) {
+    // First time — create trial and allow through
+    const trialEndsAt = new Date()
+    trialEndsAt.setDate(trialEndsAt.getDate() + 7)
+    await admin.from('subscriptions').insert({
+      user_id: user.id,
+      status: 'trialing',
+      trial_ends_at: trialEndsAt.toISOString(),
+      is_exempt: false,
+    })
+    hasAccess = true
+  } else if (sub.is_exempt) {
+    hasAccess = true // exempt users always have access
+  } else if (sub.status === 'trialing') {
+    hasAccess = sub.trial_ends_at ? new Date(sub.trial_ends_at) > now : false
+  } else if (sub.status === 'active') {
+    hasAccess = true
+  } else if (sub.status === 'past_due') {
+    hasAccess = true // grace period — Stripe will retry
+  }
+
+  if (!hasAccess && pathname !== '/subscribe') {
+    return NextResponse.redirect(new URL('/subscribe', request.url))
   }
 
   return supabaseResponse

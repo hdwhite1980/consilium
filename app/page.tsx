@@ -184,10 +184,30 @@ function HomeInner() {
   const searchParams = useSearchParams()
   const debateRef = useRef<HTMLDivElement>(null)
   const [userEmail, setUserEmail] = useState<string | null>(null)
+  const [subStatus, setSubStatus] = useState<{ status: string; daysLeft: number | null } | null>(null)
 
   useEffect(() => {
     const supabase = createClient()
-    supabase.auth.getUser().then(({ data }) => setUserEmail(data.user?.email ?? null))
+    supabase.auth.getUser().then(async ({ data }) => {
+      setUserEmail(data.user?.email ?? null)
+      if (data.user) {
+        const { data: sub } = await supabase
+          .from('subscriptions')
+          .select('status, trial_ends_at, is_exempt')
+          .eq('user_id', data.user.id)
+          .single()
+        if (sub) {
+          if (sub.is_exempt) {
+            setSubStatus({ status: 'exempt', daysLeft: null })
+          } else {
+            const daysLeft = sub.status === 'trialing' && sub.trial_ends_at
+              ? Math.max(0, Math.ceil((new Date(sub.trial_ends_at).getTime() - Date.now()) / 86400000))
+              : null
+            setSubStatus({ status: sub.status, daysLeft })
+          }
+        }
+      }
+    })
   }, [])
 
   const handleSignOut = async () => {
@@ -404,6 +424,28 @@ function HomeInner() {
               <span className="text-[10px] font-mono text-white/25 hidden sm:block max-w-[120px] truncate">
                 {userEmail}
               </span>
+              {subStatus?.status !== 'exempt' && subStatus?.status === 'trialing' && subStatus.daysLeft !== null && (
+                <button onClick={async () => {
+                  const res = await fetch('/api/stripe/checkout', { method: 'POST' })
+                  const d = await res.json()
+                  if (d.url) window.location.href = d.url
+                }}
+                  className="text-[10px] font-mono px-2.5 py-1 rounded-full transition-all hover:opacity-80 hidden sm:flex items-center gap-1"
+                  style={{ background: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)' }}>
+                  ⏳ {subStatus.daysLeft}d trial
+                </button>
+              )}
+              {subStatus?.status !== 'exempt' && subStatus?.status === 'active' && (
+                <button onClick={async () => {
+                  const res = await fetch('/api/stripe/portal', { method: 'POST' })
+                  const d = await res.json()
+                  if (d.url) window.location.href = d.url
+                }}
+                  className="text-[10px] font-mono px-2.5 py-1 rounded-full transition-all hover:opacity-80 hidden sm:flex items-center gap-1"
+                  style={{ background: 'rgba(52,211,153,0.08)', color: '#34d399', border: '1px solid rgba(52,211,153,0.2)' }}>
+                  ✓ Pro
+                </button>
+              )}
               <button onClick={handleSignOut}
                 className="flex items-center gap-1 text-[10px] font-mono px-2 py-1 rounded-md transition-all hover:opacity-80"
                 style={{ background: 'rgba(248,113,113,0.1)', color: '#f87171', border: '1px solid rgba(248,113,113,0.2)' }}
