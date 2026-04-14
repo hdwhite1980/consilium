@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/app/lib/auth/client'
+import TechnicalCharts from '@/app/components/TechnicalCharts'
 import {
   TrendingUp, TrendingDown, Minus, Clock, AlertTriangle,
   BarChart2, Globe, DollarSign, Activity, Shield, Zap, LogOut
@@ -812,6 +813,29 @@ function HomeInner() {
                 )}
               </div>
             )}
+
+            {/* Technical Charts — shown after judge verdict */}
+            {stage === 'done' && md && (
+              <TechnicalCharts
+                ticker={ticker}
+                technicals={{
+                  rsi: md!.technicals?.rsi ?? 50,
+                  technicalBias: md!.technicals?.technicalBias ?? 'NEUTRAL',
+                  technicalScore: md!.technicals?.technicalScore ?? 0,
+                  sma50: md!.technicals?.sma50 ?? 0,
+                  sma200: md!.technicals?.sma200 ?? 0,
+                  goldenCross: md!.technicals?.goldenCross ?? false,
+                  macdHistogram: md!.technicals?.macdHistogram ?? 0,
+                  bbPosition: md!.technicals?.bbPosition ?? 0.5,
+                  bbSignal: md!.technicals?.bbSignal ?? 'normal',
+                  volumeRatio: md!.technicals?.volumeRatio ?? 1,
+                  support: md!.technicals?.support ?? 0,
+                  resistance: md!.technicals?.resistance ?? 0,
+                  currentPrice: md!.currentPrice ?? 0,
+                }}
+              />
+            )}
+
 
             {/* Signal matrix */}
             {stage === 'done' && (md?.conviction?.signals?.length ?? 0) > 0 && (

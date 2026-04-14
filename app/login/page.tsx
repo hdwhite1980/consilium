@@ -1,11 +1,11 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/app/lib/auth/client'
 import { Eye, EyeOff, AlertCircle } from 'lucide-react'
 
-export default function LoginPage() {
+function LoginPageInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [email, setEmail]       = useState('')
@@ -259,5 +259,13 @@ export default function LoginPage() {
         CONSILIUM · For informational purposes only · Not financial advice
       </p>
     </div>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div style={{ background: '#0a0d12', minHeight: '100vh' }} />}>
+      <LoginPageInner />
+    </Suspense>
   )
 }
