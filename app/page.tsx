@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/app/lib/auth/client'
 import TechnicalCharts from '@/app/components/TechnicalCharts'
+import OptionsRecommendations from '@/app/components/OptionsRecommendations'
 import {
   TrendingUp, TrendingDown, Minus, Clock, AlertTriangle,
   BarChart2, Globe, DollarSign, Activity, Shield, Zap, LogOut
@@ -889,6 +890,23 @@ function HomeInner() {
                   </div>
                 )}
               </div>
+            )}
+
+            {/* Options Recommendations — shown after judge verdict */}
+            {stage === 'done' && jud && md && (
+              <OptionsRecommendations
+                ticker={ticker}
+                currentPrice={md.currentPrice ?? 0}
+                signal={jud.signal}
+                timeHorizon={jud.timeHorizon ?? '2-4 weeks'}
+                target={jud.target ?? ''}
+                technicals={md.technicals ? {
+                  technicalScore: md.technicals.technicalScore,
+                  goldenCross: md.technicals.goldenCross,
+                  rsi: md.technicals.rsi,
+                } : null}
+                verdict={jud.summary ?? ''}
+              />
             )}
 
             {/* Technical Charts — shown after judge verdict */}
