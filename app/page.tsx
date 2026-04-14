@@ -393,8 +393,8 @@ function HomeInner() {
             <div className="rounded-xl border p-3" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.07)' }}>
               <div className="flex items-baseline gap-2 mb-1.5">
                 <span className="text-lg font-bold font-mono">${md!.currentPrice.toFixed(2)}</span>
-                <span className="text-xs font-mono" style={{ color: md!.technicals.priceChange1D >= 0 ? '#34d399' : '#f87171' }}>
-                  {pct(md!.technicals.priceChange1D)}
+                <span className="text-xs font-mono" style={{ color: md!.technicals?.priceChange1D >= 0 ? '#34d399' : '#f87171' }}>
+                  {pct(md!.technicals?.priceChange1D)}
                 </span>
               </div>
               <Spark bars={md!.bars} />
@@ -428,14 +428,14 @@ function HomeInner() {
           {md?.technicals && (
             <Card title="Technicals" icon={<BarChart2 size={11}/>} color="#a78bfa">
               {[
-                ['RSI (14)', <span style={{ color: md!.technicals.rsi > 70 ? '#f87171' : md!.technicals.rsi < 30 ? '#34d399' : 'white' }}>{md!.technicals.rsi.toFixed(1)}</span>],
-                ['MACD', <span style={{ color: md!.technicals.macdHistogram >= 0 ? '#34d399' : '#f87171' }}>{md!.technicals.macdHistogram >= 0 ? '▲ pos' : '▼ neg'}</span>],
-                ['MA cross', <span style={{ color: md!.technicals.goldenCross ? '#34d399' : '#f87171' }}>{md!.technicals.goldenCross ? 'Golden ✓' : 'Death ✗'}</span>],
-                ['vs SMA200', <span style={{ color: md!.currentPrice >= md!.technicals.sma200 ? '#34d399' : '#f87171' }}>{pct((md!.currentPrice / md!.technicals.sma200 - 1) * 100)}</span>],
-                ['Volume', <span>{md!.technicals.volumeRatio.toFixed(1)}x avg</span>],
-                ['Bollinger', <span>{md!.technicals.bbSignal}</span>],
-                ['Support', <span>${md!.technicals.support.toFixed(2)}</span>],
-                ['Resistance', <span>${md!.technicals.resistance.toFixed(2)}</span>],
+                ['RSI (14)', <span style={{ color: md!.technicals?.rsi > 70 ? '#f87171' : md!.technicals?.rsi < 30 ? '#34d399' : 'white' }}>{md!.technicals?.rsi.toFixed(1)}</span>],
+                ['MACD', <span style={{ color: md!.technicals?.macdHistogram >= 0 ? '#34d399' : '#f87171' }}>{md!.technicals?.macdHistogram >= 0 ? '▲ pos' : '▼ neg'}</span>],
+                ['MA cross', <span style={{ color: md!.technicals?.goldenCross ? '#34d399' : '#f87171' }}>{md!.technicals?.goldenCross ? 'Golden ✓' : 'Death ✗'}</span>],
+                ['vs SMA200', <span style={{ color: md!.currentPrice >= md!.technicals?.sma200 ? '#34d399' : '#f87171' }}>{pct((md!.currentPrice / md!.technicals?.sma200 - 1) * 100)}</span>],
+                ['Volume', <span>{md!.technicals?.volumeRatio.toFixed(1)}x avg</span>],
+                ['Bollinger', <span>{md!.technicals?.bbSignal}</span>],
+                ['Support', <span>${md!.technicals?.support.toFixed(2)}</span>],
+                ['Resistance', <span>${md!.technicals?.resistance.toFixed(2)}</span>],
               ].map(([k, v]) => (
                 <div key={String(k)} className="flex justify-between text-xs">
                   <span className="text-white/35">{k}</span>
@@ -448,32 +448,32 @@ function HomeInner() {
           {/* Fundamentals */}
           {md?.fundamentals && (
             <Card title="Fundamentals" icon={<DollarSign size={11}/>} color="#60a5fa">
-              {md!.fundamentals.peRatio !== null && (
-                <div className="flex justify-between text-xs"><span className="text-white/35">P/E</span><span className="font-mono">{md!.fundamentals.peRatio.toFixed(1)}x</span></div>
+              {md!.fundamentals?.peRatio !== null && (
+                <div className="flex justify-between text-xs"><span className="text-white/35">P/E</span><span className="font-mono">{md!.fundamentals?.peRatio.toFixed(1)}x</span></div>
               )}
               <div className="flex justify-between text-xs">
                 <span className="text-white/35">Analysts</span>
-                <span className="font-mono text-[10px]" style={{ color: '#60a5fa' }}>{md!.fundamentals.analystConsensus.replace('_',' ')}</span>
+                <span className="font-mono text-[10px]" style={{ color: '#60a5fa' }}>{md!.fundamentals?.analystConsensus.replace('_',' ')}</span>
               </div>
-              {md!.fundamentals.analystUpside !== null && (
+              {md!.fundamentals?.analystUpside !== null && (
                 <div className="flex justify-between text-xs">
                   <span className="text-white/35">Upside</span>
-                  <span className="font-mono" style={{ color: md!.fundamentals.analystUpside >= 0 ? '#34d399' : '#f87171' }}>{pct(md!.fundamentals.analystUpside)}</span>
+                  <span className="font-mono" style={{ color: md!.fundamentals?.analystUpside >= 0 ? '#34d399' : '#f87171' }}>{pct(md!.fundamentals?.analystUpside)}</span>
                 </div>
               )}
-              {md!.fundamentals.daysToEarnings !== null && (
+              {md!.fundamentals?.daysToEarnings !== null && (
                 <div className="flex justify-between text-xs">
                   <span className="text-white/35">Earnings</span>
                   <span className="font-mono text-[10px]"
-                    style={{ color: md!.fundamentals.earningsRisk === 'high' ? '#f87171' : md!.fundamentals.earningsRisk === 'moderate' ? '#fbbf24' : '#34d399' }}>
-                    {md!.fundamentals.daysToEarnings}d — {md!.fundamentals.earningsRisk}
+                    style={{ color: md!.fundamentals?.earningsRisk === 'high' ? '#f87171' : md!.fundamentals?.earningsRisk === 'moderate' ? '#fbbf24' : '#34d399' }}>
+                    {md!.fundamentals?.daysToEarnings}d — {md!.fundamentals?.earningsRisk}
                   </span>
                 </div>
               )}
               <div className="flex justify-between text-xs">
                 <span className="text-white/35">EPS record</span>
-                <span className="font-mono text-[10px]" style={{ color: md!.fundamentals.consistentBeater ? '#34d399' : '#fbbf24' }}>
-                  {md!.fundamentals.consistentBeater ? 'beater ✓' : 'mixed'}
+                <span className="font-mono text-[10px]" style={{ color: md!.fundamentals?.consistentBeater ? '#34d399' : '#fbbf24' }}>
+                  {md!.fundamentals?.consistentBeater ? 'beater ✓' : 'mixed'}
                 </span>
               </div>
             </Card>
@@ -484,18 +484,18 @@ function HomeInner() {
             <Card title="Smart Money" icon={<Shield size={11}/>} color="#34d399">
               <div className="flex justify-between text-xs">
                 <span className="text-white/35">Insiders</span>
-                <Chip label={md!.smartMoney.insiderSignal.replace('_',' ')}
-                  color={md!.smartMoney.insiderSignal.includes('buy') ? '#34d399' : md!.smartMoney.insiderSignal.includes('sell') ? '#f87171' : '#fbbf24'} />
+                <Chip label={md!.smartMoney?.insiderSignal.replace('_',' ')}
+                  color={md!.smartMoney?.insiderSignal.includes('buy') ? '#34d399' : md!.smartMoney?.insiderSignal.includes('sell') ? '#f87171' : '#fbbf24'} />
               </div>
-              {md!.smartMoney.congressSignal !== 'none' && (
+              {md!.smartMoney?.congressSignal !== 'none' && (
                 <div className="flex justify-between text-xs">
                   <span className="text-white/35">Congress</span>
-                  <Chip label={`${md!.smartMoney.congressSignal} (${md!.smartMoney.congressTrades})`}
-                    color={md!.smartMoney.congressSignal === 'buying' ? '#34d399' : '#f87171'} />
+                  <Chip label={`${md!.smartMoney?.congressSignal} (${md!.smartMoney?.congressTrades})`}
+                    color={md!.smartMoney?.congressSignal === 'buying' ? '#34d399' : '#f87171'} />
                 </div>
               )}
-              {md!.smartMoney.notableHolders.length > 0 && (
-                <div className="text-[9px] text-white/30 leading-relaxed">{md!.smartMoney.notableHolders.join(' · ')}</div>
+              {md!.smartMoney?.notableHolders.length > 0 && (
+                <div className="text-[9px] text-white/30 leading-relaxed">{md!.smartMoney?.notableHolders.join(' · ')}</div>
               )}
             </Card>
           )}
@@ -503,32 +503,32 @@ function HomeInner() {
           {/* Options */}
           {md?.options && (
             <Card title="Options Flow" icon={<Activity size={11}/>} color="#f87171">
-              {md!.options.putCallRatio !== null && (
+              {md!.options?.putCallRatio !== null && (
                 <div className="flex justify-between text-xs">
                   <span className="text-white/35">P/C ratio</span>
-                  <span className="font-mono text-[10px]" style={{ color: md!.options.putCallSignal === 'bullish' ? '#34d399' : md!.options.putCallSignal === 'bearish' ? '#f87171' : 'white' }}>
-                    {md!.options.putCallRatio.toFixed(2)} — {md!.options.putCallSignal}
+                  <span className="font-mono text-[10px]" style={{ color: md!.options?.putCallSignal === 'bullish' ? '#34d399' : md!.options?.putCallSignal === 'bearish' ? '#f87171' : 'white' }}>
+                    {md!.options?.putCallRatio.toFixed(2)} — {md!.options?.putCallSignal}
                   </span>
                 </div>
               )}
-              {md!.options.shortInterestPct !== null && (
+              {md!.options?.shortInterestPct !== null && (
                 <div className="flex justify-between text-xs">
                   <span className="text-white/35">Short int.</span>
-                  <span className="font-mono text-[10px]" style={{ color: md!.options.shortInterestPct > 20 ? '#fbbf24' : 'white' }}>
-                    {md!.options.shortInterestPct.toFixed(1)}% float
+                  <span className="font-mono text-[10px]" style={{ color: md!.options?.shortInterestPct > 20 ? '#fbbf24' : 'white' }}>
+                    {md!.options?.shortInterestPct.toFixed(1)}% float
                   </span>
                 </div>
               )}
-              {md!.options.unusualCount > 0 && (
+              {md!.options?.unusualCount > 0 && (
                 <div className="flex justify-between text-xs">
                   <span className="text-white/35">Sweeps</span>
-                  <span className="font-mono text-[10px]" style={{ color: '#fbbf24' }}>{md!.options.unusualCount} unusual</span>
+                  <span className="font-mono text-[10px]" style={{ color: '#fbbf24' }}>{md!.options?.unusualCount} unusual</span>
                 </div>
               )}
-              {md!.options.maxPainStrike && (
+              {md!.options?.maxPainStrike && (
                 <div className="flex justify-between text-xs">
                   <span className="text-white/35">Max pain</span>
-                  <span className="font-mono text-[10px]">${md!.options.maxPainStrike}</span>
+                  <span className="font-mono text-[10px]">${md!.options?.maxPainStrike}</span>
                 </div>
               )}
             </Card>
@@ -538,21 +538,21 @@ function HomeInner() {
           {md?.marketContext && (
             <Card title="Market" icon={<Globe size={11}/>} color="#fbbf24">
               <div className="text-[10px] font-mono mb-1" style={{ color: '#fbbf24' }}>
-                {md!.marketContext.regime.replace(/_/g,' ').toUpperCase()}
+                {md!.marketContext?.regime.replace(/_/g,' ').toUpperCase()}
               </div>
               <div className="flex justify-between text-xs">
                 <span className="text-white/35">SPY</span>
-                <span className="font-mono" style={{ color: md!.marketContext.spy.change1D >= 0 ? '#34d399' : '#f87171' }}>
-                  {pct(md!.marketContext.spy.change1D)}
+                <span className="font-mono" style={{ color: md!.marketContext?.spy.change1D >= 0 ? '#34d399' : '#f87171' }}>
+                  {pct(md!.marketContext?.spy.change1D)}
                 </span>
               </div>
               <div className="flex justify-between text-xs">
                 <span className="text-white/35">VIX</span>
-                <span className="font-mono" style={{ color: md!.marketContext.vix.level > 25 ? '#f87171' : '#34d399' }}>
-                  {md!.marketContext.vix.level.toFixed(1)}
+                <span className="font-mono" style={{ color: md!.marketContext?.vix.level > 25 ? '#f87171' : '#34d399' }}>
+                  {md!.marketContext?.vix.level.toFixed(1)}
                 </span>
               </div>
-              {md!.marketContext.competitors.slice(0,3).map(c => (
+              {md!.marketContext?.competitors.slice(0,3).map(c => (
                 <div key={c.ticker} className="flex justify-between text-xs">
                   <span className="text-white/30 font-mono">{c.ticker}</span>
                   <span className="font-mono text-[10px]" style={{ color: c.change1D >= 0 ? '#34d399' : '#f87171' }}>{pct(c.change1D)}</span>
@@ -826,29 +826,29 @@ function HomeInner() {
                 technicals={md!.technicals ? {
                   ...md!.technicals,
                   currentPrice: md!.currentPrice ?? 0,
-                  ema9: md!.technicals.ema9 ?? 0,
-                  ema20: md!.technicals.ema20 ?? 0,
-                  support2: md!.technicals.support2 ?? md!.technicals.support,
-                  resistance2: md!.technicals.resistance2 ?? md!.technicals.resistance,
-                  ema9CrossEma20: md!.technicals.ema9CrossEma20 ?? 'none',
-                  macdLine: md!.technicals.macdLine ?? 0,
-                  macdSignal: md!.technicals.macdSignal ?? 0,
-                  macdCrossover: md!.technicals.macdCrossover ?? 'none',
-                  bbUpper: md!.technicals.bbUpper ?? 0,
-                  bbMiddle: md!.technicals.bbMiddle ?? 0,
-                  bbLower: md!.technicals.bbLower ?? 0,
-                  stochK: md!.technicals.stochK ?? 50,
-                  stochD: md!.technicals.stochD ?? 50,
-                  stochSignal: md!.technicals.stochSignal ?? 'neutral',
-                  stochCrossover: md!.technicals.stochCrossover ?? 'none',
-                  vwap: md!.technicals.vwap ?? 0,
-                  priceVsVwap: md!.technicals.priceVsVwap ?? 0,
-                  vwapSignal: md!.technicals.vwapSignal ?? 'above',
-                  obv: md!.technicals.obv ?? 0,
-                  obvTrend: md!.technicals.obvTrend ?? 'flat',
-                  obvDivergence: md!.technicals.obvDivergence ?? 'none',
-                  fibLevels: md!.technicals.fibLevels ?? [],
-                  nearestFibLevel: md!.technicals.nearestFibLevel ?? null,
+                  ema9: md!.technicals?.ema9 ?? 0,
+                  ema20: md!.technicals?.ema20 ?? 0,
+                  support2: md!.technicals?.support2 ?? md!.technicals?.support,
+                  resistance2: md!.technicals?.resistance2 ?? md!.technicals?.resistance,
+                  ema9CrossEma20: md!.technicals?.ema9CrossEma20 ?? 'none',
+                  macdLine: md!.technicals?.macdLine ?? 0,
+                  macdSignal: md!.technicals?.macdSignal ?? 0,
+                  macdCrossover: md!.technicals?.macdCrossover ?? 'none',
+                  bbUpper: md!.technicals?.bbUpper ?? 0,
+                  bbMiddle: md!.technicals?.bbMiddle ?? 0,
+                  bbLower: md!.technicals?.bbLower ?? 0,
+                  stochK: md!.technicals?.stochK ?? 50,
+                  stochD: md!.technicals?.stochD ?? 50,
+                  stochSignal: md!.technicals?.stochSignal ?? 'neutral',
+                  stochCrossover: md!.technicals?.stochCrossover ?? 'none',
+                  vwap: md!.technicals?.vwap ?? 0,
+                  priceVsVwap: md!.technicals?.priceVsVwap ?? 0,
+                  vwapSignal: md!.technicals?.vwapSignal ?? 'above',
+                  obv: md!.technicals?.obv ?? 0,
+                  obvTrend: md!.technicals?.obvTrend ?? 'flat',
+                  obvDivergence: md!.technicals?.obvDivergence ?? 'none',
+                  fibLevels: md!.technicals?.fibLevels ?? [],
+                  nearestFibLevel: md!.technicals?.nearestFibLevel ?? null,
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 } as any : null}
               />
