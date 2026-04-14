@@ -15,6 +15,17 @@ function ConfirmInner() {
     const type       = searchParams.get('type')
     const code       = searchParams.get('code')
     const next       = searchParams.get('next') ?? '/'
+    const error_code = searchParams.get('error_code')
+    const error_desc = searchParams.get('error_description')
+
+    // Show any Supabase error params directly
+    if (error_code || error_desc) {
+      setStatus('error')
+      setMessage(error_desc?.replace(/\+/g, ' ') ?? 'Confirmation failed.')
+      return
+    }
+
+    console.log('Confirm params:', { token_hash: !!token_hash, type, code: !!code, url: window.location.href })
 
     const supabase = createClient()
 
