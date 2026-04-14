@@ -174,7 +174,7 @@ export async function GET(req: NextRequest) {
           const { data: cached } = await supabase
             .from('news_cache')
             .select('*')
-            .eq('cache_date', today)
+            .eq('cache_key', today)
             .single()
 
           if (cached?.data) {
@@ -207,8 +207,8 @@ export async function GET(req: NextRequest) {
         await supabase
           .from('news_cache')
           .upsert(
-            { cache_date: today, generated_at: new Date().toISOString(), data: result },
-            { onConflict: 'cache_date' }
+            { cache_key: today, cache_date: today, generated_at: new Date().toISOString(), data: result },
+            { onConflict: 'cache_key' }
           )
 
         send('complete', { ...(result as Record<string, unknown>), cached: false, ageMinutes: 0 })
