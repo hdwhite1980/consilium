@@ -75,6 +75,9 @@ interface JudgeResult {
   signal: Signal; confidence: number; target: string; risk: string
   summary: string; winningArgument: string; dissent: string
   scenarios: Scenario[]; invalidationTrigger: string; rounds: number
+  entryPrice: string; stopLoss: string; takeProfit: string; timeHorizon: string
+  plainEnglish: string; technicalsExplained: string
+  fundamentalsExplained: string; smartMoneyExplained: string; actionPlan: string
 }
 
 const SIG_COLOR: Record<Signal, string> = { BULLISH: '#34d399', BEARISH: '#f87171', NEUTRAL: '#fbbf24' }
@@ -622,6 +625,70 @@ export default function Home() {
                 )}
 
                 <Bar2 val={jud.confidence} color="#fbbf24" label="confidence" />
+
+                {/* Plain English */}
+                {jud.plainEnglish && (
+                  <div className="rounded-xl p-4 space-y-2 mt-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2">What this means in plain English</div>
+                    <p className="text-sm text-white/80 leading-relaxed">{jud.plainEnglish}</p>
+                  </div>
+                )}
+
+                {/* Signal explanations */}
+                {(jud.technicalsExplained || jud.fundamentalsExplained || jud.smartMoneyExplained) && (
+                  <div className="space-y-2 mt-3">
+                    <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-1">Signal explanations</div>
+                    {jud.technicalsExplained && (
+                      <div className="rounded-lg p-3" style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)' }}>
+                        <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#a78bfa' }}>Technicals — what the chart is saying</div>
+                        <p className="text-xs text-white/65 leading-relaxed">{jud.technicalsExplained}</p>
+                      </div>
+                    )}
+                    {jud.fundamentalsExplained && (
+                      <div className="rounded-lg p-3" style={{ background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.15)' }}>
+                        <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#60a5fa' }}>Fundamentals — what the business numbers say</div>
+                        <p className="text-xs text-white/65 leading-relaxed">{jud.fundamentalsExplained}</p>
+                      </div>
+                    )}
+                    {jud.smartMoneyExplained && (
+                      <div className="rounded-lg p-3" style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.15)' }}>
+                        <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#34d399' }}>Smart money — what big players are doing</div>
+                        <p className="text-xs text-white/65 leading-relaxed">{jud.smartMoneyExplained}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Trade plan */}
+                {jud.entryPrice && (
+                  <div className="space-y-2 mt-3">
+                    <div className="text-[10px] font-mono uppercase tracking-widest text-white/25">Trade plan</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {([
+                        { label: 'Entry', val: jud.entryPrice, color: '#34d399', icon: '▶' },
+                        { label: 'Stop Loss', val: jud.stopLoss, color: '#f87171', icon: '✕' },
+                        { label: 'Take Profit', val: jud.takeProfit, color: '#fbbf24', icon: '★' },
+                        { label: 'Time Horizon', val: jud.timeHorizon, color: '#a78bfa', icon: '◷' },
+                      ] as Array<{label:string;val:string;color:string;icon:string}>).map(({ label, val, color, icon }) => (
+                        <div key={label} className="rounded-lg p-3 border" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.08)' }}>
+                          <div className="flex items-center gap-1 mb-1">
+                            <span style={{ color, fontSize: 10 }}>{icon}</span>
+                            <span className="text-[9px] font-mono uppercase tracking-widest text-white/30">{label}</span>
+                          </div>
+                          <div className="text-xs font-semibold leading-snug" style={{ color }}>{val}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Action plan */}
+                {jud.actionPlan && (
+                  <div className="rounded-xl p-4 mt-3" style={{ background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: '#fbbf24' }}>Action plan — what to do next</div>
+                    <p className="text-sm text-white/75 leading-relaxed">{jud.actionPlan}</p>
+                  </div>
+                )}
               </div>
             )}
 

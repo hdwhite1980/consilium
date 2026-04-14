@@ -56,6 +56,16 @@ export interface JudgeResult {
   scenarios: Array<{ label: string; probability: number; trigger: string }>
   invalidationTrigger: string
   rounds: number
+  // New fields
+  entryPrice: string
+  stopLoss: string
+  takeProfit: string
+  timeHorizon: string
+  plainEnglish: string
+  technicalsExplained: string
+  fundamentalsExplained: string
+  smartMoneyExplained: string
+  actionPlan: string
 }
 
 export interface PipelineResult {
@@ -178,7 +188,7 @@ export async function runJudge(
 ): Promise<JudgeResult> {
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
-    max_tokens: 1200,
+    max_tokens: 2000,
     system: `You are the Judge of an elite AI stock council for ${bundle.ticker}. You hold NO prior position. Weigh argument QUALITY not vote count. Be decisive. Name the winning argument explicitly.`,
     messages: [{
       role: 'user',
@@ -199,8 +209,32 @@ Counter: ${gpt.strongestCounterArgument}
 CONVICTION ENGINE:
 ${bundle.aiContext.convictionSection}
 
-JSON ONLY:
-{"signal":"BULLISH|BEARISH|NEUTRAL","confidence":<0-100>,"target":"price target","risk":"critical risk","summary":"4-5 sentence verdict","winningArgument":"who won and why","dissent":"strongest opposing view","scenarios":[{"label":"bull","probability":<0-100>,"trigger":"catalyst"},{"label":"base","probability":<0-100>,"trigger":"condition"},{"label":"bear","probability":<0-100>,"trigger":"risk"}],"invalidationTrigger":"clearest signal thesis is wrong","rounds":${round}}`
+JSON ONLY — include ALL fields below:
+{
+  "signal": "BULLISH|BEARISH|NEUTRAL",
+  "confidence": <0-100>,
+  "target": "specific price target e.g. $248",
+  "risk": "single most critical risk in one sentence",
+  "summary": "4-5 sentence professional verdict",
+  "winningArgument": "who made the strongest case and exactly why",
+  "dissent": "strongest opposing view in one sentence",
+  "scenarios": [
+    {"label":"bull","probability":<0-100>,"trigger":"specific catalyst"},
+    {"label":"base","probability":<0-100>,"trigger":"base case condition"},
+    {"label":"bear","probability":<0-100>,"trigger":"specific risk event"}
+  ],
+  "invalidationTrigger": "the single clearest signal this thesis is wrong",
+  "rounds": ${round},
+  "entryPrice": "recommended entry price or range e.g. $195-$198 on a pullback to support",
+  "stopLoss": "where to cut losses e.g. $189 — below SMA200 support",
+  "takeProfit": "where to take profits e.g. $215 first target, $225 full exit",
+  "timeHorizon": "realistic timeframe e.g. 2-3 weeks for base case to play out",
+  "plainEnglish": "Explain the verdict in simple plain English as if talking to someone who has never traded before. 3-4 sentences. No jargon. What is this stock doing and what should someone know about it right now?",
+  "technicalsExplained": "Explain what the technical signals mean in plain English. What is the RSI telling us? What does the death cross or golden cross mean? What does price vs moving averages tell us? 3-4 sentences a beginner would understand.",
+  "fundamentalsExplained": "Explain what the fundamental signals mean in plain English. What do the analyst ratings mean? What does earnings date mean for the stock? What does insider buying or selling tell us? 3-4 sentences a beginner would understand.",
+  "smartMoneyExplained": "Explain what the smart money signals mean in plain English. What does it mean when insiders buy or sell? What does congressional trading tell us? What does options flow and short interest mean? 3-4 sentences a beginner would understand.",
+  "actionPlan": "Give a clear, specific, step-by-step action plan in plain English. What should someone actually DO — buy, sell, wait, set an alert? Be specific about price levels. 4-5 sentences."
+}`
     }]
   })
   return parseJSON<JudgeResult>((msg.content[0] as { text: string }).text)
