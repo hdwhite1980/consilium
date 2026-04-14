@@ -6,6 +6,12 @@ export const metadata: Metadata = {
   description: 'Three AI models debate stock direction and converge on a consensus verdict.',
 }
 
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+}
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">

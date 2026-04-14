@@ -398,7 +398,7 @@ function ScoreBadge({ score, bias }: { score: number; bias: string }) {
 // ── Indicator Card wrapper ────────────────────────────────────
 function ICard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl p-3 border" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.07)' }}>
+    <div className="rounded-xl p-2.5 sm:p-3 border" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.07)' }}>
       <div className="text-[10px] font-mono uppercase tracking-widest text-white/20 mb-2">{title}</div>
       {children}
     </div>
@@ -567,7 +567,7 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
       </div>
 
       {/* Indicator grid 2x2 */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 gap-2 sm:gap-3">
         <ICard title="RSI (14)">
           <RSIGauge rsi={t.rsi} />
           <Explain color={rsiColor} what={rsiWhat} means={rsiMeans} />

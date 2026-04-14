@@ -300,10 +300,10 @@ function HomeInner() {
   const finalSig = jud?.signal ?? cla?.signal ?? md?.conviction?.direction
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden" style={{ background: '#0a0d12' }}>
+    <div className="flex flex-col min-h-screen md:h-screen md:overflow-hidden" style={{ background: '#0a0d12' }}>
 
       {/* Header */}
-      <header className="flex items-center gap-3 px-5 py-3 border-b shrink-0"
+      <header className="flex flex-wrap items-center gap-2 px-3 py-2.5 border-b shrink-0"
         style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
         <div className="flex items-center gap-2 shrink-0">
           <div className="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold text-white"
@@ -317,7 +317,7 @@ function HomeInner() {
         <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())}
           onKeyDown={e => e.key === 'Enter' && !running && run()}
           placeholder="AAPL" maxLength={6}
-          className="w-20 rounded-lg px-3 py-1.5 text-sm font-mono font-semibold tracking-widest outline-none border"
+          className="w-16 sm:w-20 rounded-lg px-3 py-1.5 text-sm font-mono font-semibold tracking-widest outline-none border"
           style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.12)', color: 'white' }} />
 
         <div className="flex gap-1">
@@ -339,10 +339,10 @@ function HomeInner() {
         </button>
 
         <button onClick={() => router.push('/news')}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-sm font-semibold transition-all hover:opacity-80"
+          className="flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 rounded-lg text-sm font-semibold transition-all hover:opacity-80"
           style={{ background: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)' }}>
           <Zap size={13} />
-          Today&apos;s Movers
+          <span className="hidden sm:inline">Today&apos;s Movers</span>
         </button>
 
         {running && <span className="text-xs font-mono text-white/25 truncate flex-1">{statusMsg}</span>}
@@ -382,15 +382,18 @@ function HomeInner() {
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-col md:flex-row flex-1 md:overflow-hidden">
 
         {/* Left sidebar: signal dashboard */}
-        <aside className="w-60 shrink-0 flex flex-col gap-2.5 p-3.5 overflow-y-auto border-r"
+        <aside className="w-full md:w-60 md:shrink-0 flex flex-col gap-2.5 p-3.5 md:overflow-y-auto border-b md:border-b-0 md:border-r"
           style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
+
+          {/* Mobile: grid layout for sidebar cards */}
+          <div className="grid grid-cols-2 md:grid-cols-1 gap-2.5">
 
           {/* Price + sparkline */}
           {md && (
-            <div className="rounded-xl border p-3" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.07)' }}>
+            <div className="col-span-2 md:col-span-1 rounded-xl border p-3" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.07)' }}>
               <div className="flex items-baseline gap-2 mb-1.5">
                 <span className="text-lg font-bold font-mono">${(md!.currentPrice ?? 0).toFixed(2)}</span>
                 <span className="text-xs font-mono" style={{ color: md!.technicals?.priceChange1D >= 0 ? '#34d399' : '#f87171' }}>
@@ -560,12 +563,14 @@ function HomeInner() {
               ))}
             </Card>
           )}
+
+          </div>{/* end sidebar grid */}
         </aside>
 
         {/* Main debate area */}
-        <main className="flex-1 flex flex-col overflow-hidden">
+        <main className="flex-1 flex flex-col md:overflow-hidden">
 
-          <div ref={debateRef} className="flex-1 overflow-y-auto p-5 space-y-4">
+          <div ref={debateRef} className="flex-1 md:overflow-y-auto p-3 sm:p-5 space-y-4">
 
             {cached && stage === 'done' && (
               <div className="flex items-center justify-between px-4 py-2.5 rounded-xl mb-1"
@@ -591,7 +596,7 @@ function HomeInner() {
                 <div className="text-xs text-white/25 max-w-sm leading-relaxed">
                   Computes 50+ signals across technicals, fundamentals, smart money, and options — then three AIs debate until the judge delivers a weighted verdict.
                 </div>
-                <div className="grid grid-cols-2 gap-2 mt-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
                   {['RSI · MACD · Bollinger · Volume', 'P/E · EPS · Earnings · Ratings', 'SEC Filings · Congress · 13F', 'Options Sweeps · Short Interest'].map(t => (
                     <div key={t} className="px-3 py-2 rounded-lg text-[10px] font-mono text-white/25 text-center border"
                       style={{ borderColor: 'rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)' }}>{t}</div>
@@ -638,7 +643,7 @@ function HomeInner() {
                   <span className="ml-auto text-[10px] font-mono text-white/20">Stage 2</span>
                 </div>
                 <p className="text-sm text-white/70 leading-relaxed mb-3">{cla.reasoning}</p>
-                <div className="grid grid-cols-2 gap-3 mb-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
                   <div className="text-xs"><div className="text-white/25 mb-1">Technical</div><div className="text-white/50 leading-relaxed">{cla.technicalBasis}</div></div>
                   <div className="text-xs"><div className="text-white/25 mb-1">Fundamental</div><div className="text-white/50 leading-relaxed">{cla.fundamentalBasis}</div></div>
                 </div>
@@ -701,7 +706,7 @@ function HomeInner() {
 
                 {jud.dissent && <div className="text-xs text-white/25 italic">Dissent: {jud.dissent}</div>}
 
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {[
                     { label: 'Signal',   val: jud.signal,  color: SIG_COLOR[jud.signal] },
                     { label: 'Target',   val: jud.target,  color: '#e2e8f0' },

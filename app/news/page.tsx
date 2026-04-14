@@ -229,7 +229,7 @@ export default function NewsPage() {
     <div className="flex flex-col min-h-screen" style={{ background: '#0a0d12', color: 'white' }}>
 
       {/* Header */}
-      <header className="flex items-center gap-3 px-5 py-3.5 border-b sticky top-0 z-10"
+      <header className="flex flex-wrap items-center gap-2 px-3 py-3 border-b sticky top-0 z-10"
         style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
         <button onClick={() => router.push('/')}
           className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/70 transition-colors">
@@ -339,7 +339,7 @@ export default function NewsPage() {
             </div>
           </div>
 
-          <div className="max-w-4xl mx-auto px-5 py-6 space-y-8">
+          <div className="max-w-4xl mx-auto px-3 sm:px-5 py-4 sm:py-6 space-y-6 sm:space-y-8">
 
             {/* Crypto alert */}
             {data.cryptoAlert && (
@@ -354,7 +354,7 @@ export default function NewsPage() {
             )}
 
             {/* Two column layout for bull/bear */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 gap-6">
 
               {/* Bullish */}
               <div>
@@ -396,7 +396,7 @@ export default function NewsPage() {
                   count={data.watchlist.length}
                   color="#fbbf24"
                 />
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3">
                   {data.watchlist.map(m => (
                     <MoverCard key={m.ticker} mover={m} onAnalyze={handleAnalyze} />
                   ))}
@@ -410,7 +410,7 @@ export default function NewsPage() {
                 <div className="flex items-center gap-2 mb-3">
                   <span className="text-[10px] font-mono uppercase tracking-widest text-white/25">Sector movements</span>
                 </div>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   {data.sectorMovers.map((s, i) => {
                     const col = s.direction === 'up' ? '#34d399' : s.direction === 'down' ? '#f87171' : '#fbbf24'
                     return (
