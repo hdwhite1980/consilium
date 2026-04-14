@@ -30,13 +30,9 @@ export async function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl
 
-  // ── Always public — no auth needed ───────────────────────────
+  // ── Always public — no auth needed, no redirects ────────────
   const alwaysPublic = ['/login', '/auth/callback', '/subscribe']
   if (alwaysPublic.some(p => pathname.startsWith(p))) {
-    // Logged-in users on /login → send them home (only if they have access)
-    if (user && pathname === '/login') {
-      return NextResponse.redirect(new URL('/', request.url))
-    }
     return supabaseResponse
   }
 
