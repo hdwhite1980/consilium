@@ -148,7 +148,7 @@ export async function fetchOptionsFlow(ticker: string, currentPrice: number): Pr
       const ratio = vol / oi
       if (ratio > 3 && vol > 500) {
         unusualActivity.push({
-          type: String(opt.option_type),
+          type: String(opt.option_type) as 'call' | 'put',
           strike: Number(opt.strike),
           expiry: chain.expiry,
           volume: vol,
