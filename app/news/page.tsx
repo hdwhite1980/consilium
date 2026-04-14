@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
+import { createClient } from '@/app/lib/auth/client'
+import { LogOut } from 'lucide-react'
 import { TrendingUp, TrendingDown, RefreshCw, ArrowLeft, Eye, Zap, Globe } from 'lucide-react'
 
 // ── Types ──────────────────────────────────────────────────────
@@ -207,6 +209,14 @@ export default function NewsPage() {
 
   useEffect(() => { load() }, [load])
 
+  const handleSignOut = async () => {
+    await fetch('/api/auth/session', { method: 'DELETE' })
+    const supabase = createClient()
+    await supabase.auth.signOut()
+    router.push('/login')
+    router.refresh()
+  }
+
   const handleAnalyze = (ticker: string) => {
     router.push(`/?ticker=${ticker}`)
   }
@@ -257,6 +267,11 @@ export default function NewsPage() {
             style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)', border: '1px solid rgba(255,255,255,0.1)' }}>
             <RefreshCw size={11} className={loading ? 'animate-spin' : ''} />
             {loading ? 'Loading...' : isCached ? '↻ Fresh run' : 'Refresh'}
+          </button>
+          <button onClick={handleSignOut}
+            className="flex items-center gap-1 text-[10px] font-mono px-2.5 py-1.5 rounded-lg transition-all hover:opacity-80"
+            style={{ background: 'rgba(248,113,113,0.1)', color: '#f87171', border: '1px solid rgba(248,113,113,0.2)' }}>
+            <LogOut size={10} />
           </button>
         </div>
       </header>

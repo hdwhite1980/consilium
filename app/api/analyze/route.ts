@@ -5,8 +5,16 @@ import { createServerClient } from '@/app/lib/supabase'
 
 export const maxDuration = 120
 
+// Cache durations in minutes per timeframe
+const CACHE_MINUTES: Record<string, number> = {
+  '1D': 30,
+  '1W': 120,
+  '1M': 360,
+  '3M': 720,
+}
+
 export async function POST(req: NextRequest) {
-  const { ticker, timeframe } = await req.json()
+  const { ticker, timeframe, forceRefresh } = await req.json()
   if (!ticker) return Response.json({ error: 'ticker required' }, { status: 400 })
 
   const symbol = ticker.toUpperCase().trim()
@@ -19,6 +27,68 @@ export async function POST(req: NextRequest) {
         controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
 
       try {
+        const supabase = createServerClient()
+
+        // ── Cache check ────────────────────────────────────────
+        if (!forceRefresh) {
+          const cacheMinutes = CACHE_MINUTES[tf] ?? 120
+          const cutoff = new Date(Date.now() - cacheMinutes * 60 * 1000).toISOString()
+
+          const { data: cached } = await supabase
+            .from('analyses')
+            .select('*')
+            .eq('ticker', symbol)
+            .eq('timeframe', tf)
+            .gte('created_at', cutoff)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .single()
+
+          if (cached) {
+            const ageMinutes = Math.round(
+              (Date.now() - new Date(cached.created_at).getTime()) / 60000
+            )
+            // Stream cached results exactly like a live run
+            send('status', { stage: 'cache_hit', message: `Serving cached analysis from ${ageMinutes} minute${ageMinutes === 1 ? '' : 's'} ago` })
+
+            // Reconstruct market_data from stored signal_bundle metadata
+            send('market_data', {
+              bars: [],
+              currentPrice: cached.price ?? 0,
+              cached: true,
+              cachedAt: cached.created_at,
+              ageMinutes,
+            })
+
+            // Stream each AI stage result with a small delay so the UI animates
+            await new Promise(r => setTimeout(r, 300))
+            send('gemini_done', cached.gemini_news)
+
+            await new Promise(r => setTimeout(r, 300))
+            send('claude_done', cached.claude_analysis)
+
+            await new Promise(r => setTimeout(r, 300))
+            send('gpt_done', cached.gpt_validation)
+
+            await new Promise(r => setTimeout(r, 300))
+            send('judge_done', cached.judge_verdict)
+
+            send('complete', {
+              analysisId: cached.id,
+              cached: true,
+              cachedAt: cached.created_at,
+              ageMinutes,
+              gemini: cached.gemini_news,
+              claude: cached.claude_analysis,
+              gpt: cached.gpt_validation,
+              judge: cached.judge_verdict,
+              transcript: cached.transcript,
+            })
+            return
+          }
+        }
+
+        // ── Live pipeline ──────────────────────────────────────
         send('status', { stage: 'building_bundle', message: 'Gathering market data and computing signals...' })
 
         const bundle = await buildSignalBundle(symbol, tf, (step) =>
@@ -28,6 +98,7 @@ export async function POST(req: NextRequest) {
         send('market_data', {
           bars: bundle.bars,
           currentPrice: bundle.currentPrice,
+          cached: false,
           technicals: {
             rsi: bundle.technicals.rsi,
             technicalBias: bundle.technicals.technicalBias,
@@ -96,7 +167,7 @@ export async function POST(req: NextRequest) {
 
         const result = await runPipeline(bundle, (event, data) => send(event, data))
 
-        const supabase = createServerClient()
+        // Save to Supabase
         const { data: saved } = await supabase.from('analyses').insert({
           ticker: symbol,
           timeframe: tf,
@@ -113,7 +184,11 @@ export async function POST(req: NextRequest) {
           transcript: result.transcript,
         }).select().single()
 
-        send('complete', { analysisId: saved?.id, ...result })
+        send('complete', {
+          analysisId: saved?.id,
+          cached: false,
+          ...result,
+        })
 
       } catch (err) {
         console.error('Pipeline error:', err)

@@ -2,9 +2,10 @@
 
 import { useState, useRef, useCallback, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { createClient } from '@/app/lib/auth/client'
 import {
   TrendingUp, TrendingDown, Minus, Clock, AlertTriangle,
-  BarChart2, Globe, DollarSign, Activity, Shield, Zap
+  BarChart2, Globe, DollarSign, Activity, Shield, Zap, LogOut
 } from 'lucide-react'
 
 type Signal = 'BULLISH' | 'BEARISH' | 'NEUTRAL'
@@ -173,6 +174,21 @@ function HomeInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const debateRef = useRef<HTMLDivElement>(null)
+  const [userEmail, setUserEmail] = useState<string | null>(null)
+
+  useEffect(() => {
+    const supabase = createClient()
+    supabase.auth.getUser().then(({ data }) => setUserEmail(data.user?.email ?? null))
+  }, [])
+
+  const handleSignOut = async () => {
+    // Clear server session record first
+    await fetch('/api/auth/session', { method: 'DELETE' })
+    const supabase = createClient()
+    await supabase.auth.signOut()
+    router.push('/login')
+    router.refresh()
+  }
   const abortRef  = useRef<AbortController | null>(null)
   const scroll    = useCallback(() => setTimeout(() => debateRef.current?.scrollTo({ top: 99999, behavior: 'smooth' }), 80), [])
 
@@ -340,6 +356,20 @@ function HomeInner() {
           {finalSig && <SBadge s={finalSig} />}
           <span className="w-1.5 h-1.5 rounded-full animate-pulse-dot"
             style={{ background: stage === 'done' ? '#34d399' : stage === 'error' ? '#f87171' : running ? '#fbbf24' : '#ffffff18' }} />
+          {userEmail && (
+            <div className="flex items-center gap-2 pl-2 border-l" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
+              <span className="text-[10px] font-mono text-white/25 hidden sm:block max-w-[120px] truncate">
+                {userEmail}
+              </span>
+              <button onClick={handleSignOut}
+                className="flex items-center gap-1 text-[10px] font-mono px-2 py-1 rounded-md transition-all hover:opacity-80"
+                style={{ background: 'rgba(248,113,113,0.1)', color: '#f87171', border: '1px solid rgba(248,113,113,0.2)' }}
+                title="Sign out">
+                <LogOut size={10} />
+                <span className="hidden sm:inline">Sign out</span>
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
