@@ -255,9 +255,16 @@ function LoginPageInner() {
         )}
       </div>
 
-      <p className="mt-6 text-[10px] font-mono text-white/15 text-center">
-        CONSILIUM · For informational purposes only · Not financial advice
-      </p>
+      <div className="mt-6 flex items-center gap-4 justify-center">
+        <a href="/subscribe"
+          className="text-[11px] font-mono text-white/30 hover:text-white/60 transition-colors underline">
+          View pricing
+        </a>
+        <span className="text-white/15 text-xs">·</span>
+        <p className="text-[10px] font-mono text-white/15">
+          Not financial advice
+        </p>
+      </div>
     </div>
   )
 }

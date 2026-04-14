@@ -430,9 +430,9 @@ function HomeInner() {
                   const d = await res.json()
                   if (d.url) window.location.href = d.url
                 }}
-                  className="text-[10px] font-mono px-2.5 py-1 rounded-full transition-all hover:opacity-80 hidden sm:flex items-center gap-1"
-                  style={{ background: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)' }}>
-                  ⏳ {subStatus.daysLeft}d trial
+                  className="text-[10px] font-mono px-2.5 py-1 rounded-full transition-all hover:opacity-80 flex items-center gap-1"
+                  style={{ background: subStatus.daysLeft <= 2 ? 'rgba(248,113,113,0.12)' : 'rgba(251,191,36,0.12)', color: subStatus.daysLeft <= 2 ? '#f87171' : '#fbbf24', border: `1px solid ${subStatus.daysLeft <= 2 ? 'rgba(248,113,113,0.3)' : 'rgba(251,191,36,0.25)'}` }}>
+                  ⏳ {subStatus.daysLeft}d left — Subscribe
                 </button>
               )}
               {subStatus?.status !== 'exempt' && subStatus?.status === 'active' && (
