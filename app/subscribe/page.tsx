@@ -64,15 +64,18 @@ function SubscribeInner() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center px-4 py-12"
+    <div className="min-h-screen flex flex-col px-4 py-8"
       style={{ background: '#0a0d12' }}>
 
       {/* Back button */}
-      <a href="/login"
-        className="flex items-center gap-1.5 text-xs text-white/30 hover:text-white/60 transition-colors mb-8"
-        style={{ alignSelf: 'flex-start' }}>
-        ← Back to sign in
-      </a>
+      <div className="w-full max-w-md mx-auto mb-6">
+        <button onClick={() => router.push('/login')}
+          className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/70 transition-colors">
+          ← Back to sign in
+        </button>
+      </div>
+
+      <div className="flex flex-col items-center flex-1 justify-center">
 
       {/* Logo */}
       <div className="flex items-center gap-3 mb-10">
@@ -154,6 +157,8 @@ function SubscribeInner() {
           Past analysis does not guarantee future results. See full disclaimer on login.
         </p>
       </div>
+
+      </div>{/* end centered content */}
     </div>
   )
 }
