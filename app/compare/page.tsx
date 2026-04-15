@@ -102,6 +102,15 @@ export default function ComparePage() {
       }).catch(() => {})
   }, [])
 
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { tutorialId } = (e as CustomEvent).detail
+      if (tutorialId === 'compare') setShowTutorial(true)
+    }
+    window.addEventListener('consilium:launch_tutorial', handler)
+    return () => window.removeEventListener('consilium:launch_tutorial', handler)
+  }, [])
+
   const run = useCallback(async () => {
     if (!tickerA || !tickerB) return
     setRunning(true); setStatus(''); setMdA(null); setMdB(null); setJudgeA(null); setJudgeB(null); setComparison(null)

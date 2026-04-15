@@ -326,8 +326,14 @@ export function Tutorial({ config, onComplete, onSkip, autoStart = false }: Tuto
 // ── Tutorial launcher button (shown in header) ─────────────────
 export function TutorialLauncher({ tutorialId, label = 'Tutorial' }: { tutorialId: string; label?: string }) {
   const launch = () => {
+    // First try the direct function (if Tutorial is already mounted)
     const fn = (window as any)[`tutorial_${tutorialId}_restart`]
-    if (fn) fn()
+    if (fn) {
+      fn()
+      return
+    }
+    // Otherwise dispatch a custom event — the page listens and remounts the Tutorial
+    window.dispatchEvent(new CustomEvent('consilium:launch_tutorial', { detail: { tutorialId } }))
   }
 
   return (

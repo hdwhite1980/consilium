@@ -294,6 +294,16 @@ function HomeInner() {
       .catch(() => setTutorialChecked(true))
   }, [tutorialChecked])
 
+  // Listen for tutorial relaunch from TutorialLauncher button
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { tutorialId } = (e as CustomEvent).detail
+      if (tutorialId === 'main') setShowTutorial(true)
+    }
+    window.addEventListener('consilium:launch_tutorial', handler)
+    return () => window.removeEventListener('consilium:launch_tutorial', handler)
+  }, [])
+
   const handleSignOut = async () => {
     // Clear server session record first
     await fetch('/api/auth/session', { method: 'DELETE' })

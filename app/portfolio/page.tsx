@@ -115,6 +115,15 @@ export default function PortfolioPage() {
       }).catch(() => {})
   }, [])
 
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { tutorialId } = (e as CustomEvent).detail
+      if (tutorialId === 'portfolio') setShowTutorial(true)
+    }
+    window.addEventListener('consilium:launch_tutorial', handler)
+    return () => window.removeEventListener('consilium:launch_tutorial', handler)
+  }, [])
+
   const addPosition = async () => {
     if (!addTicker || !addShares) return
     setAddLoading(true)
