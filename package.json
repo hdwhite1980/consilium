@@ -7,7 +7,7 @@
     "build": "NODE_OPTIONS=\"--max-old-space-size=2048\" next build",
     "start": "next start",
     "lint": "next lint",
-    "prebuild": "rm -rf .next/static .next/server .next/BUILD_ID tsconfig.tsbuildinfo 2>/dev/null || true"
+    "prebuild": "rm -rf .next/static .next/server .next/BUILD_ID tsconfig.tsbuildinfo *.tsbuildinfo 2>/dev/null || true"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
