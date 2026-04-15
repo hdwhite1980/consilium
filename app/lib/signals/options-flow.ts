@@ -6,7 +6,9 @@
 //   - Calculated put/call ratio from options chain
 // ─────────────────────────────────────────────────────────────
 
-const TRADIER_BASE = 'https://sandbox.tradier.com/v1' // use api.tradier.com for live
+const TRADIER_BASE = () => process.env.TRADIER_API_KEY
+  ? 'https://api.tradier.com/v1'
+  : 'https://sandbox.tradier.com/v1'
 const TRADIER_KEY = () => process.env.TRADIER_API_KEY
 
 export interface OptionsFlowSignals {
@@ -53,7 +55,7 @@ async function fetchOptionsChain(ticker: string) {
   try {
     // Get nearest expiry
     const expRes = await fetch(
-      `${TRADIER_BASE}/markets/options/expirations?symbol=${ticker}&includeAllRoots=true`,
+      `${TRADIER_BASE()}/markets/options/expirations?symbol=${ticker}&includeAllRoots=true`,
       {
         headers: {
           'Authorization': `Bearer ${TRADIER_KEY()}`,
@@ -68,7 +70,7 @@ async function fetchOptionsChain(ticker: string) {
     if (!expiry) return null
 
     const chainRes = await fetch(
-      `${TRADIER_BASE}/markets/options/chains?symbol=${ticker}&expiration=${expiry}&greeks=true`,
+      `${TRADIER_BASE()}/markets/options/chains?symbol=${ticker}&expiration=${expiry}&greeks=true`,
       {
         headers: {
           'Authorization': `Bearer ${TRADIER_KEY()}`,
