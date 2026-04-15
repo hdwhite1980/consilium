@@ -93,7 +93,7 @@ export async function POST(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
 
-  const { trades, availableCash } = await req.json()
+  const { trades, availableCash, unrealizedTotal } = await req.json()
 
   if (!trades?.length) {
     return NextResponse.json({ ideas: [], insights: [], allocation: [], realizedPnL: 0 })
@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
   const openTrades: TradeInput[] = trades.filter((t: TradeInput) => !t.exit_price)
   const closedTrades: TradeInput[] = trades.filter((t: TradeInput) => !!t.exit_price)
 
-  // Get live prices for open trades
+  // Get live prices for open trades (skip if summaries already have currentPrice from client)
   const priceMap: Record<string, number | null> = {}
   await Promise.all(openTrades.map(async t => {
     priceMap[t.ticker] = await getLivePrice(t.ticker)
@@ -172,20 +172,23 @@ export async function POST(req: NextRequest) {
 
   const msg = await anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
-    max_tokens: 1200,
-    system: `You are the Reinvestment Council for a retail trader. Analyze their trade history and available cash, then recommend where to redeploy gains. Be specific and contextual — reference their actual tickers and P&L numbers. Allocate the available cash across 2-3 ideas with dollar amounts that sum close to the available cash. All suggestedAmount fields must be plain numbers, not strings with $ signs.`,
+    max_tokens: 1500,
+    system: `You are the Reinvestment Council for a retail trader. Your job is to give specific, actionable reinvestment advice based on their actual positions and P&L. Always reference their real tickers and numbers. Give 3 ideas. Even when available cash is $0, suggest strategies: partial profit-taking on winners, adding to existing BULLISH positions, or sector rotation out of NEUTRAL/BEARISH positions into stronger names. All suggestedAmount values must be plain integers, no $ signs or commas.`,
     messages: [{
       role: 'user',
-      content: `TRADER'S OPEN TRADES:
+      content: `TRADER'S OPEN POSITIONS:
 ${tradeContext || 'No open trades'}
 
-REALIZED GAINS FROM CLOSED TRADES: $${realizedPnL.toFixed(0)}
-AVAILABLE CASH TO REINVEST: $${(availableCash ?? realizedPnL).toFixed(0)}
+REALIZED CASH (from closed trades): $${realizedPnL.toFixed(0)}
+UNREALIZED GAINS (paper profits on open trades): $${(unrealizedTotal ?? 0).toFixed(0)}
+AVAILABLE CASH TO DEPLOY: $${(availableCash ?? 0).toFixed(0)}
 
-CANDIDATE REINVESTMENT TICKERS (from sector peers + add-to-existing):
-${candidateContext || 'No candidates available — suggest broad market ETFs like SPY, QQQ'}
+NOTE: If available cash is $0, give ideas around: (1) taking partial profits on winning positions to generate cash, (2) adding to existing positions on dips, (3) sector rotation — sell underperformers and rotate into stronger names.
 
-Generate reinvestment recommendations. Return JSON ONLY — no markdown, no backticks, no preamble:
+CANDIDATE REINVESTMENT TICKERS (sector peers + potential add-to-existing):
+${candidateContext || 'No prior analysis found — suggest SPY, QQQ, or sector leaders'}
+
+Generate 3 reinvestment ideas and 3-4 actionable insights. Return JSON ONLY — no markdown, no backticks:
 {
   "ideas": [
     {
@@ -193,7 +196,7 @@ Generate reinvestment recommendations. Return JSON ONLY — no markdown, no back
       "isAddToExisting": false,
       "signal": "BULLISH",
       "confidence": 72,
-      "rationale": "2-3 sentences connecting this idea to their specific gains",
+      "rationale": "2-3 sentences specifically referencing their trades and why this fits their current exposure and strategy",
       "suggestedAmount": 2170,
       "suggestedShares": "~14 shares",
       "risk": "medium",
@@ -203,11 +206,12 @@ Generate reinvestment recommendations. Return JSON ONLY — no markdown, no back
   "insights": [
     {
       "type": "success",
-      "text": "Specific insight about their trades. **Bold** key tickers and numbers."
+      "text": "Specific insight referencing their actual tickers and P&L numbers. **Bold** the key tickers and amounts."
     }
   ],
   "allocation": [
-    { "label": "AMD", "pct": 50, "amount": 2170, "color": "blue" }
+    { "label": "AMD", "pct": 50, "amount": 2170, "color": "blue" },
+    { "label": "Hold", "pct": 50, "amount": 0, "color": "amber" }
   ]
 }`
     }]

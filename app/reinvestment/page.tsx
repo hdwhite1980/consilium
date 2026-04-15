@@ -286,7 +286,7 @@ function ReinvestmentInner() {
         // fetch live price via ticker API
         const res = await fetch(`/api/ticker?ticker=${t.ticker}`)
         const data = await res.json()
-        const currentPrice = data?.quote?.c ?? data?.price ?? null
+        const currentPrice: number | null = data?.price ?? null
         const pnl = currentPrice ? (currentPrice - t.entry_price) * t.shares : null
         const pnlPct = currentPrice ? ((currentPrice - t.entry_price) / t.entry_price) * 100 : null
         return { ...t, currentPrice, pnl, pnlPct } as TradeSummary
@@ -296,15 +296,19 @@ function ReinvestmentInner() {
     })).then(setSummaries)
   }, [trades])
 
-  const availableCash = realizedPnL > 0 ? realizedPnL : 0
+  // Available capital = realized cash + unrealized gains (so ideas work even without closed trades)
+  const unrealizedTotal = summaries.reduce((s, t) => s + (t.pnl ?? 0), 0)
+  const availableCash = realizedPnL > 0 ? realizedPnL : Math.max(0, unrealizedTotal)
 
   const loadIdeas = async () => {
     setLoadingIdeas(true)
     try {
+      // Pass live summaries (with currentPrice/pnl) not raw trades so the AI gets real numbers
+      const tradesForIdeas = summaries.length > 0 ? summaries : trades
       const res = await fetch('/api/reinvestment/ideas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ trades, availableCash })
+        body: JSON.stringify({ trades: tradesForIdeas, availableCash, unrealizedTotal })
       })
       const data = await res.json()
       setIdeas(data.ideas ?? [])
@@ -350,7 +354,6 @@ function ReinvestmentInner() {
   // Metrics
   const openTrades = summaries
   const closedTrades = trades.filter(t => t.exit_price)
-  const totalPnL = summaries.reduce((s, t) => s + (t.pnl ?? 0), 0)
   const realizedTotal = closedTrades.reduce((s, t) => s + (t.exit_price! - t.entry_price) * t.shares, 0)
   const totalInvested = summaries.reduce((s, t) => s + t.entry_price * t.shares, 0)
 
@@ -381,10 +384,12 @@ function ReinvestmentInner() {
           <span className="text-sm font-bold" style={{ color: txt }}>Reinvestment Tracker</span>
         </div>
         <div className="flex-1" />
-        {realizedTotal > 0 && (
+        {availableCash > 0 && (
           <div className="flex items-center gap-2 mr-2">
-            <span className="text-xs" style={{ color: txt3 }}>Available to reinvest</span>
-            <span className="text-base font-bold font-mono" style={{ color: '#34d399' }}>{fmt$(realizedTotal)}</span>
+            <span className="text-xs" style={{ color: txt3 }}>
+              {realizedTotal > 0 ? 'Available to reinvest' : 'Deployable gains'}
+            </span>
+            <span className="text-base font-bold font-mono" style={{ color: '#34d399' }}>{fmt$(availableCash)}</span>
           </div>
         )}
         <button onClick={() => { setPrefill(undefined); setShowLogModal(true) }}
@@ -415,9 +420,24 @@ function ReinvestmentInner() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
               { label: 'Open trades', value: openTrades.length.toString(), sub: `${closedTrades.length} closed` },
-              { label: 'Unrealized P&L', value: (totalPnL ?? 0) >= 0 ? `+${fmt$(totalPnL)}` : `${fmt$(totalPnL)}`, sub: totalInvested > 0 ? fmtPct(totalPnL / totalInvested * 100) : '0%', color: totalPnL >= 0 ? '#34d399' : '#f87171' },
-              { label: 'Realized gains', value: fmt$(realizedTotal), sub: `${closedTrades.length} exits`, color: realizedTotal >= 0 ? '#34d399' : '#f87171' },
-              { label: 'Available cash', value: fmt$(Math.max(0, realizedTotal)), sub: 'from closed trades', color: '#60a5fa' },
+              {
+                label: 'Unrealized P&L',
+                value: (unrealizedTotal ?? 0) >= 0 ? `+${fmt$(unrealizedTotal)}` : `${fmt$(unrealizedTotal)}`,
+                sub: totalInvested > 0 ? fmtPct((unrealizedTotal / totalInvested) * 100) : '0%',
+                color: (unrealizedTotal ?? 0) >= 0 ? '#34d399' : '#f87171'
+              },
+              {
+                label: 'Realized gains',
+                value: fmt$(realizedTotal),
+                sub: `${closedTrades.length} exits`,
+                color: realizedTotal >= 0 ? '#34d399' : '#f87171'
+              },
+              {
+                label: realizedTotal > 0 ? 'Available cash' : 'Deployable capital',
+                value: fmt$(availableCash),
+                sub: realizedTotal > 0 ? 'from closed trades' : unrealizedTotal > 0 ? 'unrealized gains' : 'no gains yet',
+                color: availableCash > 0 ? '#60a5fa' : txt3 as string
+              },
             ].map(({ label, value, sub, color }) => (
               <div key={label} className="rounded-xl p-3" style={{ background: surf2, border: `1px solid ${brd}` }}>
                 <div className="text-[10px] font-mono uppercase tracking-widest mb-1" style={{ color: txt3 }}>{label}</div>
@@ -614,10 +634,10 @@ function ReinvestmentInner() {
                   )}
 
                   {/* Allocation */}
-                  {allocation.length > 0 && realizedTotal > 0 && (
+                  {allocation.length > 0 && availableCash > 0 && (
                     <div className="rounded-2xl p-5" style={{ background: surf, border: `1px solid ${brd}` }}>
                       <p className="text-[10px] font-mono uppercase tracking-widest mb-4" style={{ color: txt3 }}>
-                        Suggested allocation of {fmt$(realizedTotal)}
+                        Suggested allocation of {fmt$(availableCash)} {realizedTotal <= 0 ? '(unrealized gains)' : ''}
                       </p>
                       <div className="space-y-3">
                         {allocation.map(a => (
