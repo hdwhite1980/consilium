@@ -346,8 +346,10 @@ ${bundle.aiContext.optionsSection}
 
 ${bundle.aiContext.convictionSection}
 
+REQUIRED: Your technicalBasis MUST reference at least 2 of these if present in the data above: Ichimoku cloud position, ATR-derived stop/target levels, Williams %R, CCI, ROC momentum direction, relative strength vs sector. These are high-signal indicators — ignoring them weakens your case.
+
 JSON ONLY:
-{"signal":"BULLISH|BEARISH|NEUTRAL","reasoning":"4-5 sentences integrating all signals","target":"price target e.g. $195","confidence":<0-100>,"technicalBasis":"2 sentences","fundamentalBasis":"2 sentences","catalysts":["2-3 catalysts"],"keyRisks":["2-3 risks"]}`
+{"signal":"BULLISH|BEARISH|NEUTRAL","reasoning":"4-5 sentences integrating all signals including new indicators","target":"price target e.g. $195","confidence":<0-100>,"technicalBasis":"2-3 sentences — must cite Ichimoku, ATR, or relative strength if available","fundamentalBasis":"2 sentences","catalysts":["2-3 catalysts"],"keyRisks":["2-3 risks"]}`
     }]
   })
   return parseJSON<ClaudeResult>((msg.content[0] as { text: string }).text)
@@ -372,8 +374,17 @@ ${bundle.aiContext.technicalsSection}
 ${bundle.aiContext.optionsSection}
 ${bundle.aiContext.convictionSection}
 
+EXPLOIT THESE IF THEY CONTRADICT THE LEAD ANALYST'S THESIS:
+- Ichimoku cloud position (above/below/in cloud, TK cross direction)
+- ATR-based volatility (is the suggested stop realistic given ATR?)
+- Williams %R and CCI readings (do they confirm or contradict RSI?)
+- ROC momentum (accelerating or decelerating?)
+- Relative strength vs sector (outperforming or lagging peers?)
+- GEX signal (dealer positioning — pinning or amplifying?)
+- Earnings implied move vs historical (options overpriced/underpriced?)
+
 JSON ONLY:
-{"agrees":<true|false>,"signal":"BULLISH|BEARISH|NEUTRAL","reasoning":"4 sentences","confidence":<0-100>,"challenges":["2-4 specific data-backed challenges"],"alternateScenario":"scenario the Lead Analyst underweights","strongestCounterArgument":"single most compelling counter"}` }
+{"agrees":<true|false>,"signal":"BULLISH|BEARISH|NEUTRAL","reasoning":"4 sentences","confidence":<0-100>,"challenges":["2-4 specific data-backed challenges — cite the new indicators above if they support your case"],"alternateScenario":"scenario the Lead Analyst underweights","strongestCounterArgument":"single most compelling counter"}` }
     ]
   })
   return parseJSON<GptResult>(completion.choices[0].message.content!)
@@ -575,8 +586,11 @@ Yields on: ${counter?.yieldsOn.join('; ') ?? ''}
 Still pressing: ${counter?.pressesOn.join('; ') ?? ''}
 Closing argument: ${counter?.closingArgument ?? ''}` : ''}
 
-OPTIONS FLOW:
+OPTIONS FLOW & VOLATILITY:
 ${bundle.aiContext.optionsSection}
+
+KEY TECHNICAL CONTEXT (for stop/target calibration):
+${bundle.aiContext.technicalsSection}
 
 CONVICTION ENGINE:
 ${bundle.aiContext.convictionSection}
@@ -598,15 +612,15 @@ JSON ONLY — include ALL fields below:
   "invalidationTrigger": "the single clearest signal this thesis is wrong",
   "rounds": ${round},
   "entryPrice": "recommended entry price or range e.g. $195-$198 on a pullback to support",
-  "stopLoss": "where to cut losses e.g. $189 — below SMA200 support",
-  "takeProfit": "where to take profits — for BULLISH this is above entry price, for BEARISH this is below entry price. Must be consistent with the signal direction. e.g. BULLISH: '$215 first target, $225 full exit' | BEARISH: '$192 first target, $185 full exit'",
+  "stopLoss": "where to cut losses — use the ATR-derived stop from the signal data if available, explain why e.g. '$189 — 2× ATR below entry, below SMA200 support'",
+  "takeProfit": "where to take profits — use ATR-derived target if available. For BULLISH above entry, for BEARISH below entry. e.g. BULLISH: '$215 first (1.5× ATR), $225 full exit at resistance' | BEARISH: '$192 first target, $185 full exit'",
   "timeHorizon": "realistic timeframe e.g. 2-3 weeks for base case to play out",
   "plainEnglish": "Explain the verdict in simple plain English as if talking to someone who has never traded before. 3-4 sentences. No jargon. What is this stock doing and what should someone know about it right now?",
-  "technicalsExplained": "Explain what the technical signals mean in plain English. What is the RSI telling us? What does the death cross or golden cross mean? What does price vs moving averages tell us? 3-4 sentences a beginner would understand.",
-  "fundamentalsExplained": "Explain what the fundamental signals mean in plain English. What do the analyst ratings mean? What does earnings date mean for the stock? What does insider buying or selling tell us? 3-4 sentences a beginner would understand.",
-  "smartMoneyExplained": "Explain what the smart money signals mean in plain English. What does it mean when insiders buy or sell? What does congressional trading tell us? What does options flow and short interest mean? 3-4 sentences a beginner would understand.",
-  "actionPlan": "Give a clear, specific, step-by-step action plan in plain English. What should someone actually DO — buy, sell, wait, set an alert? Be specific about price levels. 4-5 sentences.",
-  "optionsStrategy": "Based on the verdict, options flow, and IV conditions — what is the single best options approach for this stock right now? One paragraph. Cover whether to buy or sell options, whether IV is favorable, what type of strategy fits (buying calls/puts, spreads, selling premium), and why. Write it for someone who understands options basics but is not an expert."
+  "technicalsExplained": "Explain what the technical signals mean in plain English. Cover: what the Ichimoku cloud position says about the trend, what ATR says about volatility and appropriate stop placement, what RSI/Williams/CCI oscillators agree or disagree on, and whether momentum (ROC) is accelerating or decelerating. 4-5 sentences a beginner would understand.",
+  "fundamentalsExplained": "Explain what the fundamental signals mean in plain English. What do the analyst ratings mean? What does earnings date mean for the stock? If earnings implied move data is available, explain whether options are overpriced or underpriced. What does insider buying or selling tell us? 3-4 sentences.",
+  "smartMoneyExplained": "Explain what the smart money signals mean in plain English. What does it mean when insiders buy or sell? What does congressional trading tell us? What does options flow, GEX (dealer positioning), and short interest mean? 3-4 sentences.",
+  "actionPlan": "Give a clear, specific, step-by-step action plan in plain English. Reference the ATR-derived stop and target levels specifically. What should someone actually DO — buy, sell, wait, set an alert? Be specific about price levels. 4-5 sentences.",
+  "optionsStrategy": "Based on the verdict, options flow, IV conditions, and GEX signal — what is the single best options approach right now? One paragraph. If earnings are near, address whether the implied move makes options expensive or cheap. Cover whether to buy or sell options, what type of strategy fits, and why. Write for someone who understands options basics."
 }`
     }]
   })
