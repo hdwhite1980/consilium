@@ -324,7 +324,7 @@ export async function runClaude(bundle: SignalBundle, gemini: GeminiResult): Pro
       }
       const pn: Record<string, string> = { balanced: 'Balanced', technical: 'Technical Trader', fundamental: 'Fundamental Analyst' }
       const p = (( bundle as any).persona ?? 'balanced') as string
-      return `You are the Lead Analyst (${pn[p] ?? 'Balanced'} perspective) in an elite AI stock council for ${bundle.ticker}. ${pi[p] ?? pi.balanced} Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data — only use what you have.`
+      return `You are the Lead Analyst (${pn[p] ?? 'Balanced'} perspective) in an elite AI stock council for ${bundle.ticker}. ${pi[p] ?? pi.balanced} Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data — only use what you have. IMPORTANT: If the price data shows a period change exceeding ±200%, treat this as a potential data error and note it explicitly rather than building your analysis on it.`
     })(),
     messages: [{
       role: 'user',

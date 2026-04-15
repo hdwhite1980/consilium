@@ -407,7 +407,9 @@ export function calculateTechnicals(bars: Bar[]): TechnicalSignals {
 
   // ── Price stats ───────────────────────────────────────────
   const priceChange1D = ((current - prev) / prev) * 100
-  const priceChangePeriod = ((current - first) / first) * 100
+  // Cap period change at ±500% — anything beyond that is a data error, not a real move
+  const rawPeriodChange = first > 0 ? ((current - first) / first) * 100 : 0
+  const priceChangePeriod = Math.max(-500, Math.min(500, rawPeriodChange))
   const high52w = Math.max(...highs)
   const low52w  = Math.min(...lows)
   const distFromHigh = ((high52w - current) / high52w) * 100

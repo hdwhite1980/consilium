@@ -77,8 +77,30 @@ export async function buildSignalBundle(
     const livePrice = await fetchCryptoPrice(sym)
     if (livePrice > 0) currentPrice = livePrice
 
+    // ── Sanity check: validate bars against live price ──────────────────
+    // If bars are wildly inconsistent with the live price, discard them.
+    // This catches Alpaca returning wrong-pair data or CoinGecko rate-limit garbage.
+    let validatedBars = bars
+    if (bars.length > 0 && livePrice > 0) {
+      const lastBarPrice = bars[bars.length - 1].c
+      const ratio = livePrice / lastBarPrice
+      // If last bar is more than 5x or less than 0.2x the live price — data is bad
+      if (ratio > 5 || ratio < 0.2) {
+        console.warn(`[crypto] Bar price ${lastBarPrice} vs live ${livePrice} — ratio ${ratio.toFixed(2)} is suspect, using scaled bars`)
+        // Scale all bars proportionally to match live price
+        const scale = livePrice / lastBarPrice
+        validatedBars = bars.map(b => ({
+          ...b,
+          o: b.o * scale,
+          h: b.h * scale,
+          l: b.l * scale,
+          c: b.c * scale,
+        }))
+      }
+    }
+
     onProgress?.('Computing technical indicators...')
-    const technicals = calculateTechnicals(bars)
+    const technicals = calculateTechnicals(validatedBars)
 
     onProgress?.('Fetching market context...')
     const [marketContext, optionsFlow] = await Promise.all([
@@ -151,7 +173,7 @@ Focus on technical signals, volume trends, and market structure for directional 
     )
 
     const newsSection = `=== NEWS & SENTIMENT ===\n${formatNewsForAI(news)}`
-    const priceSection = `=== PRICE ACTION ===\n${formatBarsForAI(bars, timeframe)}`
+    const priceSection = `=== PRICE ACTION ===\n${formatBarsForAI(validatedBars, timeframe)}`
     const technicalsSection = technicals.summary
     const marketSection = marketContext.summary
     const fundamentalsSection = cryptoFundamentals.summary
@@ -162,7 +184,7 @@ Focus on technical signals, volume trends, and market structure for directional 
 
     return {
       ticker: sym, timeframe, timestamp: new Date().toISOString(),
-      bars, news, currentPrice,
+      bars: validatedBars, news, currentPrice,
       technicals, marketContext,
       fundamentals: cryptoFundamentals,
       smartMoney: cryptoSmartMoney,
