@@ -480,6 +480,13 @@ function HomeInner() {
           <span className="hidden sm:inline">Tomorrow</span>
         </button>
 
+        <button onClick={() => router.push('/portfolio')}
+          className="flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 rounded-lg text-sm font-semibold transition-all hover:opacity-80"
+          style={{ background: 'rgba(52,211,153,0.12)', color: '#34d399', border: '1px solid rgba(52,211,153,0.25)' }}>
+          <span className="text-xs">💼</span>
+          <span className="hidden sm:inline">Portfolio</span>
+        </button>
+
         <button onClick={() => router.push('/guide')}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm transition-all hover:opacity-80"
           style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.08)' }}
