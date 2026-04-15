@@ -389,7 +389,20 @@ function InvestInner() {
   const [showFirstWin, setShowFirstWin] = useState(false)
   const [firstWinAmount, setFirstWinAmount] = useState(0)
   const [tab, setTab] = useState<'ideas' | 'trades' | 'history'>('ideas')
+  const [priceUpdatedAt, setPriceUpdatedAt] = useState<Date | null>(null)
   const isDark = useDarkMode()
+
+  // Market hours check (US Eastern Time)
+  const isMarketOpen = () => {
+    const now = new Date()
+    const et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }))
+    const day = et.getDay()
+    const hour = et.getHours()
+    const min = et.getMinutes()
+    const mins = hour * 60 + min
+    // Mon–Fri, 9:30am–4:00pm ET
+    return day >= 1 && day <= 5 && mins >= 570 && mins < 960
+  }
 
   const txt  = isDark ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.9)'
   const txt2 = isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)'
@@ -417,11 +430,38 @@ function InvestInner() {
 
       const closed = (data.trades ?? []).filter((t: Trade) => t.exit_price)
       setTrades([...enriched, ...closed])
+      setPriceUpdatedAt(new Date())
     } catch { /* ignore */ }
     setLoading(false)
   }, [])
 
   useEffect(() => { loadData() }, [loadData])
+
+  // Auto-refresh prices every 5 min during market hours
+  useEffect(() => {
+    const refreshPrices = async () => {
+      if (!isMarketOpen()) return
+      setTrades(prev => {
+        const open = prev.filter(t => !t.exit_price)
+        if (!open.length) return prev
+        Promise.all(open.map(async t => {
+          try {
+            const r = await fetch(`/api/ticker?ticker=${t.ticker}`)
+            const d = await r.json()
+            const cp: number | null = d?.price ?? null
+            return { ...t, currentPrice: cp, pnl: cp ? (cp - t.entry_price) * t.shares : null, pnlPct: cp ? ((cp - t.entry_price) / t.entry_price) * 100 : null }
+          } catch { return t }
+        })).then(enriched => {
+          const closed = prev.filter(t => !!t.exit_price)
+          setTrades([...enriched, ...closed])
+          setPriceUpdatedAt(new Date())
+        })
+        return prev
+      })
+    }
+    const interval = setInterval(refreshPrices, 5 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [])
 
   const openTrades = trades.filter(t => !t.exit_price)
   const closedTrades = trades.filter(t => !!t.exit_price)
@@ -541,7 +581,12 @@ function InvestInner() {
               </div>
               <div className="text-right">
                 <div className="text-2xl font-bold font-mono" style={{ color: txt }}>{fmt$(totalValue)}</div>
-                <div className="text-[10px]" style={{ color: txt3 }}>total portfolio</div>
+                <div className="flex items-center justify-end gap-1.5 mt-0.5">
+                  <div className="w-1.5 h-1.5 rounded-full" style={{ background: isMarketOpen() ? '#34d399' : txt3 }} />
+                  <div className="text-[10px]" style={{ color: txt3 }}>
+                    {isMarketOpen() ? 'live · refreshes 5min' : priceUpdatedAt ? `last close · ${priceUpdatedAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : 'market closed'}
+                  </div>
+                </div>
               </div>
             </div>
 
