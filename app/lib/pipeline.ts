@@ -324,7 +324,11 @@ export async function runClaude(bundle: SignalBundle, gemini: GeminiResult): Pro
       }
       const pn: Record<string, string> = { balanced: 'Balanced', technical: 'Technical Trader', fundamental: 'Fundamental Analyst' }
       const p = (( bundle as any).persona ?? 'balanced') as string
-      return `You are the Lead Analyst (${pn[p] ?? 'Balanced'} perspective) in an elite AI stock council for ${bundle.ticker}. ${pi[p] ?? pi.balanced} Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data — only use what you have. IMPORTANT: If the price data shows a period change exceeding ±200%, treat this as a potential data error and note it explicitly rather than building your analysis on it.`
+      const isForexPair = bundle.ticker.length === 6 && /^[A-Z]{6}$/.test(bundle.ticker) && ['USD','EUR','GBP','JPY','AUD','CAD','NZD','CHF','SEK','NOK','DKK','SGD','HKD','MXN','ZAR','TRY'].some(c => bundle.ticker.startsWith(c) || bundle.ticker.endsWith(c))
+      const assetContext = isForexPair
+        ? `This is a FOREX currency pair. Analysis focuses on: central bank policy divergence between the two currencies, macroeconomic data (inflation, employment, GDP) for each region, interest rate differentials, technical price action, and global risk sentiment. There are no earnings, P/E ratios, or insider data for forex. Use the technical signals and macro context as your primary evidence.`
+        : `${pi[p] ?? pi.balanced}`
+      return `You are the Lead Analyst (${pn[p] ?? 'Balanced'} perspective) in an elite AI council for ${bundle.ticker}. ${assetContext} Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data — only use what you have. IMPORTANT: If the price data shows a period change exceeding ±200%, treat this as a potential data error and note it explicitly rather than building your analysis on it.`
     })(),
     messages: [{
       role: 'user',

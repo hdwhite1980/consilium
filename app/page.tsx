@@ -509,9 +509,9 @@ function HomeInner() {
 
         {/* ── Analysis controls ── */}
         <div className="flex items-center gap-1.5 flex-1">
-          <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())}
+          <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
             onKeyDown={e => e.key === 'Enter' && !running && run()}
-            placeholder="AAPL" maxLength={6} data-tutorial="ticker-input"
+            placeholder="AAPL / EURUSD / BTC" maxLength={7} data-tutorial="ticker-input"
             className="w-16 sm:w-20 rounded-lg px-2.5 py-1.5 text-sm font-mono font-bold tracking-widest outline-none border transition-colors"
             style={{ background: inputBg, borderColor: brd2, color: txt }} />
 
@@ -680,11 +680,16 @@ function HomeInner() {
           {/* Price + sparkline */}
           <div className="col-span-2 md:col-span-1 rounded-xl border p-3" style={{ background: surf, borderColor: brd }}>
             <div className="flex items-baseline gap-2 mb-1.5">
-              <span className="text-base font-bold font-mono" style={{ color: txt }}>${(md!.currentPrice ?? 0).toFixed(2)}</span>
+              <span className="text-base font-bold font-mono" style={{ color: txt }}>
+                {/* Forex rates need more decimal places */}
+                {md!.currentPrice < 10 && md!.currentPrice > 0
+                  ? (md!.currentPrice < 0.01 ? md!.currentPrice.toFixed(6) : md!.currentPrice.toFixed(4))
+                  : `$${(md!.currentPrice ?? 0).toFixed(2)}`}
+              </span>
               <span className="text-xs font-mono" style={{ color: md!.technicals?.priceChange1D >= 0 ? '#34d399' : '#f87171' }}>
                 {((v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`)(md!.technicals?.priceChange1D)}
               </span>
-              <span className="text-[9px] font-mono ml-auto" style={{ color: txt3 }}>15m delay</span>
+              <span className="text-[9px] font-mono ml-auto" style={{ color: txt3 }}>live</span>
             </div>
             <Spark bars={md!.bars} />
           </div>
@@ -861,6 +866,7 @@ function HomeInner() {
               <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
                 <div className="text-4xl opacity-60">📊</div>
                 <div className="text-base font-semibold" style={{ color: 'var(--text2)' }}>Enter a ticker and click Analyze</div>
+                <div className="text-xs font-mono" style={{ color: 'var(--text3)' }}>Stocks · Crypto · Forex pairs (EURUSD, GBPJPY...)</div>
               </div>
             )}
 

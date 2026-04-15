@@ -6,6 +6,7 @@
 
 import { fetchNews, fetchBars, formatNewsForAI, formatBarsForAI } from './data/alpaca'
 import { fetchCryptoBars, fetchCryptoPrice, fetchCryptoMetadata, isCryptoTicker } from './data/crypto'
+import { fetchForexBars, fetchForexRate, fetchForexMetadata, isForexTicker, getForexInfo } from './data/forex'
 import { calculateTechnicals } from './signals/technicals'
 import { buildMarketContext } from './signals/market-context'
 import { fetchFundamentals } from './signals/fundamentals'
@@ -60,9 +61,10 @@ export async function buildSignalBundle(
   onProgress?: (step: string) => void
 ): Promise<SignalBundle> {
   const sym = ticker.toUpperCase()
-  const isCrypto = isCryptoTicker(sym)
+  const isCrypto = isForexTicker(sym) ? false : isCryptoTicker(sym)
+  const isForex = isForexTicker(sym)
 
-  onProgress?.(`Fetching ${isCrypto ? 'crypto' : 'price'} data and news...`)
+  onProgress?.(`Fetching ${isForex ? 'forex' : isCrypto ? 'crypto' : 'price'} data and news...`)
 
   // ── Crypto path: CoinGecko bars + Alpaca news ──────────────
   if (isCrypto) {
@@ -193,7 +195,104 @@ Focus on technical signals, volume trends, and market structure for directional 
     }
   }
 
-  // ── Equity path (unchanged) ────────────────────────────────
+  // ── Forex path ─────────────────────────────────────────────
+  if (isForex) {
+    const forexInfo = getForexInfo(sym)!
+    const [bars, news, forexMeta] = await Promise.all([
+      fetchForexBars(sym, timeframe),
+      fetchNews(`${forexInfo.base} ${forexInfo.quote} forex`, 10),
+      fetchForexMetadata(sym),
+    ])
+
+    let currentPrice = bars.length ? bars[bars.length - 1].c : 0
+    const liveRate = await fetchForexRate(sym)
+    if (liveRate > 0) currentPrice = liveRate
+
+    // Validate bars against live rate
+    if (bars.length > 0 && liveRate > 0) {
+      const ratio = liveRate / bars[bars.length - 1].c
+      if (ratio > 2 || ratio < 0.5) {
+        const scale = liveRate / bars[bars.length - 1].c
+        bars.forEach(b => { b.o *= scale; b.h *= scale; b.l *= scale; b.c *= scale })
+      }
+    }
+
+    onProgress?.('Computing technical indicators...')
+    const technicals = calculateTechnicals(bars)
+
+    onProgress?.('Fetching market context...')
+    const [marketContext, optionsFlow] = await Promise.all([
+      buildMarketContext('SPY', timeframe), // macro context via SPY
+      fetchOptionsFlow(sym, currentPrice),  // usually empty for forex
+    ])
+
+    // Forex-specific fundamentals stub
+    const dp = (n: number | null) => n != null ? n.toFixed(5) : 'N/A'
+    const forexFundamentals = {
+      summary: `=== FOREX FUNDAMENTALS ===
+Pair: ${forexMeta.name} (${sym})
+Current Rate: ${dp(currentPrice)}
+24h Change: ${forexMeta.change24h != null ? (forexMeta.change24h >= 0 ? '+' : '') + forexMeta.change24hPct?.toFixed(3) + '%' : 'N/A'}
+Session High: ${dp(forexMeta.weekHigh)} | Session Low: ${dp(forexMeta.weekLow)}
+Group: ${forexMeta.group} pair
+Background: ${forexMeta.description}
+Note: Forex has no P/E ratio, earnings, or insider data. Analysis focuses on technical signals, macro regime, central bank policy divergence, and price action.`,
+      peRatio: null, pbRatio: null, psRatio: null, evEbitda: null, debtToEquity: null,
+      revenueGrowthYoY: null, epsGrowthYoY: null, grossMargin: null, operatingMargin: null,
+      netMargin: null, freeCashFlowYield: null, roe: null,
+      nextEarningsDate: null, daysToEarnings: null, earningsRisk: 'none' as const,
+      epsSurprises: [], avgSurprisePct: null, consistentBeater: false,
+      analystBuy: 0, analystHold: 0, analystSell: 0, analystTargetPrice: null,
+      analystConsensus: 'unknown' as const, analystUpside: null,
+      recentUpgrades: [], recentDowngrades: [],
+      insiderBuyValue: 0, insiderSellValue: 0, insiderSignal: 'neutral' as const,
+      earningsImpliedMove: null, earningsHistoricalMove: null, earningsEdge: null,
+    }
+
+    const forexSmartMoney = {
+      summary: `=== SMART MONEY (FOREX) ===
+Institutional positioning data (COT reports) not available via current data sources.
+Focus on central bank policy signals, economic data releases, and technical structure.`,
+      insiderTransactions: [],
+      insiderNetValue: 0,
+      insiderSignal: 'neutral' as const,
+      insiderHighlight: '',
+      institutionalOwnership: [],
+      totalInstitutionalPct: 0,
+      institutionalNetChange: 'stable',
+      notableHolders: [],
+      congressionalTrades: [],
+      congressSignal: 'none' as const,
+    }
+
+    onProgress?.('Running conviction engine...')
+    const conviction = buildConvictionOutput(
+      sym, currentPrice,
+      technicals, forexFundamentals, forexSmartMoney, optionsFlow, marketContext
+    )
+
+    const newsSection = `=== NEWS & FOREX EVENTS ===\n${formatNewsForAI(news)}`
+    const priceSection = `=== PRICE ACTION ===\n${formatBarsForAI(bars, timeframe)}`
+    const technicalsSection = technicals.summary
+    const marketSection = marketContext.summary
+    const fundamentalsSection = forexFundamentals.summary
+    const smartMoneySection = forexSmartMoney.summary
+    const optionsSection = optionsFlow.summary
+    const convictionSection = conviction.summary
+    const fullBundle = [newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection].join('\n\n')
+
+    return {
+      ticker: sym, timeframe, timestamp: new Date().toISOString(),
+      bars, news, currentPrice,
+      technicals, marketContext,
+      fundamentals: forexFundamentals,
+      smartMoney: forexSmartMoney,
+      optionsFlow, conviction,
+      aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, fullBundle },
+    }
+  }
+
+  // ── Equity path ─────────────────────────────────────────────
   const [bars, news] = await Promise.all([
     fetchBars(sym, timeframe),
     fetchNews(sym, 15),
