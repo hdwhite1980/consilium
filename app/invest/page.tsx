@@ -427,11 +427,15 @@ function InvestInner() {
   const closedTrades = trades.filter(t => !!t.exit_price)
 
   // Compute total portfolio value
-  const unrealized = openTrades.reduce((s, t) => s + (t.currentPrice ?? t.entry_price) * t.shares, 0)
+  const unrealizedValue = openTrades.reduce((s, t) => s + (t.currentPrice ?? t.entry_price) * t.shares, 0)
   const realized = closedTrades.reduce((s, t) => s + (t.exit_price! - t.entry_price) * t.shares, 0)
   const totalInvested = openTrades.reduce((s, t) => s + t.entry_price * t.shares, 0)
   const startBal = journey?.starting_balance ?? 0
-  const totalValue = startBal + realized + (unrealized - totalInvested)
+  // Cash remaining = starting balance - what's currently deployed + any realized gains/losses
+  const cashRemaining = Math.max(0, startBal - totalInvested + realized)
+  // Total = cash on hand + current market value of open positions
+  const totalValue = cashRemaining + unrealizedValue
+  const openPnL = unrealizedValue - totalInvested
   const milestone = getMilestone(totalValue)
   const nextMilestone = getNextMilestone(totalValue)
   const progress = nextMilestone ? Math.min(100, ((totalValue - milestone.min) / (nextMilestone.min - milestone.min)) * 100) : 100
@@ -442,7 +446,7 @@ function InvestInner() {
       const res = await fetch('/api/invest/ideas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ totalValue, openTrades, startingBalance: startBal }),
+        body: JSON.stringify({ totalValue, openTrades, startingBalance: startBal, cashRemaining }),
       })
       const data = await res.json()
       setIdeas(data.ideas ?? [])
@@ -556,7 +560,7 @@ function InvestInner() {
 
             <div className="grid grid-cols-4 gap-2">
               {[
-                { label: 'In play', val: fmt$(openTrades.reduce((s,t) => s + (t.pnl ?? 0), 0)), color: (openTrades.reduce((s,t) => s + (t.pnl ?? 0), 0)) >= 0 ? '#34d399' : '#f87171' },
+                { label: 'In play', val: `${openPnL >= 0 ? '+' : ''}${fmt$(openPnL)}`, color: openPnL >= 0 ? '#34d399' : '#f87171' },
                 { label: 'Locked in', val: fmt$(realized), color: realized >= 0 ? '#34d399' : '#f87171' },
                 { label: 'Win streak', val: `${journey.win_streak} 🔥`, color: '#fbbf24' },
                 { label: 'Win rate', val: journey.total_trades > 0 ? `${Math.round((journey.winning_trades / journey.total_trades) * 100)}%` : '—', color: txt },
