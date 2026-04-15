@@ -648,6 +648,14 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
             allowFullScreen />
         </div>
       )}
+
+      {/* Data transparency note */}
+      <p className="text-[10px] font-mono leading-relaxed px-1"
+        style={{ color: 'rgba(255,255,255,0.2)' }}>
+        Moving average values (SMA50, SMA200) may differ slightly from other platforms such as TradingView.
+        This is due to differences in how historical prices are adjusted for splits and dividends — not a calculation error.
+        RSI, MACD, and signal direction are unaffected and remain accurate.
+      </p>
     </div>
   )
 }
