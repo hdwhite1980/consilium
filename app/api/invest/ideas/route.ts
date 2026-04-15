@@ -3,16 +3,44 @@ import { createClient } from '@/app/lib/auth/server'
 import Anthropic from '@anthropic-ai/sdk'
 
 const STAGE_CONFIG = [
-  { name: 'Spark',   min: 0,      max: 10,     maxPrice: 5,   minPrice: 1,  maxPositions: 2, stopPct: '20–30%', targetPct: '40–80%', strategy: 'momentum and volume spike plays' },
-  { name: 'Ember',   min: 10,     max: 50,     maxPrice: 8,   minPrice: 1,  maxPositions: 2, stopPct: '18–25%', targetPct: '35–70%', strategy: 'momentum with early technical confirmation' },
-  { name: 'Flame',   min: 50,     max: 200,    maxPrice: 15,  minPrice: 1,  maxPositions: 3, stopPct: '15–20%', targetPct: '30–60%', strategy: 'technical setups with catalyst awareness' },
-  { name: 'Blaze',   min: 200,    max: 1000,   maxPrice: 50,  minPrice: 2,  maxPositions: 4, stopPct: '10–15%', targetPct: '20–40%', strategy: 'fundamentally-supported technical breakouts' },
-  { name: 'Inferno', min: 1000,   max: 10000,  maxPrice: 200, minPrice: 5,  maxPositions: 5, stopPct: '8–12%',  targetPct: '15–30%', strategy: 'high-conviction full debate analysis' },
-  { name: 'Free',    min: 10000,  max: Infinity, maxPrice: 99999, minPrice: 1, maxPositions: 10, stopPct: '5–10%', targetPct: '10–25%', strategy: 'diversified conviction-weighted portfolio' },
+  { name: 'Spark',   min: 0,      max: 10,     maxPositions: 2, stopPct: '20–30%', targetPct: '40–80%', strategy: 'momentum and volume spike plays on micro-cap stocks' },
+  { name: 'Ember',   min: 10,     max: 50,     maxPositions: 2, stopPct: '18–25%', targetPct: '35–70%', strategy: 'momentum with early technical confirmation' },
+  { name: 'Flame',   min: 50,     max: 200,    maxPositions: 3, stopPct: '15–20%', targetPct: '30–60%', strategy: 'technical setups with catalyst awareness' },
+  { name: 'Blaze',   min: 200,    max: 1000,   maxPositions: 4, stopPct: '10–15%', targetPct: '20–40%', strategy: 'fundamentally-supported technical breakouts' },
+  { name: 'Inferno', min: 1000,   max: 10000,  maxPositions: 5, stopPct: '8–12%',  targetPct: '15–30%', strategy: 'high-conviction full debate analysis' },
+  { name: 'Free',    min: 10000,  max: Infinity, maxPositions: 10, stopPct: '5–10%', targetPct: '10–25%', strategy: 'diversified conviction-weighted portfolio' },
 ]
 
 function getStage(totalValue: number) {
   return STAGE_CONFIG.find(s => totalValue >= s.min && totalValue < s.max) ?? STAGE_CONFIG[0]
+}
+
+// Calculate ideal price range based on deployable cash
+// Target: each position should buy 10–50 shares (feels like a real holding)
+// Per-position capital = deployable / max positions
+// ideal price = per-position capital / target shares
+function getPriceRange(deployable: number, maxPositions: number): { minPrice: number; maxPrice: number; targetShares: number } {
+  const perPosition = deployable / Math.max(1, maxPositions)
+
+  if (perPosition <= 5) {
+    // Under $5/position — buy fractional or 1-3 shares of $1-3 stocks
+    return { minPrice: 0.5, maxPrice: 5, targetShares: Math.max(1, Math.floor(perPosition)) }
+  } else if (perPosition <= 20) {
+    // $5-20/position — $1-8 stocks, 3-15 shares
+    return { minPrice: 1, maxPrice: Math.min(8, perPosition * 0.7), targetShares: 5 }
+  } else if (perPosition <= 100) {
+    // $20-100/position — $3-25 stocks, 5-20 shares
+    return { minPrice: 2, maxPrice: Math.min(25, perPosition * 0.6), targetShares: 10 }
+  } else if (perPosition <= 500) {
+    // $100-500/position — $5-60 stocks, 10-30 shares
+    return { minPrice: 5, maxPrice: Math.min(60, perPosition * 0.5), targetShares: 15 }
+  } else if (perPosition <= 2000) {
+    // $500-2000/position — $10-150 stocks
+    return { minPrice: 10, maxPrice: Math.min(150, perPosition * 0.4), targetShares: 20 }
+  } else {
+    // $2000+/position — any price, 20-50 shares
+    return { minPrice: 20, maxPrice: Math.min(500, perPosition * 0.3), targetShares: 30 }
+  }
 }
 
 // Small-cap stocks by sector — known to trade in lower price ranges
@@ -59,6 +87,25 @@ export async function POST(req: NextRequest) {
     (totalValue ?? 0) - (openTrades?.reduce((s: number, t: { entry_price: number; shares: number }) => s + t.entry_price * t.shares, 0) ?? 0)
   )
 
+  // Dynamic price range based on how much they can actually deploy
+  const priceRange = getPriceRange(deployable, stage.maxPositions)
+  const minPrice = priceRange.minPrice
+  const maxPrice = priceRange.maxPrice
+  const targetShares = priceRange.targetShares
+
+  // Pick candidate tickers from the right price tier
+  const SMALL_CAP_BY_PRICE: Record<string, string[]> = {
+    'under5':   ['SNDL','CLOV','MVIS','WKHS','GOEV','RIDE','NKLA','PHUN','BBIG','ILUS','AMC','CMAX','NRXP','OCGN','TELL'],
+    'under15':  ['GPRO','LAZR','LIDR','BLNK','PLUG','FCEL','HYLN','SOLO','XPEV','NIO','GOTU','GRAB','ACHR','JOBY','ARCHER'],
+    'under30':  ['F','BAC','T','ITUB','VALE','SWN','RIG','NOK','ERIC','GOLD','AG','FSM','MRO','APA','BORR'],
+    'under75':  ['SNAP','LYFT','RIVN','LCID','SOFI','OPEN','UWMC','VUZI','NAOV','SPCE','PTRA','DKNG','PENN','MGAM','AGS'],
+    'under200': ['UBER','HOOD','COIN','RBLX','PLTR','MARA','RIOT','HUT','BITF','CLSK','IREN','WULF','BTBT','CIFR','CORZ'],
+    'any':      ['AMD','NVDA','META','GOOGL','MSFT','AAPL','AMZN','TSLA','JPM','GS'],
+  }
+
+  const priceTier = maxPrice <= 5 ? 'under5' : maxPrice <= 15 ? 'under15' : maxPrice <= 30 ? 'under30' : maxPrice <= 75 ? 'under75' : maxPrice <= 200 ? 'under200' : 'any'
+  const priceTierTickers = SMALL_CAP_BY_PRICE[priceTier] ?? []
+
   // Fetch live sector performance
   const sectors = await fetchSectorPerformance()
 
@@ -91,33 +138,35 @@ export async function POST(req: NextRequest) {
   const msg = await anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 2000,
-    system: `You are the Consilium Investment Council's journey guide for small investors. You recommend stage-appropriate stocks using live sector performance data.
+    system: `You are the Consilium Investment Council's journey guide for investors at all levels. You recommend stage-appropriate stocks using live sector performance data.
 
-CRITICAL PRICE RULE: Every stock you recommend MUST currently trade between $${stage.minPrice} and $${stage.maxPrice}. This is absolute. Do not recommend any stock trading outside this range.
+CRITICAL PRICE RULE: Every stock you recommend MUST currently trade between $${minPrice.toFixed(2)} and $${maxPrice.toFixed(2)}. This range is calculated from the user's available capital so each position feels meaningful — around ${targetShares} shares per position. A $${maxPrice.toFixed(0)} stock with ${targetShares} shares = $${(maxPrice * targetShares).toFixed(0)} which is appropriate for their balance. Do NOT recommend stocks outside this range.
 
-All numeric fields (price, suggestedAmount, suggestedShares, stopPct, targetPct, confidence) must be plain numbers.`,
+All numeric fields must be plain numbers — no $ signs, no commas.`,
     messages: [{
       role: 'user',
       content: `TRADER PROFILE:
-Stage: ${stage.name} — portfolio value $${(totalValue ?? 0).toFixed(2)}, cash to deploy: $${deployable.toFixed(2)}
-Stock price range: $${stage.minPrice}–$${stage.maxPrice} ONLY
+Stage: ${stage.name} — total portfolio $${(totalValue ?? 0).toFixed(2)}, cash to deploy: $${deployable.toFixed(2)}
+STOCK PRICE RANGE: $${minPrice.toFixed(2)}–$${maxPrice.toFixed(2)} (sized so they can buy ~${targetShares} shares per position)
+Per-position budget: ~$${(deployable / stage.maxPositions).toFixed(2)}
 Strategy: ${stage.strategy}
 Stop range: ${stage.stopPct} | Target range: ${stage.targetPct}
 
-TODAY'S SECTOR PERFORMANCE (use this to select sectors):
+TODAY'S SECTOR PERFORMANCE:
 ${sectorContext || 'Sector data unavailable — use broad market context'}
 
 STRONGEST SECTORS TODAY: ${allTopNames.slice(0, 3).join(', ')}
 BULLISH SECTORS: ${bullishSectors.map(s => s.name).join(', ') || 'None — market is mixed/bearish'}
 
-CANDIDATE TICKERS IN TOP SECTORS (verify these are in the $${stage.minPrice}–$${stage.maxPrice} range):
-${candidateTickers.join(', ')}
+CANDIDATE TICKERS in the $${minPrice.toFixed(2)}–$${maxPrice.toFixed(2)} price range:
+Sector candidates: ${candidateTickers.slice(0, 15).join(', ')}
+Price-tier candidates: ${priceTierTickers.join(', ')}
 
-Generate EXACTLY 5 stock ideas — one per top sector where possible. Each must:
-1. Trade between $${stage.minPrice} and $${stage.maxPrice}
-2. Come from one of today's top-performing sectors
+Generate EXACTLY 5 stock ideas — spread across today's strongest sectors. Each must:
+1. Trade between $${minPrice.toFixed(2)} and $${maxPrice.toFixed(2)}
+2. Come from one of today's better-performing sectors
 3. Have a specific catalyst RIGHT NOW
-4. Be sized to the $${deployable.toFixed(2)} available capital
+4. Suggest ~${targetShares} shares sized to their ~$${(deployable / stage.maxPositions).toFixed(2)} per-position budget
 
 Return JSON ONLY — no markdown, no backticks:
 {
@@ -131,9 +180,9 @@ Return JSON ONLY — no markdown, no backticks:
       "signal": "BULLISH",
       "confidence": 71,
       "catalyst": "One specific reason to buy this week",
-      "rationale": "2 sentences — why this fits the stage and sector momentum",
+      "rationale": "2 sentences — why this fits their $${(deployable / stage.maxPositions).toFixed(2)} per-position budget and sector momentum",
       "suggestedAmount": 3.68,
-      "suggestedShares": 2,
+      "suggestedShares": ${targetShares},
       "entry": "$1.80–1.90",
       "stop": "$1.45",
       "stopPct": 21,
@@ -144,8 +193,8 @@ Return JSON ONLY — no markdown, no backticks:
       "volumeNote": "volume 4.2× average"
     }
   ],
-  "journeyNote": "One sentence referencing their progress and the market context today",
-  "stageAdvice": "One practical tip for trading at the ${stage.name} stage today",
+  "journeyNote": "One sentence referencing their ${stage.name} stage progress and today's market",
+  "stageAdvice": "One practical tip for the ${stage.name} stage today",
   "marketContext": "One sentence on overall market conditions from the sector data"
 }`
     }]
@@ -176,9 +225,9 @@ Return JSON ONLY — no markdown, no backticks:
 
       const displayPrice = livePrice ?? idea.price ?? 0
 
-      // Hard reject if outside price range
-      if (livePrice && (livePrice > stage.maxPrice || livePrice < stage.minPrice)) {
-        console.log(`Rejected ${idea.ticker}: $${livePrice} outside $${stage.minPrice}–$${stage.maxPrice}`)
+      // Hard reject if outside dynamic price range
+      if (livePrice && (livePrice > maxPrice || livePrice < minPrice)) {
+        console.log(`Rejected ${idea.ticker}: $${livePrice} outside $${minPrice}–$${maxPrice}`)
         continue
       }
 
