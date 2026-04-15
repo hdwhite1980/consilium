@@ -46,6 +46,32 @@ export async function POST(req: NextRequest) {
             .single()
 
           if (cached) {
+            // ── Price staleness check ──────────────────────────
+            // If price has moved >3% since cache, invalidate and run fresh
+            let priceStale = false
+            try {
+              const quoteRes = await fetch(
+                `https://data.alpaca.markets/v2/stocks/${symbol}/quotes/latest`,
+                { headers: {
+                  'APCA-API-KEY-ID': process.env.ALPACA_API_KEY!,
+                  'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY!,
+                }}
+              )
+              if (quoteRes.ok) {
+                const quoteData = await quoteRes.json()
+                const livePrice = quoteData?.quote?.ap ?? quoteData?.quote?.bp ?? 0
+                const cachedPrice = cached.price ?? 0
+                if (livePrice > 0 && cachedPrice > 0) {
+                  const priceDrift = Math.abs(livePrice - cachedPrice) / cachedPrice
+                  if (priceDrift > 0.03) {
+                    priceStale = true
+                    send('status', { stage: 'building_bundle', message: `Price moved ${(priceDrift*100).toFixed(1)}% since last analysis — running fresh analysis...` })
+                  }
+                }
+              }
+            } catch { /* Quote fetch failed — serve cache */ }
+
+            if (!priceStale) {
             const ageMinutes = Math.round(
               (Date.now() - new Date(cached.created_at).getTime()) / 60000
             )
@@ -94,6 +120,7 @@ export async function POST(req: NextRequest) {
               transcript: cached.transcript,
             })
             return
+            } // end !priceStale
           }
         }
 
