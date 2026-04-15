@@ -513,9 +513,9 @@ function HomeInner() {
 
         {/* ── Analysis controls ── */}
         <div className="flex items-center gap-1.5 flex-1">
-          <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
-            onKeyDown={e => e.key === 'Enter' && !running && run()}
-            placeholder="AAPL / EURUSD / BTC" maxLength={7} data-tutorial="ticker-input"
+          <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase().replace(/[^A-Z/]/g, ''))}
+            onKeyDown={e => { if (e.key === 'Enter' && !running) { setTicker(t => t.replace(/\//g, '')); setTimeout(run, 0) } }}
+            placeholder="AAPL · EUR/USD · BTC" maxLength={7} data-tutorial="ticker-input"
             className="w-16 sm:w-20 rounded-lg px-2.5 py-1.5 text-sm font-mono font-bold tracking-widest outline-none border transition-colors"
             style={{ background: inputBg, borderColor: brd2, color: txt }} />
 
@@ -870,7 +870,7 @@ function HomeInner() {
               <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
                 <div className="text-4xl opacity-60">📊</div>
                 <div className="text-base font-semibold" style={{ color: 'var(--text2)' }}>Enter a ticker and click Analyze</div>
-                <div className="text-xs font-mono" style={{ color: 'var(--text3)' }}>Stocks · Crypto · Forex pairs (EURUSD, GBPJPY...)</div>
+                <div className="text-xs font-mono" style={{ color: 'var(--text3)' }}>Stocks · Crypto · Forex (EUR/USD, GBP/JPY...)</div>
               </div>
             )}
 
