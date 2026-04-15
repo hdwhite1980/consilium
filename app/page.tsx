@@ -486,14 +486,15 @@ function HomeInner() {
   const inputBg = isDark ? '#181e2a' : '#f0f2f7'
 
   const NAV_ITEMS = [
-    { label: 'Today', icon: '⚡', path: '/news',      color: '#fbbf24' },
+    { label: 'Today', icon: '⚡', path: '/news',        color: '#fbbf24' },
     { label: 'Tomorrow', icon: '📅', path: '/tomorrow', color: '#a78bfa' },
+    { label: 'Invest', icon: '🔥', path: '/invest',     color: '#f97316' },
     { label: 'Portfolio', icon: '💼', path: '/portfolio', color: '#34d399' },
     { label: 'Reinvest', icon: '💰', path: '/reinvestment', color: '#34d399' },
-    { label: 'Macro', icon: '🌍', path: '/macro',    color: '#60a5fa' },
-    { label: 'Compare', icon: '⚡', path: '/compare',  color: '#f87171' },
-    { label: 'Academy', icon: '🎓', path: '/training', color: '#a78bfa' },
-    { label: 'Guide', icon: '📖', path: '/guide',    color: txt3 },
+    { label: 'Macro', icon: '🌍', path: '/macro',       color: '#60a5fa' },
+    { label: 'Compare', icon: '⚡', path: '/compare',   color: '#f87171' },
+    { label: 'Academy', icon: '🎓', path: '/training',  color: '#a78bfa' },
+    { label: 'Guide', icon: '📖', path: '/guide',       color: txt3 },
   ]
 
   return (
@@ -727,8 +728,19 @@ function HomeInner() {
               {([
                 ['RSI', <span style={{ color: md!.technicals?.rsi > 70 ? '#f87171' : md!.technicals?.rsi < 30 ? '#34d399' : txt }}>{md!.technicals?.rsi?.toFixed(1)}</span>],
                 ['MACD', <span style={{ color: md!.technicals?.macdHistogram >= 0 ? '#34d399' : '#f87171' }}>{md!.technicals?.macdHistogram >= 0 ? '▲ pos' : '▼ neg'}</span>],
-                ['MA cross', <span style={{ color: md!.technicals?.goldenCross ? '#34d399' : '#f87171' }}>{md!.technicals?.goldenCross ? 'Golden ✓' : 'Death ✗'}</span>],
-                ['vs SMA200', <span style={{ color: md!.currentPrice >= md!.technicals?.sma200 ? '#34d399' : '#f87171' }}>{((md!.currentPrice / md!.technicals?.sma200 - 1) * 100 >= 0 ? '+' : '') + ((md!.currentPrice / md!.technicals?.sma200 - 1) * 100).toFixed(1) + '%'}</span>],
+                ['MA cross', (() => {
+                    const t = md!.technicals
+                    if (!t?.sma200 || !t?.sma50 || Math.abs(t.sma200 - t.sma50) / t.sma50 < 0.0001) {
+                      return <span style={{ color: 'rgba(255,255,255,0.3)' }}>N/A</span>
+                    }
+                    return <span style={{ color: t.goldenCross ? '#34d399' : '#f87171' }}>{t.goldenCross ? 'Golden ✓' : 'Death ✗'}</span>
+                  })()],
+                ['vs SMA200', (() => {
+                    const sma200 = md!.technicals?.sma200
+                    if (!sma200 || sma200 <= 0) return <span style={{ color: 'rgba(255,255,255,0.3)' }}>N/A</span>
+                    const pct = (md!.currentPrice / sma200 - 1) * 100
+                    return <span style={{ color: pct >= 0 ? '#34d399' : '#f87171' }}>{(pct >= 0 ? '+' : '') + pct.toFixed(1) + '%'}</span>
+                  })()],
                 ['Williams %R', <span style={{ color: md!.technicals?.williamsR > -20 ? '#f87171' : md!.technicals?.williamsR < -80 ? '#34d399' : txt }}>{md!.technicals?.williamsR?.toFixed(1)}</span>],
                 ['CCI', <span style={{ color: md!.technicals?.cci > 100 ? '#f87171' : md!.technicals?.cci < -100 ? '#34d399' : txt }}>{md!.technicals?.cci?.toFixed(0)}</span>],
                 ['ATR(14)', <span style={{ color: txt }}>
@@ -741,8 +753,8 @@ function HomeInner() {
                 ['Rel Str', <span style={{ color: (md!.technicals?.relStrengthVsSector ?? 0) > 0 ? '#34d399' : (md!.technicals?.relStrengthVsSector ?? 0) < 0 ? '#f87171' : txt }}>{md!.technicals?.relStrengthVsSector != null ? ((md!.technicals?.relStrengthVsSector >= 0 ? '+' : '') + md!.technicals?.relStrengthVsSector?.toFixed(1) + '%') : 'N/A'}</span>],
                 ['Volume', <span style={{ color: txt }}>{md!.technicals?.volumeRatio?.toFixed(1)}x avg</span>],
                 ['Bollinger', <span style={{ color: txt }}>{md!.technicals?.bbSignal}</span>],
-                ['Support', <span style={{ color: txt }}>${md!.technicals?.support?.toFixed(2)}</span>],
-                ['Resist', <span style={{ color: txt }}>${md!.technicals?.resistance?.toFixed(2)}</span>],
+                ['Support', <span style={{ color: txt }}>{md!.currentPrice < 10 ? md!.technicals?.support?.toFixed(4) : '$' + md!.technicals?.support?.toFixed(2)}</span>],
+                ['Resist', <span style={{ color: txt }}>{md!.currentPrice < 10 ? md!.technicals?.resistance?.toFixed(4) : '$' + md!.technicals?.resistance?.toFixed(2)}</span>],
               ] as [string, React.ReactNode][]).map(([k, v]) => (
                 <div key={k} className="flex justify-between text-xs">
                   <span style={{ color: txt3 }}>{k}</span>
