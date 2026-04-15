@@ -382,6 +382,8 @@ function InvestInner() {
   const [ideas, setIdeas] = useState<Idea[]>([])
   const [journeyNote, setJourneyNote] = useState('')
   const [stageAdvice, setStageAdvice] = useState('')
+  const [marketContext, setMarketContext] = useState('')
+  const [topSectors, setTopSectors] = useState<Array<{ name: string; signal: string; change1D: number }>>([])
   const [loadingIdeas, setLoadingIdeas] = useState(false)
   const [showLog, setShowLog] = useState(false)
   const [prefill, setPrefill] = useState<Partial<{ ticker: string; entry_price: number; shares: number; council_signal: string }> | undefined>()
@@ -492,6 +494,8 @@ function InvestInner() {
       setIdeas(data.ideas ?? [])
       setJourneyNote(data.journeyNote ?? '')
       setStageAdvice(data.stageAdvice ?? '')
+      setMarketContext(data.marketContext ?? '')
+      setTopSectors(data.topSectors ?? [])
       setTab('ideas')
     } catch { /* ignore */ }
     setLoadingIdeas(false)
@@ -624,9 +628,9 @@ function InvestInner() {
               {ideas.length === 0 ? (
                 <div className="rounded-2xl p-8 text-center" style={{ background: surf, border: `1px solid ${brd}` }}>
                   <div className="text-3xl mb-3">⚡</div>
-                  <p className="text-sm font-semibold mb-1" style={{ color: txt }}>Get stage-matched stock picks</p>
+                  <p className="text-sm font-semibold mb-1" style={{ color: txt }}>Get stage-matched picks from today's best sectors</p>
                   <p className="text-xs mb-5" style={{ color: txt3 }}>
-                    The council will find stocks priced for your {milestone.name} stage with specific entry, stop, and target levels sized to your balance.
+                    The council pulls live sector performance data and finds 5 stocks in the $1–$5 range from today's strongest sectors — sized to your exact balance.
                   </p>
                   <button onClick={loadIdeas} disabled={loadingIdeas}
                     className="flex items-center gap-2 mx-auto px-6 py-3 rounded-xl text-sm font-bold text-white disabled:opacity-50"
@@ -637,20 +641,40 @@ function InvestInner() {
                 </div>
               ) : (
                 <>
+                  {/* Sector performance strip */}
+                  {topSectors.length > 0 && (
+                    <div className="flex gap-2 overflow-x-auto pb-1">
+                      {topSectors.map(s => (
+                        <div key={s.name} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg shrink-0"
+                          style={{ background: s.signal === 'BULLISH' ? 'rgba(52,211,153,0.08)' : s.signal === 'BEARISH' ? 'rgba(248,113,113,0.08)' : surf2, border: `1px solid ${s.signal === 'BULLISH' ? 'rgba(52,211,153,0.2)' : s.signal === 'BEARISH' ? 'rgba(248,113,113,0.2)' : brd}` }}>
+                          <span className="text-[10px] font-semibold" style={{ color: s.signal === 'BULLISH' ? '#34d399' : s.signal === 'BEARISH' ? '#f87171' : txt3 }}>{s.name}</span>
+                          <span className="text-[10px] font-mono" style={{ color: s.change1D >= 0 ? '#34d399' : '#f87171' }}>{s.change1D >= 0 ? '+' : ''}{s.change1D.toFixed(2)}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {journeyNote && (
                     <div className="px-4 py-3 rounded-xl text-sm" style={{ background: 'rgba(249,115,22,0.08)', border: '1px solid rgba(249,115,22,0.15)', color: '#f97316' }}>
                       🔥 {journeyNote}
                     </div>
                   )}
-                  {stageAdvice && (
-                    <div className="px-4 py-3 rounded-xl text-xs" style={{ background: surf2, border: `1px solid ${brd}`, color: txt2 }}>
-                      <span className="font-semibold" style={{ color: txt }}>Stage tip: </span>{stageAdvice}
+                  {marketContext && (
+                    <div className="px-4 py-2.5 rounded-xl text-xs" style={{ background: surf2, border: `1px solid ${brd}`, color: txt2 }}>
+                      <span className="font-semibold" style={{ color: txt }}>Market: </span>{marketContext}
                     </div>
                   )}
-                  {ideas.map((idea, i) => (
-                    <IdeaCard key={`${idea.ticker}-${i}`} idea={idea} router={router} isDark={isDark}
-                      onLog={pf => { setPrefill(pf); setShowLog(true) }} />
-                  ))}
+                  {stageAdvice && (
+                    <div className="px-4 py-2.5 rounded-xl text-xs" style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)', color: txt2 }}>
+                      <span className="font-semibold" style={{ color: '#a78bfa' }}>Stage tip: </span>{stageAdvice}
+                    </div>
+                  )}
+                  {/* Ideas grid — 2 columns */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {ideas.map((idea, i) => (
+                      <IdeaCard key={`${idea.ticker}-${i}`} idea={idea} router={router} isDark={isDark}
+                        onLog={pf => { setPrefill(pf); setShowLog(true) }} />
+                    ))}
+                  </div>
                   <button onClick={loadIdeas} disabled={loadingIdeas}
                     className="w-full py-3 rounded-xl text-xs font-semibold transition-all hover:opacity-80 flex items-center justify-center gap-2"
                     style={{ background: surf2, color: txt3, border: `1px solid ${brd}` }}>
