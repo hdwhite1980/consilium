@@ -40,6 +40,7 @@ export async function POST(req: NextRequest) {
             .select('*')
             .eq('ticker', symbol)
             .eq('timeframe', tf)
+            .eq('persona', persona ?? 'balanced')
             .gte('created_at', cutoff)
             .order('created_at', { ascending: false })
             .limit(1)
@@ -194,6 +195,7 @@ export async function POST(req: NextRequest) {
         const { data: saved } = await supabase.from('analyses').insert({
           ticker: symbol,
           timeframe: tf,
+          persona: persona ?? 'balanced',
           price: bundle.currentPrice,
           gemini_news: result.gemini,
           claude_analysis: result.claude,
