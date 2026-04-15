@@ -490,11 +490,11 @@ function HomeInner() {
         <div className="flex items-center gap-1.5 flex-1">
           <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())}
             onKeyDown={e => e.key === 'Enter' && !running && run()}
-            placeholder="AAPL" maxLength={6}
+            placeholder="AAPL" maxLength={6} data-tutorial="ticker-input"
             className="w-16 sm:w-20 rounded-lg px-2.5 py-1.5 text-sm font-mono font-bold tracking-widest outline-none border transition-colors"
             style={{ background: inputBg, borderColor: brd2, color: txt }} />
 
-          <div className="flex gap-0.5">
+          <div className="flex gap-0.5" data-tutorial="timeframe-selector">
             {(['1D','1W','1M','3M'] as TF[]).map(t => (
               <button key={t} onClick={() => setTf(t)}
                 className="px-2 py-1.5 rounded-md text-xs font-mono border transition-all"
@@ -507,7 +507,7 @@ function HomeInner() {
           </div>
 
           {/* Persona selector */}
-          <div className="flex items-center gap-0.5 rounded-lg p-0.5" style={{ background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)', border: `1px solid ${brd}` }}>
+          <div className="flex items-center gap-0.5 rounded-lg p-0.5" data-tutorial="persona-selector" style={{ background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)', border: `1px solid ${brd}` }}>
             {(Object.entries(PERSONAS) as [Persona, typeof PERSONAS[Persona]][]).map(([key, p]) => (
               <button key={key} onClick={() => setPersona(key)} title={p.desc}
                 className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-mono transition-all"
@@ -522,7 +522,7 @@ function HomeInner() {
             ))}
           </div>
 
-          <button onClick={run} disabled={running}
+          <button onClick={run} disabled={running} data-tutorial="analyze-btn"
             className="px-3 sm:px-4 py-1.5 rounded-lg text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95 disabled:opacity-40 shrink-0"
             style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
             {running ? '…' : 'Analyze'}
@@ -652,7 +652,7 @@ function HomeInner() {
 
         {/* Left sidebar — only show when there's data */}
         {md && (
-          <aside className="w-full md:w-56 lg:w-60 md:shrink-0 flex flex-col gap-2 p-3 md:overflow-y-auto border-b md:border-b-0 md:border-r"
+          <aside data-tutorial="sidebar" className="w-full md:w-56 lg:w-60 md:shrink-0 flex flex-col gap-2 p-3 md:overflow-y-auto border-b md:border-b-0 md:border-r"
             style={{ background: isDark ? '#0d1117' : '#f5f7fb', borderColor: brd }}>
           <div className="grid grid-cols-2 md:grid-cols-1 gap-2">
 

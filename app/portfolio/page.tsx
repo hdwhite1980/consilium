@@ -208,7 +208,7 @@ export default function PortfolioPage() {
         </div>
         <div className="ml-auto flex items-center gap-2">
           <TutorialLauncher tutorialId="portfolio" label="How it works" />
-          <button onClick={() => setShowAdd(!showAdd)}
+          <button onClick={() => setShowAdd(!showAdd)} data-tutorial="add-position-btn" 
             className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
             style={{ background: 'rgba(167,139,250,0.15)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.25)' }}>
             <Plus size={12} /> Add position
