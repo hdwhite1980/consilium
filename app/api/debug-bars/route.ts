@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
   let feedUsed = 'none'
   for (const feed of ['sip', 'iex']) {
     const res = await fetch(
-      `https://data.alpaca.markets/v2/stocks/${ticker}/bars?timeframe=1Day&start=${startStr}&end=${endStr}&limit=300&adjustment=split&feed=${feed}`,
+      `https://data.alpaca.markets/v2/stocks/${ticker}/bars?timeframe=1Day&start=${startStr}&end=${endStr}&limit=300&adjustment=all&feed=${feed}`,
       { headers }
     )
     const data = await res.json()
@@ -71,18 +71,36 @@ export async function GET(req: NextRequest) {
   const sma200 = sma(closes, 200)
   const stoch = calcStoch(bars)
 
+  // EMA calculation for cross-check
+  function ema(values: number[], period: number): number {
+    const k = 2 / (period + 1)
+    let val = values.slice(0, period).reduce((a, b) => a + b, 0) / period
+    for (let i = period; i < values.length; i++) val = values[i] * k + val * (1 - k)
+    return val
+  }
+
+  const ema9  = ema(closes, 9)
+  const ema20 = ema(closes, 20)
+  const vwap  = bars.reduce((s, b) => s + ((b.h + b.l + b.c) / 3) * b.v, 0) /
+                bars.reduce((s, b) => s + b.v, 0)
+
   return NextResponse.json({
     ticker,
     barsReturned: bars.length,
     feedUsed,
+    adjustment: 'all',
     dateRange: { first: bars[0].t, last: bars[bars.length - 1].t },
     currentPrice: closes[closes.length - 1],
-    rsi: rsi.toFixed(2),
+    rsi14: rsi.toFixed(2),
     sma50: sma50.toFixed(2),
     sma200: sma200.toFixed(2),
+    ema9: ema9.toFixed(2),
+    ema20: ema20.toFixed(2),
     goldenCross: sma50 > sma200,
     stochK: stoch.k.toFixed(2),
+    vwap: vwap.toFixed(2),
     last5closes: closes.slice(-5).map((c: number) => c.toFixed(2)),
-    note: bars.length < 200 ? `⚠ Only ${bars.length} bars returned — SMA200 inaccurate` : 'OK'
+    verifyAgainst: 'Open TradingView → same ticker → Daily chart → add RSI(14), check values match within 1 point',
+    note: bars.length < 200 ? '⚠ Only ' + bars.length + ' bars — SMA200 inaccurate' : '✓ Sufficient bars for all indicators'
   })
 }

@@ -41,7 +41,7 @@ export async function fetchBars(ticker: string, timeframe: string): Promise<Alpa
 
     for (const feed of ['sip', 'iex']) {
       try {
-        const url = `${BASE}/v2/stocks/${ticker}/bars?timeframe=${tf}&start=${startStr}&end=${endStr}&limit=1000&adjustment=split&feed=${feed}`
+        const url = `${BASE}/v2/stocks/${ticker}/bars?timeframe=${tf}&start=${startStr}&end=${endStr}&limit=1000&adjustment=all&feed=${feed}`
         const res = await fetch(url, { headers: alpacaHeaders(), next: { revalidate: 300 } })
         if (!res.ok) continue
         const data = await res.json()
@@ -85,7 +85,7 @@ export async function fetchMultiBars(tickers: string[], timeframe: string): Prom
 
     for (const feed of ['sip', 'iex']) {
       try {
-        const url = `${BASE}/v2/stocks/bars?symbols=${symbols}&timeframe=${tf}&start=${startStr}&end=${endStr}&limit=1000&adjustment=split&feed=${feed}`
+        const url = `${BASE}/v2/stocks/bars?symbols=${symbols}&timeframe=${tf}&start=${startStr}&end=${endStr}&limit=1000&adjustment=all&feed=${feed}`
         const res = await fetch(url, { headers: alpacaHeaders(), next: { revalidate: 300 } })
         if (!res.ok) continue
         const data = await res.json()
@@ -128,8 +128,8 @@ function barParams(timeframe: string) {
   // 1D and 1W use hourly bars — RSI/MACD on hourly tells a different story.
   // 1M and 3M use daily bars with enough history for accurate SMA200.
   switch (timeframe) {
-    case '1D': return { tf: '1Hour', daysBack: 30  }   // 30 days of hourly = ~480 bars
-    case '1W': return { tf: '1Hour', daysBack: 60  }   // 60 days of hourly = ~960 bars
+    case '1D': return { tf: '1Hour', daysBack: 90  }   // 90 days of hourly ~1440 bars — better RSI warmup
+    case '1W': return { tf: '1Hour', daysBack: 120 }   // 120 days of hourly ~1920 bars
     case '1M': return { tf: '1Day',  daysBack: 420 }   // 420 calendar days = ~290 trading days
     case '3M': return { tf: '1Day',  daysBack: 420 }   // same — need SMA200
     default:   return { tf: '1Day',  daysBack: 420 }

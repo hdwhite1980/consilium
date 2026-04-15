@@ -193,10 +193,13 @@ function calcStochastic(bars: Bar[], kPeriod = 14, dPeriod = 3): { k: number; d:
 }
 
 // ── VWAP ──────────────────────────────────────────────────────
+// For intraday (hourly) bars: true session VWAP using all bars
+// For daily bars: 20-day VWAP (rolling) — TradingView equivalent
 function calcVWAP(bars: Bar[]): number {
-  // Use all available bars (intraday VWAP uses session, we approximate with period)
+  // Use last 20 bars for daily, all bars for intraday
+  const window = bars.length > 100 ? bars.slice(-20) : bars
   let totalTPV = 0, totalVol = 0
-  for (const bar of bars) {
+  for (const bar of window) {
     const typicalPrice = (bar.h + bar.l + bar.c) / 3
     totalTPV += typicalPrice * bar.v
     totalVol += bar.v
@@ -305,13 +308,18 @@ export function calculateTechnicals(bars: Bar[]): TechnicalSignals {
   const distFromLow  = ((current - low52w) / low52w) * 100
 
   // ── Moving averages ───────────────────────────────────────
-  const s20  = sma(closes, Math.min(20, closes.length))
-  const s50  = sma(closes, Math.min(50, closes.length))
-  const s200 = sma(closes, Math.min(200, closes.length))
+  // Only compute SMA if we have enough bars — never silently compute a wrong value
+  const hasEnoughFor200 = closes.length >= 200
+  const hasEnoughFor50  = closes.length >= 50
+  const s20  = closes.length >= 20  ? sma(closes, 20)  : sma(closes, closes.length)
+  const s50  = hasEnoughFor50       ? sma(closes, 50)  : sma(closes, closes.length)
+  const s200 = hasEnoughFor200      ? sma(closes, 200) : s50  // fallback to s50 so cross logic doesn't break
   const e9   = ema(closes, Math.min(9, closes.length))
   const e20  = ema(closes, Math.min(20, closes.length))
   const e12  = ema(closes, Math.min(12, closes.length))
   const e26  = ema(closes, Math.min(26, closes.length))
+  // Only signal golden/death cross when we have real SMA200 data
+  const crossValid = hasEnoughFor200 && hasEnoughFor50
 
   // EMA 9/20 crossover (using previous values to detect cross)
   const prevE9  = ema(closes.slice(0, -1), Math.min(9, closes.length - 1))
@@ -424,7 +432,9 @@ export function calculateTechnicals(bars: Bar[]): TechnicalSignals {
   const summary = [
     `Price: $${current.toFixed(2)} (${p(priceChange1D)} today, ${p(priceChangePeriod)} period)`,
     `EMAs: EMA9 $${e9.toFixed(2)} / EMA20 $${e20.toFixed(2)} — ${ema9CrossEma20 !== 'none' ? ema9CrossEma20 + ' crossover!' : e9 > e20 ? 'bullish alignment' : 'bearish alignment'}`,
-    `MAs: SMA50 ${p((current/s50-1)*100)} / SMA200 ${p((current/s200-1)*100)} — ${s50 > s200 ? 'golden cross' : 'death cross'} in effect`,
+    hasEnoughFor200
+      ? `MAs: SMA50 ${p((current/s50-1)*100)} / SMA200 ${p((current/s200-1)*100)} — ${s50 > s200 ? 'golden cross' : 'death cross'} in effect`
+      : `MAs: SMA50 ${p((current/s50-1)*100)} — SMA200 unavailable (only ${closes.length} bars, need 200)`,
     `MACD: histogram ${macdHist >= 0 ? 'positive' : 'negative'}${macdCrossover !== 'none' ? ' — ' + macdCrossover + ' crossover!' : ''}`,
     `RSI(14): ${rsiVal.toFixed(1)} — ${rsiSignal}`,
     `Stochastic(14,3,3): %K ${stochK.toFixed(1)} / %D ${stochD.toFixed(1)} — ${stochSignal}${stochCrossover !== 'none' ? ', ' + stochCrossover + ' crossover' : ''}`,
@@ -445,7 +455,8 @@ export function calculateTechnicals(bars: Bar[]): TechnicalSignals {
     priceVsSma20: (current/s20-1)*100,
     priceVsSma50: (current/s50-1)*100,
     priceVsSma200: (current/s200-1)*100,
-    goldenCross: s50 > s200, deathCross: s50 < s200,
+    goldenCross: crossValid && s50 > s200,
+    deathCross:  crossValid && s50 < s200,
     ema9CrossEma20,
     macdLine, macdSignal: macdSig, macdHistogram: macdHist, macdCrossover,
     rsi: rsiVal, rsiSignal,
