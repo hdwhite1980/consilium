@@ -475,6 +475,7 @@ function HomeInner() {
     { label: 'Today', icon: '⚡', path: '/news',      color: '#fbbf24' },
     { label: 'Tomorrow', icon: '📅', path: '/tomorrow', color: '#a78bfa' },
     { label: 'Portfolio', icon: '💼', path: '/portfolio', color: '#34d399' },
+    { label: 'Reinvest', icon: '💰', path: '/reinvestment', color: '#34d399' },
     { label: 'Macro', icon: '🌍', path: '/macro',    color: '#60a5fa' },
     { label: 'Compare', icon: '⚡', path: '/compare',  color: '#f87171' },
     { label: 'Guide', icon: '📖', path: '/guide',    color: txt3 },
@@ -1131,6 +1132,30 @@ function HomeInner() {
                   <div className="rounded-xl p-4" style={{ background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)' }}>
                     <div className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: '#fbbf24' }}>Action plan</div>
                     <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{jud.actionPlan}</p>
+                  </div>
+                )}
+
+                {/* Log Trade CTA */}
+                {jud.signal && (jud.signal === 'BULLISH' || jud.signal === 'NEUTRAL') && (
+                  <div className="flex items-center justify-between gap-3 px-1">
+                    <p className="text-xs" style={{ color: 'var(--text3)' }}>
+                      Acted on this analysis? Track your trade and get reinvestment ideas.
+                    </p>
+                    <button
+                      onClick={() => {
+                        const entryPrice = md?.currentPrice ?? 0
+                        const params = new URLSearchParams({
+                          ticker,
+                          price: entryPrice.toFixed(2),
+                          signal: jud.signal,
+                          confidence: String(jud.confidence),
+                        })
+                        router.push(`/reinvestment?${params}`)
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold shrink-0 transition-all hover:opacity-80"
+                      style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399', border: '1px solid rgba(52,211,153,0.2)' }}>
+                      💰 Log trade
+                    </button>
                   </div>
                 )}
 
