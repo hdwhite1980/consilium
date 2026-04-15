@@ -1,97 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function GET(req: NextRequest) {
-  const ticker = req.nextUrl.searchParams.get('ticker') ?? 'EURUSD'
   const results: Record<string, unknown> = {}
+  const finnhubKey = process.env.FINNHUB_API_KEY
 
-  const alpacaKey    = process.env.ALPACA_API_KEY
-  const alpacaSecret = process.env.ALPACA_SECRET_KEY
-  const finnhubKey   = process.env.FINNHUB_API_KEY
-  const alpacaBase   = process.env.ALPACA_BASE_URL ?? 'https://data.alpaca.markets'
-
-  results.env = {
-    hasAlpacaKey: !!alpacaKey,
-    hasAlpacaSecret: !!alpacaSecret,
-    hasFinnhubKey: !!finnhubKey,
-    alpacaBase,
+  // Test 1: Finnhub quote with different forex symbol formats
+  for (const sym of ['EURUSD', 'OANDA:EUR_USD', 'FX:EURUSD']) {
+    try {
+      const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(sym)}&token=${finnhubKey}`, { cache: 'no-store' })
+      const d = await res.json()
+      results[`finnhub_${sym.replace(/[^A-Z0-9]/g,'_')}`] = { status: res.status, c: d.c, pc: d.pc, hasData: (d.c ?? 0) > 0 }
+    } catch (e) { results[`finnhub_${sym}`] = { error: String(e) } }
   }
 
-  // ── Test 1: Alpaca forex/bars ──────────────────────────────
+  // Test 2: Frankfurter (ECB data, truly free, no key required)
   try {
-    const symbol = 'EUR/USD'
-    const end   = new Date().toISOString()
-    const start = new Date(Date.now() - 14 * 86400000).toISOString()
-    const url   = `${alpacaBase}/v1beta3/forex/bars?symbols=${encodeURIComponent(symbol)}&timeframe=1Day&start=${start}&end=${end}&limit=10&sort=asc`
-    const res   = await fetch(url, {
-      headers: { 'APCA-API-KEY-ID': alpacaKey!, 'APCA-API-SECRET-KEY': alpacaSecret! },
-      cache: 'no-store',
-    })
-    const text = await res.text()
-    let data: unknown
-    try { data = JSON.parse(text) } catch { data = text.slice(0, 200) }
-    results.alpaca_forex_bars = { status: res.status, ok: res.ok, data }
-  } catch (e) { results.alpaca_forex_bars = { error: String(e) } }
+    const res = await fetch('https://api.frankfurter.app/latest?from=EUR&to=USD,GBP,JPY', { cache: 'no-store' })
+    results.frankfurter_latest = { status: res.status, ok: res.ok, body: (await res.text()).slice(0, 400) }
+  } catch (e) { results.frankfurter_latest = { error: String(e) } }
 
-  // ── Test 2: Alpaca latest forex rates ─────────────────────
+  // Test 3: Frankfurter historical bars (this is what we need for technicals)
   try {
-    const url = `${alpacaBase}/v1beta3/forex/latest/rates?currency_pairs=EUR/USD`
-    const res = await fetch(url, {
-      headers: { 'APCA-API-KEY-ID': alpacaKey!, 'APCA-API-SECRET-KEY': alpacaSecret! },
-      cache: 'no-store',
-    })
+    const end = new Date().toISOString().split('T')[0]
+    const start = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0]
+    const res = await fetch(`https://api.frankfurter.app/${start}..${end}?from=EUR&to=USD`, { cache: 'no-store' })
     const text = await res.text()
-    let data: unknown
-    try { data = JSON.parse(text) } catch { data = text.slice(0, 200) }
-    results.alpaca_forex_rates = { status: res.status, ok: res.ok, data }
-  } catch (e) { results.alpaca_forex_rates = { error: String(e) } }
+    results.frankfurter_history = { status: res.status, ok: res.ok, body: text.slice(0, 500) }
+  } catch (e) { results.frankfurter_history = { error: String(e) } }
 
-  // ── Test 3: Finnhub forex/rates ───────────────────────────
+  // Test 4: ECB SDMX API (official, free, no key)
   try {
-    const url = `https://finnhub.io/api/v1/forex/rates?base=EUR&token=${finnhubKey}`
-    const res = await fetch(url, { cache: 'no-store' })
-    const text = await res.text()
-    let data: unknown
-    try { data = JSON.parse(text) } catch { data = text.slice(0, 200) }
-    results.finnhub_forex_rates = { status: res.status, ok: res.ok, data }
-  } catch (e) { results.finnhub_forex_rates = { error: String(e) } }
+    const res = await fetch('https://data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A?lastNObservations=10&format=jsondata', { cache: 'no-store' })
+    results.ecb_sdmx = { status: res.status, ok: res.ok, body: (await res.text()).slice(0, 400) }
+  } catch (e) { results.ecb_sdmx = { error: String(e) } }
 
-  // ── Test 4: Finnhub forex/candle ─────────────────────────
+  // Test 5: Open Exchange Rates (free 1000 req/month, needs free key)
   try {
-    const to   = Math.floor(Date.now() / 1000)
-    const from = to - 14 * 86400
-    const url  = `https://finnhub.io/api/v1/forex/candle?symbol=OANDA:EUR_USD&resolution=D&from=${from}&to=${to}&token=${finnhubKey}`
-    const res  = await fetch(url, { cache: 'no-store' })
-    const text = await res.text()
-    let data: unknown
-    try { data = JSON.parse(text) } catch { data = text.slice(0, 200) }
-    results.finnhub_forex_candle = { status: res.status, ok: res.ok, data }
-  } catch (e) { results.finnhub_forex_candle = { error: String(e) } }
-
-  // ── Test 5: Finnhub forex/candle IC Markets ───────────────
-  try {
-    const to   = Math.floor(Date.now() / 1000)
-    const from = to - 14 * 86400
-    const url  = `https://finnhub.io/api/v1/forex/candle?symbol=IC%20MARKETS%3AEUR%2FUSD&resolution=D&from=${from}&to=${to}&token=${finnhubKey}`
-    const res  = await fetch(url, { cache: 'no-store' })
-    const text = await res.text()
-    let data: unknown
-    try { data = JSON.parse(text) } catch { data = text.slice(0, 200) }
-    results.finnhub_forex_candle_ic = { status: res.status, ok: res.ok, data }
-  } catch (e) { results.finnhub_forex_candle_ic = { error: String(e) } }
-
-  // ── Test 6: Finnhub supported forex symbols ───────────────
-  try {
-    const url = `https://finnhub.io/api/v1/forex/symbol?exchange=oanda&token=${finnhubKey}`
-    const res = await fetch(url, { cache: 'no-store' })
-    const text = await res.text()
-    let data: unknown
-    try {
-      const arr = JSON.parse(text)
-      // Just show first 5 matching EUR/USD
-      data = Array.isArray(arr) ? arr.filter((s: {symbol: string}) => s.symbol?.includes('EUR')).slice(0, 5) : text.slice(0, 200)
-    } catch { data = text.slice(0, 200) }
-    results.finnhub_forex_symbols = { status: res.status, ok: res.ok, data }
-  } catch (e) { results.finnhub_forex_symbols = { error: String(e) } }
+    const res = await fetch('https://openexchangerates.org/api/latest.json?app_id=freetest', { cache: 'no-store' })
+    results.openexchangerates = { status: res.status, ok: res.ok, body: (await res.text()).slice(0, 200) }
+  } catch (e) { results.openexchangerates = { error: String(e) } }
 
   return NextResponse.json(results, { status: 200 })
 }
