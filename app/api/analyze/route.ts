@@ -103,7 +103,8 @@ export async function POST(req: NextRequest) {
         const bundle = await buildSignalBundle(symbol, tf, (step) =>
           send('status', { stage: 'building_bundle', message: step })
         )
-        bundle.persona = persona ?? 'balanced'
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ;(bundle as any).persona = persona ?? 'balanced'
 
         send('market_data', {
           bars: bundle.bars,
