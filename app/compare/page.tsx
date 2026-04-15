@@ -225,8 +225,8 @@ export default function ComparePage() {
                   {md && (
                     <>
                       <div className="flex items-center gap-2">
-                        <SigBadge s={md.conviction.direction} />
-                        <span className="text-[10px] font-mono text-white/30">{md.conviction.convergingSignals} converging</span>
+                        {md.conviction?.direction && <SigBadge s={md.conviction.direction} />}
+                        <span className="text-[10px] font-mono text-white/30">{md.conviction?.convergingSignals ?? 0} converging</span>
                       </div>
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                         {[

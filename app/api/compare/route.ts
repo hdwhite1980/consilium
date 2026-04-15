@@ -166,11 +166,33 @@ Provide a head-to-head analysis JSON only:
             ticker: symA,
             currentPrice: bundleA.currentPrice,
             technicals: technicalsToPayload(bundleA.technicals, bundleA.currentPrice),
+            conviction: {
+              direction: bundleA.conviction.direction,
+              convergenceScore: bundleA.conviction.convergenceScore,
+              convergingSignals: bundleA.conviction.convergingSignals,
+              divergingSignals: bundleA.conviction.divergingSignals,
+            },
+            fundamentals: {
+              peRatio: bundleA.fundamentals?.peRatio ?? null,
+              analystConsensus: bundleA.fundamentals?.analystConsensus ?? 'hold',
+              analystUpside: bundleA.fundamentals?.analystUpside ?? null,
+            },
           },
           marketB: {
             ticker: symB,
             currentPrice: bundleB.currentPrice,
             technicals: technicalsToPayload(bundleB.technicals, bundleB.currentPrice),
+            conviction: {
+              direction: bundleB.conviction.direction,
+              convergenceScore: bundleB.conviction.convergenceScore,
+              convergingSignals: bundleB.conviction.convergingSignals,
+              divergingSignals: bundleB.conviction.divergingSignals,
+            },
+            fundamentals: {
+              peRatio: bundleB.fundamentals?.peRatio ?? null,
+              analystConsensus: bundleB.fundamentals?.analystConsensus ?? 'hold',
+              analystUpside: bundleB.fundamentals?.analystUpside ?? null,
+            },
           },
         })
 
