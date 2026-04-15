@@ -48,6 +48,8 @@ export interface GptResult {
 export interface RebuttalResult {
   signal: Signal
   confidence: number
+  researchQuestion: string   // what the Lead Analyst asked Gemini to verify
+  researchAnswer: string     // what Gemini found
   rebuttal: string           // Lead Analyst's direct response to Devil's Advocate
   concedes: string[]         // points the Lead Analyst admits are valid
   maintains: string[]        // points the Lead Analyst doubles down on
@@ -56,6 +58,8 @@ export interface RebuttalResult {
 }
 
 export interface CounterResult {
+  researchQuestion: string   // what the Devil's Advocate asked Gemini to verify
+  researchAnswer: string     // what Gemini found
   finalChallenge: string     // Devil's Advocate's final shot after rebuttal
   yieldsOn: string[]         // points Devil's Advocate now accepts
   pressesOn: string[]        // points Devil's Advocate still presses
@@ -113,6 +117,171 @@ function parseJSON<T>(text: string): T {
   const end = clean.lastIndexOf('}')
   if (start === -1 || end === -1) throw new Error('No JSON in response')
   return JSON.parse(clean.slice(start, end + 1)) as T
+}
+
+// Targeted Gemini research during debate — fetches fresh live data and answers
+export async function runTargetedResearch(
+  bundle: SignalBundle,
+  question: string,
+  context: string
+): Promise<string> {
+
+  // ── Classify what kind of data the question needs ──
+  const q = question.toLowerCase()
+  const needsNews        = q.includes('news') || q.includes('recent') || q.includes('latest') || q.includes('announced') || q.includes('report') || q.includes('catalyst')
+  const needsFundamentals = q.includes('earnings') || q.includes('revenue') || q.includes('pe ') || q.includes('p/e') || q.includes('margin') || q.includes('eps') || q.includes('guidance') || q.includes('analyst') || q.includes('upgrade') || q.includes('downgrade') || q.includes('target')
+  const needsOptions     = q.includes('option') || q.includes('put') || q.includes('call') || q.includes('iv ') || q.includes('implied vol') || q.includes('short interest') || q.includes('unusual')
+  const needsTechnicals  = q.includes('support') || q.includes('resistance') || q.includes('rsi') || q.includes('macd') || q.includes('volume') || q.includes('moving average') || q.includes('trend') || q.includes('vwap') || q.includes('breakout') || q.includes('breakdown')
+  const needsMacro       = q.includes('vix') || q.includes('fed') || q.includes('rate') || q.includes('market') || q.includes('sector') || q.includes('spy') || q.includes('inflation') || q.includes('macro')
+
+  // ── Fetch additional live data the bundle may not have ──
+  const liveDataParts: string[] = []
+
+  // Fresh Finnhub quote for price-sensitive questions
+  if (needsTechnicals || needsFundamentals) {
+    try {
+      const key = process.env.FINNHUB_API_KEY
+      if (key) {
+        const [quoteRes, metricRes] = await Promise.all([
+          fetch(`https://finnhub.io/api/v1/quote?symbol=${bundle.ticker}&token=${key}`),
+          fetch(`https://finnhub.io/api/v1/stock/metric?symbol=${bundle.ticker}&metric=all&token=${key}`)
+        ])
+        if (quoteRes.ok) {
+          const q2 = await quoteRes.json()
+          liveDataParts.push(`LIVE QUOTE: Current $${q2.c}, Open $${q2.o}, High $${q2.h}, Low $${q2.l}, Prev close $${q2.pc}, Change ${((q2.c-q2.pc)/q2.pc*100).toFixed(2)}%`)
+        }
+        if (metricRes.ok) {
+          const m = await metricRes.json()
+          const met = m.metric ?? {}
+          liveDataParts.push(`KEY METRICS: 52wk high $${met['52WeekHigh']}, 52wk low $${met['52WeekLow']}, Beta ${met.beta?.toFixed(2)}, P/E ${met.peBasicExclExtraTTM?.toFixed(1)}, EPS TTM $${met.epsTTM?.toFixed(2)}, Revenue growth YoY ${met.revenueGrowthTTMYoy?.toFixed(1)}%, Gross margin ${met.grossMarginTTM?.toFixed(1)}%`)
+        }
+      }
+    } catch { /* non-critical */ }
+  }
+
+  // Fresh analyst recommendations and price targets
+  if (needsFundamentals) {
+    try {
+      const key = process.env.FINNHUB_API_KEY
+      if (key) {
+        const [recRes, ptRes, earningsRes] = await Promise.all([
+          fetch(`https://finnhub.io/api/v1/stock/recommendation?symbol=${bundle.ticker}&token=${key}`),
+          fetch(`https://finnhub.io/api/v1/stock/price-target?symbol=${bundle.ticker}&token=${key}`),
+          fetch(`https://finnhub.io/api/v1/calendar/earnings?symbol=${bundle.ticker}&token=${key}`)
+        ])
+        if (recRes.ok) {
+          const recs = await recRes.json()
+          const r = recs[0]
+          if (r) liveDataParts.push(`ANALYST CONSENSUS (latest): ${r.buy + r.strongBuy} buy, ${r.hold} hold, ${r.sell + r.strongSell} sell (${r.period})`)
+        }
+        if (ptRes.ok) {
+          const pt = await ptRes.json()
+          if (pt.targetMean) liveDataParts.push(`PRICE TARGETS: Mean $${pt.targetMean?.toFixed(2)}, High $${pt.targetHigh?.toFixed(2)}, Low $${pt.targetLow?.toFixed(2)} (${pt.lastUpdated})`)
+        }
+        if (earningsRes.ok) {
+          const cal = await earningsRes.json()
+          const next = (cal.earningsCalendar ?? []).find((e: {date: string}) => new Date(e.date) >= new Date())
+          if (next) liveDataParts.push(`NEXT EARNINGS: ${next.date} — EPS estimate $${next.epsEstimate ?? 'N/A'}, Revenue estimate $${next.revenueEstimate ? (next.revenueEstimate/1e9).toFixed(2)+'B' : 'N/A'}`)
+        }
+      }
+    } catch { /* non-critical */ }
+  }
+
+  // Fresh options data
+  if (needsOptions) {
+    try {
+      const tradierKey = process.env.TRADIER_API_KEY
+      const tradierBase = tradierKey ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1'
+      const expRes = await fetch(
+        `${tradierBase}/markets/options/expirations?symbol=${bundle.ticker}&includeAllRoots=true`,
+        { headers: { Authorization: `Bearer ${tradierKey}`, Accept: 'application/json' } }
+      )
+      if (expRes.ok) {
+        const expData = await expRes.json()
+        const expiries: string[] = expData.expirations?.date ?? []
+        if (expiries[0]) {
+          const chainRes = await fetch(
+            `${tradierBase}/markets/options/chains?symbol=${bundle.ticker}&expiration=${expiries[0]}&greeks=true`,
+            { headers: { Authorization: `Bearer ${tradierKey}`, Accept: 'application/json' } }
+          )
+          if (chainRes.ok) {
+            const chain = await chainRes.json()
+            const options = chain.options?.option ?? []
+            const calls = options.filter((o: {option_type: string}) => o.option_type === 'call')
+            const puts  = options.filter((o: {option_type: string}) => o.option_type === 'put')
+            const callVol = calls.reduce((s: number, o: {volume: number}) => s + (o.volume || 0), 0)
+            const putVol  = puts.reduce((s: number, o: {volume: number}) => s + (o.volume || 0), 0)
+            const pcr = callVol > 0 ? (putVol / callVol).toFixed(2) : 'N/A'
+            const highIV = options
+              .filter((o: {greeks?: {mid_iv: number}}) => o.greeks?.mid_iv)
+              .sort((a: {greeks: {mid_iv: number}}, b: {greeks: {mid_iv: number}}) => b.greeks.mid_iv - a.greeks.mid_iv)
+              .slice(0, 3)
+              .map((o: {strike: number; option_type: string; greeks: {mid_iv: number}; volume: number}) =>
+                `$${o.strike} ${o.option_type} IV ${(o.greeks.mid_iv * 100).toFixed(0)}% vol ${o.volume}`)
+            liveDataParts.push(`OPTIONS (${expiries[0]}): P/C ratio ${pcr}, Call vol ${callVol}, Put vol ${putVol}`)
+            if (highIV.length) liveDataParts.push(`HIGH IV OPTIONS: ${highIV.join(' | ')}`)
+          }
+        }
+      }
+    } catch { /* non-critical */ }
+  }
+
+  // Fresh VIX and macro
+  if (needsMacro) {
+    try {
+      const key = process.env.FINNHUB_API_KEY
+      if (key) {
+        const [spyRes, vixRes] = await Promise.all([
+          fetch(`https://finnhub.io/api/v1/quote?symbol=SPY&token=${key}`),
+          fetch(`https://finnhub.io/api/v1/quote?symbol=VIXY&token=${key}`)
+        ])
+        if (spyRes.ok) {
+          const spy = await spyRes.json()
+          liveDataParts.push(`SPY: $${spy.c} (${((spy.c-spy.pc)/spy.pc*100).toFixed(2)}% today)`)
+        }
+        if (vixRes.ok) {
+          const vix = await vixRes.json()
+          liveDataParts.push(`VIX PROXY (VIXY): $${vix.c} (${((vix.c-vix.pc)/vix.pc*100).toFixed(2)}% today)`)
+        }
+      }
+    } catch { /* non-critical */ }
+  }
+
+  const liveData = liveDataParts.length > 0
+    ? `\nFRESH LIVE DATA (just fetched):\n${liveDataParts.join('\n')}`
+    : ''
+
+  // ── Build full context for Gemini ──
+  const sections: string[] = []
+  if (needsNews || !needsTechnicals) sections.push(bundle.aiContext.newsSection)
+  if (needsTechnicals) sections.push(bundle.aiContext.technicalsSection)
+  if (needsFundamentals) sections.push(bundle.aiContext.fundamentalsSection)
+  if (needsOptions) sections.push(bundle.aiContext.optionsSection)
+  if (needsMacro) sections.push(bundle.aiContext.marketSection)
+  if (needsOptions || needsTechnicals) sections.push(bundle.aiContext.smartMoneySection)
+  // Always include context passed by caller
+  if (context && !sections.some(s => s === context)) sections.push(context)
+
+  const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro']
+  for (const modelName of GEMINI_MODELS) {
+    try {
+      const model = getGenAI().getGenerativeModel({ model: modelName })
+      const result = await model.generateContent(`You are the News Scout providing urgent real-time research during a live stock debate about ${bundle.ticker} (currently $${bundle.currentPrice.toFixed(2)}).
+
+A council member has asked: "${question}"
+${liveData}
+
+SIGNAL DATA FROM BUNDLE:
+${sections.join('\n\n')}
+
+Answer in 2-4 sentences using the freshest data available, prioritizing the LIVE DATA section if present. Include specific numbers, dates, and percentages. Be direct and decisive — this goes straight into the debate. If the data genuinely doesn't support the question, say so clearly.`)
+      return result.response.text().trim().slice(0, 600)
+    } catch (e) {
+      const msg = (e as Error).message ?? ''
+      if (!msg.includes('503') && !msg.includes('overload') && !msg.includes('404')) throw e
+    }
+  }
+  return 'Research unavailable at this time.'
 }
 
 export async function runGemini(bundle: SignalBundle): Promise<GeminiResult> {
@@ -216,11 +385,35 @@ export async function runRebuttal(
   claude: ClaudeResult,
   gpt: GptResult
 ): Promise<RebuttalResult> {
-  const pa = (bundle as any).persona ?? 'balanced'
+
+  // ── Step 1: Lead Analyst identifies the single most important data gap ──
+  // Ask Claude what it needs Gemini to verify before rebutting
+  const researchAsk = await getAnthropic().messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 150,
+    system: `You are the Lead Analyst in a stock debate about ${bundle.ticker}. You can send ONE research question to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before you respond to the Devil's Advocate. Ask about the single most important data point that would resolve the most significant challenge.`,
+    messages: [{
+      role: 'user',
+      content: `YOUR ORIGINAL CALL: ${claude.signal} at $${bundle.currentPrice.toFixed(2)}, target ${claude.target}
+
+DEVIL'S ADVOCATE CHALLENGES:
+${gpt.challenges.map((c, i) => `${i+1}. ${c}`).join('\n')}
+STRONGEST COUNTER: ${gpt.strongestCounterArgument}
+
+What ONE question should the News Scout research right now to help you respond? Reply with just the question, nothing else.`
+    }]
+  })
+  const researchQuestion = (researchAsk.content[0] as { text: string }).text.trim()
+
+  // ── Step 2: Gemini runs the targeted research ──
+  const researchContext = `${bundle.aiContext.technicalsSection}\n${bundle.aiContext.fundamentalsSection}\n${bundle.aiContext.smartMoneySection}\n${bundle.aiContext.optionsSection}\n${bundle.aiContext.marketSection}`
+  const researchAnswer = await runTargetedResearch(bundle, researchQuestion, researchContext)
+
+  // ── Step 3: Lead Analyst rebuts with fresh research in hand ──
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
-    max_tokens: 800,
-    system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. The Devil's Advocate has challenged your analysis. Defend your position where the data supports you. Concede points where the Devil's Advocate is correct. Do not be stubborn — intellectual honesty strengthens your credibility with the Judge.`,
+    max_tokens: 900,
+    system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research to help you respond. Use it. Defend your position where data supports you, concede where the Devil's Advocate is correct. Intellectual honesty wins with the Judge.`,
     messages: [{
       role: 'user',
       content: `YOUR ORIGINAL CALL: ${claude.signal} on ${bundle.ticker} at $${bundle.currentPrice.toFixed(2)}, target ${claude.target}
@@ -231,21 +424,33 @@ ${gpt.challenges.map((c, i) => `${i+1}. ${c}`).join('\n')}
 STRONGEST COUNTER: ${gpt.strongestCounterArgument}
 ALTERNATE SCENARIO: ${gpt.alternateScenario}
 
-Respond directly to each challenge. Concede valid points. Defend positions backed by data. Update your price target if the challenges reveal you overshot. Be specific.
+NEWS SCOUT RESEARCH (fresh data, just retrieved):
+Question asked: "${researchQuestion}"
+Answer: ${researchAnswer}
+
+Now respond directly to each challenge. Reference the fresh research where relevant. Concede valid points. Defend positions backed by data. Update your price target if warranted.
 
 JSON ONLY:
 {
   "signal": "BULLISH|BEARISH|NEUTRAL",
   "confidence": <0-100>,
-  "rebuttal": "3-4 sentences directly responding to the most important challenges",
+  "researchQuestion": "${researchQuestion.replace(/"/g, "'")}",
+  "researchAnswer": ${JSON.stringify(researchAnswer)},
+  "rebuttal": "3-4 sentences directly responding to the challenges, referencing the fresh research",
   "concedes": ["specific points you now agree the Devil's Advocate got right — be honest, 1-3 items"],
-  "maintains": ["specific points you are standing firm on with data backing — 2-4 items"],
-  "updatedTarget": "revised price target e.g. $195, or same as before if unchanged",
-  "finalStance": "one sentence — your maintained position after considering all challenges"
+  "maintains": ["specific points you stand firm on with data backing — 2-4 items"],
+  "updatedTarget": "revised price target or same as before",
+  "finalStance": "one sentence — your maintained position after considering all challenges and research"
 }`
     }]
   })
-  return parseJSON<RebuttalResult>((msg.content[0] as { text: string }).text)
+  const raw = parseJSON<RebuttalResult>((msg.content[0] as { text: string }).text)
+  // Ensure research fields are always populated
+  return {
+    ...raw,
+    researchQuestion,
+    researchAnswer,
+  }
 }
 
 // Devil's Advocate fires back after Lead Analyst's rebuttal
@@ -254,30 +459,64 @@ export async function runCounter(
   gpt: GptResult,
   rebuttal: RebuttalResult
 ): Promise<CounterResult> {
+
+  // ── Step 1: Devil's Advocate identifies what Gemini should verify ──
+  const researchAsk = await getOpenAI().chat.completions.create({
+    model: 'gpt-4o',
+    max_tokens: 150,
+    messages: [
+      { role: 'system', content: `You are the Devil's Advocate in a stock debate about ${bundle.ticker}. You can send ONE research question to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before firing back at the Lead Analyst. Ask about the single most important thing that could strengthen your challenge or expose a weakness in their rebuttal.` },
+      { role: 'user', content: `LEAD ANALYST'S REBUTTAL: ${rebuttal.rebuttal}
+THEY CONCEDE: ${rebuttal.concedes.join('; ')}
+THEY MAINTAIN: ${rebuttal.maintains.join('; ')}
+FRESH RESEARCH THEY USED: "${rebuttal.researchQuestion}" → ${rebuttal.researchAnswer}
+
+What ONE question should the News Scout research right now to help you counter? Reply with just the question, nothing else.` }
+    ]
+  })
+  const researchQuestion = researchAsk.choices[0].message.content?.trim() ?? ''
+
+  // ── Step 2: Gemini runs the targeted research ──
+  const researchContext = `${bundle.aiContext.technicalsSection}\n${bundle.aiContext.fundamentalsSection}\n${bundle.aiContext.smartMoneySection}\n${bundle.aiContext.optionsSection}\n${bundle.aiContext.marketSection}`
+  const researchAnswer = await runTargetedResearch(bundle, researchQuestion, researchContext)
+
+  // ── Step 3: Devil's Advocate fires back with fresh research ──
   const completion = await getOpenAI().chat.completions.create({
     model: 'gpt-4o',
-    max_tokens: 600,
+    max_tokens: 700,
     messages: [
-      { role: 'system', content: `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. The Lead Analyst has rebutted your challenges. Acknowledge valid concessions, but press hard on the points that remain unresolved. This is your final opportunity to influence the Judge. Be sharp, specific, and data-driven.` },
+      { role: 'system', content: `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research. Use it. This is your final shot. Be sharp, specific, and data-driven.` },
       { role: 'user', content: `YOUR ORIGINAL CHALLENGES: ${gpt.challenges.join('; ')}
 
 LEAD ANALYST'S REBUTTAL: ${rebuttal.rebuttal}
 THEY CONCEDE: ${rebuttal.concedes.join('; ')}
 THEY MAINTAIN: ${rebuttal.maintains.join('; ')}
 UPDATED TARGET: ${rebuttal.updatedTarget}
+RESEARCH THEY CITED: "${rebuttal.researchQuestion}" → ${rebuttal.researchAnswer}
 
-Now respond. Acknowledge where their rebuttal was convincing. Double down on unresolved weaknesses. What should the Judge not ignore?
+YOUR FRESH RESEARCH (just retrieved):
+Question: "${researchQuestion}"
+Answer: ${researchAnswer}
+
+Now fire back. Acknowledge where their rebuttal was convincing. Use the fresh research to press on unresolved weaknesses. What must the Judge not ignore?
 
 JSON ONLY:
 {
-  "finalChallenge": "2-3 sentences — your most important remaining challenge after their rebuttal",
-  "yieldsOn": ["points where their rebuttal convinced you — be honest, 1-2 items"],
+  "researchQuestion": ${JSON.stringify(researchQuestion)},
+  "researchAnswer": ${JSON.stringify(researchAnswer)},
+  "finalChallenge": "2-3 sentences — your strongest remaining challenge, referencing fresh research where relevant",
+  "yieldsOn": ["points where their rebuttal genuinely convinced you — be honest, 1-2 items"],
   "pressesOn": ["points that remain unresolved and the Judge must weigh — 2-3 items"],
   "closingArgument": "one sentence — the single most important thing for the Judge to consider"
 }` }
     ]
   })
-  return parseJSON<CounterResult>(completion.choices[0].message.content!)
+  const raw = parseJSON<CounterResult>(completion.choices[0].message.content!)
+  return {
+    ...raw,
+    researchQuestion,
+    researchAnswer,
+  }
 }
 
 export async function runJudge(
@@ -320,12 +559,16 @@ Strongest counter: ${gpt.strongestCounterArgument}
 Alternate scenario: ${gpt.alternateScenario}
 
 ${rebuttal ? `━━━ ROUND 2 ━━━
+LEAD ANALYST consulted News Scout: "${rebuttal.researchQuestion}"
+News Scout found: ${rebuttal.researchAnswer}
 LEAD ANALYST REBUTTAL (updated signal: ${rebuttal.signal}, ${rebuttal.confidence}%):
 ${rebuttal.rebuttal}
 Concedes: ${rebuttal.concedes.join('; ')}
 Maintains: ${rebuttal.maintains.join('; ')}
 Updated target: ${rebuttal.updatedTarget}
 
+DEVIL'S ADVOCATE consulted News Scout: "${counter?.researchQuestion ?? ''}"
+News Scout found: ${counter?.researchAnswer ?? ''}
 DEVIL'S ADVOCATE COUNTER:
 ${counter?.finalChallenge ?? ''}
 Yields on: ${counter?.yieldsOn.join('; ') ?? ''}
