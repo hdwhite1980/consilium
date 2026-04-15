@@ -242,7 +242,7 @@ const FAQ_OPTIONS: FAQItem[] = [
 ]
 
 const FAQ_BILLING: FAQItem[] = [
-  { q: 'How much does Consilium cost?', a: "$19/month after the 7-day free trial. The trial includes full access to every feature with no credit card required." },
+  { q: 'How much does Consilium cost?', a: "Standard is $29/month and Pro is $49/month, both with a 7-day free trial. During the trial you get full Pro access regardless of which plan you choose. No credit card required to start." },
   { q: 'Can I cancel anytime?', a: "Yes. You can cancel from the Account Settings page at any time. You'll retain access until the end of your billing period." },
   { q: 'What happens when my trial ends?', a: "You'll see a Subscribe prompt on next login. Your saved analyses, portfolio positions, and trading history are preserved — you just need to subscribe to run new analyses." },
   { q: 'Does Consilium store my financial data?', a: "Consilium stores analysis results, portfolio positions you manually enter, and reinvestment trades you log. It does not connect to your brokerage, does not have access to your actual trades, and does not store payment information (Stripe handles payments)." },

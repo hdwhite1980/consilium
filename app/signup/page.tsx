@@ -135,9 +135,11 @@ function SignupInner() {
           </div>
 
           <div className="mt-12 pt-8 border-t" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
-            <div className="flex items-center gap-3 mb-1">
-              <span className="text-2xl font-bold text-white">$19</span>
-              <span className="text-white/40">/month after trial</span>
+            <div className="flex items-baseline gap-2 mb-1">
+              <span className="text-2xl font-bold text-white">$29</span>
+              <span className="text-white/40 text-sm">/month Standard · </span>
+              <span className="text-2xl font-bold text-white">$49</span>
+              <span className="text-white/40 text-sm">/month Pro</span>
             </div>
             <div className="flex items-center gap-2">
               <Check size={13} style={{ color: '#34d399' }} />
