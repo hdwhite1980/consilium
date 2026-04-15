@@ -2,28 +2,25 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, ChevronDown, ChevronUp, BookOpen, HelpCircle, Zap, BarChart2, TrendingUp, Shield, DollarSign, Calendar, Activity } from 'lucide-react'
+import { ArrowLeft, HelpCircle, BarChart2, Zap, TrendingUp, DollarSign, Activity, BookOpen, Shield } from 'lucide-react'
 
-// ── Types ─────────────────────────────────────────────────────
 interface FAQItem { q: string; a: string }
-interface GuideSection { id: string; icon: React.ReactNode; title: string; color: string; content: React.ReactNode }
 
-// ── FAQ Component ─────────────────────────────────────────────
 function FAQAccordion({ items }: { items: FAQItem[] }) {
   const [open, setOpen] = useState<number | null>(null)
   return (
     <div className="space-y-2">
       {items.map((item, i) => (
-        <div key={i} className="rounded-xl border overflow-hidden transition-all"
-          style={{ borderColor: open === i ? 'rgba(167,139,250,0.3)' : 'rgba(255,255,255,0.07)', background: open === i ? 'rgba(167,139,250,0.05)' : 'rgba(255,255,255,0.02)' }}>
-          <button className="w-full flex items-start justify-between gap-3 px-4 py-3.5 text-left"
-            onClick={() => setOpen(open === i ? null : i)}>
-            <span className="text-sm font-semibold text-white/85 leading-snug">{item.q}</span>
-            {open === i ? <ChevronUp size={16} className="shrink-0 mt-0.5" style={{ color: '#a78bfa' }} /> : <ChevronDown size={16} className="shrink-0 mt-0.5 text-white/30" />}
+        <div key={i} className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
+          <button
+            onClick={() => setOpen(open === i ? null : i)}
+            className="w-full text-left flex items-start justify-between gap-3 px-4 py-3">
+            <span className="text-sm font-semibold text-white leading-relaxed">{item.q}</span>
+            <span className="text-white/30 shrink-0 mt-0.5">{open === i ? '▲' : '▼'}</span>
           </button>
           {open === i && (
-            <div className="px-4 pb-4">
-              <p className="text-sm text-white/60 leading-relaxed">{item.a}</p>
+            <div className="px-4 pb-4 text-sm text-white/60 leading-relaxed border-t border-white/05 pt-3">
+              {item.a}
             </div>
           )}
         </div>
@@ -32,266 +29,231 @@ function FAQAccordion({ items }: { items: FAQItem[] }) {
   )
 }
 
-// ── Guide Section Component ───────────────────────────────────
-function Section({ section }: { section: GuideSection }) {
-  const [collapsed, setCollapsed] = useState(false)
-  return (
-    <div id={section.id} className="rounded-2xl border overflow-hidden"
-      style={{ borderColor: `${section.color}20`, background: '#111620' }}>
-      <button className="w-full flex items-center justify-between px-5 py-4 border-b"
-        style={{ borderColor: `${section.color}15` }}
-        onClick={() => setCollapsed(!collapsed)}>
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
-            style={{ background: `${section.color}15` }}>
-            <span style={{ color: section.color }}>{section.icon}</span>
-          </div>
-          <span className="text-base font-bold text-white">{section.title}</span>
-        </div>
-        {collapsed ? <ChevronDown size={16} className="text-white/30" /> : <ChevronUp size={16} className="text-white/30" />}
-      </button>
-      {!collapsed && (
-        <div className="px-5 py-5">{section.content}</div>
-      )}
-    </div>
-  )
+interface GuideSection {
+  id: string; title: string; icon: React.ReactNode; color: string; content: React.ReactNode
 }
 
-// ── Content blocks ────────────────────────────────────────────
-function P({ children }: { children: React.ReactNode }) {
-  return <p className="text-sm text-white/65 leading-relaxed mb-3">{children}</p>
-}
-function H({ children }: { children: React.ReactNode }) {
-  return <h4 className="text-xs font-bold font-mono uppercase tracking-widest text-white/40 mb-2 mt-4 first:mt-0">{children}</h4>
-}
-function Tip({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="rounded-lg px-3.5 py-3 mb-3 text-sm leading-relaxed"
-      style={{ background: 'rgba(52,211,153,0.07)', border: '1px solid rgba(52,211,153,0.2)', color: 'rgba(52,211,153,0.9)' }}>
-      💡 {children}
-    </div>
-  )
-}
-function Warn({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="rounded-lg px-3.5 py-3 mb-3 text-sm leading-relaxed"
-      style={{ background: 'rgba(248,113,113,0.07)', border: '1px solid rgba(248,113,113,0.2)', color: 'rgba(248,113,113,0.9)' }}>
-      ⚠ {children}
-    </div>
-  )
-}
-function Step({ n, children }: { n: number; children: React.ReactNode }) {
-  return (
-    <div className="flex items-start gap-3 mb-3">
-      <div className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5"
-        style={{ background: 'rgba(167,139,250,0.2)', color: '#a78bfa' }}>{n}</div>
-      <p className="text-sm text-white/65 leading-relaxed">{children}</p>
-    </div>
-  )
-}
+const P = ({ children }: { children: React.ReactNode }) => (
+  <p className="text-sm text-white/65 leading-relaxed mb-3">{children}</p>
+)
+const H = ({ children }: { children: React.ReactNode }) => (
+  <h3 className="text-sm font-bold text-white mt-5 mb-2">{children}</h3>
+)
+const Tip = ({ children }: { children: React.ReactNode }) => (
+  <div className="flex gap-2 px-3 py-2.5 rounded-lg mb-3" style={{ background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.2)' }}>
+    <span className="text-green-400 shrink-0 mt-0.5">💡</span>
+    <span className="text-xs text-green-400 leading-relaxed">{children}</span>
+  </div>
+)
+const Warn = ({ children }: { children: React.ReactNode }) => (
+  <div className="flex gap-2 px-3 py-2.5 rounded-lg mb-3" style={{ background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)' }}>
+    <span className="text-yellow-400 shrink-0 mt-0.5">⚠</span>
+    <span className="text-xs text-yellow-400 leading-relaxed">{children}</span>
+  </div>
+)
 
-// ── FAQ Data ──────────────────────────────────────────────────
-const FAQ_GENERAL: FAQItem[] = [
-  { q: 'What is Consilium?', a: 'Consilium is an AI-powered stock analysis platform. You type in a stock ticker and three AI roles — News Scout, Lead Analyst, and Devil\'s Advocate — each contribute their perspective. A fourth role, the Council Judge, weighs all arguments and delivers a final verdict with a signal (Bullish, Bearish, or Neutral), a price target, entry/exit levels, and plain English explanations of every indicator.' },
-  { q: 'Is Consilium financial advice?', a: 'No. Consilium is an informational and educational tool. Nothing on this platform constitutes financial advice, investment advice, or trading recommendations. You are solely responsible for your investment decisions. Always do your own research and consult a qualified financial professional before trading.' },
-  { q: 'How accurate is Consilium?', a: 'No AI tool — or any analyst — can predict markets with certainty. Consilium synthesizes many signals to give you a well-rounded perspective, but it can and does get things wrong. Use it as one input among many, not as the sole basis for any trade. Past analysis does not guarantee future results.' },
-  { q: 'How often should I run an analysis?', a: 'For most stocks, once per day on the 1M or 3M timeframe is sufficient. Day traders might want 1D or 1W analyses more frequently. The cache system means repeated requests for the same ticker/timeframe within the cache window (30 min for 1D, up to 12h for 3M) return the stored result instantly.' },
-  { q: 'Why do I sometimes get a cached result?', a: 'To save costs and speed up your experience, Consilium caches analysis results. If someone else (or you) already analyzed the same ticker on the same timeframe recently, you\'ll see the cached result with a yellow "Cached" badge. You can always click "↻ Refresh" to force a fresh analysis.' },
-  { q: 'Can I use Consilium for crypto?', a: 'Yes — you can enter crypto tickers like BTC, ETH, SOL, DOGE, etc. The technical indicators and AI analysis work the same way. The Today\'s Movers and Tomorrow\'s Movers pages also include crypto setups.' },
-]
-
-const FAQ_TECHNICAL: FAQItem[] = [
-  { q: 'What does RSI mean?', a: 'RSI (Relative Strength Index) measures buying and selling momentum on a scale of 0-100. Below 30 means the stock has been sold heavily and may bounce (oversold). Above 70 means it has been bought aggressively and may pull back (overbought). Around 50 is neutral.' },
-  { q: 'What is a Death Cross vs Golden Cross?', a: 'A Golden Cross is when the 50-day moving average crosses above the 200-day moving average — a historically bullish signal meaning medium-term momentum is stronger than the long-term trend. A Death Cross is the opposite — the 50-day drops below the 200-day — a historically bearish signal.' },
-  { q: 'What is VWAP?', a: 'VWAP (Volume Weighted Average Price) is the average price of every trade made today, weighted by volume. It resets every morning. Price above VWAP means buyers are in control. Below VWAP means sellers dominate. Institutions use it as a benchmark — a stock that can\'t reclaim VWAP is considered weak.' },
-  { q: 'What does the Stochastic Oscillator show?', a: 'The Stochastic Oscillator (%K and %D lines) shows where the price closed relative to its range over the past 14 days. Above 80 is overbought. Below 20 is oversold. The most important signal is when the fast %K line crosses the slow %D line — a bullish crossover (K crosses above D) is often a buy signal; bearish crossover is a sell signal.' },
-  { q: 'What is OBV?', a: 'On-Balance Volume (OBV) tracks buying and selling pressure by accumulating volume on up-days and subtracting volume on down-days. A rising OBV with a falling price (bullish divergence) suggests smart money is quietly accumulating — a potentially bullish signal. Falling OBV with rising price (bearish divergence) suggests institutions are quietly selling.' },
-  { q: 'What are Fibonacci levels?', a: 'Fibonacci retracement levels (23.6%, 38.2%, 50%, 61.8%, 78.6%) identify where price tends to pause or reverse after a big move. They work partly because so many traders watch them — making them self-fulfilling. The nearest Fibonacci level to the current price is the most relevant for short-term trades.' },
-  { q: 'Why do all timeframes show the same technicals?', a: 'The 1M and 3M timeframes use daily bars, so the indicators will be very similar. The 1D and 1W timeframes use hourly bars, giving different RSI and MACD readings that reflect shorter-term momentum. Switching from 1W to 1M is a meaningful change; switching between 1M and 3M will be more similar.' },
-]
-
-const FAQ_SIGNALS: FAQItem[] = [
-  { q: 'What do the four AI stages do?', a: 'News Scout scans recent news and assesses macro conditions. Lead Analyst synthesizes all 50+ technical, fundamental, and smart money signals into a directional call. Devil\'s Advocate challenges that call with data-backed counter-arguments. The Council Verdict (Judge) weighs argument quality — not vote count — and delivers the final signal, price target, entry/exit levels, and plain English explanation.' },
-  { q: 'What is the Conviction Score?', a: 'The Conviction Score (-100 to +100) measures how many of the 50+ signals agree with the directional verdict. A score above +50 means strong signal convergence — most indicators point the same way. Near zero means mixed signals. The score helps you gauge how confident the overall analysis is.' },
-  { q: 'What is Smart Money?', a: 'Smart Money refers to large, informed investors — corporate insiders (executives and directors), members of Congress who trade stocks, and large institutional holders. When insiders buy their own company\'s stock, it\'s often a bullish signal. Congressional trades are tracked because elected officials sometimes have access to material non-public information.' },
-  { q: 'What does Options Flow tell me?', a: 'The put/call ratio measures how many puts (bearish bets) vs calls (bullish bets) are being traded. A low ratio means more calls = bullish sentiment. A high ratio means more puts = bearish. Unusual sweeps are large options orders that exceed normal volume — these often signal that a big player is making a directional bet ahead of a news event.' },
-  { q: 'Why are fundamentals sometimes missing?', a: 'Fundamental data (P/E ratio, analyst ratings, earnings dates) may not be available for every stock. Very small cap stocks, newer companies, and most crypto assets have limited analyst coverage. If the fundamentals section is empty for a stock, the AI will still analyze based on the technical and market signals it does have.' },
-]
-
-const FAQ_OPTIONS: FAQItem[] = [
-  { q: 'What is a call option?', a: 'A call option gives you the right to BUY 100 shares at a specific price (the strike) before a specific date (expiry). You buy calls when you think a stock will go UP. If the stock rises above your strike price, your option becomes valuable. If it doesn\'t, you lose the premium you paid — which is your maximum loss.' },
-  { q: 'What is a put option?', a: 'A put option gives you the right to SELL 100 shares at a specific price before expiry. You buy puts when you think a stock will go DOWN. If the stock falls below your strike, your put gains value. If the stock goes up instead, you lose the premium — your maximum loss.' },
-  { q: 'What does ITM, ATM, OTM mean?', a: 'In The Money (ITM) means the option already has intrinsic value — for a call, the stock is above the strike. At The Money (ATM) means the stock is right at the strike price. Out of The Money (OTM) means the option has no intrinsic value yet — for a call, the stock is still below the strike. ATM and slightly OTM options are most commonly traded.' },
-  { q: 'What is Delta?', a: 'Delta measures how much your option\'s value changes for every $1 move in the stock. A delta of 0.50 means if the stock rises $1, your call option gains $0.50 per share ($50 per contract controlling 100 shares). Delta ranges from 0 to 1 for calls, and 0 to -1 for puts.' },
-  { q: 'What is Theta (time decay)?', a: 'Theta is how much value your option loses every single day, just from time passing — even if the stock doesn\'t move. A theta of -0.05 means you lose $5 per contract per day. This is why holding options too long is dangerous — they decay in value constantly. The closer to expiry, the faster theta erodes the option.' },
-  { q: 'What is IV (Implied Volatility)?', a: 'Implied Volatility (IV) reflects how much the market expects a stock to move. High IV means options are expensive — the market expects big moves. Low IV means cheap options. IV often spikes before earnings reports. Buying options when IV is high is risky because even if you\'re right about direction, the IV may "crush" after the event, reducing your option\'s value.' },
-  { q: 'How much can I lose trading options?', a: 'When buying calls or puts, your maximum loss is 100% of the premium you paid. If you pay $300 for a contract and it expires worthless, you lose $300. Options expire worthless far more often than most people expect. Never trade options with money you cannot afford to lose entirely.' },
-]
-
-const FAQ_BILLING: FAQItem[] = [
-  { q: 'How does the free trial work?', a: 'Your 7-day free trial starts the moment you sign up. No credit card is required. You get full access to everything during the trial. On day 7, if you haven\'t subscribed, you\'ll be redirected to the subscription page. You won\'t be charged automatically — you have to actively subscribe.' },
-  { q: 'What does $19/month include?', a: 'Everything. Unlimited stock analyses, all timeframes, Today\'s Movers, Tomorrow\'s Movers, Options Strategy recommendations, full technical charts, fundamentals, smart money data, and all future features. There\'s one plan — no tiers or feature gates.' },
-  { q: 'How do I cancel?', a: 'Click the "✓ Pro" badge in the top right of the app header. This opens the Stripe billing portal where you can cancel, update payment method, or download invoices. If you cancel, you keep access until the end of your current billing period.' },
-  { q: 'Can I get a refund?', a: 'Reach out within 7 days of being charged and we\'ll make it right. We don\'t want you paying for something that isn\'t working for you.' },
-  { q: 'Is my account sharing allowed?', a: 'No — accounts are strictly one device at a time. Logging in from a second device automatically signs out the first. This is enforced to protect the integrity of the service.' },
-]
-
-// ── Guide Sections ─────────────────────────────────────────────
 const SECTIONS: GuideSection[] = [
   {
-    id: 'getting-started',
-    icon: <Zap size={16} />,
-    title: 'Getting Started',
-    color: '#fbbf24',
-    content: (
-      <>
-        <H>Running your first analysis</H>
-        <Step n={1}>Type a stock ticker (e.g. AAPL, NVDA, TSLA, BTC) into the input box in the top bar.</Step>
-        <Step n={2}>Select a timeframe — 1D for intraday, 1W for short-term, 1M for medium-term, 3M for longer-term outlook.</Step>
-        <Step n={3}>Click Analyze. The four-stage AI debate begins — usually takes 30-60 seconds.</Step>
-        <Step n={4}>Read the Council Verdict at the bottom. This is the final synthesized signal with price target, entry/exit levels, and plain English explanations.</Step>
-        <Tip>Start with a stock you already know — this makes it easier to judge whether the analysis makes sense to you.</Tip>
-
-        <H>Understanding the layout</H>
-        <P>The left sidebar shows a quick summary of all signal categories: technicals, fundamentals, smart money, options flow, and market context. This gives you a snapshot before reading the full debate.</P>
-        <P>The right panel shows the four AI stages streaming in real time. Each stage builds on the previous one — the Judge reads all three stages before delivering the verdict.</P>
-        <P>Below the verdict, you'll find the Technical Charts section with detailed visual indicators, and the Options Strategy section for options recommendations.</P>
-
-        <H>Timeframe guide</H>
-        <P>1D uses hourly bars and reflects intraday momentum — RSI and MACD on hourly charts move faster and signal more frequently. Use for day trading setups.</P>
-        <P>1W also uses hourly bars over a longer lookback — good for swing trades of a few days to a week.</P>
-        <P>1M and 3M use daily bars with full SMA200 history. These give the most reliable technical signals for longer holds. Most users start here.</P>
-      </>
-    ),
-  },
-  {
-    id: 'todays-movers',
-    icon: <Activity size={16} />,
-    title: "Today's Movers",
-    color: '#fbbf24',
-    content: (
-      <>
-        <P>Today's Movers scans the latest 50+ news headlines and identifies specific stocks and crypto that could move significantly today — based on real catalysts, not speculation.</P>
-        <H>What you'll see</H>
-        <P><strong className="text-white/80">Potential Winners</strong> — stocks with bullish catalysts like earnings beats, analyst upgrades, positive FDA decisions, or partnership announcements.</P>
-        <P><strong className="text-white/80">Potential Losers</strong> — stocks with bearish catalysts like earnings misses, downgrades, legal issues, or guidance cuts.</P>
-        <P><strong className="text-white/80">Worth Watching</strong> — neutral setups where the direction isn't clear but a significant move is likely.</P>
-        <P><strong className="text-white/80">Sector Movements</strong> — which sectors are rotating in or out today and why.</P>
-        <Tip>Click "Run full AI analysis" on any mover to get the complete four-stage analysis with price target and trade plan.</Tip>
-        <P>Today's Movers is cached once per day — the first analysis each day runs Gemini on the latest headlines. Subsequent visitors that day see the cached result instantly. Use "Force refresh" if you want the absolute latest headlines.</P>
-      </>
-    ),
-  },
-  {
-    id: 'tomorrows-movers',
-    icon: <Calendar size={16} />,
-    title: "Tomorrow's Movers",
+    id: 'how-it-works',
+    title: 'How the Council Works',
+    icon: <Zap size={14} />,
     color: '#a78bfa',
     content: (
       <>
-        <P>Tomorrow's Movers is a forward-looking playbook for the next trading day. Instead of reacting to news that already happened, it helps you prepare in advance.</P>
-        <H>What's included</H>
-        <P><strong className="text-white/80">Opening Bell Playbook</strong> — a step-by-step guide written in plain English for what to watch in the first 30 minutes of trading. Written for all experience levels.</P>
-        <P><strong className="text-white/80">Pre-Market Watchlist</strong> — 5-8 stocks/crypto with specific setups, key price levels, and both a bullish and bearish game plan for each.</P>
-        <P><strong className="text-white/80">Earnings Calendar</strong> — companies reporting earnings tomorrow with expected move percentages and what to watch in the report.</P>
-        <P><strong className="text-white/80">Economic Events</strong> — Fed minutes, CPI, jobs reports, and other scheduled data releases with plain English explanation of market impact.</P>
-        <P><strong className="text-white/80">Sector Setups</strong> — which sectors are positioned for moves and the best individual stock play in each.</P>
-        <Tip>Check Tomorrow's Movers the evening before a trading day to build your watchlist and set price alerts.</Tip>
+        <P>Consilium runs a six-stage adversarial debate before giving you a verdict. The stages stream in real time — you watch the debate happen.</P>
+        <H>Stage 1 — News Scout</H>
+        <P>Scans recent headlines, assesses macro conditions (VIX level, SPY trend, sector performance), and reports the current market regime (RISK ON, HIGH FEAR, etc.). This context feeds every subsequent stage.</P>
+        <H>Stage 2 — Lead Analyst</H>
+        <P>Synthesizes all 24+ signals into a directional call with a price target, confidence score, and specific technical and fundamental basis. The analyst personality you selected shapes how they weight different signals.</P>
+        <H>Stage 3 — Devil's Advocate</H>
+        <P>Attacks the Lead Analyst's thesis with data-backed challenges. Required to disagree — can't simply agree with the Lead Analyst. Produces 2-4 specific challenges, an alternate scenario, and identifies the single strongest counter-argument.</P>
+        <H>Stage 4 — Lead Analyst Rebuttal</H>
+        <P>Before responding, the Lead Analyst requests fresh live data from the News Scout — earnings estimates, analyst targets, options flow, or macro data. Armed with this, they concede valid points and defend positions where data supports them. Concessions are explicitly listed.</P>
+        <Tip>What the Lead Analyst concedes is the most important signal in the entire analysis. If they concede their strongest point, the confidence score drops and the Judge weighs it heavily.</Tip>
+        <H>Stage 5 — Devil's Advocate Counter</H>
+        <P>Also fetches fresh data from the News Scout, acknowledges where the rebuttal convinced them, and doubles down on unresolved weaknesses. Delivers a closing argument for the Judge.</P>
+        <H>Stage 6 — Council Verdict (Judge)</H>
+        <P>Having read the complete two-round transcript, the Judge delivers the final verdict. Weighs argument quality — not vote count. Produces: signal (BULLISH/BEARISH/NEUTRAL), confidence score, ATR-derived stop loss and take profit levels, time horizon, plain English explanation, action plan, probability-weighted scenarios, and an invalidation trigger.</P>
+        <Warn>The council's analysis is for informational purposes only. It is not financial advice. Never risk money you cannot afford to lose.</Warn>
       </>
     ),
   },
   {
-    id: 'technical-charts',
-    icon: <BarChart2 size={16} />,
-    title: 'Technical Charts',
-    color: '#a78bfa',
+    id: 'signals',
+    title: 'Signals & Indicators',
+    icon: <BarChart2 size={14} />,
+    color: '#60a5fa',
     content: (
       <>
-        <P>The Technical Charts section appears below the Council Verdict after each analysis. Every indicator has two sections: "What is this?" explains the concept from scratch, and "What it means for this stock right now" uses the actual values to tell you what the data is saying.</P>
-        <H>Indicators included</H>
-        <P><strong className="text-white/80">RSI (14)</strong> — momentum gauge. Oversold below 30, overbought above 70.</P>
-        <P><strong className="text-white/80">Stochastic (14,3,3)</strong> — similar to RSI but compares close to the price range. Watch for %K/%D crossovers.</P>
-        <P><strong className="text-white/80">MACD (12,26,9)</strong> — trend and momentum. Histogram going positive is bullish, crossovers are key signals.</P>
-        <P><strong className="text-white/80">Bollinger Bands</strong> — volatility channel. Squeezes often precede big moves. Touching bands is a mean-reversion signal.</P>
-        <P><strong className="text-white/80">Moving Averages</strong> — SMA50/200 (golden/death cross), EMA9/20 (faster crossovers for short-term traders).</P>
-        <P><strong className="text-white/80">VWAP</strong> — institutional benchmark. Price above VWAP = bullish intraday bias.</P>
-        <P><strong className="text-white/80">OBV</strong> — volume-based trend confirmation. Divergences are early warning signals.</P>
-        <P><strong className="text-white/80">Fibonacci Levels</strong> — support and resistance zones from recent swing highs/lows.</P>
-        <P><strong className="text-white/80">Pivot Points</strong> — S1, S2, R1, R2 levels showing where buyers/sellers have historically appeared.</P>
-        <Tip>The Finviz chart image at the top of Technical Charts shows the actual candlestick chart with SMA50 and SMA200 overlaid — you can literally see the death cross or golden cross visually.</Tip>
+        <P>The sidebar shows 24+ live indicators computed from market data before the debate starts. These feed directly into the AI council's arguments.</P>
+        <H>Technical Indicators</H>
+        <P>RSI(14), MACD(12,26,9), Stochastic(14,3,3), SMA 20/50/200, EMA 9/12/20/26, golden/death cross, Bollinger Bands, VWAP, OBV with divergence detection, support/resistance levels (2 each), and Fibonacci retracements.</P>
+        <H>New Indicators (Added 2026)</H>
+        <P><strong className="text-white">ATR(14)</strong> — Average True Range in dollars and %. The council uses 2× ATR for stop placement and 3× ATR for targets. Stops tighter than 1× ATR will be hit by normal daily noise.</P>
+        <P><strong className="text-white">Ichimoku Cloud</strong> — The most decisive single trend indicator. Price above cloud = structurally bullish. Below = bearish. Inside = indecisive. TK cross detection for entry signals.</P>
+        <P><strong className="text-white">Williams %R</strong> — Oscillator from -100 to 0. Combined with RSI and CCI, triple oscillator confirmation at extremes is one of the strongest overbought/oversold signals.</P>
+        <P><strong className="text-white">CCI(20)</strong> — Commodity Channel Index. Above +100 = overbought, below -100 = oversold. Measures deviation from statistical mean price.</P>
+        <P><strong className="text-white">ROC</strong> — Rate of Change, 10 and 20 periods. Compares the two to detect accelerating vs decelerating momentum — often the first warning sign before RSI turns.</P>
+        <P><strong className="text-white">Relative Strength vs Sector</strong> — Stock performance minus sector ETF performance. A stock up 2% when its sector is up 9% is underperforming by 7% — hidden weakness the Devil's Advocate will cite.</P>
+        <P><strong className="text-white">GEX (Gamma Exposure)</strong> — Dealer hedging dynamics. Positive GEX = price pinning near key levels. Negative GEX = moves will accelerate through levels rather than bounce.</P>
+        <P><strong className="text-white">Earnings Implied Move</strong> — ATM straddle cost vs historical actual move. When options are overpriced vs history, the council flags it and adjusts the options strategy recommendation.</P>
+        <H>Conviction Score</H>
+        <P>Aggregates all signals into a -100 to +100 score. Adjusted for market regime — HIGH FEAR discounts bullish signals. The conviction score sets the ceiling for the Lead Analyst's confidence.</P>
+        <Tip>Open the Technical Charts section below the verdict to see every indicator visualized with a two-part explanation: what the indicator is showing and what it means for this specific stock right now.</Tip>
+      </>
+    ),
+  },
+  {
+    id: 'personas',
+    title: 'Analyst Personalities',
+    icon: <Activity size={14} />,
+    color: '#fbbf24',
+    content: (
+      <>
+        <P>Before running an analysis, select which lens the Lead Analyst and Judge apply. Same data, different interpretation.</P>
+        <H>⚖ Balanced (default)</H>
+        <P>Equal weight to technicals and fundamentals. When signals conflict, explicitly notes the conflict. Produces lower confidence scores when evidence is genuinely divided. Best for most users and most situations.</P>
+        <H>📈 Technical Trader</H>
+        <P>Price action is primary. Follows the trend — never fights the tape. A death cross is bearish regardless of P/E ratio. RSI, MACD, Ichimoku cloud, and moving averages drive the call. Best for swing traders using 1D and 1W timeframes.</P>
+        <H>📊 Fundamental Analyst</H>
+        <P>Business quality, earnings growth, analyst consensus, and valuation vs historical averages drive the verdict. A 30% drawdown in a high-quality business at a discount to its historical P/E is an opportunity. Best for investors using 1M and 3M timeframes.</P>
+        <Tip>Run the same stock under Technical and Fundamental. Getting different verdicts is not a bug — it tells you exactly what kind of trade this is. Technical BEARISH + Fundamental BULLISH = short-term weakness in a long-term opportunity. Size accordingly.</Tip>
+        <P>Each personality produces a separate cached analysis. Running AAPL as Technical never overwrites the AAPL Balanced cache.</P>
+      </>
+    ),
+  },
+  {
+    id: 'verdict',
+    title: 'Reading the Verdict',
+    icon: <Shield size={14} />,
+    color: '#34d399',
+    content: (
+      <>
+        <P>The Council Verdict appears at the top of results and is always visible. Here's what every field means:</P>
+        <H>Signal</H>
+        <P>BULLISH, BEARISH, or NEUTRAL. Not a buy/sell recommendation — a directional bias from the council based on the debate outcome.</P>
+        <H>Confidence Score</H>
+        <P>A measure of signal agreement, not a probability of profit. 85%+ = almost all signals align. 45% = signals genuinely conflict. Use it for position sizing: 85%+ = full size, 70-84% = 75%, 55-69% = 50%, below 55% = 25% or skip.</P>
+        <H>Trade Plan (Entry / Stop / Target)</H>
+        <P>Entry is the suggested price range. Stop loss uses 2× ATR as a floor — anything tighter gets hit by normal daily volatility. Take profit uses 3× ATR as a starting point, adjusted for nearby resistance levels.</P>
+        <Warn>Always use the invalidation trigger. If the trigger condition is met, re-run the analysis — the entire thesis may have changed.</Warn>
+        <H>Scenarios</H>
+        <P>Bull, base, and bear cases with probability percentages and the specific trigger condition for each. The probabilities sum to 100% and reflect the Judge's reading of the debate quality.</P>
+        <H>Signal Explanations</H>
+        <P>Expand this section for plain English breakdowns of what the technicals, fundamentals, and smart money are telling the council — written for someone who doesn't need to know what RSI is.</P>
+        <H>Log a Trade</H>
+        <P>After any BULLISH or NEUTRAL verdict, click "💰 Log trade" to record the entry price, share count, and council signal. This links to the Reinvestment Tracker where you can track P&L and get AI-powered reinvestment ideas.</P>
+      </>
+    ),
+  },
+  {
+    id: 'pages',
+    title: 'Platform Pages',
+    icon: <BookOpen size={14} />,
+    color: '#f87171',
+    content: (
+      <>
+        <H>🌍 Macro Dashboard</H>
+        <P>All 11 S&P 500 sector ETFs ranked by daily performance with a BULLISH/BEARISH/NEUTRAL signal per sector. Shows overall market regime, smart money flows (SPY, QQQ, IWM, GLD, TLT, Dollar), and refreshes every 30 minutes. Use it every morning before opening positions — it tells you whether to be aggressive or defensive.</P>
+        <H>⚡ Today's Movers</H>
+        <P>Daily-cached market intelligence showing bullish movers, bearish movers, and stocks to watch. Each links directly to the full analysis. Refreshes once per day.</P>
+        <H>📅 Tomorrow's Playbook</H>
+        <P>Forward-looking daily briefing: earnings events, economic releases, sector rotation setups, and crypto conditions for the next trading session.</P>
+        <H>💼 Portfolio</H>
+        <P>Add your actual holdings with ticker, shares, and optional cost basis. The holistic analysis fetches live prices for every position, computes RSI and moving averages per holding, and produces a portfolio score (0-100), sector concentration bars, earnings watch for the next 30 days, top risks with severity ratings, and a 3-4 step action plan.</P>
+        <H>💰 Reinvestment Tracker</H>
+        <P>Log trades after council analyses to track live P&L. When you close a trade, the realized gain becomes "available cash." The council then generates three tiered reinvestment strategies — Aggressive (50% of gains into a high-conviction idea), Moderate (25-40% into a strategic play), and Conservative (10-20% into a lower-risk option) — each with a specific entry, stop, and target.</P>
+        <Tip>The Reinvestment Tracker works even with unrealized gains. If you haven't closed any trades, the AI uses your paper profits as the deployment amount.</Tip>
+        <H>⚡ Head-to-Head Compare</H>
+        <P>Runs the full 6-stage debate on two stocks simultaneously, then a third AI call produces a definitive head-to-head verdict. Shows side-by-side conviction scores, risk/reward bars, strengths and weaknesses for each, and a clear "if you can only pick one" recommendation.</P>
+        <H>🎓 Trading Academy</H>
+        <P>Structured curriculum teaching you to use the platform like an analyst. Three tracks: how the council works, reading signals like a pro, and executing on verdicts. Each lesson includes annotated debate examples and a quiz. The Signal Glossary explains all 24+ indicators with specific examples of how each one shifts verdicts in real debates.</P>
       </>
     ),
   },
   {
     id: 'options',
-    icon: <TrendingUp size={16} />,
     title: 'Options Strategy',
-    color: '#34d399',
+    icon: <TrendingUp size={14} />,
+    color: '#f87171',
     content: (
       <>
-        <P>The Options Strategy section appears below the Technical Charts after each analysis. Click "Get options recommendation" to trigger it — it runs a separate AI call to generate a specific strategy based on the Council Verdict.</P>
-        <H>What you get</H>
-        <P><strong className="text-white/80">Strategy recommendation</strong> — a specific strategy (buy calls, buy puts, spread, etc.) matched to the verdict signal and time horizon.</P>
-        <P><strong className="text-white/80">Plain English explanation</strong> — why this strategy fits, written for someone who has never traded options.</P>
-        <P><strong className="text-white/80">Max loss / Max gain</strong> — realistic numbers for best and worst case, using actual premium costs.</P>
-        <P><strong className="text-white/80">Live contracts</strong> — 3 specific options contracts (strike, expiry, bid/ask, IV, Greeks) sourced from Yahoo Finance or Tradier.</P>
-        <P><strong className="text-white/80">Greeks explained</strong> — what delta and theta mean for those specific numbers in plain English.</P>
-        <Warn>Options are high-risk instruments. They can expire completely worthless. One contract = 100 shares. Never risk money you cannot afford to lose entirely. The Options Strategy section is educational — not a trade recommendation.</Warn>
-        <H>Understanding the contract table</H>
-        <P>Each contract shows the strike price (the price you have the right to buy/sell at), the expiry date, bid/ask spread, volume, open interest, and IV. Cost per contract = ask price × 100. A $2.50 ask means $250 per contract.</P>
+        <P>The Council Options View section appears below the verdict after each analysis. It shows the council's derivatives recommendation based on the verdict, conviction score, IV conditions, and GEX signal.</P>
+        <H>Strategy Selection Logic</H>
+        <P>BULLISH high conviction → long calls or bull call spreads. BULLISH moderate → covered calls or bull call spread. BEARISH high conviction → long puts or bear put spreads. NEUTRAL → the council shows both sides for reference.</P>
+        <H>Earnings Implied Move</H>
+        <P>When earnings are within 30 days, the council calculates the ATM straddle cost vs the stock's historical average actual move over the last 4 earnings. If options are priced at 2× the historical move, the council flags "OPTIONS OVERPRICED — selling premium is favored." This is a specific, actionable edge that most retail tools don't provide.</P>
+        <H>GEX and Options Strategy</H>
+        <P>Strong negative GEX means the council recommends defined-risk strategies (spreads) over naked directional bets — because negative GEX amplifies moves in both directions and creates whipsaw risk for options buyers.</P>
+        <Warn>Options are leveraged instruments. One contract = 100 shares. They can expire completely worthless. The Options Strategy section is educational — not a trade recommendation. Never risk money you cannot afford to lose entirely.</Warn>
       </>
     ),
   },
   {
     id: 'smart-money',
-    icon: <Shield size={16} />,
     title: 'Smart Money Signals',
-    color: '#34d399',
+    icon: <DollarSign size={14} />,
+    color: '#a78bfa',
     content: (
       <>
-        <P>Smart Money refers to informed, large-scale investors whose trading behavior can signal where a stock is headed before it's obvious in the price.</P>
-        <H>Insider trading (legal)</H>
-        <P>Corporate insiders — CEOs, CFOs, directors — must file Form 4 with the SEC within 2 days of any trade. When multiple insiders buy their own company's stock on the open market (not options grants), it's a historically bullish signal. They know the business better than anyone. Insider selling is less meaningful — executives sell for many reasons (diversification, taxes) — but a cluster of selling by multiple insiders can be bearish.</P>
-        <H>Congressional trading</H>
-        <P>Members of Congress must disclose trades within 45 days. This data is tracked because lawmakers sometimes have material non-public information from committee work. When Congress members buy a stock, Consilium flags it. This is controversial but legal data.</P>
-        <H>Institutional holders</H>
-        <P>Large funds (13F filings) show which institutions hold the stock. Heavy institutional ownership isn't necessarily bullish or bearish — but knowing who owns a stock tells you something about its investor base and stability.</P>
-        <Tip>Smart Money signals are more meaningful when combined with a bullish or bearish technical setup. Insider buying in a stock that's also technically oversold is a stronger signal than either alone.</Tip>
-      </>
-    ),
-  },
-  {
-    id: 'fundamentals',
-    icon: <DollarSign size={16} />,
-    title: 'Fundamentals',
-    color: '#60a5fa',
-    content: (
-      <>
-        <P>Fundamentals come from Finnhub and provide context about the company's financial health and analyst sentiment. They complement the technical picture.</P>
-        <H>Key metrics explained</H>
-        <P><strong className="text-white/80">P/E Ratio</strong> — Price divided by earnings per share. A high P/E (e.g. 40x) means investors are paying a premium for expected growth. Low P/E (e.g. 10x) can mean undervaluation or slow growth. Context matters — compare to the sector average.</P>
-        <P><strong className="text-white/80">Analyst Consensus</strong> — the aggregate recommendation from Wall Street analysts (Strong Buy, Buy, Hold, Sell). This reflects institutional research opinions. Upside % shows how far the average analyst price target is above the current price.</P>
-        <P><strong className="text-white/80">Earnings Date & Risk</strong> — stocks often make their biggest moves around earnings reports. "High" earnings risk means the report is close and could significantly move the stock in either direction.</P>
-        <P><strong className="text-white/80">EPS Record</strong> — whether the company consistently beats earnings estimates ("beater") or misses. Consistent beaters often get rewarded with premium valuations. Consistent misses get punished.</P>
-
+        <P>Smart money signals track what institutions, insiders, and Congress members are doing with the stock — often before it shows in price.</P>
+        <H>Insider Transactions</H>
+        <P>SEC Form 4 data showing individual insider buys and sells from the last 90 days with dollar amounts. Net buying is generally bullish — insiders know their own business better than anyone. Selling can be noise (diversification, options exercises) or signal (loss of confidence). The council distinguishes between the two.</P>
+        <H>Institutional Holdings</H>
+        <P>13F filing data showing major holders and whether notable funds are increasing or decreasing positions. Heavy institutional concentration can be bullish (smart money agrees) or risky (crowded trade vulnerable to simultaneous exits).</P>
+        <H>Congressional Trades</H>
+        <P>Disclosures of US Congress member trades from QuiverQuant. Congress members have historically outperformed the market significantly. Recent buys from multiple Congress members in the same sector are worth noting.</P>
+        <H>Short Interest</H>
+        <P>Percentage of float sold short and days to cover. Above 25% = squeeze candidate — good news can trigger rapid covering. Above 15% = heavily shorted. The council uses the put/call ratio as a proxy when direct short interest data is unavailable.</P>
       </>
     ),
   },
 ]
 
-// ── Main Page ──────────────────────────────────────────────────
+const FAQ_GENERAL: FAQItem[] = [
+  { q: 'What is Consilium?', a: "Consilium is an AI-powered stock and crypto analysis platform that runs a six-stage adversarial debate between multiple AI roles before giving you a verdict. You get a specific signal (BULLISH/BEARISH/NEUTRAL), entry price, ATR-derived stop loss, take profit levels, time horizon, and a full plain English explanation. It covers US stocks, major crypto, and your own portfolio." },
+  { q: 'How is this different from other AI stock tools?', a: "Most AI analysis tools give you one model's opinion. Consilium forces its AI council to argue against itself — the Lead Analyst makes a call, the Devil's Advocate attacks it with data, both sides rebut each other using fresh live data fetched mid-debate, and a Judge who has read the full transcript delivers the final verdict. You see every argument made and what got conceded." },
+  { q: 'How current is the data?', a: "Live prices come from Finnhub in real time. Historical bar data comes from Alpaca Markets with full dividend adjustment. Options data comes from Tradier's production API. Cached analyses are invalidated automatically when price moves more than 1.5% from the cached price, or after 2 hours maximum — whichever comes first. You'll see a status message when a fresh analysis runs." },
+  { q: 'Does it support crypto?', a: "Yes — BTC, ETH, SOL, BNB, XRP, ADA, AVAX, DOGE, and 15+ more. Crypto uses CoinGecko for real-time prices and OHLCV data. All 24+ technical indicators work identically. Fundamentals are replaced with on-chain metadata (market cap, 24h/7d change, ATH, circulating supply). The full 6-stage debate runs on crypto exactly as it does for equities." },
+  { q: 'What does the free trial include?', a: "The 7-day free trial includes full access to every feature — main analysis, crypto, Macro dashboard, Portfolio, Reinvestment Tracker, Compare, Trading Academy, and all indicator data. No credit card required to start." },
+]
+
+const FAQ_SIGNALS: FAQItem[] = [
+  { q: 'What is the conviction score?', a: "The conviction score aggregates all signals across technicals, fundamentals, smart money, options flow, and macro context into a net score from -100 to +100. It's adjusted for market regime — HIGH FEAR discounts bullish signals. The conviction score sets the ceiling on the Lead Analyst's confidence: a +20 conviction score can't produce a 90% BULLISH verdict." },
+  { q: 'Why does the confidence score matter for position sizing?', a: "The confidence score is a measure of signal agreement, not a probability of profit. 85%+ with no concessions = full intended position. 70-84% = 75%. 55-69% = 50%. Below 55% = 25% or wait. Any verdict where the Lead Analyst made 2+ concessions should drop one tier regardless of the confidence number." },
+  { q: 'What are ATR-derived stops and why does the council use them?', a: "ATR (Average True Range) measures how much the stock moves on a typical day. A stop tighter than 1× ATR will be triggered by normal daily volatility before the trade has a chance to work. The council uses 2× ATR as the minimum stop placement and 3× ATR as the baseline target, giving a 1.5:1 risk/reward starting point. You can see the specific dollar levels in the sidebar under ATR(14)." },
+  { q: 'What is the invalidation trigger?', a: "The single most important field in the verdict that most users ignore. It states exactly what condition would make the entire thesis wrong. If that condition is met, re-run the analysis immediately — the debate outcome will likely be very different. Set a price alert for the invalidation level." },
+  { q: 'What does GEX tell me?', a: "Gamma Exposure measures dealer hedging dynamics. Positive GEX means dealers are long gamma — they sell into rallies and buy dips to stay neutral, which pins price near key levels. Negative GEX means dealers must chase moves in both directions, amplifying volatility. High negative GEX near a resistance level means a breakout will run hard rather than grind." },
+  { q: 'Why do I sometimes get different verdicts for the same stock under different personas?', a: "This is intentional and useful. A stock can be technically BEARISH (price below death cross, below SMA200) and fundamentally BULLISH (beaten-down quality business at a discount to historical P/E) simultaneously. Both can be correct for different timeframes. The divergence tells you exactly what kind of trade this is: follow Technical for a 2-4 week swing, follow Fundamental for a 3-6 month position." },
+]
+
+const FAQ_TECHNICAL: FAQItem[] = [
+  { q: 'Why do my SMA values differ from TradingView?', a: "Alpaca Markets uses the standard corporate action adjustment methodology for dividend-adjusted prices. TradingView uses a proprietary algorithm. The difference is typically $3-8 on high-dividend stocks like AAPL. This is a data source difference, not a calculation error. RSI, MACD, and directional signals are unaffected and remain accurate." },
+  { q: 'What is Ichimoku Cloud and why does it matter?', a: "Ichimoku Kinko Hyo is one of the most comprehensive single indicators in technical analysis — it shows trend direction, momentum, and support/resistance simultaneously. Price above the cloud = structurally bullish (26+ sessions of price structure support this). A TK cross (Tenkan crossing Kijun while above the cloud) is an institutional entry signal. The Lead Analyst consistently leads with cloud position when it's decisive." },
+  { q: 'How does relative strength vs sector work?', a: "The council computes your stock's period return minus the sector ETF's period return over the same period. Stock up 2%, sector up 9% = -7% relative strength. This exposes hidden weakness — the stock is rising with the tide, not leading it. The Devil's Advocate uses this to challenge BULLISH calls when a stock is lagging its peers." },
+  { q: 'What does the Bollinger Band squeeze mean?', a: "A squeeze occurs when the bands narrow significantly, indicating a period of low volatility. Volatility compression historically precedes expansion — a breakout. The council treats a squeeze as a setup signal, not a directional one. Combine with Ichimoku cloud position and momentum indicators to determine direction." },
+]
+
+const FAQ_OPTIONS: FAQItem[] = [
+  { q: 'What is the Council Options View?', a: "After each analysis, the Council Options View shows a specific derivatives strategy based on the verdict, conviction score, IV conditions, and GEX signal. For BULLISH verdicts it typically recommends long calls or bull call spreads depending on IV levels. For BEARISH it recommends puts or put spreads. When IV is elevated (options expensive), it may suggest selling premium instead." },
+  { q: 'What is the earnings implied move?', a: "When earnings are within 30 days, the council calculates the cost of the at-the-money straddle and compares it to the stock's historical average actual move over the last 4 earnings. If options are priced at 2× the historical move, the verdict notes 'OPTIONS OVERPRICED — vol selling is favored.' This is an edge most retail platforms don't provide." },
+  { q: 'Why do options contracts sometimes not load?', a: "Options data comes from Tradier's production API. Tradier requires a funded brokerage account for the production endpoint. If options aren't loading, the sandbox (15-min delayed) may be serving as fallback. Options data is always unavailable for crypto and many small-cap stocks with limited open interest." },
+  { q: 'What does max pain mean?', a: "Max pain is the strike price where the most options contracts (by dollar value) would expire worthless. Market makers benefit when price closes near max pain on expiration day. On options expiration Fridays, price often gravitates toward max pain — particularly in smaller, option-heavy stocks. The council notes max pain when it aligns with or contradicts the price target." },
+]
+
+const FAQ_BILLING: FAQItem[] = [
+  { q: 'How much does Consilium cost?', a: "$19/month after the 7-day free trial. The trial includes full access to every feature with no credit card required." },
+  { q: 'Can I cancel anytime?', a: "Yes. You can cancel from the Account Settings page at any time. You'll retain access until the end of your billing period." },
+  { q: 'What happens when my trial ends?', a: "You'll see a Subscribe prompt on next login. Your saved analyses, portfolio positions, and trading history are preserved — you just need to subscribe to run new analyses." },
+  { q: 'Does Consilium store my financial data?', a: "Consilium stores analysis results, portfolio positions you manually enter, and reinvestment trades you log. It does not connect to your brokerage, does not have access to your actual trades, and does not store payment information (Stripe handles payments)." },
+]
+
 export default function GuidePage() {
   const router = useRouter()
-  const [activeTab, setActiveTab] = useState<'guide' | 'faq'>('guide')
-
-  const scrollTo = (id: string) => {
-    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
+  const [tab, setTab] = useState<'guide' | 'faq'>('guide')
 
   return (
     <div className="flex flex-col min-h-screen" style={{ background: '#0a0d12', color: 'white' }}>
-
-      {/* Header */}
       <header className="flex items-center gap-3 px-4 py-3 border-b sticky top-0 z-10"
         style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
         <button onClick={() => router.push('/')}
@@ -299,74 +261,67 @@ export default function GuidePage() {
           <ArrowLeft size={13} /> Back
         </button>
         <div className="w-px h-4" style={{ background: 'rgba(255,255,255,0.1)' }} />
-        <div className="flex items-center gap-2">
-          <BookOpen size={14} style={{ color: '#a78bfa' }} />
-          <span className="text-sm font-bold">Help Center</span>
-        </div>
-
-        {/* Tab switcher */}
-        <div className="ml-auto flex items-center gap-1 p-1 rounded-lg"
-          style={{ background: 'rgba(255,255,255,0.05)' }}>
-          {(['guide', 'faq'] as const).map(tab => (
-            <button key={tab} onClick={() => setActiveTab(tab)}
-              className="px-3 py-1 rounded-md text-xs font-semibold transition-all capitalize"
-              style={{
-                background: activeTab === tab ? 'rgba(167,139,250,0.2)' : 'transparent',
-                color: activeTab === tab ? '#a78bfa' : 'rgba(255,255,255,0.4)',
-              }}>
-              {tab === 'guide' ? '📖 User Guide' : '❓ FAQ'}
-            </button>
-          ))}
-        </div>
+        <BookOpen size={14} style={{ color: '#a78bfa' }} />
+        <span className="text-sm font-bold">User Guide & FAQ</span>
+        <div className="flex-1" />
+        <button onClick={() => router.push('/training')}
+          className="text-xs px-3 py-1 rounded-lg font-semibold transition-all hover:opacity-80"
+          style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)' }}>
+          🎓 Trading Academy →
+        </button>
       </header>
 
+      <div className="flex gap-0 border-b px-4" style={{ borderColor: 'rgba(255,255,255,0.07)', background: '#111620' }}>
+        {(['guide', 'faq'] as const).map(t => (
+          <button key={t} onClick={() => setTab(t)}
+            className="px-4 py-2.5 text-xs font-semibold capitalize border-b-2 transition-all"
+            style={{ color: tab === t ? '#a78bfa' : 'rgba(255,255,255,0.3)', borderColor: tab === t ? '#a78bfa' : 'transparent' }}>
+            {t === 'guide' ? '📖 User Guide' : '❓ FAQ'}
+          </button>
+        ))}
+      </div>
+
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-3xl mx-auto px-4 py-6">
+        <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
 
-          {/* ── USER GUIDE ── */}
-          {activeTab === 'guide' && (
-            <div className="space-y-4">
-              <div className="mb-6">
-                <h1 className="text-2xl font-bold text-white mb-2">User Guide</h1>
-                <p className="text-sm text-white/50">Everything you need to know to get the most out of Consilium.</p>
-              </div>
-
+          {tab === 'guide' && (
+            <>
               {/* Quick nav */}
-              <div className="flex flex-wrap gap-2 mb-6">
+              <div className="flex flex-wrap gap-2">
                 {SECTIONS.map(s => (
-                  <button key={s.id} onClick={() => scrollTo(s.id)}
-                    className="text-[11px] font-mono px-2.5 py-1 rounded-full transition-all hover:opacity-80"
+                  <a key={s.id} href={`#${s.id}`}
+                    className="text-[11px] px-2.5 py-1 rounded-lg transition-all hover:opacity-80"
                     style={{ background: `${s.color}12`, color: s.color, border: `1px solid ${s.color}20` }}>
                     {s.title}
-                  </button>
+                  </a>
                 ))}
               </div>
 
-              {SECTIONS.map(s => <Section key={s.id} section={s} />)}
-
-              <div className="rounded-xl p-4 mt-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
-                <p className="text-xs text-white/30 text-center leading-relaxed">
-                  Consilium is for informational and educational purposes only. Nothing here constitutes financial advice.
-                  Always do your own research and consult a qualified financial professional before making investment decisions.
-                </p>
-              </div>
-            </div>
+              {SECTIONS.map(s => (
+                <div key={s.id} id={s.id} className="rounded-2xl border overflow-hidden"
+                  style={{ borderColor: `${s.color}20`, background: '#111620' }}>
+                  <div className="flex items-center gap-3 px-5 py-4 border-b"
+                    style={{ borderColor: `${s.color}15` }}>
+                    <div className="w-7 h-7 rounded-lg flex items-center justify-center"
+                      style={{ background: `${s.color}15` }}>
+                      <span style={{ color: s.color }}>{s.icon}</span>
+                    </div>
+                    <span className="text-base font-bold text-white">{s.title}</span>
+                  </div>
+                  <div className="px-5 py-5">{s.content}</div>
+                </div>
+              ))}
+            </>
           )}
 
-          {/* ── FAQ ── */}
-          {activeTab === 'faq' && (
+          {tab === 'faq' && (
             <div className="space-y-8">
-              <div className="mb-2">
-                <h1 className="text-2xl font-bold text-white mb-2">Frequently Asked Questions</h1>
-                <p className="text-sm text-white/50">Quick answers to common questions.</p>
-              </div>
-
               {[
                 { title: 'General', icon: <HelpCircle size={14} />, color: '#fbbf24', items: FAQ_GENERAL },
-                { title: 'Technical Indicators', icon: <BarChart2 size={14} />, color: '#a78bfa', items: FAQ_TECHNICAL },
-                { title: 'AI Signals & Verdict', icon: <Zap size={14} />, color: '#34d399', items: FAQ_SIGNALS },
-                { title: 'Options Trading', icon: <TrendingUp size={14} />, color: '#f87171', items: FAQ_OPTIONS },
-                { title: 'Billing & Account', icon: <DollarSign size={14} />, color: '#60a5fa', items: FAQ_BILLING },
+                { title: 'Signals & Indicators', icon: <BarChart2 size={14} />, color: '#a78bfa', items: FAQ_SIGNALS },
+                { title: 'Technical Data', icon: <Activity size={14} />, color: '#60a5fa', items: FAQ_TECHNICAL },
+                { title: 'Options & Derivatives', icon: <TrendingUp size={14} />, color: '#f87171', items: FAQ_OPTIONS },
+                { title: 'Billing & Account', icon: <DollarSign size={14} />, color: '#34d399', items: FAQ_BILLING },
               ].map(group => (
                 <div key={group.title}>
                   <div className="flex items-center gap-2 mb-3">
@@ -376,13 +331,6 @@ export default function GuidePage() {
                   <FAQAccordion items={group.items} />
                 </div>
               ))}
-
-              <div className="rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
-                <p className="text-xs text-white/30 text-center leading-relaxed">
-                  Still have questions? The disclaimer you accepted on signup contains full legal terms.
-                  Consilium does not provide financial advice. All analysis is for educational purposes only.
-                </p>
-              </div>
             </div>
           )}
         </div>
