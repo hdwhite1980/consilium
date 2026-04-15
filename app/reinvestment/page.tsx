@@ -28,18 +28,28 @@ interface TradeSummary extends Trade {
   pnlPct: number | null
 }
 
-interface Idea {
+interface IdeaTier {
+  label: string               // e.g. "Aggressive", "Moderate", "Conservative"
+  tierColor: string           // color for the tier badge
+  strategy: string            // e.g. "Sector rotation", "Partial profit-taking", "Diversification"
+  strategyNote: string        // 1 sentence on WHY this strategy fits their situation
   ticker: string
   isAddToExisting: boolean
   signal: string
   confidence: number
-  rationale: string
+  rationale: string           // 2-3 sentences connecting to their specific gains
   suggestedAmount: number | string
   suggestedShares: string
+  pctOfGains: number          // % of available capital this represents
   risk: 'low' | 'medium' | 'high'
   timeframe: string
   currentPrice: number | null
+  entryNote: string           // e.g. "Buy on a pullback to $X support"
+  stopNote: string            // e.g. "Stop below $X (2× ATR)"
+  targetNote: string          // e.g. "First target $X, full exit $Y"
 }
+
+interface Idea extends IdeaTier {}
 
 interface Insight {
   type: 'success' | 'warning' | 'info'
@@ -550,64 +560,108 @@ function ReinvestmentInner() {
                 </div>
               ) : (
                 <>
-                  {/* Ideas grid */}
-                  <div>
-                    <p className="text-[10px] font-mono uppercase tracking-widest mb-3" style={{ color: txt3 }}>
-                      AI Reinvestment Ideas — based on your gains and current signals
+                  {/* Tiered Ideas */}
+                  <div className="space-y-4">
+                    <p className="text-[10px] font-mono uppercase tracking-widest" style={{ color: txt3 }}>
+                      Council reinvestment strategies — 3 tiers based on your gains
                     </p>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                      {ideas.map((idea, i) => (
-                        <div key={idea.ticker} className="rounded-2xl p-4 space-y-3"
-                          style={{ background: surf, border: i === 0 ? '2px solid rgba(167,139,250,0.4)' : `1px solid ${brd}` }}>
-                          {i === 0 && (
-                            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full"
-                              style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)' }}>
-                              Top pick
-                            </span>
-                          )}
-                          <div className="flex items-start justify-between gap-2">
-                            <div>
-                              <div className="text-lg font-bold font-mono" style={{ color: txt }}>{idea.ticker}</div>
-                              {idea.isAddToExisting && (
-                                <div className="text-[10px]" style={{ color: txt3 }}>Add to existing</div>
-                              )}
-                              {idea.currentPrice != null && (
-                                <div className="text-xs font-mono" style={{ color: txt3 }}>${sf(idea.currentPrice)}</div>
-                              )}
+                    {ideas.map((idea, i) => {
+                      const tierBg: Record<string, string> = {
+                        aggressive: 'rgba(248,113,113,0.06)',
+                        moderate: 'rgba(167,139,250,0.06)',
+                        conservative: 'rgba(52,211,153,0.06)',
+                      }
+                      const tierBorder: Record<string, string> = {
+                        aggressive: 'rgba(248,113,113,0.25)',
+                        moderate: 'rgba(167,139,250,0.25)',
+                        conservative: 'rgba(52,211,153,0.25)',
+                      }
+                      const tierKey = (idea.label ?? '').toLowerCase()
+                      return (
+                        <div key={`${idea.ticker}-${i}`} className="rounded-2xl overflow-hidden"
+                          style={{ border: `1px solid ${tierBorder[tierKey] ?? brd}` }}>
+
+                          {/* Tier header */}
+                          <div className="flex items-center justify-between px-5 py-3"
+                            style={{ background: tierBg[tierKey] ?? surf2, borderBottom: `1px solid ${tierBorder[tierKey] ?? brd}` }}>
+                            <div className="flex items-center gap-3">
+                              <span className="text-xs font-bold px-2.5 py-0.5 rounded-full"
+                                style={{ background: `${idea.tierColor}20`, color: idea.tierColor, border: `1px solid ${idea.tierColor}30` }}>
+                                {idea.label}
+                              </span>
+                              <div>
+                                <span className="text-xs font-semibold" style={{ color: txt }}>{idea.strategy}</span>
+                                <span className="text-xs ml-2" style={{ color: txt3 }}>·</span>
+                                <span className="text-xs ml-2" style={{ color: txt2 }}>{idea.strategyNote}</span>
+                              </div>
                             </div>
-                            <div className="flex flex-col items-end gap-1">
-                              <SigBadge s={idea.signal} />
-                              <span className="text-[9px] font-mono" style={{ color: txt3 }}>{idea.confidence}% confidence</span>
+                            <div className="flex items-center gap-3 shrink-0">
+                              <span className="text-[10px] font-mono" style={{ color: txt3 }}>
+                                {idea.pctOfGains}% of gains
+                              </span>
+                              <span className="text-sm font-bold font-mono" style={{ color: idea.tierColor }}>
+                                {fmt$(idea.suggestedAmount)}
+                              </span>
                             </div>
                           </div>
 
-                          <p className="text-xs leading-relaxed" style={{ color: txt2 }}>{idea.rationale}</p>
-
-                          <div className="grid grid-cols-2 gap-2 pt-1 border-t" style={{ borderColor: brd }}>
-                            {[
-                              ['Suggested', fmt$(idea.suggestedAmount)],
-                              ['~Shares', idea.suggestedShares],
-                              ['Risk', idea.risk],
-                              ['Timeframe', idea.timeframe],
-                            ].map(([k, v]) => (
-                              <div key={k}>
-                                <div className="text-[9px] font-mono uppercase" style={{ color: txt3 }}>{k}</div>
-                                <div className="text-xs font-semibold font-mono"
-                                  style={{ color: k === 'Risk' ? RISK_COLOR[v as string] ?? txt : txt }}>
-                                  {v}
+                          {/* Body */}
+                          <div className="px-5 py-4 space-y-4" style={{ background: surf }}>
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2 mb-1.5">
+                                  <span className="text-lg font-bold font-mono" style={{ color: txt }}>
+                                    {idea.ticker}
+                                    {idea.isAddToExisting && (
+                                      <span className="text-[10px] font-normal ml-1.5" style={{ color: txt3 }}>add to position</span>
+                                    )}
+                                  </span>
+                                  <SigBadge s={idea.signal} />
+                                  <span className="text-[10px] font-mono" style={{ color: txt3 }}>{idea.confidence}% conf.</span>
+                                  {idea.currentPrice != null && (
+                                    <span className="text-xs font-mono" style={{ color: txt2 }}>${sf(idea.currentPrice)}</span>
+                                  )}
+                                </div>
+                                <p className="text-xs leading-relaxed" style={{ color: txt2 }}>{idea.rationale}</p>
+                              </div>
+                              <div className="text-right shrink-0 space-y-1">
+                                <div className="text-[10px] font-mono uppercase" style={{ color: txt3 }}>shares</div>
+                                <div className="text-sm font-bold font-mono" style={{ color: txt }}>{idea.suggestedShares}</div>
+                                <div className="text-[10px] font-mono px-2 py-0.5 rounded-full inline-block"
+                                  style={{ background: `${RISK_COLOR[idea.risk]}15`, color: RISK_COLOR[idea.risk] }}>
+                                  {idea.risk} risk
                                 </div>
                               </div>
-                            ))}
-                          </div>
+                            </div>
 
-                          <button onClick={() => router.push(`/?ticker=${idea.ticker}`)}
-                            className="w-full py-1.5 rounded-lg text-[11px] font-semibold transition-all hover:opacity-80"
-                            style={{ background: 'rgba(167,139,250,0.08)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.15)' }}>
-                            Run full analysis →
-                          </button>
+                            {/* Trade plan strip */}
+                            {(idea.entryNote || idea.stopNote || idea.targetNote) && (
+                              <div className="grid grid-cols-3 gap-3 pt-3 border-t" style={{ borderColor: brd }}>
+                                {[
+                                  { label: 'Entry', val: idea.entryNote, color: '#34d399' },
+                                  { label: 'Stop', val: idea.stopNote, color: '#f87171' },
+                                  { label: 'Target', val: idea.targetNote, color: '#60a5fa' },
+                                ].map(({ label, val, color }) => val ? (
+                                  <div key={label}>
+                                    <div className="text-[9px] font-mono uppercase mb-0.5" style={{ color: txt3 }}>{label}</div>
+                                    <div className="text-[11px] leading-snug" style={{ color }}>{val}</div>
+                                  </div>
+                                ) : null)}
+                              </div>
+                            )}
+
+                            <div className="flex items-center justify-between pt-1">
+                              <span className="text-[10px]" style={{ color: txt3 }}>⏱ {idea.timeframe}</span>
+                              <button onClick={() => router.push(`/?ticker=${idea.ticker}`)}
+                                className="text-[11px] font-semibold px-3 py-1 rounded-lg transition-all hover:opacity-80"
+                                style={{ background: 'rgba(167,139,250,0.08)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.15)' }}>
+                                Full council analysis →
+                              </button>
+                            </div>
+                          </div>
                         </div>
-                      ))}
-                    </div>
+                      )
+                    })}
                   </div>
 
                   {/* Insights */}

@@ -172,46 +172,94 @@ export async function POST(req: NextRequest) {
 
   const msg = await anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
-    max_tokens: 1500,
-    system: `You are the Reinvestment Council for a retail trader. Your job is to give specific, actionable reinvestment advice based on their actual positions and P&L. Always reference their real tickers and numbers. Give 3 ideas. Even when available cash is $0, suggest strategies: partial profit-taking on winners, adding to existing BULLISH positions, or sector rotation out of NEUTRAL/BEARISH positions into stronger names. All suggestedAmount values must be plain integers, no $ signs or commas.`,
+    max_tokens: 1800,
+    system: `You are the Reinvestment Council for a retail trader. Give three reinvestment strategies at different commitment levels: Aggressive (deploy 50%+ of gains into a high-conviction idea), Moderate (deploy 25-40% into a strategic play), and Conservative (deploy 10-20% into a lower-risk option). Each strategy must have a clear REASON (partial profit-taking, sector rotation, diversification, add to winner, hedge, etc.) and a specific entry/stop/target. Reference their actual tickers and P&L numbers. All suggestedAmount and pctOfGains values must be plain numbers.`,
     messages: [{
       role: 'user',
       content: `TRADER'S OPEN POSITIONS:
 ${tradeContext || 'No open trades'}
 
-REALIZED CASH (from closed trades): $${realizedPnL.toFixed(0)}
-UNREALIZED GAINS (paper profits on open trades): $${(unrealizedTotal ?? 0).toFixed(0)}
-AVAILABLE CASH TO DEPLOY: $${(availableCash ?? 0).toFixed(0)}
+REALIZED CASH: $${realizedPnL.toFixed(0)}
+UNREALIZED GAINS: $${(unrealizedTotal ?? 0).toFixed(0)}
+DEPLOYABLE CAPITAL: $${(availableCash ?? 0).toFixed(0)}
 
-NOTE: If available cash is $0, give ideas around: (1) taking partial profits on winning positions to generate cash, (2) adding to existing positions on dips, (3) sector rotation — sell underperformers and rotate into stronger names.
+CANDIDATE TICKERS WITH RECENT COUNCIL SIGNALS:
+${candidateContext || 'No recent analyses found — use broad market ideas'}
 
-CANDIDATE REINVESTMENT TICKERS (sector peers + potential add-to-existing):
-${candidateContext || 'No prior analysis found — suggest SPY, QQQ, or sector leaders'}
-
-Generate 3 reinvestment ideas and 3-4 actionable insights. Return JSON ONLY — no markdown, no backticks:
+Generate EXACTLY 3 ideas: one Aggressive, one Moderate, one Conservative.
+Consider strategies like: partial profit-taking, sector rotation, adding to winners on dips, diversifying into uncorrelated sectors, hedging with defensive names, options strategies when gains are large.
+Return JSON ONLY — no markdown, no backticks:
 {
   "ideas": [
     {
+      "label": "Aggressive",
+      "tierColor": "#f87171",
+      "strategy": "Sector rotation into AI infrastructure",
+      "strategyNote": "One sentence on WHY this strategy fits their specific situation right now",
       "ticker": "AMD",
       "isAddToExisting": false,
       "signal": "BULLISH",
       "confidence": 72,
-      "rationale": "2-3 sentences specifically referencing their trades and why this fits their current exposure and strategy",
-      "suggestedAmount": 2170,
-      "suggestedShares": "~14 shares",
+      "rationale": "2-3 sentences directly referencing their gains and why AMD makes sense given their META/NVDA exposure",
+      "suggestedAmount": 3000,
+      "suggestedShares": "~19 shares at current price",
+      "pctOfGains": 50,
+      "risk": "high",
+      "timeframe": "2-4 weeks",
+      "entryNote": "Buy near $155 support or on pullback from current levels",
+      "stopNote": "Stop $148 — below 50-day SMA, ~4.5% risk",
+      "targetNote": "$168 first target (ATR-based), $178 full exit"
+    },
+    {
+      "label": "Moderate",
+      "tierColor": "#a78bfa",
+      "strategy": "Add to existing winner on dip",
+      "strategyNote": "One sentence why adding to a winner is smarter than chasing new names",
+      "ticker": "META",
+      "isAddToExisting": true,
+      "signal": "BULLISH",
+      "confidence": 65,
+      "rationale": "...",
+      "suggestedAmount": 1500,
+      "suggestedShares": "~2 shares",
+      "pctOfGains": 25,
       "risk": "medium",
-      "timeframe": "2-4 weeks"
+      "timeframe": "3-6 weeks",
+      "entryNote": "Add on any pullback to $650-660 range",
+      "stopNote": "Stop $635 — consolidates your average cost basis risk",
+      "targetNote": "$710 first profit zone"
+    },
+    {
+      "label": "Conservative",
+      "tierColor": "#34d399",
+      "strategy": "Defensive diversification",
+      "strategyNote": "One sentence on why balancing tech gains with a non-correlated position makes sense",
+      "ticker": "SPY",
+      "isAddToExisting": false,
+      "signal": "BULLISH",
+      "confidence": 55,
+      "rationale": "...",
+      "suggestedAmount": 800,
+      "suggestedShares": "~2 shares",
+      "pctOfGains": 13,
+      "risk": "low",
+      "timeframe": "hold long term",
+      "entryNote": "Buy any time — broad market ETF, no timing needed",
+      "stopNote": "No stop — long-term hold",
+      "targetNote": "Park gains safely while staying invested"
     }
   ],
   "insights": [
     {
       "type": "success",
-      "text": "Specific insight referencing their actual tickers and P&L numbers. **Bold** the key tickers and amounts."
+      "text": "Specific insight with **bold** tickers and numbers"
     }
   ],
   "allocation": [
-    { "label": "AMD", "pct": 50, "amount": 2170, "color": "blue" },
-    { "label": "Hold", "pct": 50, "amount": 0, "color": "amber" }
+    { "label": "Aggressive", "pct": 50, "amount": 3000, "color": "red" },
+    { "label": "Moderate", "pct": 25, "amount": 1500, "color": "purple" },
+    { "label": "Conservative", "pct": 13, "amount": 800, "color": "green" },
+    { "label": "Hold", "pct": 12, "amount": 700, "color": "amber" }
   ]
 }`
     }]
@@ -225,14 +273,20 @@ Generate 3 reinvestment ideas and 3-4 actionable insights. Return JSON ONLY — 
     // Enrich ideas with live prices
     for (const idea of (result.ideas ?? [])) {
       if (!idea.ticker) continue
-      const ticker = idea.ticker.replace(':ADD', '')
+      const ticker = String(idea.ticker).replace(':ADD', '')
       if (priceMap[ticker] === undefined) {
         priceMap[ticker] = await getLivePrice(ticker)
       }
       idea.currentPrice = priceMap[ticker] ?? null
-      // Ensure suggestedAmount is a number
+      // Ensure numeric fields are numbers
       if (typeof idea.suggestedAmount === 'string') {
-        idea.suggestedAmount = parseFloat(idea.suggestedAmount.replace(/[^0-9.-]/g, '')) || 0
+        idea.suggestedAmount = parseFloat(String(idea.suggestedAmount).replace(/[^0-9.-]/g, '')) || 0
+      }
+      if (typeof idea.pctOfGains === 'string') {
+        idea.pctOfGains = parseFloat(String(idea.pctOfGains)) || 0
+      }
+      if (typeof idea.confidence === 'string') {
+        idea.confidence = parseInt(String(idea.confidence)) || 50
       }
     }
 
