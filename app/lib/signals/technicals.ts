@@ -94,6 +94,37 @@ export interface TechnicalSignals {
   fibLevels: FibLevel[]
   nearestFibLevel: FibLevel | null
 
+  // ── ATR (Average True Range) ──────────────────────────────
+  atr14: number            // 14-period ATR in dollars
+  atrPct: number           // ATR as % of price
+  atrSignal: 'high_volatility' | 'low_volatility' | 'normal'
+  stopLossATR: number      // 2x ATR below current price (suggested stop)
+  takeProfitATR: number    // 3x ATR above current price (suggested target)
+
+  // ── Rate of Change / Momentum ─────────────────────────────
+  roc10: number            // 10-period ROC %
+  roc20: number            // 20-period ROC %
+  rocSignal: 'accelerating' | 'decelerating' | 'neutral'
+  momentum: number         // raw momentum (close - close[10])
+
+  // ── Relative Strength vs Sector ───────────────────────────
+  relStrengthVsSector: number | null   // % outperformance vs sector ETF
+  relStrengthSignal: 'outperforming' | 'underperforming' | 'inline' | 'unknown'
+
+  // ── Ichimoku Cloud (basic) ────────────────────────────────
+  ichimokuTenkan: number   // 9-period midpoint
+  ichimokuKijun: number    // 26-period midpoint
+  ichimokuSignal: 'above_cloud' | 'below_cloud' | 'in_cloud' | 'unknown'
+  ichimokuCross: 'bullish' | 'bearish' | 'none'  // TK cross
+
+  // ── Williams %R ───────────────────────────────────────────
+  williamsR: number        // -100 to 0; near 0 = overbought, near -100 = oversold
+  williamsSignal: 'overbought' | 'oversold' | 'neutral'
+
+  // ── CCI (Commodity Channel Index) ─────────────────────────
+  cci: number              // >100 overbought, <-100 oversold
+  cciSignal: 'overbought' | 'oversold' | 'neutral'
+
   // ── Overall Score ─────────────────────────────────────────
   technicalScore: number
   technicalBias: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
@@ -105,6 +136,81 @@ export interface FibLevel {
   price: number
   label: string
   type: 'support' | 'resistance'
+}
+
+function calcATR(bars: Bar[], period = 14): number {
+  if (bars.length < period + 1) return 0
+  const trueRanges: number[] = []
+  for (let i = 1; i < bars.length; i++) {
+    const hl = bars[i].h - bars[i].l
+    const hc = Math.abs(bars[i].h - bars[i - 1].c)
+    const lc = Math.abs(bars[i].l - bars[i - 1].c)
+    trueRanges.push(Math.max(hl, hc, lc))
+  }
+  // Wilder's smoothing
+  let atr = trueRanges.slice(0, period).reduce((a, b) => a + b, 0) / period
+  for (let i = period; i < trueRanges.length; i++) {
+    atr = (atr * (period - 1) + trueRanges[i]) / period
+  }
+  return atr
+}
+
+function calcROC(closes: number[], period: number): number {
+  if (closes.length < period + 1) return 0
+  const prev = closes[closes.length - 1 - period]
+  const curr = closes[closes.length - 1]
+  return prev === 0 ? 0 : ((curr - prev) / prev) * 100
+}
+
+function calcWilliamsR(bars: Bar[], period = 14): number {
+  if (bars.length < period) return -50
+  const slice = bars.slice(-period)
+  const high = Math.max(...slice.map(b => b.h))
+  const low = Math.min(...slice.map(b => b.l))
+  const close = bars[bars.length - 1].c
+  return high === low ? -50 : ((high - close) / (high - low)) * -100
+}
+
+function calcCCI(bars: Bar[], period = 20): number {
+  if (bars.length < period) return 0
+  const slice = bars.slice(-period)
+  const typicalPrices = slice.map(b => (b.h + b.l + b.c) / 3)
+  const mean = typicalPrices.reduce((a, b) => a + b, 0) / period
+  const meanDev = typicalPrices.reduce((a, b) => a + Math.abs(b - mean), 0) / period
+  return meanDev === 0 ? 0 : (typicalPrices[typicalPrices.length - 1] - mean) / (0.015 * meanDev)
+}
+
+function calcIchimoku(bars: Bar[]): { tenkan: number; kijun: number; signal: 'above_cloud' | 'below_cloud' | 'in_cloud' | 'unknown'; cross: 'bullish' | 'bearish' | 'none' } {
+  if (bars.length < 52) return { tenkan: 0, kijun: 0, signal: 'unknown', cross: 'none' }
+
+  const midpoint = (b: Bar[], n: number) => {
+    const slice = b.slice(-n)
+    return (Math.max(...slice.map(x => x.h)) + Math.min(...slice.map(x => x.l))) / 2
+  }
+
+  const tenkan = midpoint(bars, 9)
+  const kijun = midpoint(bars, 26)
+
+  // Senkou span A and B (cloud) — shifted 26 periods back in time, so use current calc
+  const senkouA = (tenkan + kijun) / 2
+  const senkouB = midpoint(bars, 52)
+
+  const current = bars[bars.length - 1].c
+  const cloudTop = Math.max(senkouA, senkouB)
+  const cloudBot = Math.min(senkouA, senkouB)
+
+  const signal: 'above_cloud' | 'below_cloud' | 'in_cloud' =
+    current > cloudTop ? 'above_cloud' :
+    current < cloudBot ? 'below_cloud' : 'in_cloud'
+
+  // TK cross (previous vs current)
+  const prevTenkan = bars.length >= 10 ? midpoint(bars.slice(0, -1), 9) : tenkan
+  const prevKijun  = bars.length >= 27 ? midpoint(bars.slice(0, -1), 26) : kijun
+  const cross: 'bullish' | 'bearish' | 'none' =
+    prevTenkan < prevKijun && tenkan > kijun ? 'bullish' :
+    prevTenkan > prevKijun && tenkan < kijun ? 'bearish' : 'none'
+
+  return { tenkan, kijun, signal, cross }
 }
 
 // ── Math Helpers ──────────────────────────────────────────────
@@ -379,6 +485,43 @@ export function calculateTechnicals(bars: Bar[]): TechnicalSignals {
   const { s1, s2, r1, r2 } = calcPivots(bars)
 
   // ── Technical Score (-100 to +100) ───────────────────────
+  // ── ATR ───────────────────────────────────────────────────
+  const atr14 = calcATR(bars, 14)
+  const atrPct = current > 0 ? (atr14 / current) * 100 : 0
+  const atrSignal: 'high_volatility' | 'low_volatility' | 'normal' =
+    atrPct > 3 ? 'high_volatility' : atrPct < 0.8 ? 'low_volatility' : 'normal'
+  const stopLossATR = current - atr14 * 2
+  const takeProfitATR = current + atr14 * 3
+
+  // ── ROC / Momentum ─────────────────────────────────────────
+  const roc10 = calcROC(closes, 10)
+  const roc20 = calcROC(closes, 20)
+  const momentum = closes.length >= 11 ? current - closes[closes.length - 11] : 0
+  const rocSignal: 'accelerating' | 'decelerating' | 'neutral' =
+    roc10 > roc20 + 1 ? 'accelerating' :
+    roc10 < roc20 - 1 ? 'decelerating' : 'neutral'
+
+  // ── Williams %R ───────────────────────────────────────────
+  const williamsR = calcWilliamsR(bars)
+  const williamsSignal: 'overbought' | 'oversold' | 'neutral' =
+    williamsR > -20 ? 'overbought' : williamsR < -80 ? 'oversold' : 'neutral'
+
+  // ── CCI ───────────────────────────────────────────────────
+  const cci = calcCCI(bars)
+  const cciSignal: 'overbought' | 'oversold' | 'neutral' =
+    cci > 100 ? 'overbought' : cci < -100 ? 'oversold' : 'neutral'
+
+  // ── Ichimoku ──────────────────────────────────────────────
+  const ichimoku = calcIchimoku(bars)
+  const ichimokuTenkan = ichimoku.tenkan
+  const ichimokuKijun = ichimoku.kijun
+  const ichimokuSignal = ichimoku.signal
+  const ichimokuCross = ichimoku.cross
+
+  // Relative strength vs sector — placeholder, filled by market-context
+  const relStrengthVsSector: number | null = null
+  const relStrengthSignal: 'outperforming' | 'underperforming' | 'inline' | 'unknown' = 'unknown'
+
   let score = 0
 
   // Trend (35 pts)
@@ -423,6 +566,24 @@ export function calculateTechnicals(bars: Bar[]): TechnicalSignals {
   if (bbPosition > 0.5 && bbPosition < 0.9) score += 2
   else if (bbPosition >= 0.9) score -= 3
 
+  // Williams %R (5 pts)
+  if (williamsSignal === 'oversold') score += 5
+  else if (williamsSignal === 'overbought') score -= 5
+
+  // CCI (5 pts)
+  if (cciSignal === 'oversold') score += 5
+  else if (cciSignal === 'overbought') score -= 5
+
+  // Ichimoku (10 pts)
+  if (ichimokuSignal === 'above_cloud') score += 7
+  else if (ichimokuSignal === 'below_cloud') score -= 7
+  if (ichimokuCross === 'bullish') score += 3
+  else if (ichimokuCross === 'bearish') score -= 3
+
+  // ROC momentum (5 pts)
+  if (rocSignal === 'accelerating') score += 5
+  else if (rocSignal === 'decelerating') score -= 5
+
   score = Math.max(-100, Math.min(100, Math.round(score)))
   const technicalBias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' =
     score > 25 ? 'BULLISH' : score < -25 ? 'BEARISH' : 'NEUTRAL'
@@ -438,6 +599,11 @@ export function calculateTechnicals(bars: Bar[]): TechnicalSignals {
     `MACD: histogram ${macdHist >= 0 ? 'positive' : 'negative'}${macdCrossover !== 'none' ? ' — ' + macdCrossover + ' crossover!' : ''}`,
     `RSI(14): ${rsiVal.toFixed(1)} — ${rsiSignal}`,
     `Stochastic(14,3,3): %K ${stochK.toFixed(1)} / %D ${stochD.toFixed(1)} — ${stochSignal}${stochCrossover !== 'none' ? ', ' + stochCrossover + ' crossover' : ''}`,
+    `Williams %R(14): ${williamsR.toFixed(1)} — ${williamsSignal}`,
+    `CCI(20): ${cci.toFixed(1)} — ${cciSignal}`,
+    `ATR(14): $${atr14.toFixed(2)} (${atrPct.toFixed(1)}% of price) — ${atrSignal} | Suggested stop: $${stopLossATR.toFixed(2)} | Target: $${takeProfitATR.toFixed(2)}`,
+    `ROC: 10-period ${p(roc10)}, 20-period ${p(roc20)} — momentum ${rocSignal}`,
+    `Ichimoku: price is ${ichimokuSignal.replace(/_/g,' ')}${ichimokuCross !== 'none' ? ' — TK ' + ichimokuCross + ' cross!' : ''}`,
     `VWAP: $${vwap.toFixed(2)} — price is ${p(priceVsVwap)} ${vwapSignal} VWAP`,
     `OBV trend: ${obvTrend}${obvDivergence !== 'none' ? ' — ' + obvDivergence + ' divergence detected!' : ''}`,
     `Bollinger: ${bbSignal} band, price at ${(bbPosition * 100).toFixed(0)}% of band`,
@@ -467,6 +633,13 @@ export function calculateTechnicals(bars: Bar[]): TechnicalSignals {
     avgVolume20: avgVol, lastVolume: lastVol, volumeRatio: volRatio, volumeSignal,
     support: s1, resistance: r1, support2: s2, resistance2: r2,
     fibLevels, nearestFibLevel,
+    // New indicators
+    atr14, atrPct, atrSignal, stopLossATR, takeProfitATR,
+    roc10, roc20, rocSignal, momentum,
+    williamsR, williamsSignal,
+    cci, cciSignal,
+    ichimokuTenkan, ichimokuKijun, ichimokuSignal, ichimokuCross,
+    relStrengthVsSector, relStrengthSignal,
     technicalScore: score, technicalBias,
     summary,
   }
@@ -491,6 +664,12 @@ function emptyTechnicals(): TechnicalSignals {
     support: z, resistance: z, support2: z, resistance2: z,
     fibLevels: [], nearestFibLevel: null,
     technicalScore: 0, technicalBias: 'NEUTRAL',
+    atr14: 0, atrPct: 0, atrSignal: 'normal', stopLossATR: 0, takeProfitATR: 0,
+    roc10: 0, roc20: 0, rocSignal: 'neutral', momentum: 0,
+    williamsR: -50, williamsSignal: 'neutral',
+    cci: 0, cciSignal: 'neutral',
+    ichimokuTenkan: 0, ichimokuKijun: 0, ichimokuSignal: 'unknown', ichimokuCross: 'none',
+    relStrengthVsSector: null, relStrengthSignal: 'unknown',
     summary: 'No price data available.',
   }
 }
@@ -537,6 +716,25 @@ export function technicalsToPayload(t: TechnicalSignals, currentPrice: number): 
     priceChange1D: t.priceChange1D,
     fibLevels: t.fibLevels,
     nearestFibLevel: t.nearestFibLevel,
+    atr14: t.atr14,
+    atrPct: t.atrPct,
+    atrSignal: t.atrSignal,
+    stopLossATR: t.stopLossATR,
+    takeProfitATR: t.takeProfitATR,
+    roc10: t.roc10,
+    roc20: t.roc20,
+    rocSignal: t.rocSignal,
+    momentum: t.momentum,
+    williamsR: t.williamsR,
+    williamsSignal: t.williamsSignal,
+    cci: t.cci,
+    cciSignal: t.cciSignal,
+    ichimokuTenkan: t.ichimokuTenkan,
+    ichimokuKijun: t.ichimokuKijun,
+    ichimokuSignal: t.ichimokuSignal,
+    ichimokuCross: t.ichimokuCross,
+    relStrengthVsSector: t.relStrengthVsSector,
+    relStrengthSignal: t.relStrengthSignal,
     currentPrice,
   }
 }

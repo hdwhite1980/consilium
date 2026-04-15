@@ -35,6 +35,11 @@ export interface OptionsFlowSignals {
   shortRatio: number | null        // days to cover
   shortSignal: 'squeeze_candidate' | 'heavily_shorted' | 'normal' | 'low'
 
+  // Gamma Exposure (GEX)
+  gex: number | null               // net gamma exposure in $ millions
+  gexSignal: 'pinning' | 'accelerating' | 'neutral'  // dealer hedging dynamic
+  gexNote: string                  // plain English interpretation
+
   // Summary for AI
   summary: string
 }
@@ -197,6 +202,34 @@ export async function fetchOptionsFlow(ticker: string, currentPrice: number): Pr
     shortPct > 15 ? 'heavily_shorted' :
     shortPct < 3 ? 'low' : 'normal'
 
+  // ── Gamma Exposure (GEX) ───────────────────────────────────
+  // GEX = sum of (call gamma × OI × 100 × price) - (put gamma × OI × 100 × price)
+  // Positive GEX = dealers long gamma = price-pinning effect
+  // Negative GEX = dealers short gamma = price-amplifying effect
+  let gex: number | null = null
+  let gexSignal: OptionsFlowSignals['gexSignal'] = 'neutral'
+  let gexNote = ''
+
+  if (chain?.options?.length) {
+    try {
+      type OC = Record<string, unknown> & { greeks?: Record<string, unknown>; option_type?: string; open_interest?: unknown }
+      let totalGex = 0
+      for (const opt of chain.options as OC[]) {
+        const gamma = Number(opt.greeks?.gamma) || 0
+        const oi = Number(opt.open_interest) || 0
+        const contribution = gamma * oi * 100 * currentPrice
+        totalGex += opt.option_type === 'call' ? contribution : -contribution
+      }
+      gex = totalGex / 1e6 // convert to millions
+      gexSignal = Math.abs(gex) < 50 ? 'neutral' : gex > 0 ? 'pinning' : 'accelerating'
+      gexNote = gex > 100
+        ? `Strong positive GEX ($${gex.toFixed(0)}M) — dealers long gamma, expect price pinning near $${maxPainStrike ?? currentPrice.toFixed(0)}`
+        : gex < -100
+        ? `Strong negative GEX ($${gex.toFixed(0)}M) — dealers short gamma, moves likely to accelerate`
+        : `Neutral GEX ($${gex.toFixed(0)}M) — no strong dealer hedging pressure`
+    } catch { /* non-critical */ }
+  }
+
   // ── Summary ────────────────────────────────────────────────
   const lines = [
     `=== OPTIONS FLOW & SHORT INTEREST ===`,
@@ -208,6 +241,7 @@ export async function fetchOptionsFlow(ticker: string, currentPrice: number): Pr
           `  Call OI: ${totalCallOI.toLocaleString()} | Put OI: ${totalPutOI.toLocaleString()}`,
           maxPainStrike ? `  Max pain strike: $${maxPainStrike} (price gravitates here at expiry)` : '',
           ivSkew !== null ? `  IV skew (put-call): ${(ivSkew*100).toFixed(1)}% — market ${ivSignal}` : '',
+          gexNote ? `  GEX: ${gexNote}` : '',
           unusualActivity.length > 0
             ? [`  Unusual sweeps detected:`,
                ...unusualActivity.slice(0, 3).map(u =>
@@ -238,6 +272,7 @@ export async function fetchOptionsFlow(ticker: string, currentPrice: number): Pr
     shortInterestPct: shortPct,
     shortRatio,
     shortSignal,
+    gex, gexSignal, gexNote,
     summary: lines.join('\n'),
   }
 }

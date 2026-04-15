@@ -187,6 +187,10 @@ export async function buildMarketContext(ticker: string, timeframe: string): Pro
 
   const { regime, summary: regimeSummary } = detectRegime(spy, vix)
 
+  // Relative strength: stock period change vs sector period change
+  // This is computed in aggregator after we have both technicals and market context
+  const stockPeriodChange = 0 // placeholder — filled in aggregator
+
   // Build text summary for AI
   const pct = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
   const lines = [
@@ -200,6 +204,7 @@ export async function buildMarketContext(ticker: string, timeframe: string): Pro
     ``,
     `Sector (${sectorInfo.name} — ${sectorInfo.etf}):`,
     `  ${pct(sector.changePeriod)} period, RSI ${sector.rsi.toFixed(0)}, trend ${sector.trend}`,
+    `  Relative strength vs sector will be computed once stock data is available.`,
     ``,
     `Competitors:`,
     ...competitors.map(c => `  ${c.ticker}: ${pct(c.change1D)} today / ${pct(c.changePeriod)} period`),

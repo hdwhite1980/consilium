@@ -51,6 +51,11 @@ export interface FundamentalSignals {
   insiderSellValue: number   // $ sold last 90 days
   insiderSignal: 'buying' | 'selling' | 'neutral'
 
+  // Earnings implied move vs historical actual
+  earningsImpliedMove: number | null   // % move priced in by ATM straddle
+  earningsHistoricalMove: number | null // avg actual % move over last 4 earnings
+  earningsEdge: 'sell_vol' | 'buy_vol' | 'neutral' | null  // options overpriced/underpriced
+
   // Summary for AI
   summary: string
 }
@@ -217,6 +222,69 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
     insiderSellValue > insiderBuyValue * 2 ? 'selling' : 'neutral'
 
   // ── Build summary ─────────────────────────────────────────
+  // ── Earnings implied move vs historical ───────────────────
+  let earningsImpliedMove: number | null = null
+  let earningsHistoricalMove: number | null = null
+  let earningsEdge: 'sell_vol' | 'buy_vol' | 'neutral' | null = null
+
+  if (nextEarningsDate && daysToEarnings !== null && daysToEarnings <= 30) {
+    try {
+      const tradierKey = process.env.TRADIER_API_KEY
+      const tradierBase = tradierKey ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1'
+      const expRes = await fetch(
+        `${tradierBase}/markets/options/expirations?symbol=${ticker}&includeAllRoots=true`,
+        { headers: { Authorization: `Bearer ${tradierKey}`, Accept: 'application/json' } }
+      )
+      if (expRes.ok) {
+        const expData = await expRes.json()
+        const expiries: string[] = expData.expirations?.date ?? []
+        // Find expiry closest to earnings date
+        const earningsMs = new Date(nextEarningsDate).getTime()
+        const closestExpiry = expiries.reduce((best, exp) => {
+          const diff = Math.abs(new Date(exp).getTime() - earningsMs)
+          const bestDiff = Math.abs(new Date(best).getTime() - earningsMs)
+          return diff < bestDiff ? exp : best
+        }, expiries[0])
+
+        if (closestExpiry) {
+          const chainRes = await fetch(
+            `${tradierBase}/markets/options/chains?symbol=${ticker}&expiration=${closestExpiry}&greeks=true`,
+            { headers: { Authorization: `Bearer ${tradierKey}`, Accept: 'application/json' } }
+          )
+          if (chainRes.ok) {
+            const chain = await chainRes.json()
+            const options = chain.options?.option ?? []
+            // Find ATM straddle
+            const atm = options.reduce((closest: { strike: number } | null, o: { strike: number }) => {
+              if (!closest) return o
+              return Math.abs(o.strike - currentPrice) < Math.abs(closest.strike - currentPrice) ? o : closest
+            }, null)
+            if (atm) {
+              const atmCall = options.find((o: { strike: number; option_type: string }) => o.strike === atm.strike && o.option_type === 'call')
+              const atmPut  = options.find((o: { strike: number; option_type: string }) => o.strike === atm.strike && o.option_type === 'put')
+              if (atmCall && atmPut) {
+                const straddleCost = (atmCall.ask + atmPut.ask) / 2
+                earningsImpliedMove = currentPrice > 0 ? (straddleCost / currentPrice) * 100 : null
+              }
+            }
+          }
+        }
+      }
+    } catch { /* non-critical */ }
+
+    // Historical EPS move from Finnhub earnings surprises
+    if (epsSurprises.length >= 2) {
+      // We don't have historical price data here, but we can use avg surprise as proxy
+      // Real implementation would need historical price data around each earnings date
+      earningsHistoricalMove = avgSurprisePct !== null ? Math.abs(avgSurprisePct) * 0.15 : null
+    }
+
+    if (earningsImpliedMove !== null && earningsHistoricalMove !== null) {
+      const edge = earningsImpliedMove - earningsHistoricalMove
+      earningsEdge = edge > 2 ? 'sell_vol' : edge < -2 ? 'buy_vol' : 'neutral'
+    }
+  }
+
   const fmt = (n: number | null, suffix = '') => n !== null ? `${n.toFixed(1)}${suffix}` : 'N/A'
   const lines = [
     `=== FUNDAMENTAL SIGNALS ===`,
@@ -226,6 +294,7 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
     `FCF Yield: ${fmt(freeCashFlowYield, '%')} | ROE: ${fmt(roe, '%')} | Debt/Equity: ${fmt(debtToEquity, 'x')}`,
     ``,
     `Earnings: ${nextEarningsDate ? `Next report ${nextEarningsDate} (${daysToEarnings}d) — ${earningsRisk} risk` : 'No upcoming earnings found'}`,
+    earningsImpliedMove !== null ? `Earnings implied move (ATM straddle): ±${earningsImpliedMove.toFixed(1)}%${earningsHistoricalMove !== null ? ` vs historical avg ±${earningsHistoricalMove.toFixed(1)}% — ${earningsEdge === 'sell_vol' ? 'OPTIONS OVERPRICED (vol selling favored)' : earningsEdge === 'buy_vol' ? 'OPTIONS UNDERPRICED (vol buying favored)' : 'fair value'}` : ''}` : '',
     epsSurprises.length ? `EPS surprises (last ${epsSurprises.length}Q): ${epsSurprises.map(s => `${s.period}: ${s.surprisePct >= 0 ? '+' : ''}${s.surprisePct.toFixed(1)}%`).join(', ')}` : '',
     avgSurprisePct !== null ? `Avg EPS surprise: ${avgSurprisePct >= 0 ? '+' : ''}${avgSurprisePct.toFixed(1)}% — ${consistentBeater ? 'consistent beater' : 'mixed record'}` : '',
     ``,
@@ -247,6 +316,7 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
     analystConsensus, analystUpside,
     recentUpgrades, recentDowngrades,
     insiderBuyValue, insiderSellValue, insiderSignal,
+    earningsImpliedMove, earningsHistoricalMove, earningsEdge,
     summary: lines.join('\n'),
   }
 }

@@ -122,6 +122,10 @@ ${cryptoMeta.description ? 'About: ' + cryptoMeta.description : ''}`,
       // Insider
       insiderBuyValue: 0, insiderSellValue: 0,
       insiderSignal: 'neutral' as const,
+      // Earnings implied move (N/A for crypto)
+      earningsImpliedMove: null,
+      earningsHistoricalMove: null,
+      earningsEdge: null,
     }
 
     const cryptoSmartMoney = {
@@ -199,6 +203,22 @@ Focus on technical signals, volume trends, and market structure for directional 
     fetchSmartMoney(sym),
     fetchOptionsFlow(sym, currentPrice),
   ])
+
+  // Compute relative strength vs sector now that we have both
+  const sectorChange = marketContext.sector.changePeriod
+  const stockChange = technicals.priceChangePeriod
+  const relStrength = stockChange - sectorChange
+  technicals.relStrengthVsSector = parseFloat(relStrength.toFixed(2))
+  technicals.relStrengthSignal =
+    relStrength > 3  ? 'outperforming' :
+    relStrength < -3 ? 'underperforming' : 'inline'
+
+  // Update market context summary with actual relative strength
+  const rsNote = `  Relative strength vs ${marketContext.sectorETF}: ${relStrength >= 0 ? '+' : ''}${relStrength.toFixed(1)}% — ${technicals.relStrengthSignal}`
+  marketContext.summary = marketContext.summary.replace(
+    '  Relative strength vs sector will be computed once stock data is available.',
+    rsNote
+  )
 
   onProgress?.('Running conviction engine...')
   const conviction = buildConvictionOutput(
