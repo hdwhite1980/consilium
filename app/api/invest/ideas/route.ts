@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/app/lib/auth/server'
 import Anthropic from '@anthropic-ai/sdk'
+import { getVolumeMoversEnhanced } from '@/app/lib/data/screener'
 
 const STAGE_CONFIG = [
   { name: 'Spark',   min: 0,      max: 10,     maxPositions: 2, stopPct: '20–30%', targetPct: '40–80%', strategy: 'momentum and volume spike plays on micro-cap stocks' },
@@ -133,6 +134,18 @@ export async function POST(req: NextRequest) {
     candidateTickers.push(...tickers.slice(0, 4))
   }
 
+  // ── Step 1: Get real volume movers in the price range ────────
+  // These are actual stocks moving TODAY with real volume data
+  const realMovers = await getVolumeMoversEnhanced(minPrice, maxPrice, 10)
+
+  // Format movers for AI context
+  const moversContext = realMovers.length > 0
+    ? `TODAY'S REAL VOLUME MOVERS in the $${minPrice.toFixed(2)}–$${maxPrice.toFixed(2)} range (from Alpaca screener):\n` +
+      realMovers.map(m =>
+        `${m.ticker}: $${m.price.toFixed(2)}, ${m.changePercent >= 0 ? '+' : ''}${m.changePercent.toFixed(1)}% today, volume moving`
+      ).join('\n')
+    : `No screener data available — use your knowledge of current $${minPrice.toFixed(2)}–$${maxPrice.toFixed(2)} stocks`
+
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
   const msg = await anthropic.messages.create({
@@ -152,21 +165,24 @@ Per-position budget: ~$${(deployable / stage.maxPositions).toFixed(2)}
 Strategy: ${stage.strategy}
 Stop range: ${stage.stopPct} | Target range: ${stage.targetPct}
 
+${moversContext}
+
 TODAY'S SECTOR PERFORMANCE:
 ${sectorContext || 'Sector data unavailable — use broad market context'}
 
 STRONGEST SECTORS TODAY: ${allTopNames.slice(0, 3).join(', ')}
 BULLISH SECTORS: ${bullishSectors.map(s => s.name).join(', ') || 'None — market is mixed/bearish'}
 
-CANDIDATE TICKERS in the $${minPrice.toFixed(2)}–$${maxPrice.toFixed(2)} price range:
-Sector candidates: ${candidateTickers.slice(0, 15).join(', ')}
-Price-tier candidates: ${priceTierTickers.join(', ')}
+BACKUP CANDIDATE TICKERS (only use if real movers list is empty):
+${candidateTickers.slice(0, 10).join(', ')}, ${priceTierTickers.slice(0, 8).join(', ')}
 
-Generate EXACTLY 5 stock ideas — spread across today's strongest sectors. Each must:
-1. Trade between $${minPrice.toFixed(2)} and $${maxPrice.toFixed(2)}
-2. Come from one of today's better-performing sectors
-3. Have a specific catalyst RIGHT NOW
-4. Suggest ~${targetShares} shares sized to their ~$${(deployable / stage.maxPositions).toFixed(2)} per-position budget
+INSTRUCTION: Use the REAL VOLUME MOVERS above as your primary source — these are confirmed to be trading in range TODAY. For each, explain the technical setup and why the sector conditions support it. Only use backup candidates if the movers list is empty.
+
+Generate EXACTLY 5 stock ideas. Each must:
+1. Trade between $${minPrice.toFixed(2)} and $${maxPrice.toFixed(2)} — prefer stocks from the real movers list
+2. Come from a top-performing sector where possible
+3. Have a specific catalyst or technical reason RIGHT NOW
+4. Suggest ~${targetShares} shares for ~$${(deployable / stage.maxPositions).toFixed(2)} per-position budget
 
 Return JSON ONLY — no markdown, no backticks:
 {

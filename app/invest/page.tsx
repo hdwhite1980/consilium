@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { ArrowLeft, Plus, X, TrendingUp, TrendingDown, Flame, Zap, Target, RefreshCw, CheckCircle, Trophy } from 'lucide-react'
+import { Tutorial, TutorialLauncher, INVEST_TUTORIAL } from '@/app/components/Tutorial'
 
 // ── Milestone config ──────────────────────────────────────────
 const MILESTONES = [
@@ -276,8 +277,10 @@ function StartScreen({ onStart }: { onStart: (balance: number) => void }) {
           Start my journey 🔥
         </button>
 
-        <p className="text-xs" style={{ color: txt2 }}>
-          High-risk investments. Only invest what you can afford to lose entirely.
+        <p className="text-xs text-center" style={{ color: txt2 }}>
+          $1–$5 stocks are high-risk and speculative. Most people lose money on them.
+          The journey framework teaches discipline — it does not guarantee returns.
+          Only invest what you can afford to lose entirely.
         </p>
       </div>
     </div>
@@ -380,6 +383,7 @@ function InvestInner() {
   const [journey, setJourney] = useState<Journey | null>(null)
   const [loading, setLoading] = useState(true)
   const [ideas, setIdeas] = useState<Idea[]>([])
+  const [riskDismissed, setRiskDismissed] = useState(false)
   const [journeyNote, setJourneyNote] = useState('')
   const [stageAdvice, setStageAdvice] = useState('')
   const [marketContext, setMarketContext] = useState('')
@@ -391,6 +395,7 @@ function InvestInner() {
   const [showFirstWin, setShowFirstWin] = useState(false)
   const [firstWinAmount, setFirstWinAmount] = useState(0)
   const [tab, setTab] = useState<'ideas' | 'trades' | 'history'>('ideas')
+  const [showTutorial, setShowTutorial] = useState(false)
   const [priceUpdatedAt, setPriceUpdatedAt] = useState<Date | null>(null)
   const isDark = useDarkMode()
 
@@ -438,6 +443,28 @@ function InvestInner() {
   }, [])
 
   useEffect(() => { loadData() }, [loadData])
+
+  // Auto-start tutorial on first visit
+  useEffect(() => {
+    fetch('/api/tutorial?id=invest')
+      .then(r => r.json())
+      .then(({ progress }) => {
+        if (!progress || (!progress.completed && !progress.skipped)) setShowTutorial(true)
+      }).catch(() => {})
+  }, [])
+
+  // Relaunch on custom event
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { tutorialId } = (e as CustomEvent).detail
+      if (tutorialId === 'invest') {
+        setShowTutorial(false)
+        setTimeout(() => setShowTutorial(true), 0)
+      }
+    }
+    window.addEventListener('consilium:launch_tutorial', handler)
+    return () => window.removeEventListener('consilium:launch_tutorial', handler)
+  }, [])
 
   // Auto-refresh prices every 5 min during market hours
   useEffect(() => {
@@ -536,6 +563,11 @@ function InvestInner() {
 
   return (
     <div className="flex flex-col min-h-screen" style={{ background: 'var(--bg)', color: txt }}>
+      {showTutorial && (
+        <Tutorial config={INVEST_TUTORIAL} autoStart
+          onComplete={() => setShowTutorial(false)}
+          onSkip={() => setShowTutorial(false)} />
+      )}
       {showFirstWin && <FirstWin amount={firstWinAmount} onDismiss={() => setShowFirstWin(false)} />}
       {showLog && <LogModal onSave={logTrade} onClose={() => { setShowLog(false); setPrefill(undefined) }} prefill={prefill} />}
       {closeTarget && <CloseModal trade={closeTarget} onClose={() => setCloseTarget(null)} onSave={closeTrade} />}
@@ -554,6 +586,7 @@ function InvestInner() {
           style={{ background: 'rgba(249,115,22,0.1)', color: '#f97316', border: '1px solid rgba(249,115,22,0.2)' }}>
           <Plus size={11} /> Log trade
         </button>
+        <TutorialLauncher tutorialId="invest" label="How it works" />
       </header>
 
       {/* Tabs */}
@@ -625,12 +658,25 @@ function InvestInner() {
           {/* IDEAS tab */}
           {tab === 'ideas' && (
             <div className="space-y-4">
+              {/* Risk disclosure — always visible on ideas tab */}
+              {!riskDismissed && (
+                <div className="flex items-start gap-3 px-4 py-3 rounded-xl"
+                  style={{ background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)' }}>
+                  <span style={{ color: '#fbbf24', fontSize: 14, flexShrink: 0, marginTop: 1 }}>⚠</span>
+                  <div className="flex-1">
+                    <p className="text-xs leading-relaxed" style={{ color: 'rgba(251,191,36,0.9)' }}>
+                      <span className="font-semibold">High-risk investments.</span> Stocks priced $1–$5 are speculative — most people lose money on them. The stage system teaches discipline and position sizing, not guaranteed returns. Only invest what you can afford to lose entirely. Picks are AI-generated and may be wrong.
+                    </p>
+                  </div>
+                  <button onClick={() => setRiskDismissed(true)} className="text-[10px] shrink-0 hover:opacity-70" style={{ color: 'rgba(251,191,36,0.5)' }}>Dismiss</button>
+                </div>
+              )}
               {ideas.length === 0 ? (
                 <div className="rounded-2xl p-8 text-center" style={{ background: surf, border: `1px solid ${brd}` }}>
                   <div className="text-3xl mb-3">⚡</div>
-                  <p className="text-sm font-semibold mb-1" style={{ color: txt }}>Get stage-matched picks from today's best sectors</p>
+                  <p className="text-sm font-semibold mb-1" style={{ color: txt }}>Get today's real volume movers</p>
                   <p className="text-xs mb-5" style={{ color: txt3 }}>
-                    The council pulls live sector performance data and finds 5 stocks in the $1–$5 range from today's strongest sectors — sized to your exact balance.
+                    The council pulls actual stocks moving today from the Alpaca volume screener — filtered to your price range — then adds sector context and a trade plan. Real data, not guesses.
                   </p>
                   <button onClick={loadIdeas} disabled={loadingIdeas}
                     className="flex items-center gap-2 mx-auto px-6 py-3 rounded-xl text-sm font-bold text-white disabled:opacity-50"
