@@ -89,7 +89,7 @@ interface JudgeResult {
   scenarios: Scenario[]; invalidationTrigger: string; rounds: number
   entryPrice: string; stopLoss: string; takeProfit: string; timeHorizon: string
   plainEnglish: string; technicalsExplained: string
-  fundamentalsExplained: string; smartMoneyExplained: string; actionPlan: string
+  fundamentalsExplained: string; smartMoneyExplained: string; actionPlan: string; optionsStrategy?: string
 }
 
 const SIG_COLOR: Record<Signal, string> = { BULLISH: '#34d399', BEARISH: '#f87171', NEUTRAL: '#fbbf24' }
@@ -436,9 +436,11 @@ function HomeInner() {
             style={{ background: stage === 'done' ? '#34d399' : stage === 'error' ? '#f87171' : running ? '#fbbf24' : '#ffffff18' }} />
           {userEmail && (
             <div className="flex items-center gap-2 pl-2 border-l" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-              <span className="text-[10px] font-mono text-white/25 hidden sm:block max-w-[120px] truncate">
+              <button onClick={() => router.push('/settings')}
+                className="text-[10px] font-mono text-white/25 hidden sm:block max-w-[120px] truncate hover:text-white/50 transition-colors"
+                title="Account settings">
                 {userEmail}
-              </span>
+              </button>
               {subStatus?.status !== 'exempt' && subStatus?.status === 'trialing' && subStatus.daysLeft !== null && (
                 <button onClick={async () => {
                   const res = await fetch('/api/stripe/checkout', { method: 'POST' })
@@ -907,6 +909,14 @@ function HomeInner() {
                   <div className="rounded-xl p-4 mt-3" style={{ background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)' }}>
                     <div className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: '#fbbf24' }}>Action plan — what to do next</div>
                     <p className="text-sm text-white/75 leading-relaxed">{jud.actionPlan}</p>
+                  </div>
+                )}
+
+                {/* Council options view */}
+                {jud.optionsStrategy && (
+                  <div className="rounded-xl p-4 mt-3" style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.18)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: '#a78bfa' }}>⚖ Council options view</div>
+                    <p className="text-sm text-white/70 leading-relaxed">{jud.optionsStrategy}</p>
                   </div>
                 )}
               </div>

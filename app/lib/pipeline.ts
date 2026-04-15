@@ -66,6 +66,7 @@ export interface JudgeResult {
   fundamentalsExplained: string
   smartMoneyExplained: string
   actionPlan: string
+  optionsStrategy?: string
 }
 
 export interface PipelineResult {
@@ -144,6 +145,8 @@ ${bundle.aiContext.fundamentalsSection}
 
 ${bundle.aiContext.smartMoneySection}
 
+${bundle.aiContext.optionsSection}
+
 ${bundle.aiContext.convictionSection}
 
 JSON ONLY:
@@ -207,6 +210,9 @@ DEVIL'S ADVOCATE (${gpt.signal}, ${gpt.confidence}%, ${gpt.agrees ? 'AGREES' : '
 Challenges: ${gpt.challenges.join('; ')}
 Counter: ${gpt.strongestCounterArgument}
 
+OPTIONS FLOW:
+${bundle.aiContext.optionsSection}
+
 CONVICTION ENGINE:
 ${bundle.aiContext.convictionSection}
 
@@ -234,7 +240,8 @@ JSON ONLY — include ALL fields below:
   "technicalsExplained": "Explain what the technical signals mean in plain English. What is the RSI telling us? What does the death cross or golden cross mean? What does price vs moving averages tell us? 3-4 sentences a beginner would understand.",
   "fundamentalsExplained": "Explain what the fundamental signals mean in plain English. What do the analyst ratings mean? What does earnings date mean for the stock? What does insider buying or selling tell us? 3-4 sentences a beginner would understand.",
   "smartMoneyExplained": "Explain what the smart money signals mean in plain English. What does it mean when insiders buy or sell? What does congressional trading tell us? What does options flow and short interest mean? 3-4 sentences a beginner would understand.",
-  "actionPlan": "Give a clear, specific, step-by-step action plan in plain English. What should someone actually DO — buy, sell, wait, set an alert? Be specific about price levels. 4-5 sentences."
+  "actionPlan": "Give a clear, specific, step-by-step action plan in plain English. What should someone actually DO — buy, sell, wait, set an alert? Be specific about price levels. 4-5 sentences.",
+  "optionsStrategy": "Based on the verdict, options flow, and IV conditions — what is the single best options approach for this stock right now? One paragraph. Cover whether to buy or sell options, whether IV is favorable, what type of strategy fits (buying calls/puts, spreads, selling premium), and why. Write it for someone who understands options basics but is not an expert."
 }`
     }]
   })
