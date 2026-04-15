@@ -232,30 +232,48 @@ export default function OptionsRecommendations({
             </div>
           )}
 
-          {/* Live contracts */}
-          {data.hasLiveData && data.contracts.length > 0 && (
+          {/* Live contracts — only show when we have Greeks for responsible display */}
+          {data.hasLiveData && data.contracts.length > 0 && data.dataSource === 'Tradier' && (
             <div>
               <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2 flex items-center gap-2">
-                <span>Recommended contracts</span>
-                {data.dataSource && (
-                  <span className="px-1.5 py-0.5 rounded text-[9px]"
-                    style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399' }}>
-                    via {data.dataSource}
-                  </span>
-                )}
+                <span>Example contracts matching this strategy</span>
+                <span className="px-1.5 py-0.5 rounded text-[9px]"
+                  style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399' }}>
+                  live via Tradier
+                </span>
               </div>
               <div className="space-y-2">
                 {data.contracts.map((c, i) => <ContractCard key={i} c={c} />)}
               </div>
               <p className="text-[10px] text-white/20 mt-2 leading-relaxed">
-                Prices are live bid/ask from Tradier. One contract = 100 shares. Cost per contract = (ask price × 100).
+                One contract = 100 shares. Cost = ask price × 100. Always verify current prices with your broker before trading.
+              </p>
+            </div>
+          )}
+
+          {/* Yahoo data — show strikes for reference but clearly label as incomplete */}
+          {data.hasLiveData && data.contracts.length > 0 && data.dataSource === 'Yahoo Finance' && (
+            <div>
+              <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2 flex items-center gap-2">
+                <span>Nearby strikes for reference</span>
+                <span className="px-1.5 py-0.5 rounded text-[9px]"
+                  style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>
+                  delayed · no Greeks
+                </span>
+              </div>
+              <div className="space-y-2">
+                {data.contracts.map((c, i) => <ContractCard key={i} c={c} />)}
+              </div>
+              <p className="text-[10px] mt-2 leading-relaxed"
+                style={{ color: 'rgba(251,191,36,0.5)' }}>
+                ⚠ Greeks (delta, theta) unavailable. These strikes are shown for reference only — verify current pricing and risk with your broker before trading.
               </p>
             </div>
           )}
 
           {!data.hasLiveData && (
             <div className="text-[10px] text-white/25 px-1 leading-relaxed">
-              Live options chain data is currently unavailable for this ticker. The AI strategy recommendation above is still valid.
+              Live options chain data is currently unavailable for this ticker. The strategy guidance above is still valid.
             </div>
           )}
 

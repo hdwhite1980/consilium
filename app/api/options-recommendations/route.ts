@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 
-const TRADIER_BASE = process.env.TRADIER_API_KEY
+// Evaluated at request time so env vars are always fresh
+const TRADIER_KEY = () => process.env.TRADIER_API_KEY || ''
+const TRADIER_BASE = () => TRADIER_KEY()
   ? 'https://api.tradier.com/v1'
   : 'https://sandbox.tradier.com/v1'
-
-const TRADIER_KEY = () => process.env.TRADIER_API_KEY || ''
 
 export interface OptionsContract {
   symbol: string
@@ -42,15 +42,23 @@ export interface OptionsRecommendation {
 
 async function fetchExpirations(ticker: string): Promise<string[]> {
   try {
-    const res = await fetch(
-      `${TRADIER_BASE}/markets/options/expirations?symbol=${ticker}&includeAllRoots=true`,
+    const url = `${TRADIER_BASE()}/markets/options/expirations?symbol=${ticker}&includeAllRoots=true`
+    console.log('Tradier expirations URL:', url, 'key present:', !!TRADIER_KEY())
+    const res = await fetch(url,
       { headers: { 'Authorization': `Bearer ${TRADIER_KEY()}`, 'Accept': 'application/json' } }
     )
-    if (!res.ok) return []
+    if (!res.ok) {
+      console.error('Tradier expirations error:', res.status, await res.text())
+      return []
+    }
     const data = await res.json()
+    console.log('Tradier expirations response:', JSON.stringify(data).slice(0, 200))
     const dates = data?.expirations?.date ?? []
     return Array.isArray(dates) ? dates : [dates]
-  } catch { return [] }
+  } catch (e) {
+    console.error('Tradier expirations exception:', e)
+    return []
+  }
 }
 
 // Yahoo Finance fallback — no API key needed
@@ -105,7 +113,7 @@ async function fetchYahooOptions(ticker: string, currentPrice: number): Promise<
 async function fetchChain(ticker: string, expiry: string): Promise<OptionsContract[]> {
   try {
     const res = await fetch(
-      `${TRADIER_BASE}/markets/options/chains?symbol=${ticker}&expiration=${expiry}&greeks=true`,
+      `${TRADIER_BASE()}/markets/options/chains?symbol=${ticker}&expiration=${expiry}&greeks=true`,
       { headers: { 'Authorization': `Bearer ${TRADIER_KEY()}`, 'Accept': 'application/json' } }
     )
     if (!res.ok) return []
