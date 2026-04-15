@@ -6,6 +6,7 @@ import { createClient } from '@/app/lib/auth/client'
 import TechnicalCharts from '@/app/components/TechnicalCharts'
 import OptionsRecommendations from '@/app/components/OptionsRecommendations'
 import { useTheme } from '@/app/lib/theme'
+import { Tutorial, TutorialLauncher, MAIN_TUTORIAL } from '@/app/components/Tutorial'
 import {
   TrendingUp, TrendingDown, Minus, Clock, AlertTriangle,
   BarChart2, Globe, DollarSign, Activity, Shield, Zap, LogOut, BookOpen,
@@ -132,11 +133,11 @@ function SBadge({ s, sm }: { s: Signal; sm?: boolean }) {
 function Bar2({ val, color, label }: { val: number; color: string; label?: string }) {
   return (
     <div className="flex items-center gap-2 mt-1.5">
-      {label && <span className="text-[10px] font-mono text-white/30 w-14 shrink-0">{label}</span>}
-      <div className="flex-1 h-1 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.07)' }}>
+      {label && <span className="text-[10px] font-mono w-14 shrink-0" style={{ color: 'var(--text3)' }}>{label}</span>}
+      <div className="flex-1 h-1 rounded-full overflow-hidden" style={{ background: 'var(--surface3)' }}>
         <div className="h-full rounded-full transition-all duration-1000" style={{ width: `${Math.min(val, 100)}%`, background: color }} />
       </div>
-      <span className="text-[10px] font-mono text-white/40 w-7 text-right">{val}%</span>
+      <span className="text-[10px] font-mono w-7 text-right" style={{ color: 'var(--text3)' }}>{val}%</span>
     </div>
   )
 }
@@ -184,7 +185,7 @@ function Think({ label, color }: { label: string; color: string }) {
           <span key={i} className="w-1.5 h-1.5 rounded-full thinking-dot" style={{ background: color, animationDelay: `${i * 0.15}s` }} />
         ))}
       </div>
-      <span className="text-xs font-mono text-white/25">{label} is thinking…</span>
+      <span className="text-xs font-mono" style={{ color: 'var(--text3)' }}>{label} is thinking…</span>
     </div>
   )
 }
@@ -198,17 +199,20 @@ function Collapsible({
   const [open, setOpen] = useState(defaultOpen)
   return (
     <div className="rounded-xl border overflow-hidden"
-      style={{ borderColor: open ? `${color}30` : 'rgba(255,255,255,0.07)', background: '#111620' }}>
+      style={{ borderColor: open ? `${color}30` : 'var(--border)', background: 'var(--surface)' }}>
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-2.5 px-4 py-3 text-left transition-all hover:bg-white/[0.02]">
+        className="w-full flex items-center gap-2.5 px-4 py-3 text-left transition-all"
+        style={{ ['--tw-bg-opacity' as string]: '1' }}
+        onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface2)')}
+        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
         <span style={{ color }}>{icon}</span>
-        <span className="text-sm font-semibold text-white flex-1">{title}</span>
+        <span className="text-sm font-semibold flex-1" style={{ color: 'var(--text)' }}>{title}</span>
         {badge}
-        <span className="text-white/25 text-xs ml-auto">{open ? '▲' : '▼'}</span>
+        <span className="text-xs ml-auto" style={{ color: 'var(--text3)' }}>{open ? '▲' : '▼'}</span>
       </button>
       {open && (
-        <div className="px-4 pb-4 pt-1 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+        <div className="px-4 pb-4 pt-1 border-t" style={{ borderColor: 'var(--border)' }}>
           {children}
         </div>
       )}
@@ -239,6 +243,8 @@ function HomeInner() {
   const [subStatus, setSubStatus] = useState<{ status: string; daysLeft: number | null } | null>(null)
   const { theme, toggle: toggleTheme } = useTheme()
   const [navOpen, setNavOpen] = useState(false)
+  const [showTutorial, setShowTutorial] = useState(false)
+  const [tutorialChecked, setTutorialChecked] = useState(false)
 
   useEffect(() => {
     const supabase = createClient()
@@ -263,6 +269,21 @@ function HomeInner() {
       }
     })
   }, [])
+
+  // Auto-start tutorial on first visit
+  useEffect(() => {
+    if (tutorialChecked) return
+    fetch('/api/tutorial?id=main')
+      .then(r => r.json())
+      .then(({ progress }) => {
+        setTutorialChecked(true)
+        // Show if never started or not completed/skipped
+        if (!progress || (!progress.completed && !progress.skipped)) {
+          setShowTutorial(true)
+        }
+      })
+      .catch(() => setTutorialChecked(true))
+  }, [tutorialChecked])
 
   const handleSignOut = async () => {
     // Clear server session record first
@@ -451,6 +472,7 @@ function HomeInner() {
   ]
 
   return (
+    <>
     <div className="flex flex-col min-h-screen md:h-screen md:overflow-hidden" style={{ background: bg, color: txt }}>
 
       {/* ── Top nav bar ─────────────────────────────── */}
@@ -520,6 +542,7 @@ function HomeInner() {
                 <span className="hidden lg:inline">{n.label}</span>
               </button>
             ))}
+            <TutorialLauncher tutorialId="main" />
           </div>
 
           {/* Theme toggle */}
@@ -775,7 +798,7 @@ function HomeInner() {
         )}
 
         {/* Main debate area */}
-        <main className="flex-1 flex flex-col md:overflow-hidden">
+        <main className="flex-1 flex flex-col md:overflow-hidden" style={{ background: 'var(--bg)' }}>
 
           <div ref={debateRef} className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-4">
 
@@ -787,7 +810,7 @@ function HomeInner() {
                 }}>
                 <div className="flex items-center gap-2">
                   <span>{cached.ageMinutes > 60 ? '⚠' : '⏱'}</span>
-                  <span className="text-xs text-white/60">
+                  <span className="text-xs" style={{ color: 'var(--text2)' }}>
                     {cached.ageMinutes > 60
                       ? <><strong style={{ color: '#f87171' }}>Stale analysis — {cached.ageMinutes} minutes old.</strong> Price may have moved significantly. Run a fresh analysis.</>
                       : <>Cached analysis from <strong style={{ color: '#fbbf24' }}>{cached.ageMinutes} minute{cached.ageMinutes === 1 ? '' : 's'} ago</strong> — no AI credits used</>
@@ -809,7 +832,7 @@ function HomeInner() {
             {stage === 'idle' && (
               <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
                 <div className="text-4xl opacity-60">📊</div>
-                <div className="text-base font-semibold text-white/70">Enter a ticker and click Analyze</div>
+                <div className="text-base font-semibold" style={{ color: 'var(--text2)' }}>Enter a ticker and click Analyze</div>
               </div>
             )}
 
@@ -820,13 +843,13 @@ function HomeInner() {
                 title="News Scout"
                 icon={<span className="text-xs font-bold">N</span>}
                 color="#60a5fa"
-                badge={<><span className="text-[10px] font-mono px-2 py-0.5 rounded-full" style={{ background: 'rgba(96,165,250,0.12)', color: '#60a5fa' }}>{gem.sentiment}</span><span className="text-[10px] font-mono text-white/20 ml-1">Stage 1</span></>}
+                badge={<><span className="text-[10px] font-mono px-2 py-0.5 rounded-full" style={{ background: 'rgba(96,165,250,0.12)', color: '#60a5fa' }}>{gem.sentiment}</span><span className="text-[10px] font-mono ml-1" style={{ color: 'var(--text3)' }}>Stage 1</span></>}
                 defaultOpen={false}>
               <div className="pt-2">
-                <p className="text-sm text-white/70 leading-relaxed mb-3">{gem.summary}</p>
+                <p className="text-sm leading-relaxed mb-3" style={{ color: 'var(--text2)' }}>{gem.summary}</p>
                 <div className="space-y-1 mb-3">
                   {gem.headlines.map((h, i) => (
-                    <div key={i} className="text-xs text-white/40 flex gap-1.5">
+                    <div key={i} className="text-xs flex gap-1.5" style={{ color: 'var(--text3)' }}>
                       <span className="text-[8px] mt-0.5 shrink-0" style={{ color: '#60a5fa60' }}>●</span>{h}
                     </div>
                   ))}
@@ -834,7 +857,7 @@ function HomeInner() {
                 {gem.keyEvents.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 mb-2">{gem.keyEvents.map((e, i) => <Chip key={i} label={e} color="#60a5fa" />)}</div>
                 )}
-                <div className="text-xs italic text-white/30 border-t pt-2" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+                <div className="text-xs italic border-t pt-2" style={{ borderColor: 'var(--border)', color: 'var(--text3)' }}>
                   Regime: {gem.regimeAssessment}
                 </div>
                 <Bar2 val={gem.confidence} color="#60a5fa" label="confidence" />
@@ -849,13 +872,13 @@ function HomeInner() {
                 title="Lead Analyst"
                 icon={<span className="text-xs font-bold">L</span>}
                 color="#a78bfa"
-                badge={<><SBadge s={cla.signal} sm /><span className="text-[10px] font-mono text-white/20 ml-1">Stage 2</span></>}
+                badge={<><SBadge s={cla.signal} sm /><span className="text-[10px] font-mono ml-1" style={{ color: 'var(--text3)' }}>Stage 2</span></>}
                 defaultOpen={false}>
               <div className="pt-2">
-                <p className="text-sm text-white/70 leading-relaxed mb-3">{cla.reasoning}</p>
+                <p className="text-sm leading-relaxed mb-3" style={{ color: 'var(--text2)' }}>{cla.reasoning}</p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-                  <div className="text-xs"><div className="text-white/25 mb-1">Technical</div><div className="text-white/50 leading-relaxed">{cla.technicalBasis}</div></div>
-                  <div className="text-xs"><div className="text-white/25 mb-1">Fundamental</div><div className="text-white/50 leading-relaxed">{cla.fundamentalBasis}</div></div>
+                  <div className="text-xs"><div className="mb-1" style={{ color: 'var(--text3)' }}>Technical</div><div className="leading-relaxed" style={{ color: 'var(--text2)' }}>{cla.technicalBasis}</div></div>
+                  <div className="text-xs"><div className="mb-1" style={{ color: 'var(--text3)' }}>Fundamental</div><div className="leading-relaxed" style={{ color: 'var(--text2)' }}>{cla.fundamentalBasis}</div></div>
                 </div>
                 <div className="flex flex-wrap gap-1.5 mb-1.5">{cla.catalysts.map((c, i) => <Chip key={i} label={c} color="#a78bfa" />)}</div>
                 <div className="flex flex-wrap gap-1.5">{cla.keyRisks.map((r, i) => <Chip key={i} label={`⚠ ${r}`} color="#f87171" />)}</div>
@@ -879,20 +902,20 @@ function HomeInner() {
                   <span className="text-[10px] font-mono ml-1" style={{ color: gpt.agrees ? '#34d399' : '#fbbf24' }}>
                     {gpt.agrees ? '✓ agrees' : '⚡ challenges'}
                   </span>
-                  <span className="text-[10px] font-mono text-white/20 ml-1">Stage 3</span>
+                  <span className="text-[10px] font-mono ml-1" style={{ color: 'var(--text3)' }}>Stage 3</span>
                 </>}
                 defaultOpen={false}>
               <div className="pt-2 space-y-3">
-                <p className="text-sm text-white/70 leading-relaxed">{gpt.reasoning}</p>
+                <p className="text-sm leading-relaxed" style={{ color: 'var(--text2)' }}>{gpt.reasoning}</p>
                 {gpt.challenges.length > 0 && (
                   <div className="space-y-1">
                     {gpt.challenges.map((c, i) => (
-                      <div key={i} className="text-xs flex gap-1.5 text-white/45"><span style={{ color: '#fbbf24' }}>⚠</span>{c}</div>
+                      <div key={i} className="text-xs flex gap-1.5" style={{ color: 'var(--text2)' }}><span style={{ color: '#fbbf24' }}>⚠</span>{c}</div>
                     ))}
                   </div>
                 )}
                 {gpt.strongestCounterArgument && (
-                  <div className="text-xs italic text-white/30 border-t pt-2" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+                  <div className="text-xs italic border-t pt-2" style={{ borderColor: 'var(--border)', color: 'var(--text3)' }}>
                     Strongest counter: {gpt.strongestCounterArgument}
                   </div>
                 )}
@@ -908,34 +931,34 @@ function HomeInner() {
                 title="Lead Analyst — Rebuttal"
                 icon={<span className="text-xs font-bold">L</span>}
                 color="#a78bfa"
-                badge={<><SBadge s={reb.signal} sm /><span className="text-[10px] font-mono text-white/20 ml-1">Round 2</span></>}
+                badge={<><SBadge s={reb.signal} sm /><span className="text-[10px] font-mono ml-1" style={{ color: 'var(--text3)' }}>Round 2</span></>}
                 defaultOpen={true}>
               <div className="pt-2 space-y-3">
                 {reb.researchQuestion && (
                   <div className="rounded-lg p-3" style={{ background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.15)' }}>
                     <div className="text-[10px] font-mono uppercase tracking-widest mb-1" style={{ color: '#60a5fa' }}>🔍 News Scout consulted</div>
-                    <div className="text-xs text-white/50 mb-1.5 italic">Q: {reb.researchQuestion}</div>
-                    <div className="text-xs text-white/70 leading-relaxed">{reb.researchAnswer}</div>
+                    <div className="text-xs mb-1.5 italic" style={{ color: 'var(--text2)' }}>Q: {reb.researchQuestion}</div>
+                    <div className="text-xs leading-relaxed" style={{ color: 'var(--text)' }}>{reb.researchAnswer}</div>
                   </div>
                 )}
-                <p className="text-sm text-white/75 leading-relaxed">{reb.rebuttal}</p>
+                <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{reb.rebuttal}</p>
                 {reb.concedes.length > 0 && (
                   <div className="rounded-lg p-3" style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.15)' }}>
                     <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#f87171' }}>Concedes</div>
-                    {reb.concedes.map((c, i) => <div key={i} className="text-xs text-white/55 flex gap-1.5 mb-1"><span style={{ color: '#f87171' }}>✓</span>{c}</div>)}
+                    {reb.concedes.map((c, i) => <div key={i} className="text-xs flex gap-1.5 mb-1" style={{ color: 'var(--text2)' }}><span style={{ color: '#f87171' }}>✓</span>{c}</div>)}
                   </div>
                 )}
                 {reb.maintains.length > 0 && (
                   <div className="rounded-lg p-3" style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)' }}>
                     <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#a78bfa' }}>Stands firm on</div>
-                    {reb.maintains.map((m, i) => <div key={i} className="text-xs text-white/55 flex gap-1.5 mb-1"><span style={{ color: '#a78bfa' }}>▶</span>{m}</div>)}
+                    {reb.maintains.map((m, i) => <div key={i} className="text-xs flex gap-1.5 mb-1" style={{ color: 'var(--text2)' }}><span style={{ color: '#a78bfa' }}>▶</span>{m}</div>)}
                   </div>
                 )}
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-mono text-white/30">Updated target:</span>
+                  <span className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>Updated target:</span>
                   <span className="text-xs font-bold font-mono" style={{ color: '#a78bfa' }}>{reb.updatedTarget}</span>
                 </div>
-                <p className="text-xs italic text-white/35 border-l-2 pl-3" style={{ borderColor: 'rgba(167,139,250,0.35)' }}>{reb.finalStance}</p>
+                <p className="text-xs italic border-l-2 pl-3" style={{ color: 'var(--text3)', borderColor: 'rgba(167,139,250,0.35)' }}>{reb.finalStance}</p>
                 <Bar2 val={reb.confidence} color="#a78bfa" label="confidence" />
               </div>
               </Collapsible>
@@ -948,30 +971,30 @@ function HomeInner() {
                 title="Devil's Advocate — Final Counter"
                 icon={<span className="text-xs font-bold">D</span>}
                 color="#f87171"
-                badge={<span className="text-[10px] font-mono text-white/20 ml-1">Round 2</span>}
+                badge={<span className="text-[10px] font-mono ml-1" style={{ color: 'var(--text3)' }}>Round 2</span>}
                 defaultOpen={true}>
               <div className="pt-2 space-y-3">
                 {ctr.researchQuestion && (
                   <div className="rounded-lg p-3" style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.15)' }}>
                     <div className="text-[10px] font-mono uppercase tracking-widest mb-1" style={{ color: '#f87171' }}>🔍 News Scout consulted</div>
-                    <div className="text-xs text-white/50 mb-1.5 italic">Q: {ctr.researchQuestion}</div>
-                    <div className="text-xs text-white/70 leading-relaxed">{ctr.researchAnswer}</div>
+                    <div className="text-xs mb-1.5 italic" style={{ color: 'var(--text2)' }}>Q: {ctr.researchQuestion}</div>
+                    <div className="text-xs leading-relaxed" style={{ color: 'var(--text)' }}>{ctr.researchAnswer}</div>
                   </div>
                 )}
-                <p className="text-sm text-white/75 leading-relaxed">{ctr.finalChallenge}</p>
+                <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{ctr.finalChallenge}</p>
                 {ctr.yieldsOn.length > 0 && (
                   <div className="rounded-lg p-3" style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.15)' }}>
                     <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#34d399' }}>Now agrees on</div>
-                    {ctr.yieldsOn.map((y, i) => <div key={i} className="text-xs text-white/55 flex gap-1.5 mb-1"><span style={{ color: '#34d399' }}>✓</span>{y}</div>)}
+                    {ctr.yieldsOn.map((y, i) => <div key={i} className="text-xs flex gap-1.5 mb-1" style={{ color: 'var(--text2)' }}><span style={{ color: '#34d399' }}>✓</span>{y}</div>)}
                   </div>
                 )}
                 {ctr.pressesOn.length > 0 && (
                   <div className="rounded-lg p-3" style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.15)' }}>
                     <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#f87171' }}>Still pressing</div>
-                    {ctr.pressesOn.map((p, i) => <div key={i} className="text-xs text-white/55 flex gap-1.5 mb-1"><span style={{ color: '#fbbf24' }}>⚠</span>{p}</div>)}
+                    {ctr.pressesOn.map((p, i) => <div key={i} className="text-xs flex gap-1.5 mb-1" style={{ color: 'var(--text2)' }}><span style={{ color: '#fbbf24' }}>⚠</span>{p}</div>)}
                   </div>
                 )}
-                <p className="text-xs italic text-white/35 border-l-2 pl-3" style={{ borderColor: 'rgba(248,113,113,0.35)' }}>Closing: {ctr.closingArgument}</p>
+                <p className="text-xs italic border-l-2 pl-3" style={{ color: 'var(--text3)', borderColor: 'rgba(248,113,113,0.35)' }}>Closing: {ctr.closingArgument}</p>
               </div>
               </Collapsible>
             )}
@@ -980,7 +1003,7 @@ function HomeInner() {
             {stage === 'judge' && !jud && <Think label="Council" color="#fbbf24" />}
             {jud && (
               <div className="animate-slide-up rounded-xl p-5 border-2 space-y-4"
-                style={{ background: 'rgba(251,191,36,0.03)', borderColor: 'rgba(251,191,36,0.28)' }}>
+                style={{ background: 'rgba(251,191,36,0.05)', borderColor: 'rgba(251,191,36,0.3)' }}>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span style={{ color: '#fbbf24', fontSize: 15 }}>⚖</span>
                   <span className="text-sm font-bold" style={{ color: '#fbbf24' }}>Council Verdict</span>
@@ -989,10 +1012,10 @@ function HomeInner() {
                     style={{ background: `${PERSONAS[persona].color}12`, color: PERSONAS[persona].color, border: `1px solid ${PERSONAS[persona].color}25` }}>
                     {PERSONAS[persona].icon} {PERSONAS[persona].label}
                   </span>
-                  <span className="ml-auto text-[10px] font-mono text-white/20">Final</span>
+                  <span className="ml-auto text-[10px] font-mono" style={{ color: 'var(--text3)' }}>Final</span>
                 </div>
 
-                <p className="text-sm text-white/75 leading-relaxed">{jud.summary}</p>
+                <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{jud.summary}</p>
 
                 {/* ── TRADE PLAN — prominent, right under verdict ── */}
                 {jud.entryPrice && (
@@ -1021,11 +1044,11 @@ function HomeInner() {
                   </div>
                 )}
 
-                <div className="text-xs italic text-white/35 border-l-2 pl-3" style={{ borderColor: 'rgba(251,191,36,0.35)' }}>
+                <div className="text-xs italic border-l-2 pl-3" style={{ color: 'var(--text3)', borderColor: 'rgba(251,191,36,0.35)' }}>
                   {jud.winningArgument}
                 </div>
 
-                {jud.dissent && <div className="text-xs text-white/25 italic">Dissent: {jud.dissent}</div>}
+                {jud.dissent && <div className="text-xs italic" style={{ color: 'var(--text3)' }}>Dissent: {jud.dissent}</div>}
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {[
@@ -1034,8 +1057,8 @@ function HomeInner() {
                     { label: 'Key Risk', val: jud.risk,    color: '#f87171' },
                   ].map(({ label, val, color }) => (
                     <div key={label} className="rounded-lg p-2.5 text-center border"
-                      style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.07)' }}>
-                      <div className="text-[9px] font-mono uppercase tracking-widest text-white/25 mb-1">{label}</div>
+                      style={{ background: 'var(--surface2)', borderColor: 'var(--border)' }}>
+                      <div className="text-[9px] font-mono uppercase tracking-widest mb-1" style={{ color: 'var(--text3)' }}>{label}</div>
                       <div className="text-xs font-bold" style={{ color }}>{val}</div>
                     </div>
                   ))}
@@ -1043,7 +1066,7 @@ function HomeInner() {
 
                 {jud.scenarios?.length > 0 && (
                   <div>
-                    <div className="text-[10px] font-mono uppercase tracking-widest text-white/20 mb-2">Scenarios</div>
+                    <div className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: 'var(--text3)' }}>Scenarios</div>
                     <div className="space-y-2">
                       {jud.scenarios.map(sc => {
                         const col = sc.label === 'bull' ? '#34d399' : sc.label === 'bear' ? '#f87171' : '#fbbf24'
@@ -1057,7 +1080,7 @@ function HomeInner() {
                               <div className="h-1 rounded-full mb-1 overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
                                 <div className="h-full rounded-full" style={{ width: `${sc.probability}%`, background: col }} />
                               </div>
-                              <div className="text-[10px] text-white/30 leading-relaxed">{sc.trigger}</div>
+                              <div className="text-[10px] leading-relaxed" style={{ color: 'var(--text3)' }}>{sc.trigger}</div>
                             </div>
                           </div>
                         )
@@ -1071,8 +1094,8 @@ function HomeInner() {
                     style={{ background: 'rgba(248,113,113,0.05)', border: '1px solid rgba(248,113,113,0.18)' }}>
                     <AlertTriangle size={11} className="shrink-0 mt-0.5" style={{ color: '#f87171' }} />
                     <div>
-                      <div className="text-[9px] font-mono uppercase tracking-widest text-white/25 mb-1">Invalidation trigger</div>
-                      <div className="text-xs text-white/55">{jud.invalidationTrigger}</div>
+                      <div className="text-[9px] font-mono uppercase tracking-widest mb-1" style={{ color: 'var(--text3)' }}>Invalidation trigger</div>
+                      <div className="text-xs" style={{ color: 'var(--text2)' }}>{jud.invalidationTrigger}</div>
                     </div>
                   </div>
                 )}
@@ -1081,9 +1104,9 @@ function HomeInner() {
 
                 {/* Plain English — always visible */}
                 {jud.plainEnglish && (
-                  <div className="rounded-xl p-4 space-y-2" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
-                    <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2">Plain English</div>
-                    <p className="text-sm text-white/80 leading-relaxed">{jud.plainEnglish}</p>
+                  <div className="rounded-xl p-4 space-y-2" style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: 'var(--text3)' }}>Plain English</div>
+                    <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{jud.plainEnglish}</p>
                   </div>
                 )}
 
@@ -1091,7 +1114,7 @@ function HomeInner() {
                 {jud.actionPlan && (
                   <div className="rounded-xl p-4" style={{ background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)' }}>
                     <div className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: '#fbbf24' }}>Action plan</div>
-                    <p className="text-sm text-white/75 leading-relaxed">{jud.actionPlan}</p>
+                    <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{jud.actionPlan}</p>
                   </div>
                 )}
 
@@ -1102,19 +1125,19 @@ function HomeInner() {
                       {jud.technicalsExplained && (
                         <div className="rounded-lg p-3" style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)' }}>
                           <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#a78bfa' }}>Technicals</div>
-                          <p className="text-xs text-white/65 leading-relaxed">{jud.technicalsExplained}</p>
+                          <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{jud.technicalsExplained}</p>
                         </div>
                       )}
                       {jud.fundamentalsExplained && (
                         <div className="rounded-lg p-3" style={{ background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.15)' }}>
                           <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#60a5fa' }}>Fundamentals</div>
-                          <p className="text-xs text-white/65 leading-relaxed">{jud.fundamentalsExplained}</p>
+                          <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{jud.fundamentalsExplained}</p>
                         </div>
                       )}
                       {jud.smartMoneyExplained && (
                         <div className="rounded-lg p-3" style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.15)' }}>
                           <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#34d399' }}>Smart Money</div>
-                          <p className="text-xs text-white/65 leading-relaxed">{jud.smartMoneyExplained}</p>
+                          <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{jud.smartMoneyExplained}</p>
                         </div>
                       )}
                     </div>
@@ -1124,7 +1147,7 @@ function HomeInner() {
                 {/* Council options view — collapsible */}
                 {jud.optionsStrategy && (
                   <Collapsible title="Council Options View" icon={<span>⚖</span>} color="#a78bfa">
-                    <p className="text-sm text-white/70 leading-relaxed pt-2">{jud.optionsStrategy}</p>
+                    <p className="text-sm leading-relaxed pt-2" style={{ color: 'var(--text2)' }}>{jud.optionsStrategy}</p>
                   </Collapsible>
                 )}
               </div>
@@ -1167,14 +1190,14 @@ function HomeInner() {
             {stage === 'done' && (md?.conviction?.signals?.length ?? 0) > 0 && (
               <div className="animate-slide-up rounded-xl p-4 border"
                 style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.06)' }}>
-                <div className="text-[10px] font-mono uppercase tracking-widest text-white/20 mb-3">Signal matrix — {md!.conviction?.signals?.length ?? 0} signals analyzed</div>
+                <div className="text-[10px] font-mono uppercase tracking-widest mb-3" style={{ color: 'var(--text3)' }}>Signal matrix — {md!.conviction?.signals?.length ?? 0} signals analyzed</div>
                 <div className="space-y-1">
                   {(md!.conviction?.signals ?? []).map((s, i) => (
                     <div key={i} className="flex items-center gap-2">
                       <span className="w-1.5 h-1.5 rounded-full shrink-0"
                         style={{ background: s.direction === 'bullish' ? '#34d399' : s.direction === 'bearish' ? '#f87171' : '#fbbf24' }} />
-                      <span className="text-white/25 w-20 shrink-0 text-[10px] font-mono">{s.category}</span>
-                      <span className="text-white/45 flex-1 text-[10px] truncate">{s.signal}</span>
+                      <span className="w-20 shrink-0 text-[10px] font-mono" style={{ color: 'var(--text3)' }}>{s.category}</span>
+                      <span className="flex-1 text-[10px] truncate" style={{ color: 'var(--text2)' }}>{s.signal}</span>
                       <div className="w-14 h-1 rounded-full overflow-hidden shrink-0" style={{ background: 'rgba(255,255,255,0.05)' }}>
                         <div className="h-full rounded-full"
                           style={{
@@ -1198,14 +1221,24 @@ function HomeInner() {
 
           <div className="px-5 py-2 border-t shrink-0 flex items-center gap-2"
             style={{ borderColor: 'rgba(255,255,255,0.05)', background: '#111620' }}>
-            <Clock size={9} className="text-white/12" />
-            <span className="text-[9px] font-mono text-white/15">
+            <Clock size={9} style={{ color: 'var(--text3)' }} />
+            <span className="text-[9px] font-mono" style={{ color: 'var(--text3)' }}>
               For informational purposes only. Not financial advice. AI models can be wrong. Always do your own research.
             </span>
           </div>
         </main>
       </div>
     </div>
+    {/* Tutorial overlay */}
+    {showTutorial && (
+      <Tutorial
+        config={MAIN_TUTORIAL}
+        autoStart={true}
+        onComplete={() => setShowTutorial(false)}
+        onSkip={() => setShowTutorial(false)}
+      />
+    )}
+    </>
   )
 }
 

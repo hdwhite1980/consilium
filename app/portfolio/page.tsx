@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
+import { Tutorial, TutorialLauncher, PORTFOLIO_TUTORIAL } from '@/app/components/Tutorial'
 import { ArrowLeft, Plus, Trash2, RefreshCw, TrendingUp, TrendingDown, Minus, AlertTriangle, BarChart2, DollarSign, Calendar, ChevronDown, ChevronUp } from 'lucide-react'
 
 interface Position {
@@ -87,6 +88,7 @@ export default function PortfolioPage() {
   const [loading, setLoading] = useState(true)
   const [analyzing, setAnalyzing] = useState(false)
   const [statusMsg, setStatusMsg] = useState('')
+  const [showTutorial, setShowTutorial] = useState(false)
 
   // Add position form
   const [showAdd, setShowAdd] = useState(false)
@@ -104,6 +106,14 @@ export default function PortfolioPage() {
   }, [])
 
   useEffect(() => { loadPositions() }, [loadPositions])
+
+  useEffect(() => {
+    fetch('/api/tutorial?id=portfolio')
+      .then(r => r.json())
+      .then(({ progress }) => {
+        if (!progress || (!progress.completed && !progress.skipped)) setShowTutorial(true)
+      }).catch(() => {})
+  }, [])
 
   const addPosition = async () => {
     if (!addTicker || !addShares) return
@@ -175,6 +185,7 @@ export default function PortfolioPage() {
   const totalValue = positionData.reduce((s, p) => s + p.marketValue, 0)
 
   return (
+    <>
     <div className="flex flex-col min-h-screen" style={{ background: '#0a0d12', color: 'white' }}>
 
       {/* Header */}
@@ -196,6 +207,7 @@ export default function PortfolioPage() {
           )}
         </div>
         <div className="ml-auto flex items-center gap-2">
+          <TutorialLauncher tutorialId="portfolio" label="How it works" />
           <button onClick={() => setShowAdd(!showAdd)}
             className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
             style={{ background: 'rgba(167,139,250,0.15)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.25)' }}>
@@ -493,5 +505,9 @@ export default function PortfolioPage() {
         </div>
       </div>
     </div>
+    {showTutorial && (
+      <Tutorial config={PORTFOLIO_TUTORIAL} autoStart onComplete={() => setShowTutorial(false)} onSkip={() => setShowTutorial(false)} />
+    )}
+    </>
   )
 }

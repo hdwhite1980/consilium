@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { Tutorial, TutorialLauncher, COMPARE_TUTORIAL } from '@/app/components/Tutorial'
 import { ArrowLeft, TrendingUp, TrendingDown, Minus, ArrowRight } from 'lucide-react'
 
 type Signal = 'BULLISH' | 'BEARISH' | 'NEUTRAL'
@@ -73,6 +74,7 @@ function ScoreBar({ label, a, b, tickerA, tickerB }: { label: string; a: number;
         </div>
       </div>
     </div>
+
   )
 }
 
@@ -84,12 +86,21 @@ export default function ComparePage() {
   const [persona, setPersona] = useState<Persona>('balanced')
   const [running, setRunning] = useState(false)
   const [status, setStatus] = useState('')
+  const [showTutorial, setShowTutorial] = useState(false)
 
   const [mdA, setMdA] = useState<MarketData | null>(null)
   const [mdB, setMdB] = useState<MarketData | null>(null)
   const [judgeA, setJudgeA] = useState<JudgeResult | null>(null)
   const [judgeB, setJudgeB] = useState<JudgeResult | null>(null)
   const [comparison, setComparison] = useState<ComparisonResult | null>(null)
+
+  useEffect(() => {
+    fetch('/api/tutorial?id=compare')
+      .then(r => r.json())
+      .then(({ progress }) => {
+        if (!progress || (!progress.completed && !progress.skipped)) setShowTutorial(true)
+      }).catch(() => {})
+  }, [])
 
   const run = useCallback(async () => {
     if (!tickerA || !tickerB) return
@@ -128,6 +139,7 @@ export default function ComparePage() {
   }, [tickerA, tickerB, timeframe, persona])
 
   return (
+    <>
     <div className="flex flex-col min-h-screen" style={{ background: '#0a0d12', color: 'white' }}>
       <header className="flex items-center gap-3 px-4 py-3 border-b sticky top-0 z-10"
         style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
@@ -170,6 +182,7 @@ export default function ComparePage() {
           ))}
         </div>
 
+        <TutorialLauncher tutorialId="compare" label="How it works" />
         <button onClick={run} disabled={running || !tickerA || !tickerB}
           className="px-4 py-1.5 rounded-lg text-sm font-semibold text-white transition-all hover:opacity-90 disabled:opacity-40"
           style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
@@ -354,5 +367,9 @@ export default function ComparePage() {
         </div>
       </div>
     </div>
+    {showTutorial && (
+      <Tutorial config={COMPARE_TUTORIAL} autoStart onComplete={() => setShowTutorial(false)} onSkip={() => setShowTutorial(false)} />
+    )}
+    </>
   )
 }
