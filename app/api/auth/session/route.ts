@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/app/lib/auth/server'
 import { registerSession, clearSession, getDeviceHint } from '@/app/lib/auth/session'
+import { hasActiveAccess } from '@/app/lib/stripe'
+
+// GET /api/auth/session — returns subscription status and tier
+export async function GET(req: NextRequest) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ hasAccess: false, tier: 'standard', status: 'unauthenticated' })
+  const access = await hasActiveAccess(user.id)
+  return NextResponse.json(access)
+}
 
 // POST /api/auth/session — called client-side after login
 export async function POST(req: NextRequest) {

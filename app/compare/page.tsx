@@ -2,6 +2,8 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { UpgradeGate } from '@/app/components/UpgradeGate'
+import { useFeature } from '@/app/lib/use-subscription'
 import { Tutorial, TutorialLauncher, COMPARE_TUTORIAL } from '@/app/components/Tutorial'
 import { ArrowLeft, TrendingUp, TrendingDown, Minus, ArrowRight } from 'lucide-react'
 
@@ -86,6 +88,7 @@ export default function ComparePage() {
   const [persona, setPersona] = useState<Persona>('balanced')
   const [running, setRunning] = useState(false)
   const [status, setStatus] = useState('')
+  const { allowed: canAccess, loaded: subLoaded } = useFeature('compare')
   const [showTutorial, setShowTutorial] = useState(false)
 
   const [mdA, setMdA] = useState<MarketData | null>(null)
@@ -152,6 +155,7 @@ export default function ComparePage() {
   }, [tickerA, tickerB, timeframe, persona])
 
   return (
+    <UpgradeGate feature="compare" featureName="Head-to-Head Compare" description="Run the full 6-stage debate on two stocks simultaneously and get a definitive head-to-head recommendation." allowed={canAccess} loaded={subLoaded}>
     <>
     <div className="flex flex-col min-h-screen" style={{ background: '#0a0d12', color: 'white' }}>
       <header className="flex items-center gap-3 px-4 py-3 border-b sticky top-0 z-10"
@@ -384,5 +388,6 @@ export default function ComparePage() {
       <Tutorial config={COMPARE_TUTORIAL} autoStart onComplete={() => setShowTutorial(false)} onSkip={() => setShowTutorial(false)} />
     )}
     </>
+    </UpgradeGate>
   )
 }

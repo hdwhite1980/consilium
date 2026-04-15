@@ -6,6 +6,8 @@ import {
   ArrowLeft, Plus, Trash2, TrendingUp, TrendingDown, RefreshCw,
   DollarSign, Lightbulb, BarChart2, X, CheckCircle, AlertTriangle, Info
 } from 'lucide-react'
+import { UpgradeGate } from '@/app/components/UpgradeGate'
+import { useFeature } from '@/app/lib/use-subscription'
 
 // ── Types ──────────────────────────────────────────────────────
 interface Trade {
@@ -249,6 +251,7 @@ function ReinvestmentInner() {
   const [ideas, setIdeas] = useState<Idea[]>([])
   const [insights, setInsights] = useState<Insight[]>([])
   const [allocation, setAllocation] = useState<AllocItem[]>([])
+  const { allowed: canAccess, loaded: subLoaded } = useFeature('reinvestment')
   const [realizedPnL, setRealizedPnL] = useState(0)
   const [loading, setLoading] = useState(true)
   const [loadingIdeas, setLoadingIdeas] = useState(false)
@@ -377,6 +380,7 @@ function ReinvestmentInner() {
   const txt3  = isDark ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.35)'
 
   return (
+    <UpgradeGate feature="reinvestment" featureName="Reinvestment Tracker" description="Log trades, track live P&L, and get AI-powered tiered strategies for deploying your gains." allowed={canAccess} loaded={subLoaded}>
     <>
     <div className="flex flex-col min-h-screen" style={{ background: 'var(--bg)', color: txt }}>
 
@@ -814,6 +818,7 @@ function ReinvestmentInner() {
       />
     )}
     </>
+    </UpgradeGate>
   )
 }
 
