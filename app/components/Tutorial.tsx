@@ -421,7 +421,7 @@ export const MAIN_TUTORIAL: TutorialConfig = {
     {
       id: 'nav',
       title: 'The full platform',
-      content: '🌍 Macro ranks all 11 sectors daily. 💼 Portfolio gives a holistic view of your holdings. 💰 Reinvest tracks trades and deploys gains intelligently with tiered strategies. ⚡ Compare runs the full debate on two stocks head-to-head. 🎓 Academy teaches you to read the debate like an analyst.',
+      content: '🔥 Invest tracks your journey from any starting balance — $5 to $1M — with fire milestones and stage-matched stock picks. 🌍 Macro ranks all 11 sectors daily. 💼 Portfolio gives a holistic view of your holdings. 💰 Reinvest tracks trades and deploys gains. ⚡ Compare runs the full debate on two stocks. 🎓 Academy teaches you to read the debate like an analyst.',
       position: 'center',
       tip: 'Start your day on Macro, identify the strongest sector, use Compare on the top two names, then log your trade in Reinvest.',
     },
@@ -496,6 +496,55 @@ export const COMPARE_TUTORIAL: TutorialConfig = {
       content: 'Side-by-side verdicts show entry, stop (ATR-derived), and target for each. The conviction bars show signal strength. The "if you can only pick one" section gives the council\'s definitive recommendation with a specific reason.',
       position: 'center',
       tip: 'Use Compare when you\'re choosing between two names in the same sector — relative strength vs sector is particularly useful here since both use the same sector ETF baseline.',
+    },
+  ],
+}
+
+export const INVEST_TUTORIAL: TutorialConfig = {
+  id: 'invest',
+  title: 'Your Investment Journey',
+  description: 'Learn how the Invest page grows your portfolio from any starting amount',
+  steps: [
+    {
+      id: 'welcome',
+      title: 'Your journey starts here',
+      content: 'The Invest page is built for every starting balance — $5 or $5,000. You set how much you have, the council finds stocks sized to that exact amount, and your milestone tracks progress toward the next level.',
+      position: 'center',
+      tip: 'This is separate from the Reinvestment Tracker — Invest is for building from scratch, Reinvest is for deploying existing gains.',
+    },
+    {
+      id: 'milestone',
+      title: 'Your fire milestone',
+      content: 'Six stages: Spark ($0–$10) → Ember ($10–$50) → Flame ($50–$200) → Blaze ($200–$1K) → Inferno ($1K–$10K) → Free ($10K+). Each stage unlocks better stocks and tighter strategies. The progress bar shows exactly how far you are from the next milestone.',
+      position: 'center',
+      tip: 'The stage you\'re in determines what price range the council searches — at Spark it finds $1–$5 stocks, at Blaze it finds $10–$50 stocks, always sized so you can buy a meaningful number of shares.',
+    },
+    {
+      id: 'ideas',
+      title: 'Stage-matched picks',
+      content: 'The council reads today\'s macro sector performance and finds 5 stocks from the strongest sectors — priced and sized for your exact balance. At $5 it finds $1–3 stocks (2 shares). At $500 it finds $20–40 stocks (15 shares). Every pick has a specific catalyst, entry zone, stop loss, and target.',
+      position: 'center',
+      tip: 'The sector strip at the top of Ideas shows which sectors are BULLISH today. All 5 picks come from those sectors — you\'re always trading with the market, not against it.',
+    },
+    {
+      id: 'log',
+      title: 'Log a trade',
+      content: 'Click "Log this trade" on any idea to record it. Enter shares and entry price — the page will track live P&L automatically. When you close a trade, the council updates your milestone progress, win streak, and adjusts future picks to your new balance.',
+      position: 'center',
+      tip: 'Your first profitable close triggers a special moment. Every journey has a first win.',
+    },
+    {
+      id: 'streak',
+      title: 'Win streak and stats',
+      content: 'Your win streak, win rate, and "in play" P&L all update in real time. During market hours prices refresh every 5 minutes automatically. After market close you see the official closing prices. The total portfolio value always reflects your true position.',
+      position: 'center',
+      tip: 'Even if you lose a trade, your total trades count and win rate don\'t reset. Consistency over time is what builds the streak.',
+    },
+    {
+      id: 'done',
+      title: 'The journey is the point',
+      content: 'Most people never invest because they think they need more money first. The Invest page proves you don\'t. Start with what you have. The council finds appropriate stocks. Your milestone tracks your progress. Spark to Free is the journey — start yours.',
+      position: 'center',
     },
   ],
 }

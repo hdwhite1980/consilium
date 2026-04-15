@@ -448,7 +448,204 @@ const track3: Track = {
   ],
 }
 
-export const TRAINING_TRACKS: Track[] = [track1, track2, track3]
+
+// ── TRACK 4: The Invest Journey ──────────────────────────────
+const track4: Track = {
+  id: 'track4',
+  title: 'The investment journey',
+  description: 'How to grow any starting amount using stage-matched stocks, sector momentum, and compound discipline.',
+  color: '#f97316',
+  lessons: [
+    {
+      id: 'training:track4:lesson1',
+      title: 'Why the stage system works',
+      subtitle: 'How price range maps to position size',
+      duration: '4 min',
+      content: [
+        {
+          type: 'text',
+          text: "Most investing advice assumes you have thousands of dollars. The Invest journey assumes you have whatever you have — $5, $50, or $500 — and builds a framework that makes every amount feel like a real position.",
+        },
+        {
+          type: 'callout',
+          label: 'The position sizing insight',
+          color: '#f97316',
+          text: "At any balance level, a good position should let you buy 10–30 shares.\n\nAt $5: buy 2–3 shares of a $1–2 stock.\nAt $100: buy 10–15 shares of a $6–8 stock.\nAt $500: buy 15–20 shares of a $20–30 stock.\nAt $2,000: buy 20–30 shares of a $50–80 stock.\n\nThe price range shifts with your balance — you always buy a meaningful position.",
+        },
+        {
+          type: 'text',
+          text: "This is why the six milestones exist. Spark ($0–$10) and Ember ($10–$50) focus on $1–8 stocks because that\'s the range where a $5 account can build a real position. By Blaze ($200–$1K), you\'re buying $20–50 stocks where fundamentals and technical signals are more reliable.",
+        },
+        {
+          type: 'tip',
+          text: "Each stage also changes the stop strategy. At Spark, stops are wide (20–30%) because $1–5 stocks are volatile. By Inferno, stops are tight (8–12%) because you\'re in higher-quality names with more predictable movement.",
+        },
+      ],
+      quiz: [
+        {
+          id: 'q1',
+          question: "You have $50. The council suggests buying 20 shares of a $2.40 stock. Why is this better than buying 1 share of a $48 stock?",
+          options: [
+            "It isn\'t — 1 share of a $48 stock is simpler",
+            "20 shares gives flexibility to sell partial positions as the stock rises",
+            "A $2.40 stock always has more upside than a $48 stock",
+            "You can\'t buy stocks over $10 with $50",
+          ],
+          correctIndex: 1,
+          explanation: "With 20 shares you can sell 5 at the first target, hold 10 through the next, and keep 5 as a longer-term hold. With 1 share you have no flexibility — it\'s all or nothing. Position sizing creates optionality.",
+        },
+      ],
+    },
+    {
+      id: 'training:track4:lesson2',
+      title: 'Using sector momentum for stock selection',
+      subtitle: 'Why the best stock in a BULLISH sector beats the best stock overall',
+      duration: '4 min',
+      content: [
+        {
+          type: 'text',
+          text: "The invest council doesn\'t pick stocks in isolation. It reads the macro sector dashboard first, finds which sectors are BULLISH today, and searches for stage-appropriate stocks within those sectors — the same top-down approach professional fund managers use.",
+        },
+        {
+          type: 'callout',
+          label: 'Top-down approach',
+          color: '#60a5fa',
+          text: "Step 1: Check macro sector performance — which sectors are up?\nStep 2: Focus on the top 3–5 sectors\nStep 3: Find the best setup within those sectors at your price range\n\nA strong stock in a weak sector fights two headwinds. A strong stock in a strong sector has the wind at its back.",
+        },
+        {
+          type: 'debate_block',
+          label: 'Sector strip — Ideas tab',
+          color: '#f97316',
+          text: '"Technology: BULLISH (+2.1%) · Healthcare: BULLISH (+1.4%) · Energy: NEUTRAL (+0.2%) · Financials: BEARISH (-0.8%)"',
+          annotation: "This strip shows live data from the macro dashboard. The council only searches BULLISH sectors. On a day when Energy is red, no energy stocks appear in your picks — even if a specific energy stock looks technically strong.",
+        },
+        {
+          type: 'warning',
+          text: "When a sector turns BEARISH, small-cap stocks fall harder than the sector ETF. A 2% Healthcare sector drop can mean a 10–20% drop for a small biotech. Check the sector strip before entering any position.",
+        },
+      ],
+      quiz: [
+        {
+          id: 'q1',
+          question: "The macro dashboard shows Technology BULLISH (+1.8%) and Energy BEARISH (-1.2%). The council finds a strong technical setup in an energy small-cap. What should you do?",
+          options: [
+            "Take the trade — technical setup is what matters",
+            "Wait — the sector headwind will likely overwhelm the technical setup",
+            "Run a full council debate first",
+            "Take half a position to test the setup",
+          ],
+          correctIndex: 1,
+          explanation: "At Spark/Ember stage, small-cap stocks amplify sector moves. A technically strong setup in a BEARISH sector is fighting against institutional flows. The probability drops significantly. Wait for the sector to turn neutral or bullish.",
+        },
+      ],
+    },
+    {
+      id: 'training:track4:lesson3',
+      title: 'Tracking progress and compounding wins',
+      subtitle: 'How milestones, streaks, and reinvestment drive the journey',
+      duration: '3 min',
+      content: [
+        {
+          type: 'text',
+          text: "The journey from Spark to Free isn\'t about any single trade. It\'s about the compound effect of closing winning trades, reinvesting the full proceeds, and gradually moving into higher-quality stocks as your balance grows.",
+        },
+        {
+          type: 'callout',
+          label: 'The compound journey',
+          color: '#34d399',
+          text: "Spark → Ember ($1 → $10): 10× — one $1 stock that triples, a few times.\nEmber → Flame ($10 → $50): 5× — disciplined entries and full reinvestment.\nFlame → Blaze ($50 → $200): 4× — now in $5–15 stocks with better signals.\nBlaze → Inferno ($200 → $1,000): 5× — full debate analysis on every position.\nInferno → Free ($1,000 → $10,000): 10× — compounding accelerates here.",
+        },
+        {
+          type: 'tip',
+          text: "When you close a winning trade and cross a milestone, the council immediately recalibrates — picks shift to the next stage\'s price range. The ideas after your first big win will be noticeably different from your starting picks.",
+        },
+        {
+          type: 'text',
+          text: "The \'locked in\' counter shows realized profits — money that can\'t be taken away by market moves. Even if open positions are underwater, locked-in gains represent real progress that survives any downturn.",
+        },
+      ],
+      quiz: [
+        {
+          id: 'q1',
+          question: "You\'re at Spark with $4.50. A stock you bought at $1.20 is now at $1.50 (up 25%). The council\'s target is $2.10. What\'s the right move?",
+          options: [
+            "Hold to the full $2.10 target no matter what",
+            "Sell half now to lock in profit, hold half to target",
+            "If it\'s approaching target and showing resistance, take the profit and redeploy",
+            "Never sell early — always wait for the full target",
+          ],
+          correctIndex: 2,
+          explanation: "At Spark, locking in a 25% win and redeploying compounds faster than waiting for a 75% gain that may never come. The goal is milestone progress, not maximizing any single trade. A locked-in win counts toward Ember.",
+        },
+      ],
+    },
+    {
+      id: 'training:track4:lesson4',
+      title: 'How sector momentum drives your picks',
+      subtitle: 'Why the council checks the macro dashboard before suggesting stocks',
+      duration: '4 min',
+      content: [
+        {
+          type: 'text',
+          text: "The worst time to buy a $2 stock in the energy sector is when energy ETFs are down 3% and the sector signal is BEARISH. Even a perfectly set-up technical play will struggle when the whole sector is selling off. The Invest council solves this by checking live sector performance before suggesting any stock.",
+        },
+        {
+          type: 'callout',
+          label: 'How sector-driven picks work',
+          color: '#f97316',
+          text: "1. The council pulls live performance for all 11 S&P sectors.\n2. Sectors are ranked by signal (BULLISH first) then by today\'s % change.\n3. The top 5 sectors become the hunting ground.\n4. Five stocks are selected — one per sector — priced for your current balance.\n5. The sector strip at the top shows you exactly why each stock was chosen.",
+        },
+        {
+          type: 'text',
+          text: "Small and micro-cap stocks are highly correlated to their sector. A $2 cannabis stock moves with the consumer staples sector trend. A $3 EV stock moves with consumer discretionary. Picking against the sector is fighting a headwind — picking with it is a tailwind.",
+        },
+        {
+          type: 'debate_block',
+          label: 'Reading the sector strip',
+          color: '#f97316',
+          text: '"Technology: BULLISH +2.1% · Healthcare: BULLISH +0.8% · Energy: NEUTRAL -0.3% · Consumer Disc.: BEARISH -1.4%"',
+          annotation: "If the council suggests a consumer discretionary stock with a BEARISH sector, the individual catalyst needs to be very compelling to overcome that headwind. BULLISH sector picks always carry higher confidence.",
+        },
+        {
+          type: 'tip',
+          text: "The sector strip is also your exit signal. If you hold a healthcare stock and healthcare flips from BULLISH to BEARISH on the macro dashboard, that changes the thesis. Review your stop loss when the sector signal changes.",
+        },
+        {
+          type: 'warning',
+          text: "On HIGH FEAR days (VIX above 25, SPY down 2%+), even BULLISH sectors get dragged down. At Spark and Ember, consider waiting for stability before deploying capital — you have little buffer to absorb a broad market selloff.",
+        },
+      ],
+      quiz: [
+        {
+          id: 'q1',
+          question: "The sector strip shows Energy: NEUTRAL -0.3%. The council picks a $3.20 energy stock. How should you treat this pick vs one from a BULLISH sector?",
+          options: [
+            "More confident — NEUTRAL means less crowded, easier to move",
+            "Same confidence — individual stock setup is what matters",
+            "Less confident — a NEUTRAL sector provides no tailwind, the individual catalyst needs to be stronger",
+            "It depends entirely on the stock's volume that day",
+          ],
+          correctIndex: 2,
+          explanation: "A BULLISH sector creates institutional tailwinds. NEUTRAL means the council found this stock despite the sector not helping — the individual setup needs to compensate. Size smaller on NEUTRAL sector picks.",
+        },
+        {
+          id: 'q2',
+          question: "You hold a tech stock. Overnight the macro dashboard flips Technology from BULLISH to BEARISH. What's the right response?",
+          options: [
+            "Do nothing — the stock's technical setup hasn't changed",
+            "Sell immediately at market open",
+            "Review your stop — if price is near it, close. If not, watch closely and don't add",
+            "Add to the position — pullbacks are buying opportunities",
+          ],
+          correctIndex: 2,
+          explanation: "A sector flip doesn't automatically invalidate a trade but it changes the risk profile. Your stop becomes more critical, not less. Never add to a position when the sector tide has turned against you.",
+        },
+      ],
+    },
+  ],
+}
+
+export const TRAINING_TRACKS: Track[] = [track1, track2, track3, track4]
 
 // ── Signal Glossary ───────────────────────────────────────────
 export const GLOSSARY: GlossaryEntry[] = [
