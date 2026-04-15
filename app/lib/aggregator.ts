@@ -232,7 +232,7 @@ Focus on technical signals, volume trends, and market structure for directional 
       summary: `=== FOREX FUNDAMENTALS ===
 Pair: ${forexMeta.name} (${sym})
 Current Rate: ${dp(currentPrice)}
-24h Change: ${forexMeta.change24h != null ? (forexMeta.change24h >= 0 ? '+' : '') + forexMeta.change24hPct?.toFixed(3) + '%' : 'N/A'}
+24h Change: ${forexMeta.change24hPct != null ? (forexMeta.change24hPct >= 0 ? '+' : '') + forexMeta.change24hPct.toFixed(3) + '%' : 'N/A'}
 Session High: ${dp(forexMeta.weekHigh)} | Session Low: ${dp(forexMeta.weekLow)}
 Group: ${forexMeta.group} pair
 Background: ${forexMeta.description}
