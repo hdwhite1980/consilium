@@ -569,10 +569,16 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
       {/* Overall score */}
       <ScoreBadge score={t.technicalScore} bias={t.technicalBias} />
 
-      {/* Finviz chart */}
+      {/* Finviz chart — stocks only */}
       <div>
         <div className="text-[10px] font-mono text-white/20 mb-1.5">Daily candlestick chart — SMA50 (blue) and SMA200 (red) overlaid. The cross of these two lines is the death/golden cross.</div>
-        <FinvizChart ticker={ticker} />
+        {/^(BTC|ETH|SOL|BNB|XRP|ADA|AVAX|DOGE|DOT|LINK|LTC|BCH|XLM|UNI|MATIC|ATOM|ALGO|VET|FIL|THETA)$/.test(ticker.toUpperCase()) ||
+         /^[A-Z]{6}$/.test(ticker.toUpperCase()) && ['USD','EUR','GBP','JPY','AUD','CAD','NZD','CHF'].some(c => ticker.toUpperCase().startsWith(c) || ticker.toUpperCase().endsWith(c))
+          ? <div className="flex items-center justify-center h-16 rounded-lg text-xs text-white/25"
+              style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+              Chart not available for {ticker} — use TradingView for forex/crypto charting
+            </div>
+          : <FinvizChart ticker={ticker} />}
       </div>
 
       {/* Indicator grid 2x2 */}

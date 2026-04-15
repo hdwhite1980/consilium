@@ -121,9 +121,12 @@ export async function fetchForexBars(ticker: string, timeframe: string): Promise
   }
 
   const daysMap: Record<string, number> = {
-    '1D': 5, '1W': 21, '1M': 60, '3M': 140,
+    '1D': 120,  // 120 calendar days ≈ 85 trading days — enough for RSI/MACD warmup
+    '1W': 200,  // 200 calendar days ≈ 140 trading days — enough for SMA50 + indicators
+    '1M': 420,  // 420 calendar days ≈ 300 trading days — enough for SMA200
+    '3M': 560,  // 560 calendar days ≈ 400 trading days — SMA200 + Ichimoku cloud
   }
-  const daysBack = daysMap[timeframe] ?? 60
+  const daysBack = daysMap[timeframe] ?? 420
   const rates = await frankfurterHistory(info.base, info.quote, daysBack)
 
   if (Object.keys(rates).length < 3) return []

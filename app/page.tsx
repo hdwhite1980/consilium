@@ -731,7 +731,11 @@ function HomeInner() {
                 ['vs SMA200', <span style={{ color: md!.currentPrice >= md!.technicals?.sma200 ? '#34d399' : '#f87171' }}>{((md!.currentPrice / md!.technicals?.sma200 - 1) * 100 >= 0 ? '+' : '') + ((md!.currentPrice / md!.technicals?.sma200 - 1) * 100).toFixed(1) + '%'}</span>],
                 ['Williams %R', <span style={{ color: md!.technicals?.williamsR > -20 ? '#f87171' : md!.technicals?.williamsR < -80 ? '#34d399' : txt }}>{md!.technicals?.williamsR?.toFixed(1)}</span>],
                 ['CCI', <span style={{ color: md!.technicals?.cci > 100 ? '#f87171' : md!.technicals?.cci < -100 ? '#34d399' : txt }}>{md!.technicals?.cci?.toFixed(0)}</span>],
-                ['ATR(14)', <span style={{ color: txt }}>${md!.technicals?.atr14?.toFixed(2)} ({md!.technicals?.atrPct?.toFixed(1)}%)</span>],
+                ['ATR(14)', <span style={{ color: txt }}>
+                  {md!.currentPrice < 10
+                    ? `${md!.technicals?.atr14?.toFixed(4)} (${md!.technicals?.atrPct?.toFixed(2)}%)`
+                    : `$${md!.technicals?.atr14?.toFixed(2)} (${md!.technicals?.atrPct?.toFixed(1)}%)`}
+                </span>],
                 ['Ichimoku', <span style={{ color: md!.technicals?.ichimokuSignal === 'above_cloud' ? '#34d399' : md!.technicals?.ichimokuSignal === 'below_cloud' ? '#f87171' : '#fbbf24' }}>{(md!.technicals?.ichimokuSignal ?? 'N/A').replace(/_/g,' ')}</span>],
                 ['ROC 10d', <span style={{ color: (md!.technicals?.roc10 ?? 0) >= 0 ? '#34d399' : '#f87171' }}>{md!.technicals?.roc10?.toFixed(1)}%</span>],
                 ['Rel Str', <span style={{ color: (md!.technicals?.relStrengthVsSector ?? 0) > 0 ? '#34d399' : (md!.technicals?.relStrengthVsSector ?? 0) < 0 ? '#f87171' : txt }}>{md!.technicals?.relStrengthVsSector != null ? ((md!.technicals?.relStrengthVsSector >= 0 ? '+' : '') + md!.technicals?.relStrengthVsSector?.toFixed(1) + '%') : 'N/A'}</span>],
