@@ -5,9 +5,11 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/app/lib/auth/client'
 import TechnicalCharts from '@/app/components/TechnicalCharts'
 import OptionsRecommendations from '@/app/components/OptionsRecommendations'
+import { useTheme } from '@/app/lib/theme'
 import {
   TrendingUp, TrendingDown, Minus, Clock, AlertTriangle,
-  BarChart2, Globe, DollarSign, Activity, Shield, Zap, LogOut, BookOpen
+  BarChart2, Globe, DollarSign, Activity, Shield, Zap, LogOut, BookOpen,
+  Sun, Moon, Menu, X
 } from 'lucide-react'
 
 type Signal = 'BULLISH' | 'BEARISH' | 'NEUTRAL'
@@ -91,11 +93,14 @@ interface GptResult {
 }
 
 interface RebuttalResult {
-  signal: Signal; confidence: number; rebuttal: string
+  signal: Signal; confidence: number
+  researchQuestion: string; researchAnswer: string
+  rebuttal: string
   concedes: string[]; maintains: string[]; updatedTarget: string; finalStance: string
 }
 
 interface CounterResult {
+  researchQuestion: string; researchAnswer: string
   finalChallenge: string; yieldsOn: string[]; pressesOn: string[]; closingArgument: string
 }
 
@@ -159,9 +164,9 @@ function Chip({ label, color }: { label: string; color: string }) {
   )
 }
 
-function Card({ title, icon, color, children }: { title: string; icon: React.ReactNode; color: string; children: React.ReactNode }) {
+function Card({ title, icon, color, children, surf, brd, txt3 }: { title: string; icon: React.ReactNode; color: string; children: React.ReactNode; surf?: string; brd?: string; txt3?: string }) {
   return (
-    <div className="rounded-xl border p-3 space-y-2.5" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.07)' }}>
+    <div className="rounded-xl border p-3 space-y-2.5" style={{ background: surf ?? '#181e2a', borderColor: brd ?? 'rgba(255,255,255,0.07)' }}>
       <div className="flex items-center gap-1.5">
         <span style={{ color }}>{icon}</span>
         <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color }}>{title}</span>
@@ -232,6 +237,8 @@ function HomeInner() {
   const debateRef = useRef<HTMLDivElement>(null)
   const [userEmail, setUserEmail] = useState<string | null>(null)
   const [subStatus, setSubStatus] = useState<{ status: string; daysLeft: number | null } | null>(null)
+  const { theme, toggle: toggleTheme } = useTheme()
+  const [navOpen, setNavOpen] = useState(false)
 
   useEffect(() => {
     const supabase = createClient()
@@ -410,177 +417,237 @@ function HomeInner() {
   }, [ticker, tf, persona, scroll])
   const finalSig = jud?.signal ?? cla?.signal ?? md?.conviction?.direction
 
+  // Stage progress steps
+  const STEPS = [
+    { key: 'building', label: 'Data' },
+    { key: 'gemini',   label: 'News Scout' },
+    { key: 'claude',   label: 'Lead Analyst' },
+    { key: 'gpt',      label: 'Challenger' },
+    { key: 'rebuttal', label: 'Rebuttal' },
+    { key: 'counter',  label: 'Counter' },
+    { key: 'judge',    label: 'Verdict' },
+  ]
+  const stepIdx = STEPS.findIndex(s => s.key === stage)
+  const isDark = theme === 'dark'
+
+  // Theme-aware inline style helpers
+  const bg    = isDark ? '#0a0d12' : '#f0f2f7'
+  const surf  = isDark ? '#111620' : '#ffffff'
+  const surf2 = isDark ? '#181e2a' : '#f5f7fb'
+  const brd   = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.08)'
+  const brd2  = isDark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.15)'
+  const txt   = isDark ? 'white' : '#0f172a'
+  const txt2  = isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)'
+  const txt3  = isDark ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.35)'
+  const inputBg = isDark ? '#181e2a' : '#f0f2f7'
+
+  const NAV_ITEMS = [
+    { label: 'Today', icon: '⚡', path: '/news',      color: '#fbbf24' },
+    { label: 'Tomorrow', icon: '📅', path: '/tomorrow', color: '#a78bfa' },
+    { label: 'Portfolio', icon: '💼', path: '/portfolio', color: '#34d399' },
+    { label: 'Macro', icon: '🌍', path: '/macro',    color: '#60a5fa' },
+    { label: 'Compare', icon: '⚡', path: '/compare',  color: '#f87171' },
+    { label: 'Guide', icon: '📖', path: '/guide',    color: txt3 },
+  ]
+
   return (
-    <div className="flex flex-col min-h-screen md:h-screen md:overflow-hidden" style={{ background: '#0a0d12' }}>
+    <div className="flex flex-col min-h-screen md:h-screen md:overflow-hidden" style={{ background: bg, color: txt }}>
 
-      {/* Header */}
-      <header className="flex flex-wrap items-center gap-2 px-3 py-2.5 border-b shrink-0"
-        style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold text-white"
+      {/* ── Top nav bar ─────────────────────────────── */}
+      <nav className="flex items-center gap-2 px-3 py-2 border-b shrink-0"
+        style={{ background: surf, borderColor: brd }}>
+
+        {/* Logo */}
+        <div className="flex items-center gap-2 shrink-0 mr-1">
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold text-white shrink-0"
             style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>Σ</div>
-          <div>
-            <div className="text-sm font-bold tracking-tight leading-none">CONSILIUM</div>
-            <div className="text-[9px] font-mono text-white/20 mt-0.5">Signal Convergence Engine v2</div>
+          <span className="text-sm font-bold tracking-tight hidden sm:block" style={{ color: txt }}>CONSILIUM</span>
+        </div>
+
+        {/* ── Analysis controls ── */}
+        <div className="flex items-center gap-1.5 flex-1">
+          <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())}
+            onKeyDown={e => e.key === 'Enter' && !running && run()}
+            placeholder="AAPL" maxLength={6}
+            className="w-16 sm:w-20 rounded-lg px-2.5 py-1.5 text-sm font-mono font-bold tracking-widest outline-none border transition-colors"
+            style={{ background: inputBg, borderColor: brd2, color: txt }} />
+
+          <div className="flex gap-0.5">
+            {(['1D','1W','1M','3M'] as TF[]).map(t => (
+              <button key={t} onClick={() => setTf(t)}
+                className="px-2 py-1.5 rounded-md text-xs font-mono border transition-all"
+                style={{
+                  background: tf === t ? 'rgba(167,139,250,0.15)' : inputBg,
+                  borderColor: tf === t ? '#a78bfa' : brd,
+                  color: tf === t ? '#a78bfa' : txt3,
+                }}>{t}</button>
+            ))}
           </div>
-        </div>
 
-        <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())}
-          onKeyDown={e => e.key === 'Enter' && !running && run()}
-          placeholder="AAPL" maxLength={6}
-          className="w-16 sm:w-20 rounded-lg px-3 py-1.5 text-sm font-mono font-semibold tracking-widest outline-none border"
-          style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.12)', color: 'white' }} />
-
-        <div className="flex gap-1">
-          {(['1D','1W','1M','3M'] as TF[]).map(t => (
-            <button key={t} onClick={() => setTf(t)}
-              className="px-2.5 py-1.5 rounded-md text-xs font-mono border transition-all"
-              style={{
-                background: tf === t ? 'rgba(167,139,250,0.15)' : '#181e2a',
-                borderColor: tf === t ? '#a78bfa' : 'rgba(255,255,255,0.08)',
-                color: tf === t ? '#a78bfa' : 'rgba(255,255,255,0.3)',
-              }}>{t}</button>
-          ))}
-        </div>
-
-        {/* Persona selector */}
-        <div className="flex items-center gap-1 rounded-lg p-0.5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
-          {(Object.entries(PERSONAS) as [Persona, typeof PERSONAS[Persona]][]).map(([key, p]) => (
-            <button key={key} onClick={() => setPersona(key)}
-              title={p.desc}
-              className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-mono transition-all"
-              style={{
-                background: persona === key ? `${p.color}18` : 'transparent',
-                color: persona === key ? p.color : 'rgba(255,255,255,0.3)',
-                border: persona === key ? `1px solid ${p.color}35` : '1px solid transparent',
-              }}>
-              <span>{p.icon}</span>
-              <span className="hidden sm:inline">{p.label}</span>
-            </button>
-          ))}
-        </div>
-
-        <button onClick={run} disabled={running}
-          className="px-4 py-1.5 rounded-lg text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95 disabled:opacity-40"
-          style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
-          {running ? 'Analyzing…' : 'Analyze'}
-        </button>
-
-        <button onClick={() => router.push('/news')}
-          className="flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 rounded-lg text-sm font-semibold transition-all hover:opacity-80"
-          style={{ background: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)' }}>
-          <Zap size={13} />
-          <span className="hidden sm:inline">Today</span>
-        </button>
-
-        <button onClick={() => router.push('/tomorrow')}
-          className="flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 rounded-lg text-sm font-semibold transition-all hover:opacity-80"
-          style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.25)' }}>
-          <span className="text-xs">📅</span>
-          <span className="hidden sm:inline">Tomorrow</span>
-        </button>
-
-        <button onClick={() => router.push('/portfolio')}
-          className="flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 rounded-lg text-sm font-semibold transition-all hover:opacity-80"
-          style={{ background: 'rgba(52,211,153,0.12)', color: '#34d399', border: '1px solid rgba(52,211,153,0.25)' }}>
-          <span className="text-xs">💼</span>
-          <span className="hidden sm:inline">Portfolio</span>
-        </button>
-
-        <button onClick={() => router.push('/guide')}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm transition-all hover:opacity-80"
-          style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.08)' }}
-          title="Help & FAQ">
-          <BookOpen size={13} />
-        </button>
-
-        {running && <span className="text-xs font-mono text-white/25 truncate flex-1">{statusMsg}</span>}
-        {cached && !running && (
-          <div className="flex items-center gap-2 ml-2">
-            <span className="flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 rounded-full"
-              style={{ background: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)' }}>
-              <span>⏱</span>
-              Cached · {cached.ageMinutes}m ago
-            </span>
-            <button onClick={forceRun} disabled={running}
-              className="text-[10px] font-mono px-2.5 py-1 rounded-full transition-all hover:opacity-80"
-              style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.1)' }}>
-              ↻ Refresh
-            </button>
-          </div>
-        )}
-
-        <div className="flex items-center gap-2 ml-auto shrink-0">
-          {finalSig && <SBadge s={finalSig} />}
-          <span className="w-1.5 h-1.5 rounded-full animate-pulse-dot"
-            style={{ background: stage === 'done' ? '#34d399' : stage === 'error' ? '#f87171' : running ? '#fbbf24' : '#ffffff18' }} />
-          {userEmail && (
-            <div className="flex items-center gap-2 pl-2 border-l" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-              <button onClick={() => router.push('/settings')}
-                className="text-[10px] font-mono text-white/25 hidden sm:block max-w-[120px] truncate hover:text-white/50 transition-colors"
-                title="Account settings">
-                {userEmail}
+          {/* Persona selector */}
+          <div className="flex items-center gap-0.5 rounded-lg p-0.5" style={{ background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)', border: `1px solid ${brd}` }}>
+            {(Object.entries(PERSONAS) as [Persona, typeof PERSONAS[Persona]][]).map(([key, p]) => (
+              <button key={key} onClick={() => setPersona(key)} title={p.desc}
+                className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-mono transition-all"
+                style={{
+                  background: persona === key ? `${p.color}18` : 'transparent',
+                  color: persona === key ? p.color : txt3,
+                  border: persona === key ? `1px solid ${p.color}35` : '1px solid transparent',
+                }}>
+                <span>{p.icon}</span>
+                <span className="hidden lg:inline">{p.label}</span>
               </button>
+            ))}
+          </div>
+
+          <button onClick={run} disabled={running}
+            className="px-3 sm:px-4 py-1.5 rounded-lg text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95 disabled:opacity-40 shrink-0"
+            style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
+            {running ? '…' : 'Analyze'}
+          </button>
+        </div>
+
+        {/* ── Right side: nav links + user ── */}
+        <div className="flex items-center gap-1.5 shrink-0">
+
+          {/* Desktop nav links */}
+          <div className="hidden md:flex items-center gap-0.5">
+            {NAV_ITEMS.map(n => (
+              <button key={n.path} onClick={() => router.push(n.path)}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all hover:opacity-80"
+                style={{ color: n.color, background: `${n.color}10`, border: `1px solid ${n.color}20` }}>
+                <span className="text-[11px]">{n.icon}</span>
+                <span className="hidden lg:inline">{n.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Theme toggle */}
+          <button onClick={toggleTheme}
+            className="p-1.5 rounded-lg transition-all hover:opacity-80"
+            style={{ background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)', color: txt2, border: `1px solid ${brd}` }}
+            title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}>
+            {isDark ? <Sun size={13} /> : <Moon size={13} />}
+          </button>
+
+          {/* Status dot */}
+          <span className="w-1.5 h-1.5 rounded-full animate-pulse-dot shrink-0"
+            style={{ background: stage === 'done' ? '#34d399' : stage === 'error' ? '#f87171' : running ? '#fbbf24' : brd2 }} />
+
+          {/* User area */}
+          {userEmail && (
+            <div className="flex items-center gap-1.5 pl-1.5 border-l" style={{ borderColor: brd }}>
               {subStatus?.status !== 'exempt' && subStatus?.status === 'trialing' && subStatus.daysLeft !== null && (
-                <button onClick={async () => {
-                  const res = await fetch('/api/stripe/checkout', { method: 'POST' })
-                  const d = await res.json()
-                  if (d.url) window.location.href = d.url
-                }}
-                  className="text-[10px] font-mono px-2.5 py-1 rounded-full transition-all hover:opacity-80 flex items-center gap-1"
+                <button onClick={async () => { const r = await fetch('/api/stripe/checkout',{method:'POST'}); const d=await r.json(); if(d.url) window.location.href=d.url }}
+                  className="text-[10px] font-mono px-2 py-1 rounded-full"
                   style={{ background: subStatus.daysLeft <= 2 ? 'rgba(248,113,113,0.12)' : 'rgba(251,191,36,0.12)', color: subStatus.daysLeft <= 2 ? '#f87171' : '#fbbf24', border: `1px solid ${subStatus.daysLeft <= 2 ? 'rgba(248,113,113,0.3)' : 'rgba(251,191,36,0.25)'}` }}>
-                  ⏳ {subStatus.daysLeft}d left — Subscribe
+                  ⏳ {subStatus.daysLeft}d
                 </button>
               )}
-              {subStatus?.status !== 'exempt' && subStatus?.status === 'active' && (
-                <button onClick={async () => {
-                  const res = await fetch('/api/stripe/portal', { method: 'POST' })
-                  const d = await res.json()
-                  if (d.url) window.location.href = d.url
-                }}
-                  className="text-[10px] font-mono px-2.5 py-1 rounded-full transition-all hover:opacity-80 hidden sm:flex items-center gap-1"
-                  style={{ background: 'rgba(52,211,153,0.08)', color: '#34d399', border: '1px solid rgba(52,211,153,0.2)' }}>
-                  ✓ Pro
-                </button>
-              )}
+              <button onClick={() => router.push('/settings')}
+                className="text-[10px] font-mono hidden sm:block max-w-[100px] truncate hover:opacity-70 transition-opacity"
+                style={{ color: txt3 }} title="Account settings">{userEmail}</button>
               <button onClick={handleSignOut}
                 className="flex items-center gap-1 text-[10px] font-mono px-2 py-1 rounded-md transition-all hover:opacity-80"
-                style={{ background: 'rgba(248,113,113,0.1)', color: '#f87171', border: '1px solid rgba(248,113,113,0.2)' }}
-                title="Sign out">
+                style={{ background: 'rgba(248,113,113,0.1)', color: '#f87171', border: '1px solid rgba(248,113,113,0.2)' }}>
                 <LogOut size={10} />
-                <span className="hidden sm:inline">Sign out</span>
               </button>
             </div>
           )}
-        </div>
-      </header>
 
+          {/* Mobile menu toggle */}
+          <button onClick={() => setNavOpen(!navOpen)}
+            className="flex md:hidden p-1.5 rounded-lg transition-all"
+            style={{ background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)', color: txt2, border: `1px solid ${brd}` }}>
+            {navOpen ? <X size={14} /> : <Menu size={14} />}
+          </button>
+        </div>
+      </nav>
+
+      {/* Mobile nav drawer */}
+      {navOpen && (
+        <div className="md:hidden border-b px-3 py-2 flex flex-wrap gap-2" style={{ background: surf, borderColor: brd }}>
+          {NAV_ITEMS.map(n => (
+            <button key={n.path} onClick={() => { router.push(n.path); setNavOpen(false) }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+              style={{ color: n.color, background: `${n.color}12`, border: `1px solid ${n.color}25` }}>
+              {n.icon} {n.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* ── Stage progress bar ──────────────────────── */}
+      {running && (
+        <div className="px-3 py-2 border-b shrink-0" style={{ background: surf, borderColor: brd }}>
+          <div className="flex items-center gap-1 max-w-2xl mx-auto">
+            {STEPS.map((s, i) => {
+              const done = stepIdx > i
+              const active = stepIdx === i
+              return (
+                <div key={s.key} className="flex items-center gap-1 flex-1 min-w-0">
+                  <div className="flex flex-col items-center gap-0.5 flex-1">
+                    <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ background: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)' }}>
+                      <div className="h-full rounded-full transition-all duration-500"
+                        style={{ width: done ? '100%' : active ? '60%' : '0%', background: done ? '#34d399' : active ? '#a78bfa' : 'transparent' }} />
+                    </div>
+                    <span className="text-[8px] font-mono truncate w-full text-center"
+                      style={{ color: done ? '#34d399' : active ? '#a78bfa' : txt3 }}>{s.label}</span>
+                  </div>
+                  {i < STEPS.length - 1 && <div className="w-2 h-px shrink-0" style={{ background: done ? '#34d399' : brd }} />}
+                </div>
+              )
+            })}
+          </div>
+          {statusMsg && <p className="text-[10px] font-mono text-center mt-1" style={{ color: txt3 }}>{statusMsg}</p>}
+        </div>
+      )}
+
+      {/* ── Cached / stale banner ────────────────────── */}
+      {cached && stage === 'done' && (
+        <div className="px-3 py-2 flex items-center justify-between border-b shrink-0"
+          style={{
+            background: cached.ageMinutes > 60 ? 'rgba(248,113,113,0.07)' : isDark ? 'rgba(251,191,36,0.06)' : 'rgba(251,191,36,0.08)',
+            borderColor: cached.ageMinutes > 60 ? 'rgba(248,113,113,0.25)' : 'rgba(251,191,36,0.2)',
+          }}>
+          <span className="text-xs" style={{ color: txt2 }}>
+            {cached.ageMinutes > 60
+              ? <><strong style={{ color: '#f87171' }}>⚠ Stale — {cached.ageMinutes}m old.</strong> Price may have moved.</>
+              : <>⏱ Cached analysis · {cached.ageMinutes}m ago</>
+            }
+          </span>
+          <button onClick={forceRun}
+            className="text-[10px] font-mono px-2.5 py-1 rounded-full transition-all hover:opacity-80"
+            style={{ background: cached.ageMinutes > 60 ? 'rgba(248,113,113,0.15)' : 'rgba(251,191,36,0.15)', color: cached.ageMinutes > 60 ? '#f87171' : '#fbbf24', border: `1px solid ${cached.ageMinutes > 60 ? 'rgba(248,113,113,0.3)' : 'rgba(251,191,36,0.3)'}` }}>
+            ↻ Refresh
+          </button>
+        </div>
+      )}
+
+      {/* ── Main layout: sidebar + debate ───────────── */}
       <div className="flex flex-col md:flex-row flex-1 md:overflow-hidden">
 
-        {/* Left sidebar: signal dashboard */}
-        <aside className="w-full md:w-60 md:shrink-0 flex flex-col gap-2.5 p-3.5 md:overflow-y-auto border-b md:border-b-0 md:border-r"
-          style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
-
-          {/* Mobile: grid layout for sidebar cards */}
-          <div className="grid grid-cols-2 md:grid-cols-1 gap-2.5">
+        {/* Left sidebar — only show when there's data */}
+        {md && (
+          <aside className="w-full md:w-56 lg:w-60 md:shrink-0 flex flex-col gap-2 p-3 md:overflow-y-auto border-b md:border-b-0 md:border-r"
+            style={{ background: isDark ? '#0d1117' : '#f5f7fb', borderColor: brd }}>
+          <div className="grid grid-cols-2 md:grid-cols-1 gap-2">
 
           {/* Price + sparkline */}
-          {md && (
-            <div className="col-span-2 md:col-span-1 rounded-xl border p-3" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.07)' }}>
-              <div className="flex items-baseline gap-2 mb-1.5">
-                <span className="text-lg font-bold font-mono">${(md!.currentPrice ?? 0).toFixed(2)}</span>
-                <span className="text-xs font-mono" style={{ color: md!.technicals?.priceChange1D >= 0 ? '#34d399' : '#f87171' }}>
-                  {pct(md!.technicals?.priceChange1D)}
-                </span>
-                <span className="text-[9px] font-mono text-white/20 ml-auto">15m delay</span>
-              </div>
-              <Spark bars={md!.bars} />
+          <div className="col-span-2 md:col-span-1 rounded-xl border p-3" style={{ background: surf, borderColor: brd }}>
+            <div className="flex items-baseline gap-2 mb-1.5">
+              <span className="text-base font-bold font-mono" style={{ color: txt }}>${(md!.currentPrice ?? 0).toFixed(2)}</span>
+              <span className="text-xs font-mono" style={{ color: md!.technicals?.priceChange1D >= 0 ? '#34d399' : '#f87171' }}>
+                {((v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`)(md!.technicals?.priceChange1D)}
+              </span>
+              <span className="text-[9px] font-mono ml-auto" style={{ color: txt3 }}>15m delay</span>
             </div>
-          )}
+            <Spark bars={md!.bars} />
+          </div>
 
-          {/* Conviction bar */}
+          {/* Conviction */}
           {md?.conviction && (
-            <div className="rounded-xl border p-3 space-y-2" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.07)' }}>
+            <div className="rounded-xl border p-3 space-y-2" style={{ background: surf, borderColor: brd }}>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
                   <Zap size={11} style={{ color: SIG_COLOR[(md!.conviction?.direction ?? 'NEUTRAL') as Signal] }} />
@@ -588,34 +655,33 @@ function HomeInner() {
                     {md!.conviction?.direction ?? ''}
                   </span>
                 </div>
-                <span className="text-[10px] font-mono text-white/30 capitalize">{md!.conviction?.conviction?.replace('_',' ')}</span>
+                <span className="text-[10px] font-mono capitalize" style={{ color: txt3 }}>{md!.conviction?.conviction?.replace('_',' ')}</span>
               </div>
-              <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.07)' }}>
+              <div className="h-1.5 rounded-full overflow-hidden" style={{ background: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)' }}>
                 <div className="h-full rounded-full transition-all duration-1000"
                   style={{ width: `${((md!.conviction?.convergenceScore ?? 0) + 100) / 2}%`, background: SIG_COLOR[(md!.conviction?.direction ?? 'NEUTRAL') as Signal] }} />
               </div>
               <div className="flex justify-between text-[10px] font-mono">
-                <span style={{ color: '#34d399' }}>{md!.conviction?.convergingSignals ?? 0} converging</span>
-                <span style={{ color: '#f87171' }}>{md!.conviction?.divergingSignals ?? 0} diverging</span>
+                <span style={{ color: '#34d399' }}>{md!.conviction?.convergingSignals ?? 0} conv</span>
+                <span style={{ color: '#f87171' }}>{md!.conviction?.divergingSignals ?? 0} div</span>
               </div>
             </div>
           )}
 
           {/* Technicals */}
           {md?.technicals && (
-            <Card title="Technicals" icon={<BarChart2 size={11}/>} color="#a78bfa">
+            <Card title="Technicals" icon={<BarChart2 size={11}/>} color="#a78bfa" surf={surf} brd={brd} txt3={txt3}>
               {[
-                ['RSI (14)', <span style={{ color: md!.technicals?.rsi > 70 ? '#f87171' : md!.technicals?.rsi < 30 ? '#34d399' : 'white' }}>{md!.technicals?.rsi.toFixed(1)}</span>],
+                ['RSI', <span style={{ color: md!.technicals?.rsi > 70 ? '#f87171' : md!.technicals?.rsi < 30 ? '#34d399' : txt }}>{md!.technicals?.rsi.toFixed(1)}</span>],
                 ['MACD', <span style={{ color: md!.technicals?.macdHistogram >= 0 ? '#34d399' : '#f87171' }}>{md!.technicals?.macdHistogram >= 0 ? '▲ pos' : '▼ neg'}</span>],
                 ['MA cross', <span style={{ color: md!.technicals?.goldenCross ? '#34d399' : '#f87171' }}>{md!.technicals?.goldenCross ? 'Golden ✓' : 'Death ✗'}</span>],
-                ['vs SMA200', <span style={{ color: md!.currentPrice >= md!.technicals?.sma200 ? '#34d399' : '#f87171' }}>{pct((md!.currentPrice / md!.technicals?.sma200 - 1) * 100)}</span>],
-                ['Volume', <span>{md!.technicals?.volumeRatio.toFixed(1)}x avg</span>],
-                ['Bollinger', <span>{md!.technicals?.bbSignal}</span>],
-                ['Support', <span>${md!.technicals?.support.toFixed(2)}</span>],
-                ['Resistance', <span>${md!.technicals?.resistance.toFixed(2)}</span>],
+                ['vs SMA200', <span style={{ color: md!.currentPrice >= md!.technicals?.sma200 ? '#34d399' : '#f87171' }}>{((md!.currentPrice / md!.technicals?.sma200 - 1) * 100 >= 0 ? '+' : '') + ((md!.currentPrice / md!.technicals?.sma200 - 1) * 100).toFixed(1) + '%'}</span>],
+                ['Volume', <span style={{ color: txt }}>{md!.technicals?.volumeRatio.toFixed(1)}x avg</span>],
+                ['Support', <span style={{ color: txt }}>${md!.technicals?.support.toFixed(2)}</span>],
+                ['Resist', <span style={{ color: txt }}>${md!.technicals?.resistance.toFixed(2)}</span>],
               ].map(([k, v]) => (
                 <div key={String(k)} className="flex justify-between text-xs">
-                  <span className="text-white/35">{k}</span>
+                  <span style={{ color: txt3 }}>{k}</span>
                   <span className="font-mono text-[11px]">{v}</span>
                 </div>
               ))}
@@ -624,88 +690,60 @@ function HomeInner() {
 
           {/* Fundamentals */}
           {md?.fundamentals && (
-            <Card title="Fundamentals" icon={<DollarSign size={11}/>} color="#60a5fa">
+            <Card title="Fundamentals" icon={<DollarSign size={11}/>} color="#60a5fa" surf={surf} brd={brd} txt3={txt3}>
               {md!.fundamentals?.peRatio !== null && (
-                <div className="flex justify-between text-xs"><span className="text-white/35">P/E</span><span className="font-mono">{md!.fundamentals?.peRatio.toFixed(1)}x</span></div>
+                <div className="flex justify-between text-xs"><span style={{ color: txt3 }}>P/E</span><span className="font-mono" style={{ color: txt }}>{md!.fundamentals?.peRatio.toFixed(1)}x</span></div>
               )}
               <div className="flex justify-between text-xs">
-                <span className="text-white/35">Analysts</span>
+                <span style={{ color: txt3 }}>Analysts</span>
                 <span className="font-mono text-[10px]" style={{ color: '#60a5fa' }}>{md!.fundamentals?.analystConsensus.replace('_',' ')}</span>
               </div>
-              {md!.fundamentals?.analystUpside !== null && (
-                <div className="flex justify-between text-xs">
-                  <span className="text-white/35">Upside</span>
-                  <span className="font-mono" style={{ color: md!.fundamentals?.analystUpside >= 0 ? '#34d399' : '#f87171' }}>{pct(md!.fundamentals?.analystUpside)}</span>
-                </div>
-              )}
               {md!.fundamentals?.daysToEarnings !== null && (
                 <div className="flex justify-between text-xs">
-                  <span className="text-white/35">Earnings</span>
-                  <span className="font-mono text-[10px]"
-                    style={{ color: md!.fundamentals?.earningsRisk === 'high' ? '#f87171' : md!.fundamentals?.earningsRisk === 'moderate' ? '#fbbf24' : '#34d399' }}>
+                  <span style={{ color: txt3 }}>Earnings</span>
+                  <span className="font-mono text-[10px]" style={{ color: md!.fundamentals?.earningsRisk === 'high' ? '#f87171' : md!.fundamentals?.earningsRisk === 'moderate' ? '#fbbf24' : '#34d399' }}>
                     {md!.fundamentals?.daysToEarnings}d — {md!.fundamentals?.earningsRisk}
                   </span>
                 </div>
               )}
-              <div className="flex justify-between text-xs">
-                <span className="text-white/35">EPS record</span>
-                <span className="font-mono text-[10px]" style={{ color: md!.fundamentals?.consistentBeater ? '#34d399' : '#fbbf24' }}>
-                  {md!.fundamentals?.consistentBeater ? 'beater ✓' : 'mixed'}
-                </span>
-              </div>
             </Card>
           )}
 
           {/* Smart money */}
           {md?.smartMoney && (
-            <Card title="Smart Money" icon={<Shield size={11}/>} color="#34d399">
+            <Card title="Smart Money" icon={<Shield size={11}/>} color="#34d399" surf={surf} brd={brd} txt3={txt3}>
               <div className="flex justify-between text-xs">
-                <span className="text-white/35">Insiders</span>
+                <span style={{ color: txt3 }}>Insiders</span>
                 <Chip label={md!.smartMoney?.insiderSignal.replace('_',' ')}
                   color={md!.smartMoney?.insiderSignal.includes('buy') ? '#34d399' : md!.smartMoney?.insiderSignal.includes('sell') ? '#f87171' : '#fbbf24'} />
               </div>
-              {md!.smartMoney?.congressSignal !== 'none' && (
-                <div className="flex justify-between text-xs">
-                  <span className="text-white/35">Congress</span>
-                  <Chip label={`${md!.smartMoney?.congressSignal} (${md!.smartMoney?.congressTrades})`}
-                    color={md!.smartMoney?.congressSignal === 'buying' ? '#34d399' : '#f87171'} />
-                </div>
-              )}
               {md!.smartMoney?.notableHolders.length > 0 && (
-                <div className="text-[9px] text-white/30 leading-relaxed">{md!.smartMoney?.notableHolders.join(' · ')}</div>
+                <div className="text-[9px] leading-relaxed" style={{ color: txt3 }}>{md!.smartMoney?.notableHolders.join(' · ')}</div>
               )}
             </Card>
           )}
 
           {/* Options */}
           {md?.options && (
-            <Card title="Options Flow" icon={<Activity size={11}/>} color="#f87171">
+            <Card title="Options Flow" icon={<Activity size={11}/>} color="#f87171" surf={surf} brd={brd} txt3={txt3}>
               {md!.options?.putCallRatio !== null && (
                 <div className="flex justify-between text-xs">
-                  <span className="text-white/35">P/C ratio</span>
-                  <span className="font-mono text-[10px]" style={{ color: md!.options?.putCallSignal === 'bullish' ? '#34d399' : md!.options?.putCallSignal === 'bearish' ? '#f87171' : 'white' }}>
+                  <span style={{ color: txt3 }}>P/C ratio</span>
+                  <span className="font-mono text-[10px]" style={{ color: md!.options?.putCallSignal === 'bullish' ? '#34d399' : md!.options?.putCallSignal === 'bearish' ? '#f87171' : txt }}>
                     {md!.options?.putCallRatio.toFixed(2)} — {md!.options?.putCallSignal}
                   </span>
                 </div>
               )}
               {md!.options?.shortInterestPct !== null && (
                 <div className="flex justify-between text-xs">
-                  <span className="text-white/35">Short int.</span>
-                  <span className="font-mono text-[10px]" style={{ color: md!.options?.shortInterestPct > 20 ? '#fbbf24' : 'white' }}>
-                    {md!.options?.shortInterestPct.toFixed(1)}% float
-                  </span>
+                  <span style={{ color: txt3 }}>Short int.</span>
+                  <span className="font-mono text-[10px]" style={{ color: txt }}>{md!.options?.shortInterestPct.toFixed(1)}% float</span>
                 </div>
               )}
               {md!.options?.unusualCount > 0 && (
                 <div className="flex justify-between text-xs">
-                  <span className="text-white/35">Sweeps</span>
+                  <span style={{ color: txt3 }}>Sweeps</span>
                   <span className="font-mono text-[10px]" style={{ color: '#fbbf24' }}>{md!.options?.unusualCount} unusual</span>
-                </div>
-              )}
-              {md!.options?.maxPainStrike && (
-                <div className="flex justify-between text-xs">
-                  <span className="text-white/35">Max pain</span>
-                  <span className="font-mono text-[10px]">${md!.options?.maxPainStrike}</span>
                 </div>
               )}
             </Card>
@@ -713,38 +751,33 @@ function HomeInner() {
 
           {/* Market */}
           {md?.marketContext && (
-            <Card title="Market" icon={<Globe size={11}/>} color="#fbbf24">
+            <Card title="Market" icon={<Globe size={11}/>} color="#fbbf24" surf={surf} brd={brd} txt3={txt3}>
               <div className="text-[10px] font-mono mb-1" style={{ color: '#fbbf24' }}>
                 {md!.marketContext?.regime.replace(/_/g,' ').toUpperCase()}
               </div>
               <div className="flex justify-between text-xs">
-                <span className="text-white/35">SPY</span>
+                <span style={{ color: txt3 }}>SPY</span>
                 <span className="font-mono" style={{ color: md!.marketContext?.spy.change1D >= 0 ? '#34d399' : '#f87171' }}>
-                  {pct(md!.marketContext?.spy.change1D)}
+                  {((v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`)(md!.marketContext?.spy.change1D)}
                 </span>
               </div>
               <div className="flex justify-between text-xs">
-                <span className="text-white/35">VIX</span>
+                <span style={{ color: txt3 }}>VIX</span>
                 <span className="font-mono" style={{ color: md!.marketContext?.vix.level > 25 ? '#f87171' : '#34d399' }}>
                   {md!.marketContext?.vix.level.toFixed(1)}
                 </span>
               </div>
-              {md!.marketContext?.competitors.slice(0,3).map(c => (
-                <div key={c.ticker} className="flex justify-between text-xs">
-                  <span className="text-white/30 font-mono">{c.ticker}</span>
-                  <span className="font-mono text-[10px]" style={{ color: c.change1D >= 0 ? '#34d399' : '#f87171' }}>{pct(c.change1D)}</span>
-                </div>
-              ))}
             </Card>
           )}
 
-          </div>{/* end sidebar grid */}
-        </aside>
+          </div>
+          </aside>
+        )}
 
         {/* Main debate area */}
         <main className="flex-1 flex flex-col md:overflow-hidden">
 
-          <div ref={debateRef} className="flex-1 md:overflow-y-auto p-3 sm:p-5 space-y-4">
+          <div ref={debateRef} className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-4">
 
             {cached && stage === 'done' && (
               <div className="flex items-center justify-between px-4 py-2.5 rounded-xl mb-1"
@@ -878,6 +911,13 @@ function HomeInner() {
                 badge={<><SBadge s={reb.signal} sm /><span className="text-[10px] font-mono text-white/20 ml-1">Round 2</span></>}
                 defaultOpen={true}>
               <div className="pt-2 space-y-3">
+                {reb.researchQuestion && (
+                  <div className="rounded-lg p-3" style={{ background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.15)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-widest mb-1" style={{ color: '#60a5fa' }}>🔍 News Scout consulted</div>
+                    <div className="text-xs text-white/50 mb-1.5 italic">Q: {reb.researchQuestion}</div>
+                    <div className="text-xs text-white/70 leading-relaxed">{reb.researchAnswer}</div>
+                  </div>
+                )}
                 <p className="text-sm text-white/75 leading-relaxed">{reb.rebuttal}</p>
                 {reb.concedes.length > 0 && (
                   <div className="rounded-lg p-3" style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.15)' }}>
@@ -911,6 +951,13 @@ function HomeInner() {
                 badge={<span className="text-[10px] font-mono text-white/20 ml-1">Round 2</span>}
                 defaultOpen={true}>
               <div className="pt-2 space-y-3">
+                {ctr.researchQuestion && (
+                  <div className="rounded-lg p-3" style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.15)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-widest mb-1" style={{ color: '#f87171' }}>🔍 News Scout consulted</div>
+                    <div className="text-xs text-white/50 mb-1.5 italic">Q: {ctr.researchQuestion}</div>
+                    <div className="text-xs text-white/70 leading-relaxed">{ctr.researchAnswer}</div>
+                  </div>
+                )}
                 <p className="text-sm text-white/75 leading-relaxed">{ctr.finalChallenge}</p>
                 {ctr.yieldsOn.length > 0 && (
                   <div className="rounded-lg p-3" style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.15)' }}>
