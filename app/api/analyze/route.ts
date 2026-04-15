@@ -8,10 +8,10 @@ export const maxDuration = 120
 
 // Cache durations in minutes per timeframe
 const CACHE_MINUTES: Record<string, number> = {
-  '1D': 30,
-  '1W': 120,
-  '1M': 360,
-  '3M': 720,
+  '1D': 20,   // 20 min — intraday moves fast
+  '1W': 45,   // 45 min — price staleness check also runs
+  '1M': 60,   // 1 hour — daily bars, price check guards against big moves
+  '3M': 90,   // 90 min — longer view but price still matters
 }
 
 export async function POST(req: NextRequest) {
@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
                 const cachedPrice = cached.price ?? 0
                 if (livePrice > 0 && cachedPrice > 0) {
                   const priceDrift = Math.abs(livePrice - cachedPrice) / cachedPrice
-                  if (priceDrift > 0.03) {
+                  if (priceDrift > 0.015) {
                     priceStale = true
                     send('status', { stage: 'building_bundle', message: `Price moved ${(priceDrift*100).toFixed(1)}% since last analysis — running fresh analysis...` })
                   }
