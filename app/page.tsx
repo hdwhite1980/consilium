@@ -478,6 +478,7 @@ function HomeInner() {
     { label: 'Reinvest', icon: '💰', path: '/reinvestment', color: '#34d399' },
     { label: 'Macro', icon: '🌍', path: '/macro',    color: '#60a5fa' },
     { label: 'Compare', icon: '⚡', path: '/compare',  color: '#f87171' },
+    { label: 'Academy', icon: '🎓', path: '/training', color: '#a78bfa' },
     { label: 'Guide', icon: '📖', path: '/guide',    color: txt3 },
   ]
 
