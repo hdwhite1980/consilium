@@ -48,29 +48,51 @@ export async function POST(req: NextRequest) {
 
           if (cached) {
             // ── Price staleness check ──────────────────────────
-            // If price has moved >3% since cache, invalidate and run fresh
             let priceStale = false
+            let livePrice = 0
             try {
-              const quoteRes = await fetch(
-                `https://data.alpaca.markets/v2/stocks/${symbol}/quotes/latest`,
-                { headers: {
-                  'APCA-API-KEY-ID': process.env.ALPACA_API_KEY!,
-                  'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY!,
-                }}
-              )
-              if (quoteRes.ok) {
-                const quoteData = await quoteRes.json()
-                const livePrice = quoteData?.quote?.ap ?? quoteData?.quote?.bp ?? 0
-                const cachedPrice = cached.price ?? 0
-                if (livePrice > 0 && cachedPrice > 0) {
-                  const priceDrift = Math.abs(livePrice - cachedPrice) / cachedPrice
-                  if (priceDrift > 0.015) {
-                    priceStale = true
-                    send('status', { stage: 'building_bundle', message: `Price moved ${(priceDrift*100).toFixed(1)}% since last analysis — running fresh analysis...` })
-                  }
+              const finnhubKey = process.env.FINNHUB_API_KEY
+              if (finnhubKey) {
+                const quoteRes = await fetch(
+                  `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${finnhubKey}`,
+                  { cache: 'no-store' }
+                )
+                if (quoteRes.ok) {
+                  const quoteData = await quoteRes.json()
+                  livePrice = quoteData?.c ?? 0
                 }
               }
-            } catch { /* Quote fetch failed — serve cache */ }
+            } catch { /* fallthrough */ }
+
+            const cachedPrice: number = cached.price ?? 0
+            const cacheAgeMs = Date.now() - new Date(cached.created_at).getTime()
+            const cacheAgeHours = cacheAgeMs / 3600000
+
+            if (cachedPrice <= 0) {
+              // No price stored — can't verify freshness, force refresh if over 30 min
+              if (cacheAgeMs > 30 * 60 * 1000) {
+                priceStale = true
+                send('status', { stage: 'building_bundle', message: 'Cache has no price data — running fresh analysis...' })
+              }
+            } else if (livePrice > 0) {
+              const priceDrift = Math.abs(livePrice - cachedPrice) / cachedPrice
+              if (priceDrift > 0.015) {  // >1.5% drift = stale
+                priceStale = true
+                send('status', { stage: 'building_bundle', message: `Price moved ${(priceDrift*100).toFixed(1)}% since last analysis ($${cachedPrice.toFixed(2)} → $${livePrice.toFixed(2)}) — running fresh...` })
+              }
+            } else {
+              // Finnhub returned 0 — market closed or API issue, fall back to age check
+              if (cacheAgeHours > 2) {
+                priceStale = true
+                send('status', { stage: 'building_bundle', message: 'Cache is over 2 hours old — running fresh analysis...' })
+              }
+            }
+
+            // Hard maximum: never serve cache older than 2 hours regardless of price check
+            if (cacheAgeMs > 2 * 60 * 60 * 1000) {
+              priceStale = true
+              send('status', { stage: 'building_bundle', message: 'Cache expired (>2 hours) — running fresh analysis...' })
+            }
 
             if (!priceStale) {
             const ageMinutes = Math.round(
