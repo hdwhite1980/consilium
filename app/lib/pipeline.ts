@@ -128,7 +128,16 @@ export async function runClaude(bundle: SignalBundle, gemini: GeminiResult): Pro
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 1000,
-    system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. Synthesize ALL signals into a clear directional call. Be specific and data-driven. Your analysis will be challenged by the Devil's Advocate.`,
+    system: (() => {
+      const pi: Record<string, string> = {
+        balanced:    'Weight technical and fundamental signals equally. When they conflict, note it explicitly and let data quality determine conviction.',
+        technical:   'You are a technical trader. Price action and chart signals are primary. Follow the trend — never fight the tape. A death cross is bearish regardless of P/E ratio. RSI, MACD, and moving averages drive your call.',
+        fundamental: 'You are a value-focused analyst. Earnings growth, analyst consensus, and valuation vs historical averages drive your call. Technicals are short-term noise. A 30% drawdown in a high-quality business with strong fundamentals is an opportunity, not a sell signal.',
+      }
+      const pn: Record<string, string> = { balanced: 'Balanced', technical: 'Technical Trader', fundamental: 'Fundamental Analyst' }
+      const p = (bundle.persona ?? 'balanced') as string
+      return `You are the Lead Analyst (${pn[p] ?? 'Balanced'} perspective) in an elite AI stock council for ${bundle.ticker}. ${pi[p] ?? pi.balanced} Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate.`
+    })(),
     messages: [{
       role: 'user',
       content: `TICKER: ${bundle.ticker} | TIMEFRAME: ${bundle.timeframe} | PRICE: $${bundle.currentPrice.toFixed(2)}
@@ -189,13 +198,19 @@ export async function runJudge(
   gpt: GptResult,
   round = 1
 ): Promise<JudgeResult> {
+  const judgePersona: Record<string, string> = {
+    balanced:    'Weigh technical and fundamental arguments equally. Higher quality evidence wins regardless of type.',
+    technical:   'Give more weight to technical arguments — price action, chart patterns, and momentum signals. A stock in a clear downtrend requires exceptionally strong fundamental evidence to override the chart.',
+    fundamental: 'Give more weight to fundamental arguments — earnings quality, valuation vs history, and analyst consensus. Technical signals are short-term noise. A fundamentally strong business trading at a discount to its historical valuation is a buy even in a downtrend.',
+  }
+  const judgePersonaKey = (bundle.persona ?? 'balanced') as string
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 2000,
-    system: `You are the Judge of an elite AI stock council for ${bundle.ticker}. The council has three roles: News Scout, Lead Analyst, and Devil's Advocate. You hold NO prior position. Weigh argument QUALITY not vote count. Be decisive. Refer to council members by their role names only.`,
+    system: `You are the Judge of an elite AI stock council for ${bundle.ticker}. The council has three roles: News Scout, Lead Analyst, and Devil's Advocate. You hold NO prior position. ${judgePersona[judgePersonaKey] ?? judgePersona.balanced} Weigh argument QUALITY not vote count. Be decisive. Refer to council members by their role names only.`,
     messages: [{
       role: 'user',
-      content: `TICKER: ${bundle.ticker} | PRICE: $${bundle.currentPrice.toFixed(2)} | ROUND: ${round}
+      content: `TICKER: ${bundle.ticker} | PRICE: $${bundle.currentPrice.toFixed(2)} | ROUND: ${round} | PERSPECTIVE: ${(bundle.persona ?? 'balanced').toUpperCase()}
 
 NEWS SCOUT: ${gemini.sentiment} sentiment, ${gemini.confidence}% confidence
 ${gemini.summary}

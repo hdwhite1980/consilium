@@ -15,7 +15,7 @@ const CACHE_MINUTES: Record<string, number> = {
 }
 
 export async function POST(req: NextRequest) {
-  const { ticker, timeframe, forceRefresh } = await req.json()
+  const { ticker, timeframe, forceRefresh, persona } = await req.json()
   if (!ticker) return Response.json({ error: 'ticker required' }, { status: 400 })
 
   const symbol = ticker.toUpperCase().trim()
@@ -103,6 +103,7 @@ export async function POST(req: NextRequest) {
         const bundle = await buildSignalBundle(symbol, tf, (step) =>
           send('status', { stage: 'building_bundle', message: step })
         )
+        bundle.persona = persona ?? 'balanced'
 
         send('market_data', {
           bars: bundle.bars,

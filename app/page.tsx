@@ -13,6 +13,13 @@ import {
 type Signal = 'BULLISH' | 'BEARISH' | 'NEUTRAL'
 type Stage  = 'idle' | 'building' | 'gemini' | 'claude' | 'gpt' | 'judge' | 'done' | 'error'
 type TF     = '1D' | '1W' | '1M' | '3M'
+type Persona = 'balanced' | 'technical' | 'fundamental'
+
+const PERSONAS: Record<Persona, { label: string; icon: string; color: string; desc: string }> = {
+  balanced:    { label: 'Balanced',    icon: '⚖',  color: '#a78bfa', desc: 'Equal weight to technicals and fundamentals' },
+  technical:   { label: 'Technical',   icon: '📈', color: '#60a5fa', desc: 'Follows price action and chart patterns' },
+  fundamental: { label: 'Fundamental', icon: '📊', color: '#34d399', desc: 'Prioritizes business value and analyst consensus' },
+}
 
 interface Bar { t: string; o: number; h: number; l: number; c: number; v: number }
 interface Scenario { label: string; probability: number; trigger: string }
@@ -168,9 +175,37 @@ function Think({ label, color }: { label: string; color: string }) {
   )
 }
 
+function Collapsible({
+  title, icon, color, badge, defaultOpen = false, children
+}: {
+  title: string; icon: React.ReactNode; color: string; badge?: React.ReactNode
+  defaultOpen?: boolean; children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className="rounded-xl border overflow-hidden"
+      style={{ borderColor: open ? `${color}30` : 'rgba(255,255,255,0.07)', background: '#111620' }}>
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-2.5 px-4 py-3 text-left transition-all hover:bg-white/[0.02]">
+        <span style={{ color }}>{icon}</span>
+        <span className="text-sm font-semibold text-white flex-1">{title}</span>
+        {badge}
+        <span className="text-white/25 text-xs ml-auto">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="px-4 pb-4 pt-1 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function HomeInner() {
   const [ticker, setTicker]     = useState('AAPL')
   const [tf, setTf]             = useState<TF>('1W')
+  const [persona, setPersona]   = useState<Persona>('balanced')
   const [stage, setStage]       = useState<Stage>('idle')
   const [statusMsg, setStatus]  = useState('')
   const [md, setMd]             = useState<MarketData | null>(null)
@@ -271,7 +306,7 @@ function HomeInner() {
       const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticker: ticker.toUpperCase(), timeframe: tf, forceRefresh: false }),
+        body: JSON.stringify({ ticker: ticker.toUpperCase(), timeframe: tf, forceRefresh: false, persona }),
         signal: abortRef.current.signal,
       })
 
@@ -306,7 +341,7 @@ function HomeInner() {
     } catch (e: unknown) {
       if ((e as Error).name !== 'AbortError') { setStage('error'); setErr((e as Error).message) }
     }
-  }, [ticker, tf, scroll])
+  }, [ticker, tf, persona, scroll])
 
   const running = !['idle', 'done', 'error'].includes(stage)
 
@@ -318,7 +353,7 @@ function HomeInner() {
       const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticker: ticker.toUpperCase(), timeframe: tf, forceRefresh: true }),
+        body: JSON.stringify({ ticker: ticker.toUpperCase(), timeframe: tf, forceRefresh: true, persona }),
         signal: abortRef.current.signal,
       })
       const reader = res.body!.getReader()
@@ -351,7 +386,7 @@ function HomeInner() {
     } catch (e: unknown) {
       if ((e as Error).name !== 'AbortError') { setStage('error'); setErr((e as Error).message) }
     }
-  }, [ticker, tf, scroll])
+  }, [ticker, tf, persona, scroll])
   const finalSig = jud?.signal ?? cla?.signal ?? md?.conviction?.direction
 
   return (
@@ -384,6 +419,22 @@ function HomeInner() {
                 borderColor: tf === t ? '#a78bfa' : 'rgba(255,255,255,0.08)',
                 color: tf === t ? '#a78bfa' : 'rgba(255,255,255,0.3)',
               }}>{t}</button>
+          ))}
+        </div>
+
+        {/* Persona selector */}
+        <div className="flex gap-1">
+          {(Object.entries(PERSONAS) as [Persona, typeof PERSONAS[Persona]][]).map(([key, p]) => (
+            <button key={key} onClick={() => setPersona(key)}
+              title={p.desc}
+              className="px-2 py-1.5 rounded-md text-xs font-mono border transition-all"
+              style={{
+                background: persona === key ? `${p.color}18` : '#181e2a',
+                borderColor: persona === key ? p.color : 'rgba(255,255,255,0.08)',
+                color: persona === key ? p.color : 'rgba(255,255,255,0.3)',
+              }}>
+              {p.icon}
+            </button>
           ))}
         </div>
 
@@ -692,12 +743,13 @@ function HomeInner() {
             {/* Gemini */}
             {stage === 'gemini' && !gem && <Think label="News Scout" color="#60a5fa" />}
             {gem && (
-              <div className="animate-slide-up rounded-xl p-4 border" style={{ background: 'rgba(96,165,250,0.04)', borderColor: 'rgba(96,165,250,0.16)' }}>
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold" style={{ background: 'rgba(96,165,250,0.18)', color: '#60a5fa' }}>N</div>
-                  <span className="text-xs font-semibold" style={{ color: '#60a5fa' }}>News Scout</span>
-                  <span className="ml-auto text-[10px] font-mono text-white/20">Stage 1</span>
-                </div>
+              <Collapsible
+                title="News Scout"
+                icon={<span className="text-xs font-bold">N</span>}
+                color="#60a5fa"
+                badge={<><span className="text-[10px] font-mono px-2 py-0.5 rounded-full" style={{ background: 'rgba(96,165,250,0.12)', color: '#60a5fa' }}>{gem.sentiment}</span><span className="text-[10px] font-mono text-white/20 ml-1">Stage 1</span></>}
+                defaultOpen={false}>
+              <div className="pt-2">
                 <p className="text-sm text-white/70 leading-relaxed mb-3">{gem.summary}</p>
                 <div className="space-y-1 mb-3">
                   {gem.headlines.map((h, i) => (
@@ -714,18 +766,19 @@ function HomeInner() {
                 </div>
                 <Bar2 val={gem.confidence} color="#60a5fa" label="confidence" />
               </div>
+              </Collapsible>
             )}
 
             {/* Claude */}
             {stage === 'claude' && !cla && <Think label="Lead Analyst" color="#a78bfa" />}
             {cla && (
-              <div className="animate-slide-up rounded-xl p-4 border" style={{ background: 'rgba(167,139,250,0.04)', borderColor: 'rgba(167,139,250,0.16)' }}>
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold" style={{ background: 'rgba(167,139,250,0.18)', color: '#a78bfa' }}>L</div>
-                  <span className="text-xs font-semibold" style={{ color: '#a78bfa' }}>Lead Analyst</span>
-                  <SBadge s={cla.signal} sm />
-                  <span className="ml-auto text-[10px] font-mono text-white/20">Stage 2</span>
-                </div>
+              <Collapsible
+                title="Lead Analyst"
+                icon={<span className="text-xs font-bold">L</span>}
+                color="#a78bfa"
+                badge={<><SBadge s={cla.signal} sm /><span className="text-[10px] font-mono text-white/20 ml-1">Stage 2</span></>}
+                defaultOpen={false}>
+              <div className="pt-2">
                 <p className="text-sm text-white/70 leading-relaxed mb-3">{cla.reasoning}</p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
                   <div className="text-xs"><div className="text-white/25 mb-1">Technical</div><div className="text-white/50 leading-relaxed">{cla.technicalBasis}</div></div>
@@ -738,24 +791,28 @@ function HomeInner() {
                 </div>
                 <Bar2 val={cla.confidence} color="#a78bfa" label="confidence" />
               </div>
+              </Collapsible>
             )}
 
             {/* GPT */}
-            {stage === 'gpt' && !gpt && <Think label="Devil's Advocate" color="#34d399" />}
+            {stage === 'gpt' && !gpt && <Think label="Devil's Advocate" color="#f87171" />}
             {gpt && (
-              <div className="animate-slide-up rounded-xl p-4 border" style={{ background: 'rgba(52,211,153,0.04)', borderColor: 'rgba(52,211,153,0.16)' }}>
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold" style={{ background: 'rgba(52,211,153,0.18)', color: '#34d399' }}>D</div>
-                  <span className="text-xs font-semibold" style={{ color: '#34d399' }}>Devil's Advocate</span>
+              <Collapsible
+                title="Devil's Advocate"
+                icon={<span className="text-xs font-bold">D</span>}
+                color="#f87171"
+                badge={<>
                   <SBadge s={gpt.signal} sm />
                   <span className="text-[10px] font-mono ml-1" style={{ color: gpt.agrees ? '#34d399' : '#fbbf24' }}>
                     {gpt.agrees ? '✓ agrees' : '⚡ challenges'}
                   </span>
-                  <span className="ml-auto text-[10px] font-mono text-white/20">Stage 3</span>
-                </div>
-                <p className="text-sm text-white/70 leading-relaxed mb-3">{gpt.reasoning}</p>
+                  <span className="text-[10px] font-mono text-white/20 ml-1">Stage 3</span>
+                </>}
+                defaultOpen={false}>
+              <div className="pt-2 space-y-3">
+                <p className="text-sm text-white/70 leading-relaxed">{gpt.reasoning}</p>
                 {gpt.challenges.length > 0 && (
-                  <div className="space-y-1 mb-3">
+                  <div className="space-y-1">
                     {gpt.challenges.map((c, i) => (
                       <div key={i} className="text-xs flex gap-1.5 text-white/45"><span style={{ color: '#fbbf24' }}>⚠</span>{c}</div>
                     ))}
@@ -766,8 +823,9 @@ function HomeInner() {
                     Strongest counter: {gpt.strongestCounterArgument}
                   </div>
                 )}
-                <Bar2 val={gpt.confidence} color="#34d399" label="confidence" />
+                <Bar2 val={gpt.confidence} color="#f87171" label="confidence" />
               </div>
+              </Collapsible>
             )}
 
             {/* Judge */}
@@ -775,10 +833,14 @@ function HomeInner() {
             {jud && (
               <div className="animate-slide-up rounded-xl p-5 border-2 space-y-4"
                 style={{ background: 'rgba(251,191,36,0.03)', borderColor: 'rgba(251,191,36,0.28)' }}>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span style={{ color: '#fbbf24', fontSize: 15 }}>⚖</span>
                   <span className="text-sm font-bold" style={{ color: '#fbbf24' }}>Council Verdict</span>
                   <SBadge s={jud.signal} />
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full"
+                    style={{ background: `${PERSONAS[persona].color}12`, color: PERSONAS[persona].color, border: `1px solid ${PERSONAS[persona].color}25` }}>
+                    {PERSONAS[persona].icon} {PERSONAS[persona].label}
+                  </span>
                   <span className="ml-auto text-[10px] font-mono text-white/20">Final</span>
                 </div>
 
@@ -869,61 +931,72 @@ function HomeInner() {
 
                 <Bar2 val={jud.confidence} color="#fbbf24" label="confidence" />
 
-                {/* Plain English */}
+                {/* Plain English — always visible */}
                 {jud.plainEnglish && (
-                  <div className="rounded-xl p-4 space-y-2 mt-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
-                    <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2">What this means in plain English</div>
+                  <div className="rounded-xl p-4 space-y-2" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2">Plain English</div>
                     <p className="text-sm text-white/80 leading-relaxed">{jud.plainEnglish}</p>
                   </div>
                 )}
 
-                {/* Signal explanations */}
-                {(jud.technicalsExplained || jud.fundamentalsExplained || jud.smartMoneyExplained) && (
-                  <div className="space-y-2 mt-3">
-                    <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-1">Signal explanations</div>
-                    {jud.technicalsExplained && (
-                      <div className="rounded-lg p-3" style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)' }}>
-                        <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#a78bfa' }}>Technicals — what the chart is saying</div>
-                        <p className="text-xs text-white/65 leading-relaxed">{jud.technicalsExplained}</p>
-                      </div>
-                    )}
-                    {jud.fundamentalsExplained && (
-                      <div className="rounded-lg p-3" style={{ background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.15)' }}>
-                        <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#60a5fa' }}>Fundamentals — what the business numbers say</div>
-                        <p className="text-xs text-white/65 leading-relaxed">{jud.fundamentalsExplained}</p>
-                      </div>
-                    )}
-                    {jud.smartMoneyExplained && (
-                      <div className="rounded-lg p-3" style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.15)' }}>
-                        <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#34d399' }}>Smart money — what big players are doing</div>
-                        <p className="text-xs text-white/65 leading-relaxed">{jud.smartMoneyExplained}</p>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-
-
-                {/* Action plan */}
+                {/* Action plan — always visible */}
                 {jud.actionPlan && (
-                  <div className="rounded-xl p-4 mt-3" style={{ background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)' }}>
-                    <div className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: '#fbbf24' }}>Action plan — what to do next</div>
+                  <div className="rounded-xl p-4" style={{ background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: '#fbbf24' }}>Action plan</div>
                     <p className="text-sm text-white/75 leading-relaxed">{jud.actionPlan}</p>
                   </div>
                 )}
 
-                {/* Council options view */}
+                {/* Collapsible deep-dive sections — inside the verdict card */}
+                {(jud.technicalsExplained || jud.fundamentalsExplained || jud.smartMoneyExplained) && (
+                  <Collapsible title="Signal Explanations" icon={<BarChart2 size={14}/>} color="#a78bfa">
+                    <div className="space-y-3 pt-2">
+                      {jud.technicalsExplained && (
+                        <div className="rounded-lg p-3" style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)' }}>
+                          <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#a78bfa' }}>Technicals</div>
+                          <p className="text-xs text-white/65 leading-relaxed">{jud.technicalsExplained}</p>
+                        </div>
+                      )}
+                      {jud.fundamentalsExplained && (
+                        <div className="rounded-lg p-3" style={{ background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.15)' }}>
+                          <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#60a5fa' }}>Fundamentals</div>
+                          <p className="text-xs text-white/65 leading-relaxed">{jud.fundamentalsExplained}</p>
+                        </div>
+                      )}
+                      {jud.smartMoneyExplained && (
+                        <div className="rounded-lg p-3" style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.15)' }}>
+                          <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#34d399' }}>Smart Money</div>
+                          <p className="text-xs text-white/65 leading-relaxed">{jud.smartMoneyExplained}</p>
+                        </div>
+                      )}
+                    </div>
+                  </Collapsible>
+                )}
+
+                {/* Council options view — collapsible */}
                 {jud.optionsStrategy && (
-                  <div className="rounded-xl p-4 mt-3" style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.18)' }}>
-                    <div className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: '#a78bfa' }}>⚖ Council options view</div>
-                    <p className="text-sm text-white/70 leading-relaxed">{jud.optionsStrategy}</p>
-                  </div>
+                  <Collapsible title="Council Options View" icon={<span>⚖</span>} color="#a78bfa">
+                    <p className="text-sm text-white/70 leading-relaxed pt-2">{jud.optionsStrategy}</p>
+                  </Collapsible>
                 )}
               </div>
             )}
 
-            {/* Options Recommendations — shown after judge verdict */}
+            {/* Technical Charts — collapsible */}
+            {stage === 'done' && md && (
+              <Collapsible title="Technical Charts" icon={<BarChart2 size={14}/>} color="#a78bfa">
+                <div className="pt-2">
+                  {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                  <TechnicalCharts ticker={ticker} technicals={md.technicals as any} />
+                </div>
+              </Collapsible>
+            )}
+
+            {/* Options Recommendations — collapsible */}
             {stage === 'done' && jud && md && (
+              <Collapsible title="Options Strategy" icon={<span>📊</span>} color="#34d399"
+                badge={<span className="text-[10px] font-mono px-2 py-0.5 rounded-full ml-1" style={{ background: `${SIG_COLOR[jud.signal]}15`, color: SIG_COLOR[jud.signal], border: `1px solid ${SIG_COLOR[jud.signal]}25` }}>{jud.signal} on {ticker}</span>}>
+                <div className="pt-2">
               <OptionsRecommendations
                 ticker={ticker}
                 currentPrice={md.currentPrice ?? 0}
@@ -937,41 +1010,8 @@ function HomeInner() {
                 } : null}
                 verdict={jud.summary ?? ''}
               />
-            )}
-
-            {/* Technical Charts — shown after judge verdict */}
-            {stage === 'done' && md && (
-              <TechnicalCharts
-                ticker={ticker}
-                technicals={md!.technicals ? {
-                  ...md!.technicals,
-                  currentPrice: md!.currentPrice ?? 0,
-                  ema9: md!.technicals?.ema9 ?? 0,
-                  ema20: md!.technicals?.ema20 ?? 0,
-                  support2: md!.technicals?.support2 ?? md!.technicals?.support,
-                  resistance2: md!.technicals?.resistance2 ?? md!.technicals?.resistance,
-                  ema9CrossEma20: md!.technicals?.ema9CrossEma20 ?? 'none',
-                  macdLine: md!.technicals?.macdLine ?? 0,
-                  macdSignal: md!.technicals?.macdSignal ?? 0,
-                  macdCrossover: md!.technicals?.macdCrossover ?? 'none',
-                  bbUpper: md!.technicals?.bbUpper ?? 0,
-                  bbMiddle: md!.technicals?.bbMiddle ?? 0,
-                  bbLower: md!.technicals?.bbLower ?? 0,
-                  stochK: md!.technicals?.stochK ?? 50,
-                  stochD: md!.technicals?.stochD ?? 50,
-                  stochSignal: md!.technicals?.stochSignal ?? 'neutral',
-                  stochCrossover: md!.technicals?.stochCrossover ?? 'none',
-                  vwap: md!.technicals?.vwap ?? 0,
-                  priceVsVwap: md!.technicals?.priceVsVwap ?? 0,
-                  vwapSignal: md!.technicals?.vwapSignal ?? 'above',
-                  obv: md!.technicals?.obv ?? 0,
-                  obvTrend: md!.technicals?.obvTrend ?? 'flat',
-                  obvDivergence: md!.technicals?.obvDivergence ?? 'none',
-                  fibLevels: md!.technicals?.fibLevels ?? [],
-                  nearestFibLevel: md!.technicals?.nearestFibLevel ?? null,
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                } as any : null}
-              />
+              </div>
+              </Collapsible>
             )}
 
 
