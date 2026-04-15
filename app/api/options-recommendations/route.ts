@@ -61,63 +61,121 @@ async function fetchExpirations(ticker: string): Promise<string[]> {
   }
 }
 
-// Yahoo Finance fallback — no API key needed
-async function fetchYahooOptions(ticker: string, currentPrice: number): Promise<OptionsContract[]> {
+// Alpaca options fallback — uses existing Alpaca API key
+async function fetchAlpacaOptions(ticker: string, currentPrice: number): Promise<OptionsContract[]> {
+  const key = process.env.ALPACA_API_KEY
+  const secret = process.env.ALPACA_SECRET_KEY
+  if (!key || !secret) return []
+
   try {
-    const res = await fetch(
-      `https://query1.finance.yahoo.com/v7/finance/options/${ticker}`,
-      { headers: { 'User-Agent': 'Mozilla/5.0' }, next: { revalidate: 900 } }
+    // Get nearest expiry dates
+    const expRes = await fetch(
+      `https://data.alpaca.markets/v1beta1/options/snapshots/${ticker}?feed=indicative&limit=100&type=call`,
+      {
+        headers: {
+          'APCA-API-KEY-ID': key,
+          'APCA-API-SECRET-KEY': secret,
+          'Accept': 'application/json',
+        }
+      }
     )
-    if (!res.ok) return []
-    const data = await res.json()
-    const result = data?.optionChain?.result?.[0]
-    if (!result) return []
 
-    const expiry = result.expirationDates?.[1] ?? result.expirationDates?.[0]
-    if (!expiry) return []
+    if (!expRes.ok) {
+      console.error('Alpaca options error:', expRes.status, await expRes.text())
+      return []
+    }
 
-    const expiryDate = new Date(expiry * 1000)
-    const expiryStr = expiryDate.toISOString().split('T')[0]
-    const daysToExpiry = Math.ceil((expiryDate.getTime() - Date.now()) / 86400000)
+    const data = await expRes.json()
+    const snapshots = data?.snapshots ?? {}
+    if (!Object.keys(snapshots).length) return []
 
-    const calls = (result.options?.[0]?.calls ?? []).slice(0, 10)
-    const puts  = (result.options?.[0]?.puts  ?? []).slice(0, 10)
+    // Get put snapshots too
+    const putRes = await fetch(
+      `https://data.alpaca.markets/v1beta1/options/snapshots/${ticker}?feed=indicative&limit=100&type=put`,
+      {
+        headers: {
+          'APCA-API-KEY-ID': key,
+          'APCA-API-SECRET-KEY': secret,
+          'Accept': 'application/json',
+        }
+      }
+    )
+    const putData = putRes.ok ? await putRes.json() : { snapshots: {} }
+    const putSnapshots = putData?.snapshots ?? {}
 
-    const toContract = (o: Record<string, unknown>, type: 'call' | 'put'): OptionsContract => ({
-      symbol: String(o.contractSymbol ?? ''),
-      type,
-      strike: Number(o.strike ?? 0),
-      expiry: expiryStr,
-      last: o.lastPrice ? Number(o.lastPrice) : null,
-      bid: o.bid ? Number(o.bid) : null,
-      ask: o.ask ? Number(o.ask) : null,
-      volume: Number(o.volume ?? 0),
-      openInterest: Number(o.openInterest ?? 0),
-      iv: o.impliedVolatility ? Number(o.impliedVolatility) * 100 : null,
-      delta: null, theta: null, gamma: null,
-      daysToExpiry,
-      moneyness: Math.abs(Number(o.strike ?? 0) - currentPrice) / currentPrice < 0.02
-        ? 'ATM'
-        : type === 'call'
-          ? Number(o.strike ?? 0) < currentPrice ? 'ITM' : 'OTM'
-          : Number(o.strike ?? 0) > currentPrice ? 'ITM' : 'OTM',
-    })
+    const allSnapshots = { ...snapshots, ...putSnapshots }
 
-    return [
-      ...calls.map((o: Record<string, unknown>) => toContract(o, 'call')),
-      ...puts.map((o: Record<string, unknown>) => toContract(o, 'put')),
-    ]
-  } catch { return [] }
+    const toContract = (symbol: string, snap: Record<string, unknown>): OptionsContract | null => {
+      try {
+        // Parse OCC symbol: MSFT240119C00400000
+        const match = symbol.match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/)
+        if (!match) return null
+        const [, , dateStr, optType, strikeStr] = match
+        const year  = parseInt('20' + dateStr.slice(0, 2))
+        const month = parseInt(dateStr.slice(2, 4)) - 1
+        const day   = parseInt(dateStr.slice(4, 6))
+        const expiryDate = new Date(year, month, day)
+        const expiryStr = expiryDate.toISOString().split('T')[0]
+        const daysToExpiry = Math.ceil((expiryDate.getTime() - Date.now()) / 86400000)
+        if (daysToExpiry < 1 || daysToExpiry > 90) return null
+
+        const strike = parseInt(strikeStr) / 1000
+        const type: 'call' | 'put' = optType === 'C' ? 'call' : 'put'
+        const greeks = snap.greeks as Record<string, unknown> ?? {}
+        const quote  = snap.latestQuote as Record<string, unknown> ?? {}
+        const trade  = snap.latestTrade as Record<string, unknown> ?? {}
+        const iv     = (snap.impliedVolatility as number ?? 0) * 100
+
+        return {
+          symbol,
+          type,
+          strike,
+          expiry: expiryStr,
+          last: trade.p ? Number(trade.p) : null,
+          bid: quote.bp ? Number(quote.bp) : null,
+          ask: quote.ap ? Number(quote.ap) : null,
+          volume: Number(snap.dailyBar ? (snap.dailyBar as Record<string, unknown>).v ?? 0 : 0),
+          openInterest: Number(snap.openInterest ?? 0),
+          iv: iv || null,
+          delta: greeks.delta ? Number(greeks.delta) : null,
+          theta: greeks.theta ? Number(greeks.theta) : null,
+          gamma: greeks.gamma ? Number(greeks.gamma) : null,
+          daysToExpiry,
+          moneyness: Math.abs(strike - currentPrice) / currentPrice < 0.02
+            ? 'ATM'
+            : type === 'call'
+              ? strike < currentPrice ? 'ITM' : 'OTM'
+              : strike > currentPrice ? 'ITM' : 'OTM',
+        }
+      } catch { return null }
+    }
+
+    const contracts = Object.entries(allSnapshots)
+      .map(([sym, snap]) => toContract(sym, snap as Record<string, unknown>))
+      .filter((c): c is OptionsContract => c !== null)
+      .filter(c => c.bid !== null && c.bid > 0 && c.volume > 0)
+
+    console.log(`Alpaca options: ${contracts.length} contracts for ${ticker}`)
+    return contracts
+  } catch (e) {
+    console.error('Alpaca options exception:', e)
+    return []
+  }
 }
 
 async function fetchChain(ticker: string, expiry: string): Promise<OptionsContract[]> {
   try {
-    const res = await fetch(
-      `${TRADIER_BASE()}/markets/options/chains?symbol=${ticker}&expiration=${expiry}&greeks=true`,
+    const url = `${TRADIER_BASE()}/markets/options/chains?symbol=${ticker}&expiration=${expiry}&greeks=true`
+    const res = await fetch(url,
       { headers: { 'Authorization': `Bearer ${TRADIER_KEY()}`, 'Accept': 'application/json' } }
     )
-    if (!res.ok) return []
+    if (!res.ok) {
+      const text = await res.text()
+      console.error(`Tradier chain ${expiry} error:`, res.status, text.slice(0, 200))
+      return []
+    }
     const data = await res.json()
+    console.log(`Tradier chain ${expiry}: ${JSON.stringify(data).slice(0, 150)}`)
     const options = data?.options?.option ?? []
     const arr = Array.isArray(options) ? options : [options]
     return arr.map((o: Record<string, unknown>) => ({
@@ -207,10 +265,10 @@ export async function POST(req: NextRequest) {
       if (contracts.length > 0) dataSource = 'Tradier'
     }
 
-    // Fallback to Yahoo Finance if no Tradier data
+    // Fallback to Alpaca options if no Tradier data
     if (contracts.length === 0) {
-      contracts = await fetchYahooOptions(ticker, currentPrice)
-      if (contracts.length > 0) dataSource = 'Yahoo Finance'
+      contracts = await fetchAlpacaOptions(ticker, currentPrice)
+      if (contracts.length > 0) dataSource = 'Alpaca'
     }
 
     const bestContracts = selectBestContracts(contracts, signal, currentPrice, timeHorizon || '30 days')
@@ -244,19 +302,26 @@ Verdict Summary: ${verdict}
 Available Options Contracts:
 ${contractSummary}
 
+CRITICAL RULES:
+- If signal is NEUTRAL: strategyType MUST be "neutral". Do NOT recommend buying calls or puts on a neutral signal. Instead recommend strategies that profit from time decay or sideways movement (covered calls, cash-secured puts, iron condors).
+- If signal is BULLISH: strategyType should be "long_call" or "bull_call_spread"
+- If signal is BEARISH: strategyType should be "long_put" or "bear_put_spread"
+- NEVER contradict the signal. A NEUTRAL signal means the council sees no clear direction — respect that.
+- If NEUTRAL, the strategy name should reflect this e.g. "Sell Covered Calls", "Wait for Clearer Signal", "Cash-Secured Put for Entry"
+
 Based on this analysis, provide a specific options recommendation in JSON only (no markdown):
 {
-  "strategy": "short name e.g. Buy Put Options",
+  "strategy": "short name matching the signal e.g. 'Sell Covered Calls' for NEUTRAL, 'Buy Call Options' for BULLISH",
   "strategyType": "long_call|long_put|covered_call|cash_secured_put|bull_call_spread|bear_put_spread|neutral",
-  "rationale": "2-3 sentences explaining WHY this strategy fits the verdict in plain English. Reference the actual price target and time horizon.",
+  "rationale": "2-3 sentences explaining WHY this strategy fits the verdict signal in plain English. Must be consistent with the ${signal} signal. Reference the actual price target and time horizon.",
   "riskLevel": "high|medium|low",
   "maxLoss": "plain English description of worst case e.g. 'You lose the entire premium paid, which is $X per contract ($X total for 1 contract controlling 100 shares)'",
   "maxGain": "plain English description of best case with realistic numbers based on the price target",
-  "idealFor": "who this strategy is suitable for e.g. 'Traders who believe the stock will drop significantly within 3 weeks and are comfortable losing 100% of their investment'",
+  "idealFor": "who this strategy is suitable for",
   "timeHorizon": "specific recommendation e.g. 'Look for contracts expiring in 3-4 weeks'",
-  "alternativeStrategy": "A safer/simpler alternative for more conservative traders",
-  "beginnerWarning": "A clear, honest warning about options risk for someone who has never traded options. Mention that options can expire worthless.",
-  "greeksExplained": "Explain what delta, theta, and IV mean for the specific contracts above in plain English. E.g. 'Delta of -0.40 means if the stock drops $1, your option gains about $40 per contract. Theta of -0.05 means you lose about $5 per contract per day just from time passing.'"
+  "alternativeStrategy": "A safer/simpler alternative. For NEUTRAL signal, suggest simply waiting for a clearer signal before trading options.",
+  "beginnerWarning": "A clear, honest warning about options risk. If signal is NEUTRAL, emphasize that trading options on a neutral signal is especially risky because there is no clear direction.",
+  "greeksExplained": "Explain what delta, theta, and IV mean for the specific contracts above in plain English."
 }`
       }]
     })

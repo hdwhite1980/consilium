@@ -182,6 +182,22 @@ export default function OptionsRecommendations({
       {data && expanded && (
         <div className="p-4 space-y-4">
 
+          {/* Contradiction warning */}
+          {(() => {
+            const st = data.recommendation.strategyType
+            const isBullishStrat = st === 'long_call' || st === 'bull_call_spread'
+            const isBearishStrat = st === 'long_put' || st === 'bear_put_spread'
+            const contradicts = (signal === 'NEUTRAL' && (isBullishStrat || isBearishStrat)) ||
+              (signal === 'BULLISH' && isBearishStrat) ||
+              (signal === 'BEARISH' && isBullishStrat)
+            return contradicts ? (
+              <div className="rounded-xl px-3.5 py-3 text-xs leading-relaxed"
+                style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.25)', color: '#f87171' }}>
+                ⚠ This strategy recommendation does not align with the {signal} council verdict. Exercise extra caution — the AI may be overweighting short-term signals. Consider waiting for a clearer directional verdict before trading options.
+              </div>
+            ) : null
+          })()}
+
           {/* Strategy header */}
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -252,21 +268,20 @@ export default function OptionsRecommendations({
           )}
 
           {/* Yahoo data — show strikes for reference but clearly label as incomplete */}
-          {data.hasLiveData && data.contracts.length > 0 && data.dataSource === 'Yahoo Finance' && (
+          {data.hasLiveData && data.contracts.length > 0 && data.dataSource === 'Alpaca' && (
             <div>
               <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2 flex items-center gap-2">
-                <span>Nearby strikes for reference</span>
+                <span>Example contracts matching this strategy</span>
                 <span className="px-1.5 py-0.5 rounded text-[9px]"
-                  style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>
-                  delayed · no Greeks
+                  style={{ background: 'rgba(96,165,250,0.1)', color: '#60a5fa' }}>
+                  via Alpaca · 15min delayed
                 </span>
               </div>
               <div className="space-y-2">
                 {data.contracts.map((c, i) => <ContractCard key={i} c={c} />)}
               </div>
-              <p className="text-[10px] mt-2 leading-relaxed"
-                style={{ color: 'rgba(251,191,36,0.5)' }}>
-                ⚠ Greeks (delta, theta) unavailable. These strikes are shown for reference only — verify current pricing and risk with your broker before trading.
+              <p className="text-[10px] text-white/20 mt-2 leading-relaxed">
+                One contract = 100 shares. Cost = ask price × 100. Prices are 15 minutes delayed — verify current pricing with your broker before trading.
               </p>
             </div>
           )}
