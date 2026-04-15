@@ -16,6 +16,7 @@ export type SignalBundle = {
   ticker: string
   timeframe: string
   timestamp: string
+  persona?: 'balanced' | 'technical' | 'fundamental'
 
   // Raw data
   bars: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }>
