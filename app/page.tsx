@@ -90,6 +90,15 @@ interface GptResult {
   challenges: string[]; alternateScenario: string; strongestCounterArgument: string
 }
 
+interface RebuttalResult {
+  signal: Signal; confidence: number; rebuttal: string
+  concedes: string[]; maintains: string[]; updatedTarget: string; finalStance: string
+}
+
+interface CounterResult {
+  finalChallenge: string; yieldsOn: string[]; pressesOn: string[]; closingArgument: string
+}
+
 interface JudgeResult {
   signal: Signal; confidence: number; target: string; risk: string
   summary: string; winningArgument: string; dissent: string
@@ -212,6 +221,8 @@ function HomeInner() {
   const [gem, setGem]           = useState<GeminiResult | null>(null)
   const [cla, setCla]           = useState<ClaudeResult | null>(null)
   const [gpt, setGpt]           = useState<GptResult | null>(null)
+  const [reb, setReb]           = useState<RebuttalResult | null>(null)
+  const [ctr, setCtr]           = useState<CounterResult | null>(null)
   const [jud, setJud]           = useState<JudgeResult | null>(null)
   const [err, setErr]           = useState<string | null>(null)
   const [cached, setCached]     = useState<{ at: string; ageMinutes: number } | null>(null)
@@ -262,7 +273,7 @@ function HomeInner() {
     if (stage === 'done' && md && gem && jud) {
       try {
         sessionStorage.setItem('consilium_last', JSON.stringify({
-          ticker, tf, stage, md, gem, cla, gpt, jud, cached
+          ticker, tf, stage, md, gem, cla, gpt, reb, ctr, jud, cached
         }))
       } catch { /* storage full or unavailable */ }
     }
@@ -283,6 +294,8 @@ function HomeInner() {
           setGem(s.gem ?? null)
           setCla(s.cla ?? null)
           setGpt(s.gpt ?? null)
+          setReb(s.reb ?? null)
+          setCtr(s.ctr ?? null)
           setJud(s.jud ?? null)
           setCached(s.cached ?? null)
         }
@@ -300,7 +313,7 @@ function HomeInner() {
   const run = useCallback(async () => {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
-    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setJud(null); setErr(null); setCached(null)
+    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setErr(null); setCached(null)
 
     try {
       const res = await fetch('/api/analyze', {
@@ -331,6 +344,10 @@ function HomeInner() {
             case 'claude_done':  setCla(data); scroll(); break
             case 'gpt_start':    setStage('gpt'); scroll(); break
             case 'gpt_done':     setGpt(data); scroll(); break
+            case 'rebuttal_start': setStage('rebuttal' as Stage); scroll(); break
+            case 'rebuttal_done':  setReb(data); scroll(); break
+            case 'counter_start':  setStage('counter' as Stage); scroll(); break
+            case 'counter_done':   setCtr(data); scroll(); break
             case 'judge_start':  setStage('judge'); scroll(); break
             case 'judge_done':   setJud(data); scroll(); break
             case 'complete':     setStage('done'); if (data.cached) setCached({ at: data.cachedAt, ageMinutes: data.ageMinutes }); scroll(); break
@@ -348,7 +365,7 @@ function HomeInner() {
   const forceRun = useCallback(async () => {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
-    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setJud(null); setErr(null); setCached(null)
+    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setErr(null); setCached(null)
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
@@ -376,6 +393,10 @@ function HomeInner() {
             case 'claude_done':  setCla(data); scroll(); break
             case 'gpt_start':    setStage('gpt'); scroll(); break
             case 'gpt_done':     setGpt(data); scroll(); break
+            case 'rebuttal_start': setStage('rebuttal' as Stage); scroll(); break
+            case 'rebuttal_done':  setReb(data); scroll(); break
+            case 'counter_start':  setStage('counter' as Stage); scroll(); break
+            case 'counter_done':   setCtr(data); scroll(); break
             case 'judge_start':  setStage('judge'); scroll(); break
             case 'judge_done':   setJud(data); scroll(); break
             case 'complete':     setStage('done'); scroll(); break
@@ -423,17 +444,18 @@ function HomeInner() {
         </div>
 
         {/* Persona selector */}
-        <div className="flex gap-1">
+        <div className="flex items-center gap-1 rounded-lg p-0.5" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
           {(Object.entries(PERSONAS) as [Persona, typeof PERSONAS[Persona]][]).map(([key, p]) => (
             <button key={key} onClick={() => setPersona(key)}
               title={p.desc}
-              className="px-2 py-1.5 rounded-md text-xs font-mono border transition-all"
+              className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-mono transition-all"
               style={{
-                background: persona === key ? `${p.color}18` : '#181e2a',
-                borderColor: persona === key ? p.color : 'rgba(255,255,255,0.08)',
+                background: persona === key ? `${p.color}18` : 'transparent',
                 color: persona === key ? p.color : 'rgba(255,255,255,0.3)',
+                border: persona === key ? `1px solid ${p.color}35` : '1px solid transparent',
               }}>
-              {p.icon}
+              <span>{p.icon}</span>
+              <span className="hidden sm:inline">{p.label}</span>
             </button>
           ))}
         </div>
@@ -543,6 +565,7 @@ function HomeInner() {
                 <span className="text-xs font-mono" style={{ color: md!.technicals?.priceChange1D >= 0 ? '#34d399' : '#f87171' }}>
                   {pct(md!.technicals?.priceChange1D)}
                 </span>
+                <span className="text-[9px] font-mono text-white/20 ml-auto">15m delay</span>
               </div>
               <Spark bars={md!.bars} />
             </div>
@@ -718,16 +741,26 @@ function HomeInner() {
 
             {cached && stage === 'done' && (
               <div className="flex items-center justify-between px-4 py-2.5 rounded-xl mb-1"
-                style={{ background: 'rgba(251,191,36,0.07)', border: '1px solid rgba(251,191,36,0.18)' }}>
+                style={{
+                  background: cached.ageMinutes > 60 ? 'rgba(248,113,113,0.07)' : 'rgba(251,191,36,0.07)',
+                  border: `1px solid ${cached.ageMinutes > 60 ? 'rgba(248,113,113,0.3)' : 'rgba(251,191,36,0.18)'}`,
+                }}>
                 <div className="flex items-center gap-2">
-                  <span style={{ color: '#fbbf24' }}>⏱</span>
+                  <span>{cached.ageMinutes > 60 ? '⚠' : '⏱'}</span>
                   <span className="text-xs text-white/60">
-                    Showing cached analysis from <strong style={{ color: '#fbbf24' }}>{cached.ageMinutes} minute{cached.ageMinutes === 1 ? '' : 's'} ago</strong> — no AI credits used
+                    {cached.ageMinutes > 60
+                      ? <><strong style={{ color: '#f87171' }}>Stale analysis — {cached.ageMinutes} minutes old.</strong> Price may have moved significantly. Run a fresh analysis.</>
+                      : <>Cached analysis from <strong style={{ color: '#fbbf24' }}>{cached.ageMinutes} minute{cached.ageMinutes === 1 ? '' : 's'} ago</strong> — no AI credits used</>
+                    }
                   </span>
                 </div>
                 <button onClick={forceRun}
                   className="text-[10px] font-mono px-3 py-1 rounded-full transition-all hover:opacity-80 shrink-0"
-                  style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.3)' }}>
+                  style={{
+                    background: cached.ageMinutes > 60 ? 'rgba(248,113,113,0.15)' : 'rgba(251,191,36,0.15)',
+                    color: cached.ageMinutes > 60 ? '#f87171' : '#fbbf24',
+                    border: `1px solid ${cached.ageMinutes > 60 ? 'rgba(248,113,113,0.3)' : 'rgba(251,191,36,0.3)'}`,
+                  }}>
                   ↻ Run fresh analysis
                 </button>
               </div>
@@ -824,6 +857,67 @@ function HomeInner() {
                   </div>
                 )}
                 <Bar2 val={gpt.confidence} color="#f87171" label="confidence" />
+              </div>
+              </Collapsible>
+            )}
+
+            {/* Rebuttal */}
+            {(stage as string) === 'rebuttal' && !reb && <Think label="Lead Analyst rebutting…" color="#a78bfa" />}
+            {reb && (
+              <Collapsible
+                title="Lead Analyst — Rebuttal"
+                icon={<span className="text-xs font-bold">L</span>}
+                color="#a78bfa"
+                badge={<><SBadge s={reb.signal} sm /><span className="text-[10px] font-mono text-white/20 ml-1">Round 2</span></>}
+                defaultOpen={true}>
+              <div className="pt-2 space-y-3">
+                <p className="text-sm text-white/75 leading-relaxed">{reb.rebuttal}</p>
+                {reb.concedes.length > 0 && (
+                  <div className="rounded-lg p-3" style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.15)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#f87171' }}>Concedes</div>
+                    {reb.concedes.map((c, i) => <div key={i} className="text-xs text-white/55 flex gap-1.5 mb-1"><span style={{ color: '#f87171' }}>✓</span>{c}</div>)}
+                  </div>
+                )}
+                {reb.maintains.length > 0 && (
+                  <div className="rounded-lg p-3" style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#a78bfa' }}>Stands firm on</div>
+                    {reb.maintains.map((m, i) => <div key={i} className="text-xs text-white/55 flex gap-1.5 mb-1"><span style={{ color: '#a78bfa' }}>▶</span>{m}</div>)}
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono text-white/30">Updated target:</span>
+                  <span className="text-xs font-bold font-mono" style={{ color: '#a78bfa' }}>{reb.updatedTarget}</span>
+                </div>
+                <p className="text-xs italic text-white/35 border-l-2 pl-3" style={{ borderColor: 'rgba(167,139,250,0.35)' }}>{reb.finalStance}</p>
+                <Bar2 val={reb.confidence} color="#a78bfa" label="confidence" />
+              </div>
+              </Collapsible>
+            )}
+
+            {/* Counter */}
+            {(stage as string) === 'counter' && !ctr && <Think label="Devil's Advocate countering…" color="#f87171" />}
+            {ctr && (
+              <Collapsible
+                title="Devil's Advocate — Final Counter"
+                icon={<span className="text-xs font-bold">D</span>}
+                color="#f87171"
+                badge={<span className="text-[10px] font-mono text-white/20 ml-1">Round 2</span>}
+                defaultOpen={true}>
+              <div className="pt-2 space-y-3">
+                <p className="text-sm text-white/75 leading-relaxed">{ctr.finalChallenge}</p>
+                {ctr.yieldsOn.length > 0 && (
+                  <div className="rounded-lg p-3" style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.15)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#34d399' }}>Now agrees on</div>
+                    {ctr.yieldsOn.map((y, i) => <div key={i} className="text-xs text-white/55 flex gap-1.5 mb-1"><span style={{ color: '#34d399' }}>✓</span>{y}</div>)}
+                  </div>
+                )}
+                {ctr.pressesOn.length > 0 && (
+                  <div className="rounded-lg p-3" style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.15)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#f87171' }}>Still pressing</div>
+                    {ctr.pressesOn.map((p, i) => <div key={i} className="text-xs text-white/55 flex gap-1.5 mb-1"><span style={{ color: '#fbbf24' }}>⚠</span>{p}</div>)}
+                  </div>
+                )}
+                <p className="text-xs italic text-white/35 border-l-2 pl-3" style={{ borderColor: 'rgba(248,113,113,0.35)' }}>Closing: {ctr.closingArgument}</p>
               </div>
               </Collapsible>
             )}
