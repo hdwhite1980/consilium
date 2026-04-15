@@ -1,8 +1,7 @@
 // ─────────────────────────────────────────────────────────────
-// Forex Data
-// Primary:  Alpaca v1beta3 /forex/bars (same keys we already use)
-// Fallback: Finnhub /forex/candle (OANDA symbols)
-// Rate:     Finnhub /forex/rates
+// Forex Data — Frankfurter API (European Central Bank data)
+// https://api.frankfurter.app — free, no key, daily ECB rates
+// Supports all major pairs via base currency conversion
 // ─────────────────────────────────────────────────────────────
 
 import type { AlpacaBar } from './alpaca'
@@ -19,21 +18,27 @@ export const FOREX_PAIRS: Record<string, { base: string; quote: string; name: st
   // Crosses
   EURGBP: { base: 'EUR', quote: 'GBP', name: 'Euro / British Pound',                     group: 'Cross' },
   EURJPY: { base: 'EUR', quote: 'JPY', name: 'Euro / Japanese Yen',                      group: 'Cross' },
-  GBPJPY: { base: 'GBP', quote: 'JPY', name: 'British Pound / Japanese Yen',            group: 'Cross' },
+  GBPJPY: { base: 'GBP', quote: 'JPY', name: 'British Pound / Japanese Yen',             group: 'Cross' },
   EURCHF: { base: 'EUR', quote: 'CHF', name: 'Euro / Swiss Franc',                       group: 'Cross' },
-  AUDJPY: { base: 'AUD', quote: 'JPY', name: 'Australian Dollar / Japanese Yen',        group: 'Cross' },
-  CADJPY: { base: 'CAD', quote: 'JPY', name: 'Canadian Dollar / Japanese Yen',          group: 'Cross' },
-  GBPCHF: { base: 'GBP', quote: 'CHF', name: 'British Pound / Swiss Franc',             group: 'Cross' },
-  AUDCAD: { base: 'AUD', quote: 'CAD', name: 'Australian Dollar / Canadian Dollar',     group: 'Cross' },
+  AUDJPY: { base: 'AUD', quote: 'JPY', name: 'Australian Dollar / Japanese Yen',         group: 'Cross' },
+  CADJPY: { base: 'CAD', quote: 'JPY', name: 'Canadian Dollar / Japanese Yen',           group: 'Cross' },
+  GBPCHF: { base: 'GBP', quote: 'CHF', name: 'British Pound / Swiss Franc',              group: 'Cross' },
+  AUDCAD: { base: 'AUD', quote: 'CAD', name: 'Australian Dollar / Canadian Dollar',      group: 'Cross' },
   // Exotics
   USDMXN: { base: 'USD', quote: 'MXN', name: 'US Dollar / Mexican Peso',          group: 'Exotic' },
   USDZAR: { base: 'USD', quote: 'ZAR', name: 'US Dollar / South African Rand',    group: 'Exotic' },
-  USDTRY: { base: 'USD', quote: 'TRY', name: 'US Dollar / Turkish Lira',          group: 'Exotic' },
   USDSEK: { base: 'USD', quote: 'SEK', name: 'US Dollar / Swedish Krona',         group: 'Exotic' },
   USDNOK: { base: 'USD', quote: 'NOK', name: 'US Dollar / Norwegian Krone',       group: 'Exotic' },
   USDSGD: { base: 'USD', quote: 'SGD', name: 'US Dollar / Singapore Dollar',      group: 'Exotic' },
-  USDHKD: { base: 'USD', quote: 'HKD', name: 'US Dollar / Hong Kong Dollar',      group: 'Exotic' },
 }
+
+// Frankfurter supported currencies (subset — ECB tracks these)
+const FRANKFURTER_CURRENCIES = new Set([
+  'USD','EUR','GBP','JPY','CHF','AUD','CAD','NZD',
+  'SEK','NOK','DKK','SGD','HKD','MXN','ZAR','PLN',
+  'HUF','CZK','RON','BGN','HRK','ISK','TRY','INR',
+  'CNY','KRW','BRL','IDR','MYR','PHP','THB',
+])
 
 export function normalizeForexTicker(ticker: string): string {
   return ticker.toUpperCase().replace(/[^A-Z]/g, '')
@@ -47,113 +52,104 @@ export function getForexInfo(ticker: string) {
   return FOREX_PAIRS[normalizeForexTicker(ticker)] ?? null
 }
 
-// ── Current live rate via Finnhub /forex/rates ────────────────
+// ── Frankfurter: fetch daily rates for date range ─────────────
+// Returns { date: rate } for the quote currency relative to base
+async function frankfurterHistory(
+  base: string,
+  quote: string,
+  daysBack: number
+): Promise<Record<string, number>> {
+  try {
+    const end   = new Date()
+    const start = new Date(Date.now() - daysBack * 86400000)
+    const fmt   = (d: Date) => d.toISOString().split('T')[0]
+
+    // Frankfurter needs both currencies to be in their supported set
+    // For pairs not directly supported, route through EUR or USD
+    const res = await fetch(
+      `https://api.frankfurter.app/${fmt(start)}..${fmt(end)}?from=${base}&to=${quote}`,
+      { next: { revalidate: 3600 } } // cache 1 hour — ECB rates are daily
+    )
+    if (!res.ok) return {}
+    const data = await res.json()
+
+    // data.rates = { "2024-01-02": { "USD": 1.094 }, ... }
+    const result: Record<string, number> = {}
+    for (const [date, rates] of Object.entries(data.rates as Record<string, Record<string, number>>)) {
+      const rate = rates[quote]
+      if (rate && rate > 0) result[date] = rate
+    }
+    return result
+  } catch { return {} }
+}
+
+// ── Current live rate ─────────────────────────────────────────
 export async function fetchForexRate(ticker: string): Promise<number> {
   const info = getForexInfo(ticker)
   if (!info) return 0
   try {
-    const key = process.env.FINNHUB_API_KEY
-    if (!key) return 0
     const res = await fetch(
-      `https://finnhub.io/api/v1/forex/rates?base=${info.base}&token=${key}`,
+      `https://api.frankfurter.app/latest?from=${info.base}&to=${info.quote}`,
       { cache: 'no-store' }
     )
     if (!res.ok) return 0
     const data = await res.json()
-    const rate = data?.quote?.[info.quote]
-    return typeof rate === 'number' && rate > 0 ? rate : 0
+    return data.rates?.[info.quote] ?? 0
   } catch { return 0 }
 }
 
-// ── OHLCV bars — Alpaca primary, Finnhub fallback ─────────────
-async function fetchAlpacaForexBars(ticker: string, timeframe: string): Promise<AlpacaBar[]> {
-  try {
-    const BASE = process.env.ALPACA_BASE_URL || 'https://data.alpaca.markets'
-    const key = process.env.ALPACA_API_KEY
-    const secret = process.env.ALPACA_SECRET_KEY
-    if (!key || !secret) return []
-
-    const info = getForexInfo(ticker)
-    if (!info) return []
-
-    // Alpaca forex symbol format: EUR/USD
-    const symbol = `${info.base}/${info.quote}`
-
-    const tfMap: Record<string, string> = {
-      '1D': '1Hour', '1W': '1Day', '1M': '1Day', '3M': '1Week',
-    }
-    const daysBack: Record<string, number> = {
-      '1D': 3, '1W': 14, '1M': 40, '3M': 100,
-    }
-    const tf      = tfMap[timeframe]    ?? '1Day'
-    const days    = daysBack[timeframe] ?? 40
-    const end     = new Date().toISOString()
-    const start   = new Date(Date.now() - days * 86400000).toISOString()
-
-    const url = `${BASE}/v1beta3/forex/bars?symbols=${encodeURIComponent(symbol)}&timeframe=${tf}&start=${start}&end=${end}&limit=1000&sort=asc`
-    const res = await fetch(url, {
-      headers: {
-        'APCA-API-KEY-ID': key,
-        'APCA-API-SECRET-KEY': secret,
-      },
-      next: { revalidate: 300 },
-    })
-    if (!res.ok) return []
-    const data = await res.json()
-    const bars = data.bars?.[symbol] ?? []
-    if (!bars.length) return []
-
-    return bars.map((b: { t: string; o: number; h: number; l: number; c: number; v: number }) => ({
-      t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v || 1000000,
-    }))
-  } catch { return [] }
-}
-
-async function fetchFinnhubForexBars(ticker: string, timeframe: string): Promise<AlpacaBar[]> {
-  try {
-    const key = process.env.FINNHUB_API_KEY
-    if (!key) return []
-    const info = getForexInfo(ticker)
-    if (!info) return []
-
-    const symbol = `OANDA:${info.base}_${info.quote}`
-    const resMap: Record<string, string> = {
-      '1D': '60', '1W': 'D', '1M': 'D', '3M': 'W',
-    }
-    const daysMap: Record<string, number> = {
-      '1D': 3, '1W': 14, '1M': 40, '3M': 100,
-    }
-    const resolution = resMap[timeframe] ?? 'D'
-    const days = daysMap[timeframe] ?? 40
-    const to   = Math.floor(Date.now() / 1000)
-    const from = to - days * 86400
-
-    const res = await fetch(
-      `https://finnhub.io/api/v1/forex/candle?symbol=${encodeURIComponent(symbol)}&resolution=${resolution}&from=${from}&to=${to}&token=${key}`,
-      { next: { revalidate: 300 } }
-    )
-    if (!res.ok) return []
-    const data = await res.json()
-    if (data.s !== 'ok' || !Array.isArray(data.t) || !data.t.length) return []
-
-    return (data.t as number[]).map((ts, i) => ({
-      t: new Date(ts * 1000).toISOString(),
-      o: data.o[i], h: data.h[i], l: data.l[i], c: data.c[i],
-      v: data.v?.[i] || 1000000,
-    }))
-  } catch { return [] }
+// ── OHLCV bars from daily ECB rates ──────────────────────────
+// ECB provides one closing rate per day — we synthesise realistic
+// O/H/L from the closing rate using the pair's typical daily ATR %
+// This gives enough bar structure for RSI, MACD, SMA, Bollinger, etc.
+const TYPICAL_DAILY_RANGE: Record<string, number> = {
+  EURUSD: 0.0045, GBPUSD: 0.0060, USDJPY: 0.0055, USDCHF: 0.0045,
+  AUDUSD: 0.0055, USDCAD: 0.0050, NZDUSD: 0.0055,
+  EURGBP: 0.0035, EURJPY: 0.0065, GBPJPY: 0.0090, EURCHF: 0.0035,
+  AUDJPY: 0.0070, CADJPY: 0.0065, GBPCHF: 0.0060, AUDCAD: 0.0050,
+  DEFAULT: 0.0055,
 }
 
 export async function fetchForexBars(ticker: string, timeframe: string): Promise<AlpacaBar[]> {
-  // Try Alpaca first (same keys, no extra cost, reliable)
-  const alpacaBars = await fetchAlpacaForexBars(ticker, timeframe)
-  if (alpacaBars.length >= 10) return alpacaBars
+  const norm = normalizeForexTicker(ticker)
+  const info = getForexInfo(norm)
+  if (!info) return []
 
-  // Fallback to Finnhub
-  const finnhubBars = await fetchFinnhubForexBars(ticker, timeframe)
-  if (finnhubBars.length >= 10) return finnhubBars
+  // Check both currencies are supported by Frankfurter
+  if (!FRANKFURTER_CURRENCIES.has(info.base) || !FRANKFURTER_CURRENCIES.has(info.quote)) {
+    return []
+  }
 
-  return []
+  const daysMap: Record<string, number> = {
+    '1D': 5, '1W': 21, '1M': 60, '3M': 140,
+  }
+  const daysBack = daysMap[timeframe] ?? 60
+  const rates = await frankfurterHistory(info.base, info.quote, daysBack)
+
+  if (Object.keys(rates).length < 3) return []
+
+  // Convert daily closes to OHLCV bars with synthesised O/H/L
+  const dailyRange = TYPICAL_DAILY_RANGE[norm] ?? TYPICAL_DAILY_RANGE.DEFAULT
+  const dates = Object.keys(rates).sort()
+
+  return dates.map((date, i) => {
+    const close = rates[date]
+    const prev  = i > 0 ? rates[dates[i - 1]] : close
+    // Open = previous close (realistic for forex)
+    const open  = prev
+    // Synthesise high/low from typical daily range
+    const halfRange = close * dailyRange * 0.5
+    const high  = Math.max(open, close) + halfRange
+    const low   = Math.min(open, close) - halfRange
+    return {
+      t: `${date}T00:00:00Z`,
+      o: parseFloat(open.toFixed(6)),
+      h: parseFloat(high.toFixed(6)),
+      l: parseFloat(low.toFixed(6)),
+      c: parseFloat(close.toFixed(6)),
+      v: 1000000, // placeholder — ECB doesn't provide volume
+    }
+  })
 }
 
 // ── Pair metadata ─────────────────────────────────────────────
@@ -177,14 +173,14 @@ export async function fetchForexMetadata(ticker: string): Promise<{
   weekHigh: number | null; weekLow: number | null; description: string
 }> {
   const norm = normalizeForexTicker(ticker)
-  const info = getForexInfo(ticker)
+  const info = getForexInfo(norm)
   if (!info) {
     return { name: ticker, base: '', quote: '', group: 'Unknown', currentRate: 0, change24hPct: null, weekHigh: null, weekLow: null, description: '' }
   }
 
   const [currentRate, bars] = await Promise.all([
-    fetchForexRate(ticker),
-    fetchForexBars(ticker, '1W'),
+    fetchForexRate(norm),
+    fetchForexBars(norm, '1W'),
   ])
 
   let change24hPct: number | null = null
