@@ -100,23 +100,19 @@ export function Tutorial({ config, onComplete, onSkip, autoStart = false }: Tuto
   const [step, setStep] = useState(0)
   const [pos, setPos] = useState<TooltipPos | null>(null)
   const [spotlightRect, setSpotlightRect] = useState<DOMRect | null>(null)
-  const [saving, setSaving] = useState(false)
   const tooltipRef = useRef<HTMLDivElement>(null)
 
   const currentStep = config.steps[step]
   const isLast = step === config.steps.length - 1
   const isFirst = step === 0
 
-  const saveProgress = useCallback(async (stepIdx: number, completed = false, skipped = false) => {
-    setSaving(true)
-    try {
-      await fetch('/api/tutorial', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tutorialId: config.id, step: stepIdx, completed, skipped }),
-      })
-    } catch { /* non-critical */ }
-    setSaving(false)
+  const saveProgress = useCallback((stepIdx: number, completed = false, skipped = false) => {
+    // Fire and forget — never block navigation on API call
+    fetch('/api/tutorial', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tutorialId: config.id, step: stepIdx, completed, skipped }),
+    }).catch(() => { /* non-critical */ })
   }, [config.id])
 
   const updatePosition = useCallback(() => {
@@ -156,15 +152,15 @@ export function Tutorial({ config, onComplete, onSkip, autoStart = false }: Tuto
     }
   }, [active, updatePosition])
 
-  const goNext = async () => {
+  const goNext = () => {
     if (isLast) {
-      await saveProgress(step, true, false)
+      saveProgress(step, true, false)
       setActive(false)
       onComplete?.()
     } else {
       const next = step + 1
       setStep(next)
-      await saveProgress(next)
+      saveProgress(next)
     }
   }
 
@@ -172,8 +168,8 @@ export function Tutorial({ config, onComplete, onSkip, autoStart = false }: Tuto
     if (!isFirst) setStep(step - 1)
   }
 
-  const skip = async () => {
-    await saveProgress(step, false, true)
+  const skip = () => {
+    saveProgress(step, false, true)
     setActive(false)
     onSkip?.()
   }
@@ -294,7 +290,7 @@ export function Tutorial({ config, onComplete, onSkip, autoStart = false }: Tuto
               Skip tutorial
             </button>
 
-            <button onClick={goNext} disabled={saving}
+            <button onClick={goNext}
               className="flex items-center gap-1.5 text-xs font-semibold px-4 py-1.5 rounded-lg text-white transition-all hover:opacity-90 active:scale-95 disabled:opacity-50"
               style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
               {isLast ? (
