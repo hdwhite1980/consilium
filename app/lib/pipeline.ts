@@ -324,7 +324,7 @@ export async function runClaude(bundle: SignalBundle, gemini: GeminiResult): Pro
       }
       const pn: Record<string, string> = { balanced: 'Balanced', technical: 'Technical Trader', fundamental: 'Fundamental Analyst' }
       const p = (( bundle as any).persona ?? 'balanced') as string
-      return `You are the Lead Analyst (${pn[p] ?? 'Balanced'} perspective) in an elite AI stock council for ${bundle.ticker}. ${pi[p] ?? pi.balanced} Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate.`
+      return `You are the Lead Analyst (${pn[p] ?? 'Balanced'} perspective) in an elite AI stock council for ${bundle.ticker}. ${pi[p] ?? pi.balanced} Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data — only use what you have.`
     })(),
     messages: [{
       role: 'user',
@@ -360,7 +360,7 @@ export async function runGPT(bundle: SignalBundle, gemini: GeminiResult, claude:
     model: 'gpt-4o',
     max_tokens: 1000,
     messages: [
-      { role: 'system', content: `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. Challenge the Lead Analyst's conclusions with data. Do NOT simply agree.` },
+      { role: 'system', content: `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. Challenge the Lead Analyst's conclusions with data. Do NOT simply agree. Never mention missing or unavailable data — only use what you have. Absence of a metric is not evidence of anything.` },
       { role: 'user', content: `TICKER: ${bundle.ticker} | PRICE: $${bundle.currentPrice.toFixed(2)}
 
 NEWS SCOUT: ${gemini.sentiment} sentiment, ${gemini.confidence}% confidence
@@ -548,7 +548,7 @@ export async function runJudge(
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 2000,
-    system: `You are the Judge of an elite AI stock council for ${bundle.ticker}. The council has three roles: News Scout, Lead Analyst, and Devil's Advocate. You hold NO prior position. ${judgePersona[judgePersonaKey] ?? judgePersona.balanced} Weigh argument QUALITY not vote count. Be decisive. Refer to council members by their role names only.`,
+    system: `You are the Judge of an elite AI stock council for ${bundle.ticker}. The council has three roles: News Scout, Lead Analyst, and Devil's Advocate. You hold NO prior position. ${judgePersona[judgePersonaKey] ?? judgePersona.balanced} Weigh argument QUALITY not vote count. Be decisive. Refer to council members by their role names only. IMPORTANT: Never cite missing or unavailable data as a reason for lower conviction — only cite the data you have. If a metric is unavailable, ignore it entirely rather than mentioning its absence.`,
     messages: [{
       role: 'user',
       content: `TICKER: ${bundle.ticker} | PRICE: $${bundle.currentPrice.toFixed(2)} | ROUND: ${round} | PERSPECTIVE: ${(( bundle as any).persona ?? 'balanced').toUpperCase()}

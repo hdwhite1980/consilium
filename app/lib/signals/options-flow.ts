@@ -94,27 +94,81 @@ async function fetchOptionsChain(ticker: string) {
 
 // FINRA short interest (public, no auth needed)
 async function fetchShortInterest(ticker: string): Promise<{ pct: number | null; ratio: number | null }> {
+  // Source 1: Finnhub /stock/short-interest (paid tier)
   try {
-    // FINRA provides this data but requires parsing their reports
-    // Using a proxy approach via alternative free endpoint
-    const res = await fetch(
-      `https://api.nasdaq.com/api/quote/${ticker}/short-interest?assetclass=stocks`,
-      {
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-        next: { revalidate: 86400 }
+    const key = process.env.FINNHUB_API_KEY
+    if (key) {
+      const res = await fetch(
+        `https://finnhub.io/api/v1/stock/short-interest?symbol=${ticker}&token=${key}`,
+        { next: { revalidate: 86400 } }
+      )
+      if (res.ok) {
+        const data = await res.json()
+        // Finnhub returns { data: [{ date, shortInterest, shortRatio }] }
+        const latest = data?.data?.[0]
+        if (latest?.shortInterest && latest?.shortPercentOfFloat) {
+          return {
+            pct: parseFloat(latest.shortPercentOfFloat) * 100,
+            ratio: latest.shortRatio ?? null
+          }
+        }
       }
-    )
-    if (!res.ok) return { pct: null, ratio: null }
-    const data = await res.json()
-    const rows = data?.data?.shortInterestTable?.rows
-    if (!rows?.length) return { pct: null, ratio: null }
-    const latest = rows[0]
-    const pct = parseFloat(latest?.shortPercentOfFloat?.replace('%', '')) || null
-    const ratio = parseFloat(latest?.daysToCover) || null
-    return { pct, ratio }
-  } catch {
-    return { pct: null, ratio: null }
-  }
+    }
+  } catch { /* fallthrough */ }
+
+  // Source 2: Finnhub /stock/metric — includes shortRatio and shortPercent in metrics
+  try {
+    const key = process.env.FINNHUB_API_KEY
+    if (key) {
+      const res = await fetch(
+        `https://finnhub.io/api/v1/stock/metric?symbol=${ticker}&metric=all&token=${key}`,
+        { next: { revalidate: 86400 } }
+      )
+      if (res.ok) {
+        const data = await res.json()
+        const m = data?.metric ?? {}
+        // Finnhub metric keys: shortRatio, shortInterest, sharesShort, etc.
+        const pct = m['shortRatio'] ?? m['10DayAverageTradingVolume'] ? null : null
+        const ratio = typeof m['shortRatio'] === 'number' ? m['shortRatio'] : null
+        // sharesShortPercentOfFloat is the key we want
+        const floatPct = typeof m['sharesShortPercentOfFloat'] === 'number'
+          ? m['sharesShortPercentOfFloat'] * 100
+          : typeof m['shortPercent'] === 'number'
+          ? m['shortPercent'] * 100
+          : null
+        if (floatPct !== null || ratio !== null) {
+          return { pct: floatPct, ratio }
+        }
+      }
+    }
+  } catch { /* fallthrough */ }
+
+  // Source 3: Alpaca fundamentals endpoint (v1beta1)
+  try {
+    const alpacaKey = process.env.ALPACA_API_KEY
+    const alpacaSecret = process.env.ALPACA_SECRET_KEY
+    if (alpacaKey && alpacaSecret) {
+      const res = await fetch(
+        `https://data.alpaca.markets/v1beta1/stocks/${ticker}/snapshot`,
+        {
+          headers: {
+            'APCA-API-KEY-ID': alpacaKey,
+            'APCA-API-SECRET-KEY': alpacaSecret,
+          },
+          next: { revalidate: 86400 }
+        }
+      )
+      if (res.ok) {
+        const data = await res.json()
+        // Alpaca snapshot may include fundamental data in some tiers
+        const pct = data?.fundamentals?.shortPercentOfFloat ?? data?.shortPercentOfFloat ?? null
+        const ratio = data?.fundamentals?.shortRatio ?? data?.shortRatio ?? null
+        if (pct !== null) return { pct: pct * 100, ratio }
+      }
+    }
+  } catch { /* fallthrough */ }
+
+  return { pct: null, ratio: null }
 }
 
 export async function fetchOptionsFlow(ticker: string, currentPrice: number): Promise<OptionsFlowSignals> {
@@ -260,7 +314,12 @@ export async function fetchOptionsFlow(ticker: string, currentPrice: number): Pr
           shortSignal === 'squeeze_candidate'
             ? `  ⚠ High short interest — good news could trigger short squeeze` : '',
         ].filter(Boolean).join('\n')
-      : `  Short interest data unavailable`,
+      : [
+          `Short interest: not available from data providers for this security.`,
+          putCallRatio !== null
+            ? `  Proxy signal from options: P/C ratio ${putCallRatio.toFixed(2)} (${putCallSignal}) — ${putCallRatio > 1.0 ? 'elevated put buying suggests significant bearish positioning exists' : putCallRatio < 0.7 ? 'low put activity suggests limited bearish conviction' : 'balanced positioning'}.`
+            : `  No proxy data available. Treat short position data as unknown — do not cite absence as evidence.`,
+        ].filter(Boolean).join('\n'),
   ].filter(Boolean)
 
   return {
