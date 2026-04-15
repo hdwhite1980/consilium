@@ -44,6 +44,15 @@ interface MarketData {
     volumeRatio: number; priceChange1D: number
     fibLevels: Array<{ level: number; price: number; label: string; type: string }>
     nearestFibLevel: { level: number; price: number; label: string; type: string } | null
+    // New indicators
+    atr14: number; atrPct: number; atrSignal: string
+    stopLossATR: number; takeProfitATR: number
+    roc10: number; roc20: number; rocSignal: string; momentum: number
+    williamsR: number; williamsSignal: string
+    cci: number; cciSignal: string
+    ichimokuTenkan: number; ichimokuKijun: number
+    ichimokuSignal: string; ichimokuCross: string
+    relStrengthVsSector: number | null; relStrengthSignal: string
   }
   conviction: {
     direction: Signal; conviction: string; convergenceScore: number
@@ -694,16 +703,23 @@ function HomeInner() {
           {/* Technicals */}
           {md?.technicals && (
             <Card title="Technicals" icon={<BarChart2 size={11}/>} color="#a78bfa" surf={surf} brd={brd} txt3={txt3}>
-              {[
-                ['RSI', <span style={{ color: md!.technicals?.rsi > 70 ? '#f87171' : md!.technicals?.rsi < 30 ? '#34d399' : txt }}>{md!.technicals?.rsi.toFixed(1)}</span>],
+              {([
+                ['RSI', <span style={{ color: md!.technicals?.rsi > 70 ? '#f87171' : md!.technicals?.rsi < 30 ? '#34d399' : txt }}>{md!.technicals?.rsi?.toFixed(1)}</span>],
                 ['MACD', <span style={{ color: md!.technicals?.macdHistogram >= 0 ? '#34d399' : '#f87171' }}>{md!.technicals?.macdHistogram >= 0 ? '▲ pos' : '▼ neg'}</span>],
                 ['MA cross', <span style={{ color: md!.technicals?.goldenCross ? '#34d399' : '#f87171' }}>{md!.technicals?.goldenCross ? 'Golden ✓' : 'Death ✗'}</span>],
                 ['vs SMA200', <span style={{ color: md!.currentPrice >= md!.technicals?.sma200 ? '#34d399' : '#f87171' }}>{((md!.currentPrice / md!.technicals?.sma200 - 1) * 100 >= 0 ? '+' : '') + ((md!.currentPrice / md!.technicals?.sma200 - 1) * 100).toFixed(1) + '%'}</span>],
-                ['Volume', <span style={{ color: txt }}>{md!.technicals?.volumeRatio.toFixed(1)}x avg</span>],
-                ['Support', <span style={{ color: txt }}>${md!.technicals?.support.toFixed(2)}</span>],
-                ['Resist', <span style={{ color: txt }}>${md!.technicals?.resistance.toFixed(2)}</span>],
-              ].map(([k, v]) => (
-                <div key={String(k)} className="flex justify-between text-xs">
+                ['Williams %R', <span style={{ color: md!.technicals?.williamsR > -20 ? '#f87171' : md!.technicals?.williamsR < -80 ? '#34d399' : txt }}>{md!.technicals?.williamsR?.toFixed(1)}</span>],
+                ['CCI', <span style={{ color: md!.technicals?.cci > 100 ? '#f87171' : md!.technicals?.cci < -100 ? '#34d399' : txt }}>{md!.technicals?.cci?.toFixed(0)}</span>],
+                ['ATR(14)', <span style={{ color: txt }}>${md!.technicals?.atr14?.toFixed(2)} ({md!.technicals?.atrPct?.toFixed(1)}%)</span>],
+                ['Ichimoku', <span style={{ color: md!.technicals?.ichimokuSignal === 'above_cloud' ? '#34d399' : md!.technicals?.ichimokuSignal === 'below_cloud' ? '#f87171' : '#fbbf24' }}>{(md!.technicals?.ichimokuSignal ?? 'N/A').replace(/_/g,' ')}</span>],
+                ['ROC 10d', <span style={{ color: (md!.technicals?.roc10 ?? 0) >= 0 ? '#34d399' : '#f87171' }}>{md!.technicals?.roc10?.toFixed(1)}%</span>],
+                ['Rel Str', <span style={{ color: (md!.technicals?.relStrengthVsSector ?? 0) > 0 ? '#34d399' : (md!.technicals?.relStrengthVsSector ?? 0) < 0 ? '#f87171' : txt }}>{md!.technicals?.relStrengthVsSector != null ? ((md!.technicals?.relStrengthVsSector >= 0 ? '+' : '') + md!.technicals?.relStrengthVsSector?.toFixed(1) + '%') : 'N/A'}</span>],
+                ['Volume', <span style={{ color: txt }}>{md!.technicals?.volumeRatio?.toFixed(1)}x avg</span>],
+                ['Bollinger', <span style={{ color: txt }}>{md!.technicals?.bbSignal}</span>],
+                ['Support', <span style={{ color: txt }}>${md!.technicals?.support?.toFixed(2)}</span>],
+                ['Resist', <span style={{ color: txt }}>${md!.technicals?.resistance?.toFixed(2)}</span>],
+              ] as [string, React.ReactNode][]).map(([k, v]) => (
+                <div key={k} className="flex justify-between text-xs">
                   <span style={{ color: txt3 }}>{k}</span>
                   <span className="font-mono text-[11px]">{v}</span>
                 </div>

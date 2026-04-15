@@ -28,6 +28,15 @@ interface TechnicalChartsProps {
     resistance: number; resistance2: number
     fibLevels: FibLevel[]; nearestFibLevel: FibLevel | null
     currentPrice: number; technicalScore: number; technicalBias: string
+    // New indicators
+    atr14?: number; atrPct?: number; atrSignal?: string
+    stopLossATR?: number; takeProfitATR?: number
+    roc10?: number; roc20?: number; rocSignal?: string; momentum?: number
+    williamsR?: number; williamsSignal?: string
+    cci?: number; cciSignal?: string
+    ichimokuTenkan?: number; ichimokuKijun?: number
+    ichimokuSignal?: string; ichimokuCross?: string
+    relStrengthVsSector?: number | null; relStrengthSignal?: string
   } | null
 }
 
@@ -631,6 +640,180 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
         <ICard title="Fibonacci retracement levels">
           <FibTable levels={t.fibLevels} current={t.currentPrice} nearest={t.nearestFibLevel} />
           <Explain color="#a78bfa" what={fibWhat} means={fibMeans} />
+        </ICard>
+      )}
+
+      {/* ATR */}
+      {t.atr14 != null && t.atr14 > 0 && (
+        <ICard title="ATR — Average True Range (14)">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-center">
+              <div className="text-2xl font-bold font-mono" style={{ color: t.atrSignal === 'high_volatility' ? '#f87171' : t.atrSignal === 'low_volatility' ? '#34d399' : '#fbbf24' }}>
+                ${sf(t.atr14!)}
+              </div>
+              <div className="text-[10px] font-mono" style={{ color: 'rgba(255,255,255,0.35)' }}>{sf(t.atrPct!, 1)}% of price</div>
+            </div>
+            <div className="text-right space-y-1">
+              <div className="text-[10px] font-mono" style={{ color: 'rgba(248,113,113,0.8)' }}>2× ATR stop: ${sf(t.stopLossATR!)}</div>
+              <div className="text-[10px] font-mono" style={{ color: 'rgba(52,211,153,0.8)' }}>3× ATR target: ${sf(t.takeProfitATR!)}</div>
+            </div>
+          </div>
+          <Explain color="#fbbf24"
+            what="ATR measures how much a stock moves on a typical day, calculated as the average of the true range (high minus low, accounting for overnight gaps) over 14 periods. It normalizes volatility into a dollar and percentage figure that is directly comparable across stocks."
+            means={t.atrSignal === 'high_volatility'
+              ? `At ${sf(t.atrPct!, 1)}% of the stock price, this is high volatility. Stops need to be wider to avoid being shaken out by normal price noise. The ATR-derived stop at $${sf(t.stopLossATR!)} gives the trade room to breathe — a tighter stop will likely be triggered by routine daily fluctuation rather than a genuine trend change.`
+              : t.atrSignal === 'low_volatility'
+              ? `At ${sf(t.atrPct!, 1)}% of the stock price, this is unusually low volatility — a Bollinger squeeze may be forming. Low ATR periods often precede large directional moves. Positions can be sized larger because stops can be set tighter without being prematurely triggered.`
+              : `Volatility is at normal levels. The standard 2× ATR stop ($${sf(t.stopLossATR!)}) and 3× ATR target ($${sf(t.takeProfitATR!)}) provide a reasonable 1.5:1 risk/reward framework appropriate for the stock's typical price behavior.`
+            }
+          />
+        </ICard>
+      )}
+
+      {/* Williams %R */}
+      {t.williamsR != null && (
+        <ICard title="Williams %R (14)">
+          <div className="flex flex-col items-center mb-3">
+            <svg width="200" height="40" viewBox="0 0 200 40">
+              <rect x="10" y="14" width="180" height="12" rx="3" fill="rgba(255,255,255,0.05)" />
+              <rect x="10" y="14" width="36" height="12" rx="3" fill="rgba(52,211,153,0.15)" />
+              <rect x="154" y="14" width="36" height="12" rx="3" fill="rgba(248,113,113,0.15)" />
+              <text x="28" y="11" fontSize="8" fill="rgba(52,211,153,0.6)" textAnchor="middle">Oversold</text>
+              <text x="172" y="11" fontSize="8" fill="rgba(248,113,113,0.6)" textAnchor="middle">Overbought</text>
+              <text x="10" y="36" fontSize="8" fill="rgba(255,255,255,0.25)">-100</text>
+              <text x="190" y="36" fontSize="8" fill="rgba(255,255,255,0.25)" textAnchor="end">0</text>
+              {/* Position: -100 maps to x=10, 0 maps to x=190 */}
+              <circle cx={10 + ((t.williamsR! + 100) / 100) * 180} cy="20" r="6"
+                fill={t.williamsSignal === 'overbought' ? '#f87171' : t.williamsSignal === 'oversold' ? '#34d399' : '#fbbf24'} />
+            </svg>
+            <div className="text-lg font-bold font-mono mt-1" style={{ color: t.williamsSignal === 'overbought' ? '#f87171' : t.williamsSignal === 'oversold' ? '#34d399' : '#fbbf24' }}>
+              {sf(t.williamsR!, 1)} — {t.williamsSignal}
+            </div>
+          </div>
+          <Explain color="#60a5fa"
+            what="Williams %R is a momentum oscillator ranging from -100 to 0 that measures where the closing price sits relative to the high-low range over 14 periods. Near 0 means the stock closed near its recent high (overbought). Near -100 means it closed near its recent low (oversold)."
+            means={t.williamsSignal === 'overbought'
+              ? `At ${sf(t.williamsR!, 1)}, Williams %R confirms what RSI may also be showing — the stock has been consistently closing near its recent highs. Combined with a high RSI and CCI, this triple oscillator agreement is a strong overbought signal. Consider tightening stops or reducing position size.`
+              : t.williamsSignal === 'oversold'
+              ? `At ${sf(t.williamsR!, 1)}, Williams %R shows the stock has been consistently closing near its recent lows. When multiple oscillators (RSI, CCI, Williams %R) all confirm oversold simultaneously, the probability of at least a short-term bounce increases meaningfully.`
+              : `Williams %R at ${sf(t.williamsR!, 1)} is in neutral territory — the stock is not at an extreme. This neither confirms nor contradicts the directional thesis.`
+            }
+          />
+        </ICard>
+      )}
+
+      {/* CCI */}
+      {t.cci != null && (
+        <ICard title="CCI — Commodity Channel Index (20)">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="flex-1 h-3 rounded-full overflow-hidden relative" style={{ background: 'rgba(255,255,255,0.05)' }}>
+              <div className="absolute left-1/2 top-0 bottom-0 w-px" style={{ background: 'rgba(255,255,255,0.15)' }} />
+              <div className="h-full rounded-full absolute"
+                style={{
+                  width: `${Math.min(Math.abs(t.cci!) / 200 * 50, 50)}%`,
+                  left: t.cci! >= 0 ? '50%' : `${50 - Math.min(Math.abs(t.cci!) / 200 * 50, 50)}%`,
+                  background: t.cciSignal === 'overbought' ? '#f87171' : t.cciSignal === 'oversold' ? '#34d399' : '#fbbf24',
+                }} />
+            </div>
+            <div className="text-lg font-bold font-mono w-16 text-right" style={{ color: t.cciSignal === 'overbought' ? '#f87171' : t.cciSignal === 'oversold' ? '#34d399' : '#fbbf24' }}>
+              {sf(t.cci!, 0)}
+            </div>
+          </div>
+          <Explain color="#a78bfa"
+            what="CCI (Commodity Channel Index) measures how far the current typical price (high+low+close÷3) is from its 20-period average, normalized by mean deviation. Readings above +100 indicate the stock is well above its recent average price. Below -100 indicates it's well below."
+            means={t.cciSignal === 'overbought'
+              ? `CCI at ${sf(t.cci!, 0)} is firmly in overbought territory (above +100). This is a third oscillator confirming what RSI and Williams %R may also be showing. Institutions use CCI to time exits from extended rallies. A CCI reversal from these levels has historically preceded mean reversion moves.`
+              : t.cciSignal === 'oversold'
+              ? `CCI at ${sf(t.cci!, 0)} is in oversold territory (below -100). The stock's typical price has deviated significantly below its recent average. When fundamental signals remain intact and CCI reaches these extremes, it often signals a price that has overshot to the downside.`
+              : `CCI at ${sf(t.cci!, 0)} shows the stock trading close to its recent price average. No extremes detected.`
+            }
+          />
+        </ICard>
+      )}
+
+      {/* Ichimoku Cloud */}
+      {t.ichimokuSignal && t.ichimokuSignal !== 'unknown' && (
+        <ICard title="Ichimoku Cloud">
+          <div className="flex items-center gap-4 mb-3">
+            <div className="flex-1">
+              <div className="text-base font-bold font-mono mb-1" style={{ color: t.ichimokuSignal === 'above_cloud' ? '#34d399' : t.ichimokuSignal === 'below_cloud' ? '#f87171' : '#fbbf24' }}>
+                {(t.ichimokuSignal ?? '').replace(/_/g, ' ').toUpperCase()}
+              </div>
+              {t.ichimokuCross && t.ichimokuCross !== 'none' && (
+                <div className="text-[10px] font-mono" style={{ color: t.ichimokuCross === 'bullish' ? '#34d399' : '#f87171' }}>
+                  ⚡ TK {t.ichimokuCross} cross detected
+                </div>
+              )}
+            </div>
+            <div className="text-right text-[10px] font-mono" style={{ color: 'rgba(255,255,255,0.35)' }}>
+              <div>Tenkan: ${sf(t.ichimokuTenkan!)}</div>
+              <div>Kijun: ${sf(t.ichimokuKijun!)}</div>
+            </div>
+          </div>
+          <Explain color="#34d399"
+            what="Ichimoku Cloud (Ichimoku Kinko Hyo) is one of the most comprehensive single indicators in technical analysis. It shows trend direction, momentum, and support/resistance simultaneously. The 'cloud' (Kumo) is built from two span lines; when price is above the cloud the trend is bullish, below it is bearish, inside is neutral/indecisive. The Tenkan-sen (9-period) and Kijun-sen (26-period) midpoints act as moving averages."
+            means={t.ichimokuSignal === 'above_cloud'
+              ? `The stock is trading above the Ichimoku Cloud — this is structurally bullish on this timeframe. Cloud position is the most reliable single piece of information from this indicator because it requires sustained price action over 26+ periods to establish. A TK cross (Tenkan crossing above Kijun) while above the cloud is a high-conviction buy signal used by institutional traders.${t.ichimokuCross === 'bullish' ? ' A bullish TK cross is currently present — this combination is one of the strongest technical buy signals available.' : ''}`
+              : t.ichimokuSignal === 'below_cloud'
+              ? `The stock is trading below the Ichimoku Cloud — this is structurally bearish. The cloud now acts as overhead resistance. Price needs to break through and close above the cloud on high volume to invalidate the bearish structure. Until then, rallies to the cloud bottom are selling opportunities for technical traders.${t.ichimokuCross === 'bearish' ? ' A bearish TK cross is present, adding further confirmation to the bearish stance.' : ''}`
+              : `Price is inside the Ichimoku Cloud — this is a neutral, indecisive zone. The stock is in transition between a bullish and bearish regime. Wait for a decisive close outside the cloud before committing to a directional trade.`
+            }
+          />
+        </ICard>
+      )}
+
+      {/* ROC / Momentum */}
+      {t.roc10 != null && (
+        <ICard title="ROC — Rate of Change / Momentum">
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            {[
+              { label: 'ROC 10-period', val: t.roc10!, color: t.roc10! >= 0 ? '#34d399' : '#f87171' },
+              { label: 'ROC 20-period', val: t.roc20!, color: t.roc20! >= 0 ? '#34d399' : '#f87171' },
+            ].map(({ label, val, color }) => (
+              <div key={label} className="text-center p-2 rounded-lg" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                <div className="text-xl font-bold font-mono" style={{ color }}>{val >= 0 ? '+' : ''}{sf(val, 1)}%</div>
+                <div className="text-[9px] font-mono" style={{ color: 'rgba(255,255,255,0.3)' }}>{label}</div>
+              </div>
+            ))}
+          </div>
+          <div className="text-[10px] font-mono mb-2 text-center" style={{ color: t.rocSignal === 'accelerating' ? '#34d399' : t.rocSignal === 'decelerating' ? '#f87171' : '#fbbf24' }}>
+            Momentum: {(t.rocSignal ?? 'neutral').toUpperCase()}
+          </div>
+          <Explain color="#60a5fa"
+            what="Rate of Change (ROC) measures the percentage change in price over a set number of periods. Unlike RSI which measures relative strength, ROC measures the raw speed of price change. Momentum is the actual dollar difference between the current price and the price 10 periods ago."
+            means={t.rocSignal === 'accelerating'
+              ? `10-period ROC (${sf(t.roc10!, 1)}%) is stronger than 20-period ROC (${sf(t.roc20!, 1)}%) — momentum is accelerating. The stock is moving faster in the recent period than the medium-term period. Accelerating momentum into an oversold zone is often the strongest buy signal combination: the selling is slowing while the potential energy for a bounce is building.`
+              : t.rocSignal === 'decelerating'
+              ? `10-period ROC (${sf(t.roc10!, 1)}%) is weaker than 20-period ROC (${sf(t.roc20!, 1)}%) — momentum is decelerating. The stock may be running out of steam. Even if RSI is not yet in overbought territory, decelerating momentum warns that the move may be exhausting. This is a signal to tighten stops on long positions.`
+              : `ROC shows consistent momentum across both timeframes. No significant acceleration or deceleration detected.`
+            }
+          />
+        </ICard>
+      )}
+
+      {/* Relative Strength vs Sector */}
+      {t.relStrengthVsSector != null && t.relStrengthSignal !== 'unknown' && (
+        <ICard title="Relative Strength vs Sector">
+          <div className="flex items-center justify-center gap-4 mb-3">
+            <div className="text-center">
+              <div className="text-2xl font-bold font-mono" style={{ color: t.relStrengthVsSector! > 0 ? '#34d399' : t.relStrengthVsSector! < 0 ? '#f87171' : '#fbbf24' }}>
+                {t.relStrengthVsSector! >= 0 ? '+' : ''}{sf(t.relStrengthVsSector!, 1)}%
+              </div>
+              <div className="text-[10px] font-mono" style={{ color: 'rgba(255,255,255,0.35)' }}>vs sector this period</div>
+            </div>
+            <div className="text-base font-bold font-mono" style={{ color: t.relStrengthSignal === 'outperforming' ? '#34d399' : t.relStrengthSignal === 'underperforming' ? '#f87171' : '#fbbf24' }}>
+              {(t.relStrengthSignal ?? '').toUpperCase()}
+            </div>
+          </div>
+          <Explain color="#34d399"
+            what="Relative strength compares this stock's price performance to its sector ETF over the same period. A stock that's up 2% when its sector is up 8% is actually underperforming despite the positive return — it's losing ground to its peers. Conversely, a stock down 2% when its sector is down 10% is showing relative strength despite the loss."
+            means={t.relStrengthSignal === 'outperforming'
+              ? `This stock is outperforming its sector by ${sf(t.relStrengthVsSector!, 1)}% this period. Relative outperformance is often a precursor to continued leadership — institutional money tends to rotate toward sector leaders. A bullish thesis here is strengthened by this data because the stock is not just riding sector momentum, it's beating it.`
+              : t.relStrengthSignal === 'underperforming'
+              ? `This stock is underperforming its sector by ${Math.abs(t.relStrengthVsSector!).toFixed(1)}% this period — this is a red flag even if the absolute return appears positive. Consistent underperformance relative to sector peers suggests institutional rotation away from this name. The Devil's Advocate would correctly cite this as evidence of hidden weakness.`
+              : `Relative performance is inline with the sector — the stock is moving with its peers rather than diverging. No signal either way.`
+            }
+          />
         </ICard>
       )}
 
