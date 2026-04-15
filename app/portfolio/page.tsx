@@ -118,7 +118,11 @@ export default function PortfolioPage() {
   useEffect(() => {
     const handler = (e: Event) => {
       const { tutorialId } = (e as CustomEvent).detail
-      if (tutorialId === 'portfolio') setShowTutorial(true)
+      if (tutorialId === 'portfolio') {
+        // Force remount by toggling off then on
+        setShowTutorial(false)
+        setTimeout(() => setShowTutorial(true), 0)
+      }
     }
     window.addEventListener('consilium:launch_tutorial', handler)
     return () => window.removeEventListener('consilium:launch_tutorial', handler)

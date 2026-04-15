@@ -298,7 +298,11 @@ function HomeInner() {
   useEffect(() => {
     const handler = (e: Event) => {
       const { tutorialId } = (e as CustomEvent).detail
-      if (tutorialId === 'main') setShowTutorial(true)
+      if (tutorialId === 'main') {
+        // Force remount by toggling off then on
+        setShowTutorial(false)
+        setTimeout(() => setShowTutorial(true), 0)
+      }
     }
     window.addEventListener('consilium:launch_tutorial', handler)
     return () => window.removeEventListener('consilium:launch_tutorial', handler)
