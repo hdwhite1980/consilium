@@ -44,7 +44,14 @@ async function getLivePrice(ticker: string): Promise<number | null> {
   } catch { return null }
 }
 
-async function getCachedSignal(ticker: string): Promise<{ signal: string; confidence: number; target: string; reasoning: string } | null> {
+interface CachedSignal {
+  signal: string
+  confidence: number
+  target: string
+  reasoning: string
+}
+
+async function getCachedSignal(ticker: string): Promise<CachedSignal | null> {
   try {
     const { data } = await getAdmin()
       .from('analyses')
@@ -61,9 +68,24 @@ async function getCachedSignal(ticker: string): Promise<{ signal: string; confid
       signal: String(judge.signal ?? 'NEUTRAL'),
       confidence: Number(judge.confidence ?? 50),
       target: String(judge.target ?? 'N/A'),
-      reasoning: String(judge.summary ?? ''),
+      reasoning: String(judge.summary ?? '').slice(0, 150),
     }
   } catch { return null }
+}
+
+interface TradeInput {
+  ticker: string
+  shares: number
+  entry_price: number
+  exit_price: number | null
+  council_signal: string | null
+  confidence: number | null
+}
+
+interface TradeSummary extends TradeInput {
+  currentPrice: number | null
+  pnl: number | null
+  pnlPct: number | null
 }
 
 export async function POST(req: NextRequest) {
@@ -74,72 +96,76 @@ export async function POST(req: NextRequest) {
   const { trades, availableCash } = await req.json()
 
   if (!trades?.length) {
-    return NextResponse.json({ ideas: [], insights: [] })
+    return NextResponse.json({ ideas: [], insights: [], allocation: [], realizedPnL: 0 })
   }
 
-  // Build context about user's trades for the AI
-  const openTrades = trades.filter((t: { exit_price: number | null }) => !t.exit_price)
-  const closedTrades = trades.filter((t: { exit_price: number | null; entry_price: number; shares: number }) => t.exit_price)
+  const openTrades: TradeInput[] = trades.filter((t: TradeInput) => !t.exit_price)
+  const closedTrades: TradeInput[] = trades.filter((t: TradeInput) => !!t.exit_price)
 
   // Get live prices for open trades
   const priceMap: Record<string, number | null> = {}
-  await Promise.all(openTrades.map(async (t: { ticker: string }) => {
+  await Promise.all(openTrades.map(async t => {
     priceMap[t.ticker] = await getLivePrice(t.ticker)
   }))
 
-  // Compute P&L
-  const tradeSummaries = openTrades.map((t: { ticker: string; shares: number; entry_price: number; council_signal: string; confidence: number; persona: string }) => {
-    const current = priceMap[t.ticker]
-    const pnl = current ? (current - t.entry_price) * t.shares : null
-    const pnlPct = current ? ((current - t.entry_price) / t.entry_price) * 100 : null
+  // Compute P&L summaries
+  const tradeSummaries: TradeSummary[] = openTrades.map(t => {
+    const current = priceMap[t.ticker] ?? null
+    const pnl = current != null ? (current - t.entry_price) * t.shares : null
+    const pnlPct = current != null ? ((current - t.entry_price) / t.entry_price) * 100 : null
     return { ...t, currentPrice: current, pnl, pnlPct }
   })
 
-  const realizedPnL = closedTrades.reduce((sum: number, t: { exit_price: number; entry_price: number; shares: number }) => {
-    return sum + (t.exit_price - t.entry_price) * t.shares
+  const realizedPnL = closedTrades.reduce((sum, t) => {
+    const exitP = (t.exit_price ?? t.entry_price)
+    return sum + (exitP - t.entry_price) * t.shares
   }, 0)
 
   // Find candidate reinvestment tickers from peers of profitable trades
   const profitableTickers = tradeSummaries
-    .filter((t: { pnl: number | null }) => (t.pnl ?? 0) > 0)
-    .map((t: { ticker: string }) => t.ticker)
+    .filter(t => (t.pnl ?? 0) > 0)
+    .map(t => t.ticker)
 
   const candidateTickers = new Set<string>()
   for (const ticker of profitableTickers) {
     getPeers(ticker).forEach(p => {
-      if (!openTrades.find((t: { ticker: string }) => t.ticker === p)) {
+      if (!openTrades.find(t => t.ticker === p)) {
         candidateTickers.add(p)
       }
     })
   }
-  // Also add adding-to-existing as candidates for BULLISH open trades
+  // Also suggest adding to existing BULLISH positions that are profitable
   for (const t of tradeSummaries) {
     if (t.council_signal === 'BULLISH' && (t.pnl ?? 0) > 0) {
       candidateTickers.add(t.ticker + ':ADD')
     }
   }
 
-  // Get cached signals for candidates (limit to 6)
+  // Get cached signals for candidate tickers (limit to 6 to control latency)
   const candidates = Array.from(candidateTickers).slice(0, 6)
-  const candidateSignals: Record<string, ReturnType<typeof getCachedSignal> extends Promise<infer T> ? T : never> = {}
+  const candidateSignals: Record<string, CachedSignal | null> = {}
   await Promise.all(candidates.map(async c => {
     const ticker = c.replace(':ADD', '')
     candidateSignals[c] = await getCachedSignal(ticker)
   }))
 
-  // Build AI prompt
-  const tradeContext = tradeSummaries.map((t: { ticker: string; shares: number; entry_price: number; currentPrice: number | null; pnl: number | null; pnlPct: number | null; council_signal: string; confidence: number }) =>
-    `${t.ticker}: ${t.shares} shares @ $${t.entry_price.toFixed(2)} entry` +
-    (t.currentPrice ? ` | current $${t.currentPrice.toFixed(2)} | P&L ${t.pnl! >= 0 ? '+' : ''}$${t.pnl!.toFixed(0)} (${t.pnlPct!.toFixed(1)}%)` : ' | price unavailable') +
-    ` | Council was ${t.council_signal} ${t.confidence}%`
+  // Build context strings for the AI
+  const sf2 = (n: number | null, d = 2) => n != null ? n.toFixed(d) : 'N/A'
+
+  const tradeContext = tradeSummaries.map(t =>
+    `${t.ticker}: ${t.shares} shares @ $${sf2(t.entry_price)} entry` +
+    (t.currentPrice != null
+      ? ` | current $${sf2(t.currentPrice)} | P&L ${(t.pnl ?? 0) >= 0 ? '+' : ''}$${sf2(t.pnl, 0)} (${sf2(t.pnlPct, 1)}%)`
+      : ' | price unavailable') +
+    ` | Council was ${t.council_signal ?? 'UNKNOWN'} ${t.confidence ?? '?'}%`
   ).join('\n')
 
   const candidateContext = candidates.map(c => {
     const sig = candidateSignals[c]
     const isAdd = c.endsWith(':ADD')
     const ticker = c.replace(':ADD', '')
-    if (!sig) return `${ticker}${isAdd ? ' (add to existing)' : ''}: no recent analysis`
-    return `${ticker}${isAdd ? ' (add to existing)' : ''}: ${sig.signal} ${sig.confidence}% — ${sig.reasoning.slice(0, 120)}`
+    if (!sig) return `${ticker}${isAdd ? ' (add to existing)' : ''}: no recent Consilium analysis`
+    return `${ticker}${isAdd ? ' (add to existing)' : ''}: ${sig.signal} ${sig.confidence}% — ${sig.reasoning}`
   }).join('\n')
 
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
@@ -147,24 +173,19 @@ export async function POST(req: NextRequest) {
   const msg = await anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 1200,
-    system: `You are the Reinvestment Council for a retail trader. Your job is to analyze their trade history and available cash, then recommend where to redeploy gains. Be specific, contextual, and honest about risk. Reference their actual trades by ticker. Allocate the available cash across 2-3 ideas with specific dollar amounts that sum to the available cash. Write for someone who trusts data over hype.`,
+    system: `You are the Reinvestment Council for a retail trader. Analyze their trade history and available cash, then recommend where to redeploy gains. Be specific and contextual — reference their actual tickers and P&L numbers. Allocate the available cash across 2-3 ideas with dollar amounts that sum close to the available cash. All suggestedAmount fields must be plain numbers, not strings with $ signs.`,
     messages: [{
       role: 'user',
       content: `TRADER'S OPEN TRADES:
-${tradeContext}
+${tradeContext || 'No open trades'}
 
 REALIZED GAINS FROM CLOSED TRADES: $${realizedPnL.toFixed(0)}
-AVAILABLE CASH TO REINVEST: $${(availableCash ?? 0).toFixed(0)}
+AVAILABLE CASH TO REINVEST: $${(availableCash ?? realizedPnL).toFixed(0)}
 
 CANDIDATE REINVESTMENT TICKERS (from sector peers + add-to-existing):
-${candidateContext}
+${candidateContext || 'No candidates available — suggest broad market ETFs like SPY, QQQ'}
 
-Based on the trader's history, gains, risk exposure, and the council signals above, generate:
-1. 3 specific reinvestment ideas with rationale tied to their actual gains
-2. 3-4 council insights about their overall trade performance and what to do next
-3. Suggested allocation of available cash across the ideas
-
-JSON ONLY:
+Generate reinvestment recommendations. Return JSON ONLY — no markdown, no backticks, no preamble:
 {
   "ideas": [
     {
@@ -172,7 +193,7 @@ JSON ONLY:
       "isAddToExisting": false,
       "signal": "BULLISH",
       "confidence": 72,
-      "rationale": "2-3 sentences connecting this idea to their specific gains and why it makes sense given what they already hold",
+      "rationale": "2-3 sentences connecting this idea to their specific gains",
       "suggestedAmount": 2170,
       "suggestedShares": "~14 shares",
       "risk": "medium",
@@ -181,30 +202,34 @@ JSON ONLY:
   ],
   "insights": [
     {
-      "type": "success|warning|info",
-      "text": "Specific insight about their trades referencing actual tickers and numbers"
+      "type": "success",
+      "text": "Specific insight about their trades. **Bold** key tickers and numbers."
     }
   ],
   "allocation": [
-    { "label": "AMD", "pct": 50, "amount": 2170, "color": "blue" },
-    { "label": "MSFT add", "pct": 28, "amount": 1200, "color": "green" }
+    { "label": "AMD", "pct": 50, "amount": 2170, "color": "blue" }
   ]
 }`
     }]
   })
 
   try {
-    const text = (msg.content[0] as { text: string }).text
+    const text = (msg.content[0] as { type: string; text: string }).text
     const clean = text.replace(/```json|```/g, '').trim()
     const result = JSON.parse(clean)
 
     // Enrich ideas with live prices
-    for (const idea of result.ideas ?? []) {
+    for (const idea of (result.ideas ?? [])) {
+      if (!idea.ticker) continue
       const ticker = idea.ticker.replace(':ADD', '')
-      if (!priceMap[ticker]) {
+      if (priceMap[ticker] === undefined) {
         priceMap[ticker] = await getLivePrice(ticker)
       }
-      idea.currentPrice = priceMap[ticker]
+      idea.currentPrice = priceMap[ticker] ?? null
+      // Ensure suggestedAmount is a number
+      if (typeof idea.suggestedAmount === 'string') {
+        idea.suggestedAmount = parseFloat(idea.suggestedAmount.replace(/[^0-9.-]/g, '')) || 0
+      }
     }
 
     return NextResponse.json({
@@ -214,7 +239,8 @@ JSON ONLY:
       tradeSummaries,
       realizedPnL,
     })
-  } catch {
-    return NextResponse.json({ error: 'Failed to parse AI response' }, { status: 500 })
+  } catch (err) {
+    console.error('Ideas parse error:', err)
+    return NextResponse.json({ error: 'Failed to generate ideas' }, { status: 500 })
   }
 }

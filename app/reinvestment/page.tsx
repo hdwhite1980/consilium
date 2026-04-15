@@ -34,7 +34,7 @@ interface Idea {
   signal: string
   confidence: number
   rationale: string
-  suggestedAmount: number
+  suggestedAmount: number | string
   suggestedShares: string
   risk: 'low' | 'medium' | 'high'
   timeframe: string
@@ -63,9 +63,12 @@ const RISK_COLOR: Record<string, string> = {
 const ALLOC_COLORS: Record<string, string> = {
   blue: '#60a5fa', green: '#34d399', amber: '#fbbf24', purple: '#a78bfa', red: '#f87171'
 }
-const sf = (n: number, d = 2) => n.toFixed(d)
-const fmt$ = (n: number) => `$${Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
-const fmtPct = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
+const sf = (n: number | null | undefined, d = 2) => (n == null || isNaN(n as number) ? '0.00' : (n as number).toFixed(d))
+const fmt$ = (n: number | string | null | undefined) => {
+  const v = typeof n === 'string' ? parseFloat(n.replace(/[^0-9.-]/g, '')) : (n ?? 0)
+  return `$${Math.abs(isNaN(v) ? 0 : v).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+}
+const fmtPct = (n: number | null | undefined) => { const v = n ?? 0; return `${v >= 0 ? '+' : ''}${v.toFixed(1)}%` }
 
 function SigBadge({ s }: { s: string | null }) {
   const sig = s?.toUpperCase() ?? 'NEUTRAL'
@@ -205,7 +208,7 @@ function CloseTradeModal({
           {pnl !== null && (
             <div className="px-3 py-2 rounded-lg text-sm font-mono font-semibold text-center"
               style={{ background: pnl >= 0 ? 'rgba(52,211,153,0.1)' : 'rgba(248,113,113,0.1)', color: pnl >= 0 ? '#34d399' : '#f87171' }}>
-              {pnl >= 0 ? '+' : ''}{fmt$(pnl)} ({fmtPct(pnlPct!)}) — will be added to available cash
+              {(pnl ?? 0) >= 0 ? '+' : ''}{fmt$(pnl)} ({fmtPct(pnlPct)}) — will be added to available cash
             </div>
           )}
         </div>
@@ -412,7 +415,7 @@ function ReinvestmentInner() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
               { label: 'Open trades', value: openTrades.length.toString(), sub: `${closedTrades.length} closed` },
-              { label: 'Unrealized P&L', value: totalPnL >= 0 ? `+${fmt$(totalPnL)}` : `-${fmt$(totalPnL)}`, sub: totalInvested > 0 ? fmtPct(totalPnL / totalInvested * 100) : '0%', color: totalPnL >= 0 ? '#34d399' : '#f87171' },
+              { label: 'Unrealized P&L', value: (totalPnL ?? 0) >= 0 ? `+${fmt$(totalPnL)}` : `${fmt$(totalPnL)}`, sub: totalInvested > 0 ? fmtPct(totalPnL / totalInvested * 100) : '0%', color: totalPnL >= 0 ? '#34d399' : '#f87171' },
               { label: 'Realized gains', value: fmt$(realizedTotal), sub: `${closedTrades.length} exits`, color: realizedTotal >= 0 ? '#34d399' : '#f87171' },
               { label: 'Available cash', value: fmt$(Math.max(0, realizedTotal)), sub: 'from closed trades', color: '#60a5fa' },
             ].map(({ label, value, sub, color }) => (
@@ -464,7 +467,7 @@ function ReinvestmentInner() {
                             <td className="px-4 py-3 font-mono text-right">
                               {t.pnl !== null ? (
                                 <span style={{ color: t.pnl >= 0 ? '#34d399' : '#f87171' }}>
-                                  {t.pnl >= 0 ? '+' : ''}{fmt$(t.pnl)} ({fmtPct(t.pnlPct!)})
+                                  {(t.pnl ?? 0) >= 0 ? '+' : ''}{fmt$(t.pnl)} ({fmtPct(t.pnlPct)})
                                 </span>
                               ) : <span style={{ color: txt3 }}>—</span>}
                             </td>
@@ -548,7 +551,7 @@ function ReinvestmentInner() {
                               {idea.isAddToExisting && (
                                 <div className="text-[10px]" style={{ color: txt3 }}>Add to existing</div>
                               )}
-                              {idea.currentPrice && (
+                              {idea.currentPrice != null && (
                                 <div className="text-xs font-mono" style={{ color: txt3 }}>${sf(idea.currentPrice)}</div>
                               )}
                             </div>
@@ -678,7 +681,7 @@ function ReinvestmentInner() {
                               <td className="px-4 py-3 font-mono text-right" style={{ color: txt }}>${sf(t.exit_price!)}</td>
                               <td className="px-4 py-3 font-mono text-right">
                                 <span style={{ color: pnl >= 0 ? '#34d399' : '#f87171' }}>
-                                  {pnl >= 0 ? '+' : ''}{fmt$(pnl)} ({fmtPct(pnlPct)})
+                                  {(pnl ?? 0) >= 0 ? '+' : ''}{fmt$(pnl)} ({fmtPct(pnlPct)})
                                 </span>
                               </td>
                               <td className="px-4 py-3 text-right"><SigBadge s={t.council_signal} /></td>
