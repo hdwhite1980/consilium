@@ -403,13 +403,14 @@ function selectBestContracts(
 
   const scoreContract = (c: OptionsContract) =>
     (c.moneyness === 'ATM' ? 10 : c.moneyness === 'OTM' ? 5 : 2) +
-    Math.min(c.volume / 100, 5)
+    Math.min((c.volume || c.openInterest / 100) / 100, 5) +
+    // Prefer contracts near the target DTE
+    Math.max(0, 5 - Math.abs(c.daysToExpiry - targetDTE) / 3)
 
   const baseFilter = (c: OptionsContract) =>
     c.bid !== null && c.bid > 0 &&
-    c.daysToExpiry >= targetDTE - 7 &&
-    c.daysToExpiry <= targetDTE + 21 &&
-    c.volume > 0
+    c.daysToExpiry >= 3 &&
+    c.daysToExpiry <= 90
 
   if (signal === 'BULLISH') {
     return contracts
