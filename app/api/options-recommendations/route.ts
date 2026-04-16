@@ -123,35 +123,59 @@ function selectBestContractsWithLevels(
   const baseFilter = (c: OptionsContract) =>
     c.bid !== null && c.bid > 0 && c.daysToExpiry >= 3 && c.daysToExpiry <= 730
 
-  const scoreContract = (c: OptionsContract, idealStrike: number) => {
-    const strikeProximity = Math.max(0, 10 - Math.abs(c.strike - idealStrike) / currentPrice * 100)
-    const dteScore = Math.max(0, 5 - Math.abs(c.daysToExpiry - targetDTE) / 3)
-    const liquidityScore = Math.min(c.volume / 100 + c.openInterest / 1000, 5)
-    return strikeProximity + dteScore + liquidityScore
+  // Score within DTE band — near-term and LEAP scored separately to prevent one suppressing the other
+  const scoreNearTerm = (c: OptionsContract, idealStrike: number) => {
+    const strikeProx = Math.max(0, 10 - Math.abs(c.strike - idealStrike) / currentPrice * 100)
+    const dteScore   = Math.max(0, 5 - Math.abs(c.daysToExpiry - targetDTE) / 3)
+    const liquidity  = Math.min(c.volume / 100 + c.openInterest / 1000, 5)
+    return strikeProx + dteScore + liquidity
+  }
+
+  const scoreLeap = (c: OptionsContract, idealStrike: number) => {
+    // For LEAPs, prioritise ATM-to-slightly-ITM strikes and good open interest
+    const strikeProx = Math.max(0, 10 - Math.abs(c.strike - idealStrike) / currentPrice * 100)
+    const liquidity  = Math.min(c.openInterest / 500, 5) // LEAPs have lower daily volume
+    return strikeProx + liquidity
+  }
+
+  const selectWithLeaps = (filtered: OptionsContract[], idealStrike: number): OptionsContract[] => {
+    const nearTerm = filtered.filter(c => c.daysToExpiry <= 180)
+    const leaps    = filtered.filter(c => c.daysToExpiry > 180)
+
+    // Best 2 near-term + best 1 LEAP (if available), deduped
+    const bestNear = nearTerm
+      .sort((a, b) => scoreNearTerm(b, idealStrike) - scoreNearTerm(a, idealStrike))
+      .slice(0, 2)
+
+    const bestLeap = leaps
+      .sort((a, b) => scoreLeap(b, idealStrike) - scoreLeap(a, idealStrike))
+      .slice(0, 1)
+
+    // Combine: 2 near-term + 1 LEAP, or 3 near-term if no LEAPs available
+    const combined = [...bestNear, ...bestLeap]
+    return combined.length > 0 ? combined : nearTerm.slice(0, 3)
   }
 
   if (signal === 'BULLISH') {
     const idealStrike = entryPrice ?? currentPrice
-    return contracts
-      .filter(c => c.type === 'call' && baseFilter(c))
-      .sort((a, b) => scoreContract(b, idealStrike) - scoreContract(a, idealStrike))
-      .slice(0, 3)
+    const filtered = contracts.filter(c => c.type === 'call' && baseFilter(c))
+    return selectWithLeaps(filtered, idealStrike)
   }
 
   if (signal === 'BEARISH') {
     const idealStrike = entryPrice ?? currentPrice
-    return contracts
-      .filter(c => c.type === 'put' && baseFilter(c))
-      .sort((a, b) => scoreContract(b, idealStrike) - scoreContract(a, idealStrike))
-      .slice(0, 3)
+    const filtered = contracts.filter(c => c.type === 'put' && baseFilter(c))
+    return selectWithLeaps(filtered, idealStrike)
   }
 
+  // NEUTRAL — 1 call + 1 put near-term, 1 call LEAP
   const atm = entryPrice ?? currentPrice
   const calls = contracts.filter(c => c.type === 'call' && baseFilter(c))
-    .sort((a, b) => scoreContract(b, atm) - scoreContract(a, atm)).slice(0, 2)
-  const puts = contracts.filter(c => c.type === 'put' && baseFilter(c))
-    .sort((a, b) => scoreContract(b, atm) - scoreContract(a, atm)).slice(0, 2)
-  return [...calls, ...puts]
+  const puts  = contracts.filter(c => c.type === 'put' && baseFilter(c))
+  const bestCall = calls.sort((a, b) => scoreNearTerm(b, atm) - scoreNearTerm(a, atm)).slice(0, 1)
+  const bestPut  = puts.sort((a, b) => scoreNearTerm(b, atm) - scoreNearTerm(a, atm)).slice(0, 1)
+  const bestLeapCall = calls.filter(c => c.daysToExpiry > 180).sort((a, b) => scoreLeap(b, atm) - scoreLeap(a, atm)).slice(0, 1)
+  return [...bestCall, ...bestPut, ...bestLeapCall]
 }
 
 function selectBestContracts(

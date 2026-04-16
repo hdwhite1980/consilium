@@ -54,10 +54,11 @@ function ContractCard({ c }: { c: OptionsContract }) {
   const color = isBull ? '#34d399' : '#f87171'
   const mid = c.bid !== null && c.ask !== null ? ((c.bid + c.ask) / 2) : null
   const cost = mid !== null ? (mid * 100).toFixed(0) : '—'
+  const isLeap = c.daysToExpiry > 180
 
   return (
     <div className="rounded-xl border p-3 space-y-2"
-      style={{ background: `${color}05`, borderColor: `${color}20` }}>
+      style={{ background: `${color}05`, borderColor: isLeap ? 'rgba(167,139,250,0.3)' : `${color}20` }}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-xs font-bold font-mono px-2 py-0.5 rounded"
@@ -65,6 +66,12 @@ function ContractCard({ c }: { c: OptionsContract }) {
             {c.type.toUpperCase()} ${c.strike}
           </span>
           <span className="text-[10px] font-mono text-white/40">{c.expiry}</span>
+          {isLeap && (
+            <span className="text-[9px] font-bold font-mono px-1.5 py-0.5 rounded"
+              style={{ background: 'rgba(167,139,250,0.15)', color: '#a78bfa' }}>
+              LEAP
+            </span>
+          )}
         </div>
         <span className="text-[10px] font-mono px-2 py-0.5 rounded"
           style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)' }}>
@@ -100,6 +107,11 @@ function ContractCard({ c }: { c: OptionsContract }) {
           <div className="text-white/70">{c.iv !== null ? `${sf(c.iv, 0)}%` : '—'}</div>
         </div>
       </div>
+      {isLeap && (
+        <div className="text-[10px] leading-relaxed px-1" style={{ color: 'rgba(167,139,250,0.7)' }}>
+          LEAP: {c.daysToExpiry}d to expiry — lower theta decay (~${c.theta !== null ? Math.abs(c.theta * 100).toFixed(2) : '?'}/day per contract), high delta means it behaves more like stock. Requires more capital but gives time for the thesis to develop.
+        </div>
+      )}
     </div>
   )
 }
@@ -251,77 +263,26 @@ export default function OptionsRecommendations({
             </div>
           )}
 
-          {/* Live contracts */}
+          {/* Live contracts — single unified block */}
           {data.hasLiveData && data.contracts.length > 0 && (
             <div>
               <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2 flex items-center gap-2">
-                <span>{signal === 'NEUTRAL' ? 'Market reference' : 'Live contracts matching this strategy'}</span>
+                <span>{signal === 'NEUTRAL' ? 'Market reference — no directional position recommended' : 'Live contracts matching this strategy'}</span>
                 <span className="px-1.5 py-0.5 rounded text-[9px]"
-                  style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399' }}>
-                  live · real-time data
+                  style={{
+                    background: data.dataSource === 'Alpaca' ? 'rgba(96,165,250,0.1)' : 'rgba(52,211,153,0.1)',
+                    color: data.dataSource === 'Alpaca' ? '#60a5fa' : '#34d399',
+                  }}>
+                  {data.dataSource === 'Tradier' ? 'live · Tradier'
+                    : data.dataSource === 'Alpaca' ? 'Alpaca · 15min delayed'
+                    : 'live · real-time data'}
                 </span>
               </div>
               <div className="space-y-2">
                 {data.contracts.map((c, i) => <ContractCard key={i} c={c} />)}
               </div>
               <p className="text-[10px] text-white/20 mt-2 leading-relaxed">
-                One contract = 100 shares. Cost = ask price × 100. Verify current pricing with your broker before trading.
-              </p>
-            </div>
-          )}
-
-          {data.hasLiveData && data.contracts.length > 0 && data.dataSource === 'Tradier' && (
-            <div>
-              <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2 flex items-center gap-2">
-                <span>{signal === 'NEUTRAL' ? 'Market reference — no position recommended' : 'Example contracts matching this strategy'}</span>
-                <span className="px-1.5 py-0.5 rounded text-[9px]"
-                  style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399' }}>
-                  live via Tradier
-                </span>
-              </div>
-              <div className="space-y-2">
-                {data.contracts.map((c, i) => <ContractCard key={i} c={c} />)}
-              </div>
-              <p className="text-[10px] text-white/20 mt-2 leading-relaxed">
-                One contract = 100 shares. Cost = ask price × 100. Always verify current prices with your broker before trading.
-              </p>
-            </div>
-          )}
-
-          {/* Yahoo data — show strikes for reference but clearly label as incomplete */}
-          {data.hasLiveData && data.contracts.length > 0 && data.dataSource === 'Alpaca' && (
-            <div>
-              <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2 flex items-center gap-2">
-                <span>Example contracts matching this strategy</span>
-                <span className="px-1.5 py-0.5 rounded text-[9px]"
-                  style={{ background: 'rgba(96,165,250,0.1)', color: '#60a5fa' }}>
-                  via Alpaca · 15min delayed
-                </span>
-              </div>
-              <div className="space-y-2">
-                {data.contracts.map((c, i) => <ContractCard key={i} c={c} />)}
-              </div>
-              <p className="text-[10px] text-white/20 mt-2 leading-relaxed">
-                One contract = 100 shares. Cost = ask price × 100. Prices are 15 minutes delayed — verify current pricing with your broker before trading.
-              </p>
-            </div>
-          )}
-
-          {/* Yahoo Finance data */}
-          {data.hasLiveData && data.contracts.length > 0 && data.dataSource === 'Yahoo' && (
-            <div>
-              <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2 flex items-center gap-2">
-                <span>{signal === 'NEUTRAL' ? 'Market reference' : 'Contracts matching this strategy'}</span>
-                <span className="px-1.5 py-0.5 rounded text-[9px]"
-                  style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>
-                  via Yahoo · no Greeks
-                </span>
-              </div>
-              <div className="space-y-2">
-                {data.contracts.map((c, i) => <ContractCard key={i} c={c} />)}
-              </div>
-              <p className="text-[10px] text-white/20 mt-2 leading-relaxed">
-                Greeks (delta, theta) unavailable from this source. One contract = 100 shares. Verify current pricing with your broker before trading.
+                One contract = 100 shares. Cost = ask price × 100.{data.dataSource === 'Alpaca' ? ' Prices may be 15 minutes delayed.' : ''} Always verify current pricing with your broker before trading.
               </p>
             </div>
           )}
@@ -332,7 +293,7 @@ export default function OptionsRecommendations({
             </div>
           )}
 
-          {/* Alternative strategy */}
+                    {/* Alternative strategy */}
           <div className="rounded-xl p-3.5" style={{ background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.15)' }}>
             <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#fbbf24' }}>Conservative alternative</div>
             <p className="text-xs text-white/65 leading-relaxed">{data.recommendation.alternativeStrategy}</p>
