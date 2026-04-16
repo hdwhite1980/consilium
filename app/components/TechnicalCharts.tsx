@@ -37,6 +37,11 @@ interface TechnicalChartsProps {
     ichimokuTenkan?: number; ichimokuKijun?: number
     ichimokuSignal?: string; ichimokuCross?: string
     relStrengthVsSector?: number | null; relStrengthSignal?: string
+    // Pattern detection
+    candlePattern?: { name: string; type: string; strength: string; description: string } | null
+    chartPattern?: { name: string; type: string; target: number | null; invalidation: number | null; description: string; confidence: string } | null
+    gapPattern?: { type: string; size: number; filled: boolean; gapHigh: number; gapLow: number; bullish: boolean; description: string } | null
+    trendLines?: { higherHighs: boolean; lowerLows: boolean; higherLows: boolean; lowerHighs: boolean; trend: string; dynamicSupport: number | null; dynamicResistance: number | null } | null
   } | null
 }
 
@@ -569,16 +574,260 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
       {/* Overall score */}
       <ScoreBadge score={t.technicalScore} bias={t.technicalBias} />
 
-      {/* Finviz chart — stocks only */}
+      {/* Pattern Detection Section */}
+      {(t.candlePattern || t.chartPattern || t.gapPattern || (t.trendLines && t.trendLines.trend !== 'sideways')) && (
+        <div className="space-y-2">
+          <div className="text-[10px] font-mono uppercase tracking-widest" style={{ color: 'rgba(255,255,255,0.2)' }}>
+            Detected Patterns
+          </div>
+
+          {/* Trend Structure */}
+          {t.trendLines && t.trendLines.trend !== 'sideways' && (
+            <div className="rounded-xl p-3" style={{
+              background: t.trendLines.trend === 'uptrend' ? 'rgba(52,211,153,0.06)' : 'rgba(248,113,113,0.06)',
+              border: `1px solid ${t.trendLines.trend === 'uptrend' ? 'rgba(52,211,153,0.2)' : 'rgba(248,113,113,0.2)'}`
+            }}>
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className="text-xs font-bold capitalize" style={{ color: t.trendLines.trend === 'uptrend' ? '#34d399' : '#f87171' }}>
+                  {t.trendLines.trend === 'uptrend' ? '↗' : '↘'} {t.trendLines.trend}
+                </span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full font-mono" style={{ background: t.trendLines.trend === 'uptrend' ? 'rgba(52,211,153,0.15)' : 'rgba(248,113,113,0.15)', color: t.trendLines.trend === 'uptrend' ? '#34d399' : '#f87171' }}>
+                  {t.trendLines.higherHighs && t.trendLines.higherLows ? 'HH + HL' : t.trendLines.lowerHighs && t.trendLines.lowerLows ? 'LH + LL' : 'structure'}
+                </span>
+              </div>
+              <p className="text-[11px] leading-relaxed" style={{ color: 'rgba(255,255,255,0.55)' }}>
+                {t.trendLines.trend === 'uptrend'
+                  ? `The stock is making higher highs and higher lows — the textbook definition of an uptrend. Each rally exceeds the last peak, and each pullback holds above the prior trough. This is price structure buyers want to see.`
+                  : `The stock is making lower highs and lower lows — a confirmed downtrend. Each rally fails below the last peak, and each selloff breaks below the prior low. Price structure is bearish until a higher low forms.`}
+              </p>
+              {(t.trendLines.dynamicSupport || t.trendLines.dynamicResistance) && (
+                <div className="flex gap-3 mt-2">
+                  {t.trendLines.dynamicSupport && (
+                    <div className="text-[10px] font-mono" style={{ color: '#34d399' }}>
+                      Trend support: ${t.trendLines.dynamicSupport.toFixed(2)}
+                    </div>
+                  )}
+                  {t.trendLines.dynamicResistance && (
+                    <div className="text-[10px] font-mono" style={{ color: '#f87171' }}>
+                      Trend resistance: ${t.trendLines.dynamicResistance.toFixed(2)}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Chart Pattern */}
+          {t.chartPattern && (() => {
+            const isBull = t.chartPattern.type === 'bullish'
+            const col = isBull ? '#34d399' : t.chartPattern.type === 'bearish' ? '#f87171' : '#fbbf24'
+            const confLabel = t.chartPattern.confidence === 'high' ? '⭐ High confidence' : t.chartPattern.confidence === 'medium' ? 'Medium confidence' : 'Low confidence'
+            const whatItMeans: Record<string, string> = {
+              'Double Top': 'Price tried to break the same resistance level twice and failed both times. This exhaustion pattern typically leads to a meaningful decline as bulls give up.',
+              'Double Bottom': 'Price tested the same support level twice and bounced both times. Buyers defended the floor — this pattern typically leads to a sustained rally.',
+              'Head & Shoulders': 'Three peaks where the middle is highest — a top reversal pattern. The "neckline" is the critical level — once broken, the pattern is confirmed and the measured target activates.',
+              'Inverse Head & Shoulders': 'Three troughs where the middle is lowest — a bottom reversal. Breaking above the neckline confirms buyers have taken control from sellers.',
+              'Ascending Triangle': 'Flat resistance with rising lows — buyers are getting more aggressive each dip while sellers hold the same ceiling. A breakout through resistance is the high-probability outcome.',
+              'Descending Triangle': 'Flat support with falling highs — sellers are getting more aggressive each rally while buyers hold the same floor. A breakdown through support is the high-probability outcome.',
+              'Bull Flag': 'A sharp up-move (the pole) followed by a tight pullback (the flag). The consolidation resets short-term overbought conditions before the trend continues. The target equals the pole length added to the breakout.',
+              'Bear Flag': 'A sharp down-move (the pole) followed by a weak bounce (the flag). The bounce fails to recover meaningful ground before selling resumes. The target equals the pole length subtracted from the breakdown.',
+            }
+            return (
+              <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${col}25` }}>
+                <div className="px-3 py-2.5 flex items-center justify-between" style={{ background: `${col}10` }}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm">📊</span>
+                    <span className="text-sm font-bold" style={{ color: col }}>{t.chartPattern!.name}</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-mono capitalize" style={{ background: `${col}18`, color: col }}>{t.chartPattern!.type}</span>
+                  </div>
+                  <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.3)' }}>{confLabel}</span>
+                </div>
+                <div className="px-3 py-3 space-y-2.5">
+                  <div>
+                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'rgba(255,255,255,0.25)' }}>What the chart is showing</div>
+                    <p className="text-[11px] leading-relaxed" style={{ color: 'rgba(255,255,255,0.7)' }}>{t.chartPattern!.description}</p>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'rgba(255,255,255,0.25)' }}>What it means for {ticker}</div>
+                    <p className="text-[11px] leading-relaxed" style={{ color: 'rgba(255,255,255,0.55)' }}>
+                      {whatItMeans[t.chartPattern!.name] ?? `This pattern suggests ${isBull ? 'bullish' : 'bearish'} continuation is the higher-probability outcome.`}
+                    </p>
+                  </div>
+                  {(t.chartPattern.target || t.chartPattern.invalidation) && (
+                    <div className="flex gap-4 pt-1 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+                      {t.chartPattern.target && (
+                        <div>
+                          <div className="text-[9px] font-mono uppercase text-white/25 mb-0.5">Measured target</div>
+                          <div className="text-sm font-bold font-mono" style={{ color: col }}>${t.chartPattern.target.toFixed(2)}</div>
+                        </div>
+                      )}
+                      {t.chartPattern.invalidation && (
+                        <div>
+                          <div className="text-[9px] font-mono uppercase text-white/25 mb-0.5">Pattern breaks if</div>
+                          <div className="text-sm font-bold font-mono" style={{ color: '#f87171' }}>closes {isBull ? 'below' : 'above'} ${t.chartPattern.invalidation.toFixed(2)}</div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* Candle Pattern */}
+          {t.candlePattern && (() => {
+            const isBull = t.candlePattern.type === 'bullish'
+            const col = isBull ? '#34d399' : t.candlePattern.type === 'bearish' ? '#f87171' : '#fbbf24'
+            const strengthLabel = t.candlePattern.strength === 'strong' ? '💪 Strong' : t.candlePattern.strength === 'moderate' ? '📌 Moderate' : '💡 Weak'
+            const candleMeaning: Record<string, string> = {
+              'Bullish Engulfing': `For ${ticker}, this means buyers came in with overwhelming force on the most recent session, completely reversing the prior day's losses. High-volume engulfing patterns at key support levels are among the highest-probability reversal setups.`,
+              'Bearish Engulfing': `For ${ticker}, this means sellers came in with force on the most recent session, wiping out the prior day's gains. Watch for follow-through — if the next session confirms with another red candle, the reversal is strengthening.`,
+              'Hammer': `For ${ticker}, buyers aggressively defended lower prices during the session, pushing price back up to close near the highs. This is often the first signal of a reversal — especially meaningful when it occurs near a support level.`,
+              'Shooting Star': `For ${ticker}, buyers pushed price to new highs during the session but sellers rejected the move hard, closing near the lows. This is often the first signal of exhaustion after a run-up.`,
+              'Doji': `For ${ticker}, the market is undecided — open and close are virtually the same despite the session's range. This pause often precedes a directional move. The next candle's direction is the tell.`,
+              'Gravestone Doji': `For ${ticker}, buyers pushed to new highs but completely surrendered by the close. This is one of the most bearish doji patterns — especially meaningful at the top of a rally.`,
+              'Dragonfly Doji': `For ${ticker}, sellers pushed to new lows but buyers completely recovered by the close. This is one of the most bullish doji patterns — especially meaningful at the bottom of a decline.`,
+              'Morning Star': `For ${ticker}, this three-candle sequence shows a clean handoff from sellers to buyers. The gap and small middle candle show indecision, then the strong close confirms buyers have won the session.`,
+              'Evening Star': `For ${ticker}, this three-candle sequence shows a clean handoff from buyers to sellers. The gap and small middle candle show indecision at the top, then the strong close lower confirms sellers have taken control.`,
+              'Three White Soldiers': `For ${ticker}, three consecutive bullish closes with each opening near the prior close is the definition of sustained buying pressure. It's hard to fake three sessions like this — the trend is real.`,
+              'Three Black Crows': `For ${ticker}, three consecutive bearish closes is the definition of sustained selling pressure — no one stepped in to defend any of those sessions.`,
+              'Bullish Marubozu': `For ${ticker}, a full bullish body with no wicks means buyers were in control from open to close — no hesitation. The purest form of bullish conviction in a single candle.`,
+              'Bearish Marubozu': `For ${ticker}, a full bearish body with no wicks means sellers were in control from open to close — no hesitation. The purest form of bearish conviction.`,
+              'Bullish Harami': `For ${ticker}, the smaller bullish candle contained within yesterday's bearish range signals that selling momentum is fading. Not a strong standalone signal — needs confirmation.`,
+              'Bearish Harami': `For ${ticker}, the smaller bearish candle contained within yesterday's bullish range signals that buying momentum is fading. Watch for confirmation on the next session.`,
+            }
+            return (
+              <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${col}25` }}>
+                <div className="px-3 py-2.5 flex items-center justify-between" style={{ background: `${col}10` }}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm">🕯</span>
+                    <span className="text-sm font-bold" style={{ color: col }}>{t.candlePattern!.name}</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-mono capitalize" style={{ background: `${col}18`, color: col }}>{t.candlePattern!.type}</span>
+                  </div>
+                  <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.3)' }}>{strengthLabel}</span>
+                </div>
+                <div className="px-3 py-3 space-y-2.5">
+                  <div>
+                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'rgba(255,255,255,0.25)' }}>What the candle is showing</div>
+                    <p className="text-[11px] leading-relaxed" style={{ color: 'rgba(255,255,255,0.7)' }}>{t.candlePattern!.description}</p>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'rgba(255,255,255,0.25)' }}>What it means for {ticker}</div>
+                    <p className="text-[11px] leading-relaxed" style={{ color: 'rgba(255,255,255,0.55)' }}>
+                      {candleMeaning[t.candlePattern!.name] ?? `This ${t.candlePattern!.type} pattern on ${ticker} suggests ${isBull ? 'buying pressure is present — watch for follow-through.' : 'selling pressure is present — watch for confirmation.'}`}
+                    </p>
+                  </div>
+                  <div className="text-[10px] pt-1 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.3)' }}>
+                    ⚠ Candle patterns are most reliable when they occur at key support/resistance levels or after extended moves. Always confirm with volume and the next session's price action.
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* Gap Pattern */}
+          {t.gapPattern && (() => {
+            const col = t.gapPattern.bullish ? '#34d399' : '#f87171'
+            return (
+              <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${col}25` }}>
+                <div className="px-3 py-2.5 flex items-center gap-2" style={{ background: `${col}10` }}>
+                  <span className="text-sm">{t.gapPattern!.bullish ? '⬆' : '⬇'}</span>
+                  <span className="text-sm font-bold" style={{ color: col }}>
+                    {t.gapPattern!.type === 'gap_up' ? 'Gap Up' : 'Gap Down'} — {t.gapPattern!.size.toFixed(1)}%
+                  </span>
+                  {t.gapPattern.filled && <span className="text-[10px] px-2 py-0.5 rounded-full font-mono" style={{ background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.4)' }}>filled</span>}
+                  {!t.gapPattern.filled && <span className="text-[10px] px-2 py-0.5 rounded-full font-mono" style={{ background: `${col}18`, color: col }}>unfilled</span>}
+                </div>
+                <div className="px-3 py-3 space-y-2.5">
+                  <div>
+                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'rgba(255,255,255,0.25)' }}>What happened</div>
+                    <p className="text-[11px] leading-relaxed" style={{ color: 'rgba(255,255,255,0.7)' }}>{t.gapPattern!.description}</p>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'rgba(255,255,255,0.25)' }}>What it means for {ticker}</div>
+                    <p className="text-[11px] leading-relaxed" style={{ color: 'rgba(255,255,255,0.55)' }}>
+                      {t.gapPattern!.filled
+                        ? `The gap has been filled — price returned to the pre-gap level, which often acts as a magnet. With the gap filled, price is now free to move in the direction of the original gap with less overhead supply.`
+                        : t.gapPattern!.bullish
+                          ? `The unfilled gap between $${t.gapPattern!.gapLow.toFixed(2)} and $${t.gapPattern!.gapHigh.toFixed(2)} acts as strong support — most buyers who bought into the gap are still profitable and will defend it. Until the gap fills, it's a floor.`
+                          : `The unfilled gap between $${t.gapPattern!.gapLow.toFixed(2)} and $${t.gapPattern!.gapHigh.toFixed(2)} acts as overhead resistance — most sellers who sold into the gap are still profitable and will use any rallies to add. Until the gap fills, it's a ceiling.`
+                      }
+                    </p>
+                  </div>
+                  <div className="flex gap-4 pt-1 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+                    <div>
+                      <div className="text-[9px] font-mono uppercase text-white/25 mb-0.5">Gap zone</div>
+                      <div className="text-xs font-mono" style={{ color: col }}>${t.gapPattern.gapLow.toFixed(2)} – ${t.gapPattern.gapHigh.toFixed(2)}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
+        </div>
+      )}
+
+      {/* Finviz chart — with pattern annotation overlay */}
       <div>
-        <div className="text-[10px] font-mono text-white/20 mb-1.5">Daily candlestick chart — SMA50 (blue) and SMA200 (red) overlaid. The cross of these two lines is the death/golden cross.</div>
+        <div className="text-[10px] font-mono text-white/20 mb-1.5">
+          Daily candlestick chart — SMA50 (blue) and SMA200 (red) overlaid.
+          {t.chartPattern && ` ${t.chartPattern.name} pattern detected.`}
+          {t.candlePattern && ` ${t.candlePattern.name} candle on most recent bar.`}
+          {t.gapPattern && !t.gapPattern.filled && ` Unfilled gap at $${t.gapPattern.gapLow.toFixed(2)}–$${t.gapPattern.gapHigh.toFixed(2)}.`}
+        </div>
         {/^(BTC|ETH|SOL|BNB|XRP|ADA|AVAX|DOGE|DOT|LINK|LTC|BCH|XLM|UNI|MATIC|ATOM|ALGO|VET|FIL|THETA)$/.test(ticker.toUpperCase()) ||
          /^[A-Z]{6}$/.test(ticker.toUpperCase()) && ['USD','EUR','GBP','JPY','AUD','CAD','NZD','CHF'].some(c => ticker.toUpperCase().startsWith(c) || ticker.toUpperCase().endsWith(c))
           ? <div className="flex items-center justify-center h-16 rounded-lg text-xs text-white/25"
               style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
               Chart not available for {ticker} — use TradingView for forex/crypto charting
             </div>
-          : <FinvizChart ticker={ticker} />}
+          : (
+            <div className="relative">
+              <FinvizChart ticker={ticker} />
+              {/* Pattern annotation overlay */}
+              {(t.chartPattern || t.candlePattern || t.gapPattern) && (
+                <div className="absolute top-2 left-2 right-2 flex flex-wrap gap-1.5 pointer-events-none">
+                  {t.chartPattern && (
+                    <div className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold font-mono backdrop-blur-sm"
+                      style={{
+                        background: t.chartPattern.type === 'bullish' ? 'rgba(52,211,153,0.85)' : t.chartPattern.type === 'bearish' ? 'rgba(248,113,113,0.85)' : 'rgba(251,191,36,0.85)',
+                        color: '#000',
+                      }}>
+                      📊 {t.chartPattern.name}
+                      {t.chartPattern.target && <span className="ml-1 opacity-80">→ ${t.chartPattern.target.toFixed(2)}</span>}
+                    </div>
+                  )}
+                  {t.candlePattern && (
+                    <div className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold font-mono backdrop-blur-sm"
+                      style={{
+                        background: t.candlePattern.type === 'bullish' ? 'rgba(52,211,153,0.85)' : t.candlePattern.type === 'bearish' ? 'rgba(248,113,113,0.85)' : 'rgba(251,191,36,0.85)',
+                        color: '#000',
+                      }}>
+                      🕯 {t.candlePattern.name}
+                    </div>
+                  )}
+                  {t.gapPattern && !t.gapPattern.filled && (
+                    <div className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold font-mono backdrop-blur-sm"
+                      style={{
+                        background: t.gapPattern.bullish ? 'rgba(52,211,153,0.85)' : 'rgba(248,113,113,0.85)',
+                        color: '#000',
+                      }}>
+                      {t.gapPattern.bullish ? '⬆' : '⬇'} Gap {t.gapPattern.size.toFixed(1)}%
+                    </div>
+                  )}
+                  {t.trendLines && t.trendLines.trend !== 'sideways' && (
+                    <div className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold font-mono backdrop-blur-sm"
+                      style={{
+                        background: t.trendLines.trend === 'uptrend' ? 'rgba(52,211,153,0.85)' : 'rgba(248,113,113,0.85)',
+                        color: '#000',
+                      }}>
+                      {t.trendLines.trend === 'uptrend' ? '↗ Uptrend' : '↘ Downtrend'}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
       </div>
 
       {/* Indicator grid 2x2 */}
