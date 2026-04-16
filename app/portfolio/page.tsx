@@ -418,7 +418,12 @@ export default function PortfolioPage() {
                   const isOption = pos.position_type === 'option'
                   const daysToExpiry = pos.expiry ? Math.ceil((new Date(pos.expiry).getTime() - Date.now()) / 86400000) : null
                   const optionPnlPct = pos.entry_premium && data ? ((data.currentPrice - pos.entry_premium) / pos.entry_premium) * 100 : null
-                  const dteBadgeColor = daysToExpiry != null ? (daysToExpiry <= 7 ? '#ef4444' : daysToExpiry <= 21 ? '#f97316' : '#fbbf24') : '#fbbf24'
+                  const isLeap = daysToExpiry != null && daysToExpiry > 180
+              const dteBadgeColor = daysToExpiry != null
+                ? isLeap
+                  ? (daysToExpiry <= 90 ? '#f97316' : daysToExpiry <= 180 ? '#fbbf24' : '#a78bfa')
+                  : (daysToExpiry <= 7 ? '#ef4444' : daysToExpiry <= 21 ? '#f97316' : '#fbbf24')
+                : '#fbbf24'
 
                   return (
                     <div key={pos.id} className="flex items-center gap-3 px-5 py-3.5">
@@ -438,7 +443,7 @@ export default function PortfolioPage() {
                               {daysToExpiry !== null && (
                                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded"
                                   style={{ background: `${dteBadgeColor}15`, color: dteBadgeColor }}>
-                                  {daysToExpiry <= 0 ? 'EXPIRED' : `${daysToExpiry}d to expiry`}
+                                  {daysToExpiry <= 0 ? 'EXPIRED' : isLeap ? `LEAP · ${daysToExpiry}d` : `${daysToExpiry}d to expiry`}
                                 </span>
                               )}
                             </>

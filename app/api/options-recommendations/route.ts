@@ -86,7 +86,7 @@ async function fetchChain(ticker: string, expiry: string): Promise<OptionsContra
         daysToExpiry,
         moneyness: 'ATM' as 'ITM' | 'ATM' | 'OTM', // set by labelMoneyness
       }
-    }).filter(c => c.daysToExpiry > 0 && c.daysToExpiry <= 90)
+    }).filter(c => c.daysToExpiry > 0 && c.daysToExpiry <= 730)
   } catch { return [] }
 }
 
@@ -111,13 +111,17 @@ function selectBestContractsWithLevels(
   takeProfit: number | null,
 ): OptionsContract[] {
   const targetDTE = timeHorizon.includes('week') ? 14
-    : timeHorizon.includes('month') ? 30
-    : timeHorizon.includes('2-3') ? 21
+    : timeHorizon.includes('1 month') || timeHorizon.includes('3-4 week') ? 30
+    : timeHorizon.includes('2-3 month') ? 75
+    : timeHorizon.includes('3-6 month') || timeHorizon.includes('quarter') ? 120
+    : timeHorizon.includes('6') ? 200
+    : timeHorizon.includes('year') || timeHorizon.includes('LEAP') || timeHorizon.includes('12') ? 365
     : timeHorizon.includes('2-4') ? 21
+    : timeHorizon.includes('2-3') ? 21
     : 30
 
   const baseFilter = (c: OptionsContract) =>
-    c.bid !== null && c.bid > 0 && c.daysToExpiry >= 3 && c.daysToExpiry <= 90
+    c.bid !== null && c.bid > 0 && c.daysToExpiry >= 3 && c.daysToExpiry <= 730
 
   const scoreContract = (c: OptionsContract, idealStrike: number) => {
     const strikeProximity = Math.max(0, 10 - Math.abs(c.strike - idealStrike) / currentPrice * 100)
@@ -217,7 +221,7 @@ async function fetchAlpacaOptions(ticker: string, currentPrice: number): Promise
         const expiryDate = new Date(year, month, day)
         const expiryStr = expiryDate.toISOString().split('T')[0]
         const daysToExpiry = Math.ceil((expiryDate.getTime() - Date.now()) / 86400000)
-        if (daysToExpiry < 1 || daysToExpiry > 90) return null
+        if (daysToExpiry < 1 || daysToExpiry > 730) return null
 
         const strike = parseInt(strikeStr) / 1000
         const type: 'call' | 'put' = optType === 'C' ? 'call' : 'put'
@@ -285,7 +289,14 @@ export async function POST(req: NextRequest) {
     // Primary: Tradier — confirmed working in production
     if (TRADIER_KEY()) {
       const expiries = await fetchExpirations(ticker)
-      const targetExpiries = expiries.slice(0, 4)
+      // Include near-term AND LEAP expirations (up to 2 years out)
+      // Near-term: first 4 expirations; LEAPs: any expiry > 180 days
+      const nearTerm = expiries.slice(0, 4)
+      const leapExpiries = expiries.filter((e: string) => {
+        const dte = Math.ceil((new Date(e).getTime() - Date.now()) / 86400000)
+        return dte > 180 && dte <= 730
+      }).slice(0, 4) // max 4 LEAP expirations
+      const targetExpiries = [...new Set([...nearTerm, ...leapExpiries])]
       expiriesUsed = targetExpiries
       const chains = await Promise.all(targetExpiries.map(exp => fetchChain(ticker, exp)))
       const allContracts = chains.flat()
@@ -306,7 +317,7 @@ export async function POST(req: NextRequest) {
 
     const contractSummary = bestContracts.length > 0
       ? bestContracts.map(c =>
-          `${c.type.toUpperCase()} $${c.strike} exp ${c.expiry} | Bid $${c.bid?.toFixed(2)} Ask $${c.ask?.toFixed(2)} | Delta ${c.delta?.toFixed(2)} Theta ${c.theta?.toFixed(2)} | Vol ${c.volume} OI ${c.openInterest} | IV ${c.iv?.toFixed(0)}% | ${c.moneyness} | ${c.daysToExpiry}d to expiry`
+          `${c.type.toUpperCase()} $${c.strike} exp ${c.expiry} | Bid $${c.bid?.toFixed(2)} Ask $${c.ask?.toFixed(2)} | Delta ${c.delta?.toFixed(2)} Theta ${c.theta?.toFixed(2)} | Vol ${c.volume} OI ${c.openInterest} | IV ${c.iv?.toFixed(0)}% | ${c.moneyness} | ${c.daysToExpiry}d${c.daysToExpiry > 180 ? ' ← LEAP' : ''}`
         ).join('\n')
       : 'No live options chain available'
 
@@ -336,17 +347,25 @@ IMPORTANT — Use the Council's specific price levels in your recommendation:
 - Take profit at ${judgeTarget ? '$' + judgeTarget.toFixed(2) : 'N/A'} is the realistic target
 - Choose strikes that make sense given these levels — don't suggest contracts that expire before the move can develop
 
+LEAP OPTIONS (expiry > 180 days): If contracts with 180+ days to expiry are shown, consider recommending them when:
+- The time horizon is 3M or longer
+- The thesis requires time to play out (fundamental catalyst, sector rotation)
+- High IV makes short-term options expensive — LEAPs have lower theta decay per day
+- The user wants stock-like exposure with less capital at risk
+LEAPs behave more like stock (delta 0.7-0.9) and less like lottery tickets. Explain this clearly.
+
 CRITICAL RULES:
 - If signal is NEUTRAL: strategyType MUST be "neutral". Recommend waiting or income strategies.
 - If signal is BULLISH: recommend calls near the entry zone ($${judgeEntry?.toFixed(2) ?? currentPrice.toFixed(2)})
 - If signal is BEARISH: recommend puts near the entry zone ($${judgeEntry?.toFixed(2) ?? currentPrice.toFixed(2)})
 - NEVER contradict the signal direction.
 - Always reference the specific contracts shown above by strike and expiry.
+- If recommending a LEAP, explain why the longer duration is appropriate for this specific thesis.
 
 Respond in JSON only (no markdown):
 {
   "strategy": "specific strategy name e.g. 'Buy $${judgeEntry?.toFixed(0) ?? ''}  Put — targeting $${judgeTarget?.toFixed(0) ?? ''}'",
-  "strategyType": "long_call|long_put|covered_call|cash_secured_put|bull_call_spread|bear_put_spread|neutral",
+  "strategyType": "long_call|long_put|leap_call|leap_put|covered_call|cash_secured_put|bull_call_spread|bear_put_spread|diagonal_spread|neutral",
   "specificContract": "Which exact contract from the list above you'd choose and why — reference strike and expiry",
   "rationale": "2-3 sentences: why this contract fits the council's verdict. Reference entry $${judgeEntry?.toFixed(2) ?? ''}, stop $${judgeStop?.toFixed(2) ?? ''}, target $${judgeTarget?.toFixed(2) ?? ''}",
   "riskLevel": "high|medium|low",

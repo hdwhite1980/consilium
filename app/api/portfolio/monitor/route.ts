@@ -141,8 +141,9 @@ function detectOptionAlerts(
   const currentValue = price ? price * contracts * 100 : null
   const pnlPct = totalCost && currentValue ? ((currentValue - totalCost) / totalCost) * 100 : null
   const displayName = `${underlying} $${strike} ${optionType.toUpperCase()}`
+  const isLeap = daysToExpiry > 180
 
-  // DTE milestones
+  // DTE milestones — different thresholds for LEAPs vs standard options
   if (daysToExpiry <= 1) {
     alerts.push({
       severity: 'urgent', alert_type: 'expiry',
@@ -157,11 +158,26 @@ function detectOptionAlerts(
       message: `${daysToExpiry} days left. Theta decay is accelerating. ${theta ? `Losing ~$${Math.abs(theta * contracts * 100).toFixed(0)}/day.` : ''} Consider closing or rolling.`,
       trigger_value: daysToExpiry,
     })
-  } else if (daysToExpiry <= 21) {
+  } else if (!isLeap && daysToExpiry <= 21) {
     alerts.push({
       severity: 'watch', alert_type: 'expiry',
       title: `${displayName} entering 21-DTE zone`,
       message: `${daysToExpiry} days to expiry — theta decay accelerates from here. ${theta ? `Currently losing ~$${Math.abs(theta * contracts * 100).toFixed(0)}/day.` : ''}`,
+      trigger_value: daysToExpiry,
+    })
+  } else if (isLeap && daysToExpiry <= 90) {
+    // LEAP rolling into standard option territory
+    alerts.push({
+      severity: 'watch', alert_type: 'expiry',
+      title: `${displayName} LEAP — ${daysToExpiry} days remaining`,
+      message: `Your LEAP is now under 90 days to expiry and losing LEAP characteristics. Theta decay accelerates significantly here. Consider rolling to a further expiry or closing.`,
+      trigger_value: daysToExpiry,
+    })
+  } else if (isLeap && daysToExpiry <= 180) {
+    alerts.push({
+      severity: 'watch', alert_type: 'expiry',
+      title: `${displayName} LEAP under 6 months`,
+      message: `${daysToExpiry} days to expiry — LEAP is approaching the 90-day threshold where theta decay increases significantly. Review your exit plan.`,
       trigger_value: daysToExpiry,
     })
   }
