@@ -37,6 +37,7 @@ interface TechnicalChartsProps {
     ichimokuTenkan?: number; ichimokuKijun?: number
     ichimokuSignal?: string; ichimokuCross?: string
     relStrengthVsSector?: number | null; relStrengthSignal?: string
+    goldenZone?: { swingHigh: number; swingLow: number; trending: string; levels: Array<{ level: number; price: number; label: string; type: string }>; goldenPocketHigh: number; goldenPocketLow: number; inGoldenZone: boolean; distToZone: number } | null
     // Pattern detection
     candlePattern?: { name: string; type: string; strength: string; description: string } | null
     chartPattern?: { name: string; type: string; target: number | null; invalidation: number | null; description: string; confidence: string } | null
@@ -895,6 +896,77 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
         <ICard title="Fibonacci retracement levels">
           <FibTable levels={t.fibLevels} current={t.currentPrice} nearest={t.nearestFibLevel} />
           <Explain color="#a78bfa" what={fibWhat} means={fibMeans} />
+        </ICard>
+      )}
+
+      {/* Golden Zone Fibonacci */}
+      {t.goldenZone && (
+        <ICard title="Golden Zone — Institutional entry levels">
+          <div className="space-y-3">
+            {/* In zone alert */}
+            {t.goldenZone.inGoldenZone && (
+              <div className="rounded-xl px-3 py-2 text-center font-bold text-sm animate-pulse"
+                style={{ background: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.35)' }}>
+                ⭐ Price is currently in the Golden Zone
+              </div>
+            )}
+            {/* Golden pocket box */}
+            <div className="rounded-xl p-3" style={{ background: 'rgba(251,191,36,0.07)', border: '2px solid rgba(251,191,36,0.3)' }}>
+              <div className="text-[10px] font-mono uppercase tracking-widest text-center mb-2" style={{ color: '#fbbf24' }}>
+                ★ Golden Pocket (0.618–0.786) — Optimal institutional entry
+              </div>
+              <div className="flex justify-between items-center">
+                <div className="text-center">
+                  <div className="text-[10px] font-mono" style={{ color: 'rgba(255,255,255,0.35)' }}>Lower bound</div>
+                  <div className="text-lg font-bold font-mono" style={{ color: '#34d399' }}>${t.goldenZone.goldenPocketLow.toFixed(2)}</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-[10px] font-mono" style={{ color: '#fbbf24' }}>0.705 Golden Pocket</div>
+                  <div className="text-sm font-bold font-mono" style={{ color: '#fbbf24' }}>
+                    ${((t.goldenZone.goldenPocketLow + t.goldenZone.goldenPocketHigh) / 2).toFixed(2)}
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="text-[10px] font-mono" style={{ color: 'rgba(255,255,255,0.35)' }}>Upper bound</div>
+                  <div className="text-lg font-bold font-mono" style={{ color: '#f87171' }}>${t.goldenZone.goldenPocketHigh.toFixed(2)}</div>
+                </div>
+              </div>
+              {!t.goldenZone.inGoldenZone && (
+                <div className="text-[10px] text-center mt-2" style={{ color: 'rgba(255,255,255,0.35)' }}>
+                  {t.goldenZone.distToZone.toFixed(1)}% away from zone
+                </div>
+              )}
+            </div>
+            {/* All levels */}
+            <div className="space-y-1">
+              {t.goldenZone.levels.map(l => {
+                const isPocket = l.level === 0.705
+                const isBoundary = l.level === 0.618 || l.level === 0.786
+                return (
+                  <div key={l.level} className="flex items-center justify-between px-1 py-1 rounded-lg"
+                    style={{ background: isPocket ? 'rgba(251,191,36,0.08)' : isBoundary ? 'rgba(255,255,255,0.03)' : 'transparent' }}>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono w-10 text-right" style={{ color: isPocket ? '#fbbf24' : isBoundary ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.35)' }}>
+                        {(l.level * 100).toFixed(1)}%
+                      </span>
+                      <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.3)' }}>
+                        {isPocket ? '← Golden Pocket' : isBoundary ? '← Zone boundary' : ''}
+                      </span>
+                    </div>
+                    <span className="text-xs font-bold font-mono" style={{ color: l.type === 'support' ? '#34d399' : '#f87171' }}>
+                      {isPocket ? '★ ' : ''}${l.price.toFixed(2)}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+            <Explain color="#fbbf24"
+              what={`The Golden Zone is the most watched retracement area in technical analysis — the 61.8% to 78.6% pullback zone where institutional buyers typically enter during uptrends. These levels aren't arbitrary: 61.8% is the golden ratio (derived from the Fibonacci sequence), and 78.6% is its square root. When a stock pulls back to this zone after a strong move, it often finds heavy buying support because so many professional traders are watching the same levels. The "Golden Pocket" specifically refers to the midpoint of this zone — the 70.5% retracement — which is where the highest probability entries tend to cluster. Swing high: $${t.goldenZone.swingHigh.toFixed(2)}. Swing low: $${t.goldenZone.swingLow.toFixed(2)}.`}
+              means={t.goldenZone.inGoldenZone
+                ? `${ticker} is currently trading inside the Golden Zone ($${t.goldenZone.goldenPocketLow.toFixed(2)}–$${t.goldenZone.goldenPocketHigh.toFixed(2)}). This is where institutional traders look to buy in an uptrend. If the broader trend is bullish, this zone often acts as a strong launching pad. Watch for a bullish candle pattern (engulfing, hammer, morning star) as confirmation. The 70.5% level at $${((t.goldenZone.goldenPocketLow + t.goldenZone.goldenPocketHigh) / 2).toFixed(2)} is the highest-probability entry point within the zone.`
+                : `${ticker} is ${t.goldenZone.distToZone.toFixed(1)}% away from the Golden Zone. The zone sits between $${t.goldenZone.goldenPocketLow.toFixed(2)} and $${t.goldenZone.goldenPocketHigh.toFixed(2)}. ${t.goldenZone.trending === 'up' ? 'If price pulls back to this zone from current levels, it would represent the classic institutional buying opportunity. Watch for the stock to hold this zone on any dip.' : 'Price is currently below the zone, which means the zone is now overhead resistance. A rally back into this range would face selling pressure from traders who bought higher.'}`}
+            />
+          </div>
         </ICard>
       )}
 

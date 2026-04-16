@@ -94,6 +94,9 @@ export interface TechnicalSignals {
   fibLevels: FibLevel[]
   nearestFibLevel: FibLevel | null
 
+  // ── Golden Zone Fibonacci ──────────────────────────────────
+  goldenZone: GoldenZone
+
   // ── ATR (Average True Range) ──────────────────────────────
   atr14: number            // 14-period ATR in dollars
   atrPct: number           // ATR as % of price
@@ -402,8 +405,8 @@ function calcFibLevels(bars: Bar[]): FibLevel[] {
 
   return FIB_LEVELS.map(({ level, label }) => {
     const price = trending === 'up'
-      ? swingLow + level * range           // retracement from low
-      : swingHigh - level * range          // retracement from high
+      ? swingLow + level * range
+      : swingHigh - level * range
     return {
       level,
       price,
@@ -411,6 +414,78 @@ function calcFibLevels(bars: Bar[]): FibLevel[] {
       type: (price < current ? 'support' : 'resistance') as 'support' | 'resistance',
     }
   })
+}
+
+// ── Golden Zone Fibonacci (0.618–0.786 institutional entry zone) ──────────────
+export interface GoldenZone {
+  swingHigh: number
+  swingLow: number
+  trending: 'up' | 'down'
+  levels: FibLevel[]
+  // The golden pocket — 0.618 to 0.786 price range
+  goldenPocketHigh: number
+  goldenPocketLow: number
+  // Is current price inside the golden zone?
+  inGoldenZone: boolean
+  // Distance to nearest golden zone boundary as %
+  distToZone: number
+}
+
+function calcGoldenZone(bars: Bar[]): GoldenZone {
+  const highs = bars.map(b => b.h)
+  const lows  = bars.map(b => b.l)
+  const swingHigh = Math.max(...highs)
+  const swingLow  = Math.min(...lows)
+  const range = swingHigh - swingLow
+  const current = bars[bars.length - 1].c
+  const trending: 'up' | 'down' = current > (swingHigh + swingLow) / 2 ? 'up' : 'down'
+
+  // Golden Zone levels: 0.618, 0.65 (midpoint), 0.705 (golden pocket), 0.786, 0.88
+  const GOLDEN_LEVELS = [
+    { level: 0.618, label: '61.8% — Golden Ratio entry' },
+    { level: 0.650, label: '65% — Golden Zone mid' },
+    { level: 0.705, label: '70.5% — Golden Pocket (optimal entry)' },
+    { level: 0.786, label: '78.6% — Golden Zone outer boundary' },
+    { level: 0.880, label: '88.6% — Deep retracement' },
+  ]
+
+  const levels: FibLevel[] = GOLDEN_LEVELS.map(({ level, label }) => {
+    const price = trending === 'up'
+      ? swingHigh - level * range   // retracement DOWN from swing high
+      : swingLow + level * range    // retracement UP from swing low
+    return {
+      level,
+      price: parseFloat(price.toFixed(2)),
+      label,
+      type: (price < current ? 'support' : 'resistance') as 'support' | 'resistance',
+    }
+  })
+
+  // Golden pocket = 0.618 to 0.786 price range
+  const p618 = levels.find(l => l.level === 0.618)!.price
+  const p786 = levels.find(l => l.level === 0.786)!.price
+  const goldenPocketHigh = Math.max(p618, p786)
+  const goldenPocketLow  = Math.min(p618, p786)
+
+  const inGoldenZone = current >= goldenPocketLow && current <= goldenPocketHigh
+
+  // Distance to nearest boundary as %
+  const distToZone = inGoldenZone ? 0 :
+    Math.min(
+      Math.abs(current - goldenPocketHigh) / current * 100,
+      Math.abs(current - goldenPocketLow)  / current * 100
+    )
+
+  return {
+    swingHigh: parseFloat(swingHigh.toFixed(2)),
+    swingLow:  parseFloat(swingLow.toFixed(2)),
+    trending,
+    levels,
+    goldenPocketHigh: parseFloat(goldenPocketHigh.toFixed(2)),
+    goldenPocketLow:  parseFloat(goldenPocketLow.toFixed(2)),
+    inGoldenZone,
+    distToZone: parseFloat(distToZone.toFixed(1)),
+  }
 }
 
 function nearestFib(fibs: FibLevel[], current: number): FibLevel | null {
@@ -941,6 +1016,7 @@ export function calculateTechnicals(bars: Bar[]): TechnicalSignals {
     avgVolume20: avgVol, lastVolume: lastVol, volumeRatio: volRatio, volumeSignal,
     support: s1, resistance: r1, support2: s2, resistance2: r2,
     fibLevels, nearestFibLevel,
+    goldenZone: calcGoldenZone(bars),
     atr14, atrPct, atrSignal, stopLossATR, takeProfitATR,
     roc10, roc20, rocSignal, momentum,
     williamsR, williamsSignal,
@@ -974,6 +1050,7 @@ function emptyTechnicals(): TechnicalSignals {
     avgVolume20: z, lastVolume: z, volumeRatio: 1, volumeSignal: 'normal' as const,
     support: z, resistance: z, support2: z, resistance2: z,
     fibLevels: [], nearestFibLevel: null,
+    goldenZone: { swingHigh: 0, swingLow: 0, trending: 'up' as const, levels: [], goldenPocketHigh: 0, goldenPocketLow: 0, inGoldenZone: false, distToZone: 0 },
     technicalScore: 0, technicalBias: 'NEUTRAL' as const,
     atr14: 0, atrPct: 0, atrSignal: 'normal' as const, stopLossATR: 0, takeProfitATR: 0,
     roc10: 0, roc20: 0, rocSignal: 'neutral' as const, momentum: 0,
@@ -1034,6 +1111,7 @@ export function technicalsToPayload(t: TechnicalSignals, currentPrice: number): 
     volumeRatio: t.volumeRatio,
     priceChange1D: t.priceChange1D,
     fibLevels: t.fibLevels,
+    goldenZone: t.goldenZone,
     nearestFibLevel: t.nearestFibLevel,
     atr14: t.atr14,
     atrPct: t.atrPct,

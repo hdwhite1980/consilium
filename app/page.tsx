@@ -45,6 +45,7 @@ interface MarketData {
     volumeRatio: number; priceChange1D: number
     fibLevels: Array<{ level: number; price: number; label: string; type: string }>
     nearestFibLevel: { level: number; price: number; label: string; type: string } | null
+    goldenZone: { swingHigh: number; swingLow: number; trending: string; levels: Array<{ level: number; price: number; label: string; type: string }>; goldenPocketHigh: number; goldenPocketLow: number; inGoldenZone: boolean; distToZone: number } | null
     // New indicators
     atr14: number; atrPct: number; atrSignal: string
     stopLossATR: number; takeProfitATR: number
@@ -504,7 +505,6 @@ function HomeInner() {
     { label: 'Reinvest', icon: '💰', path: '/reinvestment', color: '#34d399' },
     { label: 'Macro', icon: '🌍', path: '/macro',       color: '#60a5fa' },
     { label: 'Compare', icon: '⚡', path: '/compare',   color: '#f87171' },
-    { label: 'Academy', icon: '🎓', path: '/training',  color: '#a78bfa' },
     { label: 'Track Record', icon: '🏆', path: '/track-record', color: '#fbbf24' },
     { label: 'Guide', icon: '📖', path: '/guide',       color: txt3 },
   ]
@@ -927,6 +927,60 @@ function HomeInner() {
                   <div className="text-[10px] leading-relaxed" style={{ color: txt3 }}>{md.technicals.gapPattern.description}</div>
                 </div>
               )}
+            </Card>
+          )}
+
+
+          {/* Golden Zone Fibonacci */}
+          {md?.technicals?.goldenZone && (
+            <Card title="Golden Zone" icon={<span style={{ fontSize: 10 }}>⬡</span>} color="#fbbf24" surf={surf} brd={brd} txt3={txt3}>
+              {(() => {
+                const gz = md!.technicals!.goldenZone!
+                return (
+                  <>
+                    {/* In zone banner */}
+                    {gz.inGoldenZone && (
+                      <div className="text-[10px] font-bold text-center py-1 rounded-lg mb-2 animate-pulse"
+                        style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.3)' }}>
+                        ⭐ Price is in the Golden Zone
+                      </div>
+                    )}
+                    {!gz.inGoldenZone && (
+                      <div className="text-[10px] text-center mb-1.5" style={{ color: txt3 }}>
+                        {gz.distToZone.toFixed(1)}% from zone · {gz.trending === 'up' ? '↗' : '↘'} {gz.trending}trend
+                      </div>
+                    )}
+                    {/* Golden pocket highlight */}
+                    <div className="rounded-lg px-2 py-1.5 mb-1.5" style={{ background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)' }}>
+                      <div className="text-[9px] font-mono uppercase text-center mb-1" style={{ color: 'rgba(251,191,36,0.6)' }}>Golden Pocket (optimal entry)</div>
+                      <div className="flex justify-between text-[10px] font-mono">
+                        <span style={{ color: '#34d399' }}>${gz.goldenPocketLow.toFixed(2)}</span>
+                        <span style={{ color: txt3 }}>—</span>
+                        <span style={{ color: '#f87171' }}>${gz.goldenPocketHigh.toFixed(2)}</span>
+                      </div>
+                    </div>
+                    {/* All golden levels */}
+                    {gz.levels.map(l => {
+                      const isInPocket = l.level === 0.618 || l.level === 0.786
+                      const isPocket = l.level === 0.705
+                      return (
+                        <div key={l.level} className="flex justify-between text-xs"
+                          style={{ opacity: isPocket ? 1 : isInPocket ? 0.9 : 0.65 }}>
+                          <span style={{ color: isPocket ? '#fbbf24' : txt3 }}>
+                            {isPocket ? '★ ' : ''}{(l.level * 100).toFixed(1)}%
+                          </span>
+                          <span className="font-mono text-[11px]" style={{ color: l.type === 'support' ? '#34d399' : '#f87171' }}>
+                            ${l.price.toFixed(2)}
+                          </span>
+                        </div>
+                      )
+                    })}
+                    <div className="text-[9px] mt-1.5 text-center" style={{ color: txt3 }}>
+                      Swing: ${gz.swingLow.toFixed(2)} – ${gz.swingHigh.toFixed(2)}
+                    </div>
+                  </>
+                )
+              })()}
             </Card>
           )}
 

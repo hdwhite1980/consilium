@@ -329,7 +329,7 @@ export function TutorialLauncher({ tutorialId, label = 'Tutorial' }: { tutorialI
       return
     }
     // Otherwise dispatch a custom event — the page listens and remounts the Tutorial
-    window.dispatchEvent(new CustomEvent('consilium:launch_tutorial', { detail: { tutorialId } }))
+    window.dispatchEvent(new CustomEvent('wali_os:launch_tutorial', { detail: { tutorialId } }))
   }
 
   return (
@@ -346,13 +346,13 @@ export function TutorialLauncher({ tutorialId, label = 'Tutorial' }: { tutorialI
 // ── Tutorial step definitions ──────────────────────────────────
 export const MAIN_TUTORIAL: TutorialConfig = {
   id: 'main',
-  title: 'Welcome to Consilium',
+  title: 'Welcome to Wali-OS',
   description: 'Learn how to use the AI stock analysis council',
   steps: [
     {
       id: 'welcome',
-      title: 'Welcome to Consilium',
-      content: 'Consilium runs multiple AI models against each other in a structured debate before giving you a recommendation. Not one AI\'s opinion — a council that argues both sides before reaching a verdict.',
+      title: 'Welcome to Wali-OS',
+      content: 'Wali-OS runs multiple AI models against each other in a structured debate before giving you a recommendation. Not one AI\'s opinion — a council that argues both sides before reaching a verdict.',
       position: 'center',
       tip: 'The debate approach catches blind spots that a single AI analysis would miss.',
     },
@@ -443,7 +443,7 @@ export const PORTFOLIO_TUTORIAL: TutorialConfig = {
     {
       id: 'intro',
       title: 'Your Personal Portfolio',
-      content: 'Add the stocks you actually own. Consilium analyzes your entire portfolio holistically — sector concentration, correlated risk, earnings timing, and specific rebalancing recommendations for your actual holdings.',
+      content: 'Add the stocks you actually own. Wali-OS analyzes your entire portfolio holistically — sector concentration, correlated risk, earnings timing, and specific rebalancing recommendations for your actual holdings.',
       position: 'center',
     },
     {
