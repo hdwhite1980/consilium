@@ -80,45 +80,69 @@ async function fetchCongressionalTrades(ticker: string): Promise<CongressionalTr
   }
 }
 
-// ── SEC EDGAR Form 4 (insider transactions) ───────────────────
+// ── Finnhub insider transactions (Form 4 with real buy/sell data) ──
 async function fetchInsiderTransactions(ticker: string): Promise<InsiderTransaction[]> {
+  const key = process.env.FINNHUB_API_KEY
+  if (!key) return []
   try {
-    // Search EDGAR full-text for Form 4 filings
-    const cutoff = new Date(Date.now() - 90 * 86400000)
-    const dateStr = `${cutoff.getFullYear()}${String(cutoff.getMonth()+1).padStart(2,'0')}${String(cutoff.getDate()).padStart(2,'0')}`
-    const url = `${EDGAR_BASE}/efts/v1/search.json?q=%22${ticker}%22&dateRange=custom&startdt=${cutoff.toISOString().split('T')[0]}&forms=4&hits.hits._source=period_of_report,display_names,file_date`
-    const res = await fetch(url, { next: { revalidate: 3600 } })
+    const from = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0]
+    const to   = new Date().toISOString().split('T')[0]
+    const res = await fetch(
+      `https://finnhub.io/api/v1/stock/insider-transactions?symbol=${ticker}&from=${from}&to=${to}&token=${key}`,
+      { next: { revalidate: 3600 } }
+    )
     if (!res.ok) return []
     const data = await res.json()
-    // Transform hits to simplified format
-    return (data?.hits?.hits || []).slice(0, 10).map((h: Record<string, Record<string, string>>) => ({
-      name: h._source?.display_names || 'Unknown',
-      title: 'Insider',
-      type: 'buy' as const, // simplified — real parsing requires XML
-      shares: 0,
-      pricePerShare: 0,
-      totalValue: 0,
-      date: h._source?.file_date || '',
-    }))
+    const txns: Array<Record<string, unknown>> = data?.data ?? []
+    return txns.slice(0, 15).map(t => {
+      const shares    = Math.abs(Number(t.share ?? 0))
+      const price     = Number(t.transactionPrice ?? 0)
+      const totalVal  = shares * price
+      // Finnhub: transactionCode P=Purchase S=Sale 10b5-1=plan sale
+      const isBuy = String(t.transactionCode) === 'P'
+      return {
+        name:           String(t.name ?? 'Insider'),
+        title:          String(t.reportedTitle ?? 'Executive'),
+        type:           isBuy ? 'buy' as const : 'sell' as const,
+        shares,
+        pricePerShare:  price,
+        totalValue:     isBuy ? totalVal : -totalVal,
+        date:           String(t.transactionDate ?? t.filingDate ?? ''),
+      }
+    }).filter(t => t.shares > 0)
   } catch {
     return []
   }
 }
 
-// ── 13F Institutional Holdings ────────────────────────────────
-// Uses OpenBB-compatible EDGAR endpoint for 13F data
+// ── Finnhub institutional ownership (13F data) ─────────────────
 async function fetchInstitutionalHoldings(ticker: string): Promise<InstitutionalHolder[]> {
-  // Notable institutional holders map — cross-referenced with common 13F filers
-  // In production this would parse full 13F XML; here we return known holders
-  // using the EDGAR company search API
+  const key = process.env.FINNHUB_API_KEY
+  if (!key) return []
   try {
     const res = await fetch(
-      `${EDGAR_DATA}/submissions/CIK0000320193.json`, // Example: AAPL CIK
+      `https://finnhub.io/api/v1/stock/institutional-ownership?symbol=${ticker}&token=${key}`,
       { next: { revalidate: 86400 } }
     )
-    // This endpoint requires knowing the CIK — in production use a CIK lookup
-    // For now return empty array and note in summary
-    return []
+    if (!res.ok) return []
+    const data = await res.json()
+    const holders: Array<Record<string, unknown>> = data?.ownership ?? []
+    // Take top 5 by share count
+    return holders
+      .sort((a, b) => Number(b.share ?? 0) - Number(a.share ?? 0))
+      .slice(0, 5)
+      .map(h => {
+        const change = Number(h.change ?? 0)
+        const changeType: InstitutionalHolder['changeType'] =
+          change > 0 ? 'added' : change < 0 ? 'reduced' : 'unchanged'
+        return {
+          name:           String(h.name ?? 'Institution'),
+          sharesHeld:     Number(h.share ?? 0),
+          changeInShares: change,
+          changeType,
+          pctOfPortfolio: 0,
+        }
+      })
   } catch {
     return []
   }
@@ -154,8 +178,14 @@ export async function fetchSmartMoney(ticker: string): Promise<SmartMoneySignals
     insiderNetValue < -500_000 ? 'sell' : 'neutral'
 
   const insiderHighlight = insiderTxns.length > 0
-    ? `${insiderTxns[0].name} filed Form 4 on ${insiderTxns[0].date}`
-    : 'No recent insider filings detected'
+    ? (() => {
+        const t = insiderTxns[0]
+        const action = t.type === 'buy' ? 'bought' : 'sold'
+        const val = Math.abs(t.totalValue)
+        const valStr = val >= 1_000_000 ? `$${(val/1_000_000).toFixed(1)}M` : `$${(val/1_000).toFixed(0)}K`
+        return `${t.name} (${t.title}) ${action} ${t.shares.toLocaleString()} shares (${valStr}) on ${t.date}`
+      })()
+    : 'No insider transactions in the last 90 days'
 
   // ── Congressional signal ───────────────────────────────────
   const congBuys = congressTrades.filter(t => t.type === 'purchase').length
@@ -169,7 +199,14 @@ export async function fetchSmartMoney(ticker: string): Promise<SmartMoneySignals
     ``,
     `Insider activity (90d from SEC EDGAR Form 4):`,
     insiderTxns.length > 0
-      ? `  ${insiderTxns.length} filing(s) detected. Net position: ${insiderNetValue >= 0 ? 'net buying' : 'net selling'}. Signal: ${insiderSignal.toUpperCase()}`
+      ? (() => {
+          const buys  = insiderTxns.filter(t => t.type === 'buy')
+          const sells = insiderTxns.filter(t => t.type === 'sell')
+          const netStr = insiderNetValue >= 0
+            ? `net buying $${(insiderNetValue/1000).toFixed(0)}K`
+            : `net selling $${(Math.abs(insiderNetValue)/1000).toFixed(0)}K`
+          return `  ${insiderTxns.length} filing(s): ${buys.length} buy(s), ${sells.length} sell(s). ${netStr}. Signal: ${insiderSignal.toUpperCase()}`
+        })()
       : `  No insider transactions filed in the last 90 days`,
     insiderHighlight ? `  Notable: ${insiderHighlight}` : '',
     ``,
