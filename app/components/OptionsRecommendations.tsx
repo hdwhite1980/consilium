@@ -252,7 +252,7 @@ export default function OptionsRecommendations({
           {data.hasLiveData && data.contracts.length > 0 && data.dataSource === 'Tradier' && (
             <div>
               <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2 flex items-center gap-2">
-                <span>Example contracts matching this strategy</span>
+                <span>{signal === 'NEUTRAL' ? 'Market reference — no position recommended' : 'Example contracts matching this strategy'}</span>
                 <span className="px-1.5 py-0.5 rounded text-[9px]"
                   style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399' }}>
                   live via Tradier
@@ -282,6 +282,25 @@ export default function OptionsRecommendations({
               </div>
               <p className="text-[10px] text-white/20 mt-2 leading-relaxed">
                 One contract = 100 shares. Cost = ask price × 100. Prices are 15 minutes delayed — verify current pricing with your broker before trading.
+              </p>
+            </div>
+          )}
+
+          {/* Yahoo Finance data */}
+          {data.hasLiveData && data.contracts.length > 0 && data.dataSource === 'Yahoo' && (
+            <div>
+              <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2 flex items-center gap-2">
+                <span>{signal === 'NEUTRAL' ? 'Market reference' : 'Contracts matching this strategy'}</span>
+                <span className="px-1.5 py-0.5 rounded text-[9px]"
+                  style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>
+                  via Yahoo · no Greeks
+                </span>
+              </div>
+              <div className="space-y-2">
+                {data.contracts.map((c, i) => <ContractCard key={i} c={c} />)}
+              </div>
+              <p className="text-[10px] text-white/20 mt-2 leading-relaxed">
+                Greeks (delta, theta) unavailable from this source. One contract = 100 shares. Verify current pricing with your broker before trading.
               </p>
             </div>
           )}

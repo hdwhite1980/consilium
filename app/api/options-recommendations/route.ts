@@ -163,6 +163,81 @@ async function fetchAlpacaOptions(ticker: string, currentPrice: number): Promise
   }
 }
 
+
+// Yahoo Finance fallback — no API key, always available
+async function fetchYahooOptions(ticker: string, currentPrice: number): Promise<OptionsContract[]> {
+  try {
+    // Yahoo returns the nearest expiry by default
+    const res = await fetch(
+      `https://query2.finance.yahoo.com/v7/finance/options/${ticker}`,
+      { headers: { 'User-Agent': 'Mozilla/5.0' }, cache: 'no-store' }
+    )
+    if (!res.ok) return []
+    const data = await res.json()
+    const result = data?.optionChain?.result?.[0]
+    if (!result) return []
+
+    const expiryTs = result.expirationDates?.[0]
+    if (!expiryTs) return []
+    const expiryDate = new Date(expiryTs * 1000)
+    const expiryStr = expiryDate.toISOString().split('T')[0]
+    const daysToExpiry = Math.ceil((expiryDate.getTime() - Date.now()) / 86400000)
+
+    const toContract = (raw: Record<string, unknown>, type: 'call' | 'put'): OptionsContract | null => {
+      try {
+        const strike = Number(raw.strike)
+        const bid = Number(raw.bid ?? 0)
+        const ask = Number(raw.ask ?? 0)
+        const last = Number(raw.lastPrice ?? 0)
+        const volume = Number(raw.volume ?? 0)
+        const oi = Number(raw.openInterest ?? 0)
+        const iv = Number(raw.impliedVolatility ?? 0) * 100
+        if (!strike || (!bid && !ask && !last)) return null
+        const moneyness = Math.abs(strike - currentPrice) / currentPrice < 0.03
+          ? 'ATM'
+          : type === 'call'
+            ? strike < currentPrice ? 'ITM' : 'OTM'
+            : strike > currentPrice ? 'ITM' : 'OTM'
+        return {
+          symbol: String(raw.contractSymbol ?? ''),
+          type,
+          strike,
+          expiry: expiryStr,
+          last: last || null,
+          bid: bid || null,
+          ask: ask || null,
+          volume,
+          openInterest: oi,
+          iv: iv || null,
+          delta: null, // Yahoo doesn't provide Greeks
+          theta: null,
+          gamma: null,
+          daysToExpiry,
+          moneyness,
+        }
+      } catch { return null }
+    }
+
+    const calls = (result.options?.[0]?.calls ?? [])
+      .map((c: Record<string, unknown>) => toContract(c, 'call'))
+      .filter((c: OptionsContract | null): c is OptionsContract => c !== null)
+
+    const puts = (result.options?.[0]?.puts ?? [])
+      .map((p: Record<string, unknown>) => toContract(p, 'put'))
+      .filter((p: OptionsContract | null): p is OptionsContract => p !== null)
+
+    const all = [...calls, ...puts].filter(c =>
+      c.volume > 0 &&
+      Math.abs(c.strike - currentPrice) / currentPrice < 0.15 // within 15% of current price
+    )
+    console.log(`Yahoo options: ${all.length} contracts for ${ticker}`)
+    return all
+  } catch (e) {
+    console.error('Yahoo options exception:', e)
+    return []
+  }
+}
+
 async function fetchChain(ticker: string, expiry: string): Promise<OptionsContract[]> {
   try {
     const url = `${TRADIER_BASE()}/markets/options/chains?symbol=${ticker}&expiration=${expiry}&greeks=true`
@@ -215,35 +290,47 @@ function selectBestContracts(
   currentPrice: number,
   timeHorizon: string
 ): OptionsContract[] {
-  const isBullish = signal === 'BULLISH'
-  const isBearish = signal === 'BEARISH'
-
   // Determine target DTE based on time horizon
   const targetDTE = timeHorizon.includes('week') ? 14
     : timeHorizon.includes('month') ? 30
     : timeHorizon.includes('2-3') ? 21
     : 30
 
-  const type = isBullish ? 'call' : isBearish ? 'put' : null
-  if (!type) return []
+  const scoreContract = (c: OptionsContract) =>
+    (c.moneyness === 'ATM' ? 10 : c.moneyness === 'OTM' ? 5 : 2) +
+    Math.min(c.volume / 100, 5)
 
-  return contracts
-    .filter(c =>
-      c.type === type &&
-      c.bid !== null && c.bid > 0 &&
-      c.daysToExpiry >= targetDTE - 7 &&
-      c.daysToExpiry <= targetDTE + 21 &&
-      c.volume > 0
-    )
-    .sort((a, b) => {
-      // Prefer ATM/slightly OTM with good liquidity
-      const aScore = (a.moneyness === 'ATM' ? 10 : a.moneyness === 'OTM' ? 5 : 2)
-        + Math.min(a.volume / 100, 5)
-      const bScore = (b.moneyness === 'ATM' ? 10 : b.moneyness === 'OTM' ? 5 : 2)
-        + Math.min(b.volume / 100, 5)
-      return bScore - aScore
-    })
-    .slice(0, 3)
+  const baseFilter = (c: OptionsContract) =>
+    c.bid !== null && c.bid > 0 &&
+    c.daysToExpiry >= targetDTE - 7 &&
+    c.daysToExpiry <= targetDTE + 21 &&
+    c.volume > 0
+
+  if (signal === 'BULLISH') {
+    return contracts
+      .filter(c => c.type === 'call' && baseFilter(c))
+      .sort((a, b) => scoreContract(b) - scoreContract(a))
+      .slice(0, 3)
+  }
+
+  if (signal === 'BEARISH') {
+    return contracts
+      .filter(c => c.type === 'put' && baseFilter(c))
+      .sort((a, b) => scoreContract(b) - scoreContract(a))
+      .slice(0, 3)
+  }
+
+  // NEUTRAL — show 2 ATM/near-ATM calls and 2 puts so user can see the market
+  // These are for reference/education, not a directional recommendation
+  const calls = contracts
+    .filter(c => c.type === 'call' && baseFilter(c))
+    .sort((a, b) => scoreContract(b) - scoreContract(a))
+    .slice(0, 2)
+  const puts = contracts
+    .filter(c => c.type === 'put' && baseFilter(c))
+    .sort((a, b) => scoreContract(b) - scoreContract(a))
+    .slice(0, 2)
+  return [...calls, ...puts]
 }
 
 export async function POST(req: NextRequest) {
@@ -269,6 +356,12 @@ export async function POST(req: NextRequest) {
     if (contracts.length === 0) {
       contracts = await fetchAlpacaOptions(ticker, currentPrice)
       if (contracts.length > 0) dataSource = 'Alpaca'
+    }
+
+    // Final fallback to Yahoo Finance (no key required)
+    if (contracts.length === 0) {
+      contracts = await fetchYahooOptions(ticker, currentPrice)
+      if (contracts.length > 0) dataSource = 'Yahoo'
     }
 
     const bestContracts = selectBestContracts(contracts, signal, currentPrice, timeHorizon || '30 days')
