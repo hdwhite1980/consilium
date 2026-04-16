@@ -6,6 +6,17 @@ import { ArrowLeft, Plus, X, TrendingUp, TrendingDown, Flame, Zap, Target, Refre
 import { Tutorial, TutorialLauncher, INVEST_TUTORIAL } from '@/app/components/Tutorial'
 
 // ── Milestone config ──────────────────────────────────────────
+// Mirror of getPriceRange from the ideas API route
+function getClientPriceRange(deployable: number, maxPositions: number): { minPrice: number; maxPrice: number } {
+  const per = deployable / Math.max(1, maxPositions)
+  if (per <= 5)    return { minPrice: 0.5, maxPrice: 5 }
+  if (per <= 20)   return { minPrice: 1,   maxPrice: Math.min(8,   per * 0.7) }
+  if (per <= 100)  return { minPrice: 2,   maxPrice: Math.min(25,  per * 0.6) }
+  if (per <= 500)  return { minPrice: 5,   maxPrice: Math.min(60,  per * 0.5) }
+  if (per <= 2000) return { minPrice: 10,  maxPrice: Math.min(150, per * 0.4) }
+  return             { minPrice: 20,  maxPrice: Math.min(500, per * 0.3) }
+}
+
 const MILESTONES = [
   { name: 'Spark',   emoji: '🔥',  min: 0,      max: 10,     color: '#fbbf24', desc: '$1–$5 stocks · momentum plays' },
   { name: 'Ember',   emoji: '🔥🔥', min: 10,     max: 50,     color: '#f97316', desc: '$1–$8 stocks · technical setups' },
@@ -278,9 +289,11 @@ function StartScreen({ onStart }: { onStart: (balance: number) => void }) {
         </button>
 
         <p className="text-xs text-center" style={{ color: txt2 }}>
-          $1–$5 stocks are high-risk and speculative. Most people lose money on them.
-          The journey framework teaches discipline — it does not guarantee returns.
-          Only invest what you can afford to lose entirely.
+          {parseFloat(amount) >= 500
+            ? 'Stocks at this level are volatile and can drop 20–30% quickly. Size positions to what you can afford to lose.'
+            : parseFloat(amount) >= 50
+            ? 'Small-cap stocks are speculative — most traders lose money on them. The stage system teaches discipline, not guaranteed returns.'
+            : 'Stocks in this price range are highly speculative. Most people lose money. Start small, learn the discipline, build from there.'}
         </p>
       </div>
     </div>
@@ -382,8 +395,8 @@ function InvestInner() {
   const [trades, setTrades] = useState<Trade[]>([])
   const [journey, setJourney] = useState<Journey | null>(null)
   const [loading, setLoading] = useState(true)
+  const [introAccepted, setIntroAccepted] = useState<boolean | null>(null)
   const [ideas, setIdeas] = useState<Idea[]>([])
-  const [riskDismissed, setRiskDismissed] = useState(false)
   const [journeyNote, setJourneyNote] = useState('')
   const [stageAdvice, setStageAdvice] = useState('')
   const [marketContext, setMarketContext] = useState('')
@@ -419,6 +432,17 @@ function InvestInner() {
   const brd  = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.08)'
 
   const loadData = useCallback(async () => {
+    // Check intro acceptance first
+    try {
+      const introRes = await fetch('/api/invest/intro')
+      const introData = await introRes.json()
+      setIntroAccepted(introData.accepted)
+      if (!introData.accepted) {
+        setLoading(false)
+        return
+      }
+    } catch { setIntroAccepted(false); setLoading(false); return }
+
     try {
       const res = await fetch('/api/invest')
       const data = await res.json()
@@ -506,6 +530,8 @@ function InvestInner() {
   const totalValue = cashRemaining + unrealizedValue
   const openPnL = unrealizedValue - totalInvested
   const milestone = getMilestone(totalValue)
+  const stageMaxPositions = MILESTONES.findIndex(m => m.name === milestone.name) + 2 // 2..7
+  const stagePriceRange = getClientPriceRange(cashRemaining, stageMaxPositions)
   const nextMilestone = getNextMilestone(totalValue)
   const progress = nextMilestone ? Math.min(100, ((totalValue - milestone.min) / (nextMilestone.min - milestone.min)) * 100) : 100
 
@@ -558,6 +584,11 @@ function InvestInner() {
       <div className="flex gap-1">{[0,1,2].map(i => <span key={i} className="w-2 h-2 rounded-full animate-bounce" style={{ background: '#f97316', animationDelay: `${i*0.15}s` }} />)}</div>
     </div>
   )
+
+  if (introAccepted === false) {
+    router.replace('/invest/intro')
+    return null
+  }
 
   if (!journey) return <StartScreen onStart={setBalance} />
 
@@ -658,19 +689,6 @@ function InvestInner() {
           {/* IDEAS tab */}
           {tab === 'ideas' && (
             <div className="space-y-4">
-              {/* Risk disclosure — always visible on ideas tab */}
-              {!riskDismissed && (
-                <div className="flex items-start gap-3 px-4 py-3 rounded-xl"
-                  style={{ background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)' }}>
-                  <span style={{ color: '#fbbf24', fontSize: 14, flexShrink: 0, marginTop: 1 }}>⚠</span>
-                  <div className="flex-1">
-                    <p className="text-xs leading-relaxed" style={{ color: 'rgba(251,191,36,0.9)' }}>
-                      <span className="font-semibold">High-risk investments.</span> Stocks priced $1–$5 are speculative — most people lose money on them. The stage system teaches discipline and position sizing, not guaranteed returns. Only invest what you can afford to lose entirely. Picks are AI-generated and may be wrong.
-                    </p>
-                  </div>
-                  <button onClick={() => setRiskDismissed(true)} className="text-[10px] shrink-0 hover:opacity-70" style={{ color: 'rgba(251,191,36,0.5)' }}>Dismiss</button>
-                </div>
-              )}
               {ideas.length === 0 ? (
                 <div className="rounded-2xl p-8 text-center" style={{ background: surf, border: `1px solid ${brd}` }}>
                   <div className="text-3xl mb-3">⚡</div>
