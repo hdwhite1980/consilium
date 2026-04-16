@@ -402,8 +402,24 @@ export function calculateTechnicals(bars: Bar[]): TechnicalSignals {
   const lows    = bars.map(b => b.l)
   const volumes = bars.map(b => b.v)
   const current = closes[closes.length - 1]
-  const prev    = closes[closes.length - 2] ?? current
   const first   = closes[0]
+
+  // ── priceChange1D — always vs yesterday's close, not previous bar ─
+  // For intraday bars (15min, 1hour), find the last bar from the previous
+  // trading day so "today" change is accurate regardless of bar resolution.
+  let prevDayClose = closes[closes.length - 2] ?? current
+  if (bars[0]?.t) {
+    const todayDate = new Date(bars[bars.length - 1].t).toISOString().split('T')[0]
+    // Walk backwards to find last bar from a different date
+    for (let i = bars.length - 2; i >= 0; i--) {
+      const barDate = new Date(bars[i].t).toISOString().split('T')[0]
+      if (barDate < todayDate) {
+        prevDayClose = bars[i].c
+        break
+      }
+    }
+  }
+  const prev = prevDayClose
 
   // ── Price stats ───────────────────────────────────────────
   const priceChange1D = ((current - prev) / prev) * 100

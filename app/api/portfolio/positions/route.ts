@@ -39,23 +39,47 @@ export async function POST(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
 
-  const { ticker, shares, avg_cost, notes } = await req.json()
-  if (!ticker || !shares) return NextResponse.json({ error: 'ticker and shares required' }, { status: 400 })
+  const {
+    ticker, shares, avg_cost, notes,
+    position_type, option_type, strike, expiry, contracts, entry_premium, underlying
+  } = await req.json()
+  if (!ticker) return NextResponse.json({ error: 'ticker required' }, { status: 400 })
+  
+  const isOption = position_type === 'option'
+  if (!isOption && !shares) return NextResponse.json({ error: 'shares required for stock positions' }, { status: 400 })
+  if (isOption && (!contracts || !strike || !expiry || !option_type)) {
+    return NextResponse.json({ error: 'contracts, strike, expiry, option_type required for options' }, { status: 400 })
+  }
 
   const portfolio = await getOrCreatePortfolio(user.id)
   if (!portfolio) return NextResponse.json({ error: 'Could not create portfolio' }, { status: 500 })
 
+  // For options, use a unique key of ticker+expiry+strike+type to allow multiple option positions
+  const conflictTarget = isOption ? undefined : 'portfolio_id,ticker'
+  
+  const upsertData: Record<string, unknown> = {
+    portfolio_id: portfolio.id,
+    user_id: user.id,
+    ticker: ticker.toUpperCase(),
+    shares: isOption ? (contracts ?? 1) * 100 : Number(shares), // options: contracts × 100
+    avg_cost: avg_cost ? Number(avg_cost) : (entry_premium ? Number(entry_premium) : null),
+    notes: notes ?? null,
+    position_type: position_type ?? 'stock',
+    updated_at: new Date().toISOString(),
+  }
+
+  if (isOption) {
+    upsertData.option_type = option_type
+    upsertData.strike = strike ? Number(strike) : null
+    upsertData.expiry = expiry ?? null
+    upsertData.contracts = contracts ? Number(contracts) : 1
+    upsertData.entry_premium = entry_premium ? Number(entry_premium) : null
+    upsertData.underlying = (underlying ?? ticker).toUpperCase()
+  }
+
   const { data, error } = await admin()
     .from('portfolio_positions')
-    .upsert({
-      portfolio_id: portfolio.id,
-      user_id: user.id,
-      ticker: ticker.toUpperCase(),
-      shares: Number(shares),
-      avg_cost: avg_cost ? Number(avg_cost) : null,
-      notes: notes ?? null,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'portfolio_id,ticker' })
+    .upsert(upsertData, conflictTarget ? { onConflict: conflictTarget } : undefined)
     .select()
     .single()
 

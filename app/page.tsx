@@ -494,6 +494,7 @@ function HomeInner() {
     { label: 'Macro', icon: '🌍', path: '/macro',       color: '#60a5fa' },
     { label: 'Compare', icon: '⚡', path: '/compare',   color: '#f87171' },
     { label: 'Academy', icon: '🎓', path: '/training',  color: '#a78bfa' },
+    { label: 'Track Record', icon: '🏆', path: '/track-record', color: '#fbbf24' },
     { label: 'Guide', icon: '📖', path: '/guide',       color: txt3 },
   ]
 
@@ -521,14 +522,19 @@ function HomeInner() {
             style={{ background: inputBg, borderColor: brd2, color: txt }} />
 
           <div className="flex gap-0.5" data-tutorial="timeframe-selector">
-            {(['1D','1W','1M','3M'] as TF[]).map(t => (
-              <button key={t} onClick={() => setTf(t)}
+            {([
+              { tf: '1D', label: '1D', title: 'Intraday — 15-min bars, same-day to next session targets' },
+              { tf: '1W', label: '1W', title: 'Swing trade — hourly bars, 3-10 day targets' },
+              { tf: '1M', label: '1M', title: 'Position trade — daily bars, 3-6 week targets' },
+              { tf: '3M', label: '3M', title: 'Investment — daily bars, 6-13 week targets, fundamentals weighted heavily' },
+            ] as { tf: TF; label: string; title: string }[]).map(({ tf: t, label, title }) => (
+              <button key={t} onClick={() => setTf(t)} title={title}
                 className="px-2 py-1.5 rounded-md text-xs font-mono border transition-all"
                 style={{
                   background: tf === t ? 'rgba(167,139,250,0.15)' : inputBg,
                   borderColor: tf === t ? '#a78bfa' : brd,
                   color: tf === t ? '#a78bfa' : txt3,
-                }}>{t}</button>
+                }}>{label}</button>
             ))}
           </div>
 

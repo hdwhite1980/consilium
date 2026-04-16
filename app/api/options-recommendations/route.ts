@@ -44,23 +44,122 @@ export interface OptionsRecommendation {
 async function fetchExpirations(ticker: string): Promise<string[]> {
   try {
     const url = `${TRADIER_BASE()}/markets/options/expirations?symbol=${ticker}&includeAllRoots=true`
-    console.log('Tradier expirations URL:', url, 'key present:', !!TRADIER_KEY())
     const res = await fetch(url,
       { headers: { 'Authorization': `Bearer ${TRADIER_KEY()}`, 'Accept': 'application/json' } }
     )
-    if (!res.ok) {
-      console.error('Tradier expirations error:', res.status, await res.text())
-      return []
-    }
+    if (!res.ok) return []
     const data = await res.json()
-    console.log('Tradier expirations response:', JSON.stringify(data).slice(0, 200))
     const dates = data?.expirations?.date ?? []
     return Array.isArray(dates) ? dates : [dates]
-  } catch (e) {
-    console.error('Tradier expirations exception:', e)
-    return []
-  }
+  } catch { return [] }
 }
+
+async function fetchChain(ticker: string, expiry: string): Promise<OptionsContract[]> {
+  try {
+    const url = `${TRADIER_BASE()}/markets/options/chains?symbol=${ticker}&expiration=${expiry}&greeks=true`
+    const res = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${TRADIER_KEY()}`, 'Accept': 'application/json' },
+      next: { revalidate: 3600 }
+    })
+    if (!res.ok) return []
+    const data = await res.json()
+    const options: Array<Record<string, unknown>> = data?.options?.option ?? []
+    if (!options.length) return []
+
+    return options.map(o => {
+      const greeks = o.greeks as Record<string, unknown> ?? {}
+      const daysToExpiry = Math.ceil((new Date(expiry).getTime() - Date.now()) / 86400000)
+      const type: 'call' | 'put' = String(o.option_type) === 'call' ? 'call' : 'put'
+      const strike = Number(o.strike)
+      return {
+        symbol: String(o.symbol ?? ''),
+        type, strike, expiry,
+        last: o.last ? Number(o.last) : null,
+        bid: o.bid ? Number(o.bid) : null,
+        ask: o.ask ? Number(o.ask) : null,
+        volume: Number(o.volume ?? 0),
+        openInterest: Number(o.open_interest ?? 0),
+        iv: greeks.mid_iv ? Number(greeks.mid_iv) * 100 : null,
+        delta: greeks.delta ? Number(greeks.delta) : null,
+        theta: greeks.theta ? Number(greeks.theta) : null,
+        gamma: greeks.gamma ? Number(greeks.gamma) : null,
+        daysToExpiry,
+        moneyness: 'ATM' as 'ITM' | 'ATM' | 'OTM', // set by labelMoneyness
+      }
+    }).filter(c => c.daysToExpiry > 0 && c.daysToExpiry <= 90)
+  } catch { return [] }
+}
+
+function labelMoneyness(contracts: OptionsContract[], currentPrice: number): OptionsContract[] {
+  return contracts.map(c => ({
+    ...c,
+    moneyness: Math.abs(c.strike - currentPrice) / currentPrice < 0.02
+      ? 'ATM' as const
+      : c.type === 'call'
+        ? c.strike < currentPrice ? 'ITM' as const : 'OTM' as const
+        : c.strike > currentPrice ? 'ITM' as const : 'OTM' as const,
+  }))
+}
+
+function selectBestContractsWithLevels(
+  contracts: OptionsContract[],
+  signal: string,
+  currentPrice: number,
+  timeHorizon: string,
+  entryPrice: number,
+  stopLoss: number | null,
+  takeProfit: number | null,
+): OptionsContract[] {
+  const targetDTE = timeHorizon.includes('week') ? 14
+    : timeHorizon.includes('month') ? 30
+    : timeHorizon.includes('2-3') ? 21
+    : timeHorizon.includes('2-4') ? 21
+    : 30
+
+  const baseFilter = (c: OptionsContract) =>
+    c.bid !== null && c.bid > 0 && c.daysToExpiry >= 3 && c.daysToExpiry <= 90
+
+  const scoreContract = (c: OptionsContract, idealStrike: number) => {
+    const strikeProximity = Math.max(0, 10 - Math.abs(c.strike - idealStrike) / currentPrice * 100)
+    const dteScore = Math.max(0, 5 - Math.abs(c.daysToExpiry - targetDTE) / 3)
+    const liquidityScore = Math.min(c.volume / 100 + c.openInterest / 1000, 5)
+    return strikeProximity + dteScore + liquidityScore
+  }
+
+  if (signal === 'BULLISH') {
+    const idealStrike = entryPrice ?? currentPrice
+    return contracts
+      .filter(c => c.type === 'call' && baseFilter(c))
+      .sort((a, b) => scoreContract(b, idealStrike) - scoreContract(a, idealStrike))
+      .slice(0, 3)
+  }
+
+  if (signal === 'BEARISH') {
+    const idealStrike = entryPrice ?? currentPrice
+    return contracts
+      .filter(c => c.type === 'put' && baseFilter(c))
+      .sort((a, b) => scoreContract(b, idealStrike) - scoreContract(a, idealStrike))
+      .slice(0, 3)
+  }
+
+  const atm = entryPrice ?? currentPrice
+  const calls = contracts.filter(c => c.type === 'call' && baseFilter(c))
+    .sort((a, b) => scoreContract(b, atm) - scoreContract(a, atm)).slice(0, 2)
+  const puts = contracts.filter(c => c.type === 'put' && baseFilter(c))
+    .sort((a, b) => scoreContract(b, atm) - scoreContract(a, atm)).slice(0, 2)
+  return [...calls, ...puts]
+}
+
+function selectBestContracts(
+  contracts: OptionsContract[],
+  signal: string,
+  currentPrice: number,
+  timeHorizon: string,
+): OptionsContract[] {
+  return selectBestContractsWithLevels(contracts, signal, currentPrice, timeHorizon, currentPrice, null, null)
+}
+
+
 
 // Alpaca options fallback — uses existing Alpaca API key
 async function fetchAlpacaOptions(ticker: string, currentPrice: number): Promise<OptionsContract[]> {
@@ -71,7 +170,7 @@ async function fetchAlpacaOptions(ticker: string, currentPrice: number): Promise
   try {
     // Get nearest expiry dates
     const expRes = await fetch(
-      `https://data.alpaca.markets/v1beta1/options/snapshots/${ticker}?feed=indicative&limit=100&type=call`,
+      `https://data.alpaca.markets/v1beta1/options/snapshots/${ticker}?feed=opra&limit=500&type=call`,
       {
         headers: {
           'APCA-API-KEY-ID': key,
@@ -92,7 +191,7 @@ async function fetchAlpacaOptions(ticker: string, currentPrice: number): Promise
 
     // Get put snapshots too
     const putRes = await fetch(
-      `https://data.alpaca.markets/v1beta1/options/snapshots/${ticker}?feed=indicative&limit=100&type=put`,
+      `https://data.alpaca.markets/v1beta1/options/snapshots/${ticker}?feed=opra&limit=500&type=put`,
       {
         headers: {
           'APCA-API-KEY-ID': key,
@@ -155,8 +254,6 @@ async function fetchAlpacaOptions(ticker: string, currentPrice: number): Promise
       .map(([sym, snap]) => toContract(sym, snap as Record<string, unknown>))
       .filter((c): c is OptionsContract => c !== null)
       .filter(c => c.bid !== null && c.bid > 0 && c.volume > 0)
-
-    console.log(`Alpaca options: ${contracts.length} contracts for ${ticker}`)
     return contracts
   } catch (e) {
     console.error('Alpaca options exception:', e)
@@ -165,294 +262,6 @@ async function fetchAlpacaOptions(ticker: string, currentPrice: number): Promise
 }
 
 
-// Yahoo Finance fallback — no API key, always available
-async function fetchYahooOptions(ticker: string, currentPrice: number): Promise<OptionsContract[]> {
-  // Try multiple Yahoo endpoints with realistic browser headers
-  const endpoints = [
-    `https://query1.finance.yahoo.com/v7/finance/options/${ticker}`,
-    `https://query2.finance.yahoo.com/v7/finance/options/${ticker}`,
-  ]
-  const yahooHeaders = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Accept': 'application/json, text/plain, */*',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Referer': 'https://finance.yahoo.com/',
-    'Origin': 'https://finance.yahoo.com',
-  }
-  try {
-    let res: Response | null = null
-    for (const url of endpoints) {
-      try {
-        res = await fetch(url, { headers: yahooHeaders, cache: 'no-store' })
-        if (res.ok) break
-        console.log(`Yahoo ${url} returned ${res.status}`)
-      } catch { continue }
-    }
-    if (!res?.ok) return []
-    const data = await res.json()
-    const result = data?.optionChain?.result?.[0]
-    if (!result) return []
-
-    const expiryTs = result.expirationDates?.[0]
-    if (!expiryTs) return []
-    const expiryDate = new Date(expiryTs * 1000)
-    const expiryStr = expiryDate.toISOString().split('T')[0]
-    const daysToExpiry = Math.ceil((expiryDate.getTime() - Date.now()) / 86400000)
-
-    const toContract = (raw: Record<string, unknown>, type: 'call' | 'put'): OptionsContract | null => {
-      try {
-        const strike = Number(raw.strike)
-        const bid = Number(raw.bid ?? 0)
-        const ask = Number(raw.ask ?? 0)
-        const last = Number(raw.lastPrice ?? 0)
-        const volume = Number(raw.volume ?? 0)
-        const oi = Number(raw.openInterest ?? 0)
-        const iv = Number(raw.impliedVolatility ?? 0) * 100
-        if (!strike || (!bid && !ask && !last)) return null
-        const moneyness = Math.abs(strike - currentPrice) / currentPrice < 0.03
-          ? 'ATM'
-          : type === 'call'
-            ? strike < currentPrice ? 'ITM' : 'OTM'
-            : strike > currentPrice ? 'ITM' : 'OTM'
-        return {
-          symbol: String(raw.contractSymbol ?? ''),
-          type,
-          strike,
-          expiry: expiryStr,
-          last: last || null,
-          bid: bid || null,
-          ask: ask || null,
-          volume,
-          openInterest: oi,
-          iv: iv || null,
-          delta: null, // Yahoo doesn't provide Greeks
-          theta: null,
-          gamma: null,
-          daysToExpiry,
-          moneyness,
-        }
-      } catch { return null }
-    }
-
-    const calls = (result.options?.[0]?.calls ?? [])
-      .map((c: Record<string, unknown>) => toContract(c, 'call'))
-      .filter((c: OptionsContract | null): c is OptionsContract => c !== null)
-
-    const puts = (result.options?.[0]?.puts ?? [])
-      .map((p: Record<string, unknown>) => toContract(p, 'put'))
-      .filter((p: OptionsContract | null): p is OptionsContract => p !== null)
-
-    const all = [...calls, ...puts].filter(c =>
-      c.volume > 0 &&
-      Math.abs(c.strike - currentPrice) / currentPrice < 0.15 // within 15% of current price
-    )
-    console.log(`Yahoo options: ${all.length} contracts for ${ticker}`)
-    return all
-  } catch (e) {
-    console.error('Yahoo options exception:', e)
-    return []
-  }
-}
-
-
-// Gemini web search — pulls live options data from Yahoo Finance
-async function fetchOptionsViaGemini(
-  ticker: string,
-  currentPrice: number,
-  signal: string,
-  targetPrice: string,
-  timeHorizon: string
-): Promise<OptionsContract[]> {
-  const geminiKey = process.env.GEMINI_API_KEY
-  if (!geminiKey) return []
-
-  try {
-    const genAI = new GoogleGenerativeAI(geminiKey)
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-flash',
-      tools: [{ googleSearch: {} } as never],
-    })
-
-    const optionType = signal === 'BEARISH' ? 'put' : 'call'
-    const prompt = `Search Yahoo Finance options for ${ticker} right now.
-
-Current price: $${currentPrice}
-Council verdict: ${signal}
-Target: ${targetPrice}
-Time horizon: ${timeHorizon}
-
-I need the ${optionType} options chain for ${ticker} from Yahoo Finance (finance.yahoo.com/quote/${ticker}/options).
-
-Return ONLY a JSON array of the 4-6 most liquid ${optionType} contracts near the money. No markdown, no backticks, just raw JSON:
-[
-  {
-    "type": "${optionType}",
-    "strike": 150,
-    "expiry": "2025-05-16",
-    "bid": 2.35,
-    "ask": 2.45,
-    "last": 2.40,
-    "volume": 1250,
-    "openInterest": 4500,
-    "iv": 28.5,
-    "delta": -0.45,
-    "theta": -0.08,
-    "daysToExpiry": 21
-  }
-]
-
-Only include contracts with volume > 100 and expiring in 7-60 days. Use real data from Yahoo Finance.`
-
-    const result = await model.generateContent(prompt)
-    const text = result.response.text().trim()
-
-    // Parse JSON from response
-    const jsonMatch = text.match(/\[[\s\S]*\]/)
-    if (!jsonMatch) {
-      console.log('Gemini options response (no JSON found):', text.slice(0, 300))
-      return []
-    }
-
-    const raw = JSON.parse(jsonMatch[0])
-    if (!Array.isArray(raw) || raw.length === 0) return []
-
-    return raw.map((c: Record<string, unknown>) => ({
-      symbol: `${ticker}${c.expiry?.toString().replace(/-/g, '').slice(2)}${c.type === 'call' ? 'C' : 'P'}${String(Math.round(Number(c.strike) * 1000)).padStart(8, '0')}`,
-      type: (c.type === 'put' ? 'put' : 'call') as 'call' | 'put',
-      strike: Number(c.strike),
-      expiry: String(c.expiry ?? ''),
-      last: c.last ? Number(c.last) : null,
-      bid: c.bid ? Number(c.bid) : null,
-      ask: c.ask ? Number(c.ask) : null,
-      volume: Number(c.volume ?? 0),
-      openInterest: Number(c.openInterest ?? 0),
-      iv: c.iv ? Number(c.iv) : null,
-      delta: c.delta ? Number(c.delta) : null,
-      theta: c.theta ? Number(c.theta) : null,
-      gamma: null,
-      daysToExpiry: Number(c.daysToExpiry ?? 30),
-      moneyness: Math.abs(Number(c.strike) - currentPrice) / currentPrice < 0.03
-        ? 'ATM'
-        : c.type === 'call'
-          ? Number(c.strike) < currentPrice ? 'ITM' : 'OTM'
-          : Number(c.strike) > currentPrice ? 'ITM' : 'OTM' as 'ITM' | 'ATM' | 'OTM',
-    })).filter(c => c.strike > 0 && c.daysToExpiry > 0)
-  } catch (e) {
-    console.error('Gemini options exception:', e)
-    return []
-  }
-}
-
-async function fetchChain(ticker: string, expiry: string): Promise<OptionsContract[]> {
-  try {
-    const url = `${TRADIER_BASE()}/markets/options/chains?symbol=${ticker}&expiration=${expiry}&greeks=true`
-    const res = await fetch(url,
-      { headers: { 'Authorization': `Bearer ${TRADIER_KEY()}`, 'Accept': 'application/json' } }
-    )
-    if (!res.ok) {
-      const text = await res.text()
-      console.error(`Tradier chain ${expiry} error:`, res.status, text.slice(0, 200))
-      return []
-    }
-    const data = await res.json()
-    console.log(`Tradier chain ${expiry}: ${JSON.stringify(data).slice(0, 150)}`)
-    const options = data?.options?.option ?? []
-    const arr = Array.isArray(options) ? options : [options]
-    return arr.map((o: Record<string, unknown>) => ({
-      symbol: String(o.symbol ?? ''),
-      type: String(o.option_type) === 'call' ? 'call' : 'put',
-      strike: Number(o.strike ?? 0),
-      expiry,
-      last: o.last !== null ? Number(o.last) : null,
-      bid: o.bid !== null ? Number(o.bid) : null,
-      ask: o.ask !== null ? Number(o.ask) : null,
-      volume: Number(o.volume ?? 0),
-      openInterest: Number(o.open_interest ?? 0),
-      iv: o.greeks ? Number((o.greeks as Record<string, unknown>).smv_vol ?? 0) * 100 : null,
-      delta: o.greeks ? Number((o.greeks as Record<string, unknown>).delta ?? 0) : null,
-      theta: o.greeks ? Number((o.greeks as Record<string, unknown>).theta ?? 0) : null,
-      gamma: o.greeks ? Number((o.greeks as Record<string, unknown>).gamma ?? 0) : null,
-      daysToExpiry: Math.ceil((new Date(expiry).getTime() - Date.now()) / 86400000),
-      moneyness: 'OTM', // computed below
-    })) as OptionsContract[]
-  } catch { return [] }
-}
-
-function labelMoneyness(contracts: OptionsContract[], currentPrice: number): OptionsContract[] {
-  return contracts.map(c => ({
-    ...c,
-    moneyness: Math.abs(c.strike - currentPrice) / currentPrice < 0.02
-      ? 'ATM'
-      : c.type === 'call'
-        ? c.strike < currentPrice ? 'ITM' : 'OTM'
-        : c.strike > currentPrice ? 'ITM' : 'OTM' as 'ITM' | 'ATM' | 'OTM',
-  }))
-}
-
-function selectBestContractsWithLevels(
-  contracts: OptionsContract[],
-  signal: string,
-  currentPrice: number,
-  timeHorizon: string,
-  entryPrice: number,
-  stopLoss: number | null,
-  takeProfit: number | null,
-): OptionsContract[] {
-  const targetDTE = timeHorizon.includes('week') ? 14
-    : timeHorizon.includes('month') ? 30
-    : timeHorizon.includes('2-3') ? 21
-    : timeHorizon.includes('2-4') ? 21
-    : 30
-
-  const baseFilter = (c: OptionsContract) =>
-    c.bid !== null && c.bid > 0 &&
-    c.daysToExpiry >= 3 &&
-    c.daysToExpiry <= 90
-
-  const scoreContract = (c: OptionsContract, idealStrike: number) => {
-    const strikeProximity = Math.max(0, 10 - Math.abs(c.strike - idealStrike) / currentPrice * 100)
-    const dteScore = Math.max(0, 5 - Math.abs(c.daysToExpiry - targetDTE) / 3)
-    const liquidityScore = Math.min(c.volume / 100 + c.openInterest / 1000, 5)
-    return strikeProximity + dteScore + liquidityScore
-  }
-
-  if (signal === 'BULLISH') {
-    // For calls: ideal strike is near entry price (ATM to slight OTM)
-    // If we have a target, find a strike between entry and target
-    const idealStrike = entryPrice ?? currentPrice
-    return contracts
-      .filter(c => c.type === 'call' && baseFilter(c))
-      .sort((a, b) => scoreContract(b, idealStrike) - scoreContract(a, idealStrike))
-      .slice(0, 3)
-  }
-
-  if (signal === 'BEARISH') {
-    // For puts: ideal strike near current price or entry
-    // Stop loss is the max risk level — use it to size the trade
-    const idealStrike = entryPrice ?? currentPrice
-    return contracts
-      .filter(c => c.type === 'put' && baseFilter(c))
-      .sort((a, b) => scoreContract(b, idealStrike) - scoreContract(a, idealStrike))
-      .slice(0, 3)
-  }
-
-  // NEUTRAL — show ATM calls and puts for reference
-  const atm = entryPrice ?? currentPrice
-  const calls = contracts.filter(c => c.type === 'call' && baseFilter(c))
-    .sort((a, b) => scoreContract(b, atm) - scoreContract(a, atm)).slice(0, 2)
-  const puts = contracts.filter(c => c.type === 'put' && baseFilter(c))
-    .sort((a, b) => scoreContract(b, atm) - scoreContract(a, atm)).slice(0, 2)
-  return [...calls, ...puts]
-}
-
-function selectBestContracts(
-  contracts: OptionsContract[],
-  signal: string,
-  currentPrice: number,
-  timeHorizon: string,
-): OptionsContract[] {
-  return selectBestContractsWithLevels(contracts, signal, currentPrice, timeHorizon, currentPrice, null, null)
-}
 
 export async function POST(req: NextRequest) {
   try {
@@ -476,12 +285,10 @@ export async function POST(req: NextRequest) {
     // Primary: Tradier — confirmed working in production
     if (TRADIER_KEY()) {
       const expiries = await fetchExpirations(ticker)
-      console.log(`Tradier expiries for ${ticker}:`, expiries.slice(0, 4))
       const targetExpiries = expiries.slice(0, 4)
       expiriesUsed = targetExpiries
       const chains = await Promise.all(targetExpiries.map(exp => fetchChain(ticker, exp)))
       const allContracts = chains.flat()
-      console.log(`Tradier raw contracts for ${ticker}:`, allContracts.length)
       contracts = labelMoneyness(allContracts, currentPrice)
       if (contracts.length > 0) dataSource = 'Tradier'
     }

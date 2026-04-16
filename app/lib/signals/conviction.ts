@@ -77,12 +77,30 @@ export function buildConvictionOutput(
   smartMoney: SmartMoneySignals,
   optionsFlow: OptionsFlowSignals,
   market: MarketContext,
+  timeframe = '1W',
 ): ConvictionOutput {
+  // Weight multipliers per timeframe
+  // 1D = intraday: technicals dominate, fundamentals near-irrelevant
+  // 1W = swing: balanced with slight technical lean
+  // 1M = position: equal weight
+  // 3M = investment: fundamentals and smart money dominate
+  const tw = {
+    '1D': { tech: 1.6, fund: 0.2, smart: 0.3, options: 1.2 },
+    '1W': { tech: 1.2, fund: 0.7, smart: 0.8, options: 1.0 },
+    '1M': { tech: 1.0, fund: 1.0, smart: 1.0, options: 0.9 },
+    '3M': { tech: 0.6, fund: 1.5, smart: 1.4, options: 0.6 },
+  }[timeframe] ?? { tech: 1.0, fund: 1.0, smart: 1.0, options: 1.0 }
 
   // ── Build signal matrix ───────────────────────────────────
   const signals: SignalRow[] = []
   const add = (category: string, signal: string, direction: 'bullish'|'bearish'|'neutral', weight: number, score: number) =>
     signals.push({ category, signal, direction, weight, score })
+
+  // Timeframe weight multipliers
+  const tw_tech  = tw.tech
+  const tw_fund  = tw.fund
+  const tw_smart = tw.smart
+  const tw_opts  = tw.options
 
   // Technical signals (weight 8)
   add('Technical', `RSI ${technicals.rsi.toFixed(0)} — ${technicals.rsiSignal}`,
@@ -186,18 +204,33 @@ export function buildConvictionOutput(
     market.sector.trend === 'up' ? 'bullish' : market.sector.trend === 'down' ? 'bearish' : 'neutral', 6,
     market.sector.changePeriod > 2 ? 5 : market.sector.changePeriod < -2 ? -5 : 0)
 
+  // ── Apply timeframe weights to category scores ───────────
+  // Scale each signal's weight by its category multiplier before scoring
+  const categoryMult: Record<string, number> = {
+    'Technical':   tw_tech,
+    'Fundamental': tw_fund,
+    'Smart Money': tw_smart,
+    'Options':     tw_opts,
+    'Macro':       1.0,  // macro is always relevant
+  }
+  const scaledSignals = signals.map(s => ({
+    ...s,
+    weight: s.weight * (categoryMult[s.category] ?? 1.0),
+    score:  s.score  * (categoryMult[s.category] ?? 1.0),
+  }))
+
   // ── Convergence score ─────────────────────────────────────
-  const totalWeight = signals.reduce((s, r) => s + r.weight, 0)
-  const weightedScore = signals.reduce((s, r) => s + r.score * r.weight, 0)
+  const totalWeight = scaledSignals.reduce((s, r) => s + r.weight, 0)
+  const weightedScore = scaledSignals.reduce((s, r) => s + r.score * r.weight, 0)
   const rawScore = totalWeight > 0 ? (weightedScore / totalWeight) * 10 : 0
   const regimeAdj = REGIME_MULTIPLIERS[market.regime] ?? 0
   const convergenceScore = Math.max(-100, Math.min(100, rawScore + regimeAdj * rawScore))
 
-  const convergingSignals = signals.filter(s =>
+  const convergingSignals = scaledSignals.filter(s =>
     (convergenceScore > 0 && s.direction === 'bullish') ||
     (convergenceScore < 0 && s.direction === 'bearish')
   ).length
-  const divergingSignals = signals.filter(s =>
+  const divergingSignals = scaledSignals.filter(s =>
     (convergenceScore > 0 && s.direction === 'bearish') ||
     (convergenceScore < 0 && s.direction === 'bullish')
   ).length

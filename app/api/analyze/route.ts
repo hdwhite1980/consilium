@@ -282,6 +282,25 @@ export async function POST(req: NextRequest) {
           },
         }).select().single()
 
+        // Auto-log to track record (fire-and-forget)
+        if (result.judge?.signal && result.judge.signal !== 'NEUTRAL') {
+          fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/track-record`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Cookie': req.headers.get('cookie') ?? '' },
+            body: JSON.stringify({
+              ticker: symbol,
+              signal: result.judge.signal,
+              confidence: result.judge.confidence,
+              entry_price: result.judge.entryPrice,
+              stop_loss: result.judge.stopLoss,
+              take_profit: result.judge.takeProfit,
+              time_horizon: result.judge.timeHorizon,
+              persona: persona ?? 'balanced',
+              timeframe: tf,
+            }),
+          }).catch(() => null)
+        }
+
         send('complete', {
           analysisId: saved?.id,
           cached: false,

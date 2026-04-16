@@ -99,7 +99,9 @@ function getSectorInfo(ticker: string) {
 
 async function getSnapshot(ticker: string, timeframe: string): Promise<MarketSnapshot> {
   try {
-    const bars = await fetchBars(ticker, timeframe)
+    // Use daily bars for market context — intraday bars give misleading macro signals
+    const macroTf = (timeframe === '1D' || timeframe === '1W') ? '1M' : timeframe
+    const bars = await fetchBars(ticker, macroTf)
     if (!bars.length) return { ticker, change1D: 0, changePeriod: 0, rsi: 50, trend: 'flat' }
     const tech = calculateTechnicals(bars)
     return {
@@ -116,7 +118,9 @@ async function getSnapshot(ticker: string, timeframe: string): Promise<MarketSna
 
 async function getVix(timeframe: string): Promise<VixSnapshot> {
   try {
-    const bars = await fetchBars('VIXY', timeframe) // VIX proxy ETF
+    // Always use daily bars for VIX — intraday VIXY bars are meaningless for macro regime
+    const vixTf = (timeframe === '1D' || timeframe === '1W') ? '1M' : timeframe
+    const bars = await fetchBars('VIXY', vixTf) // VIX proxy ETF
     if (!bars.length) return { level: 18, signal: 'neutral', description: 'VIX data unavailable' }
     const level = bars[bars.length - 1].c
     const signal = level > 30 ? 'fear' : level < 15 ? 'greed' : 'neutral'

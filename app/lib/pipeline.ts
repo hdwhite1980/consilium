@@ -111,6 +111,42 @@ export interface TranscriptMessage {
 
 function ts() { return new Date().toISOString() }
 
+function timeframeContext(tf: string): string {
+  switch (tf) {
+    case '1D': return `TIMEFRAME CONTEXT: This is a 1-DAY intraday analysis. Bars are 15-minute candles.
+FOCUS ON: intraday momentum, VWAP position, 15-min RSI, short-term support/resistance, volume spikes.
+WEIGHT HEAVILY: RSI on 15-min, VWAP deviation, Williams %R, intraday price action.
+DOWNWEIGHT: SMA200 (lagging), fundamental P/E ratios (irrelevant for day), congressional trades (too slow).
+TARGETS/STOPS: Use tight ATR-based levels (0.5–1× ATR). Time horizon: same day to next 1-2 sessions.
+DO NOT: Suggest multi-week holds. Entry/stop/target should reflect intraday or overnight moves only.`
+
+    case '1W': return `TIMEFRAME CONTEXT: This is a 1-WEEK swing trade analysis. Bars are 1-hour candles.
+FOCUS ON: 1-3 week swing setups, hourly trend direction, key daily support/resistance levels.
+WEIGHT HEAVILY: RSI on hourly, EMA 9/20 crossovers, MACD crossovers, volume confirmation, nearby earnings.
+WEIGHT NORMALLY: SMA50, fundamentals (as catalyst, not primary driver), options flow.
+DOWNWEIGHT: SMA200 crossovers (too slow for 1W), 3-month fundamental trends.
+TARGETS/STOPS: Use 1.5–2× ATR. Time horizon: 3-10 trading days.`
+
+    case '1M': return `TIMEFRAME CONTEXT: This is a 1-MONTH position trade analysis. Bars are daily candles.
+FOCUS ON: Monthly trend, daily SMA50/200 position, fundamentals as primary thesis driver.
+WEIGHT HEAVILY: SMA50/200 position and crossovers, golden/death cross, Ichimoku cloud, earnings catalyst, analyst upgrades.
+WEIGHT HEAVILY: Fundamentals — P/E vs history, EPS growth, analyst consensus and price targets.
+WEIGHT NORMALLY: RSI (for entry timing only), MACD on daily.
+TARGETS/STOPS: Use 2–3× ATR, align with key monthly S/R. Time horizon: 3-6 weeks.`
+
+    case '3M': return `TIMEFRAME CONTEXT: This is a 3-MONTH investment analysis. Bars are daily candles with full trend context.
+FOCUS ON: Macro trend, structural support/resistance, fundamental quality vs valuation, institutional flows.
+WEIGHT HEAVILY: Fundamentals — earnings growth, margins, revenue trajectory, analyst target vs current price.
+WEIGHT HEAVILY: Ichimoku cloud (structural trend), SMA200 (long-term bias), relative strength vs sector.
+WEIGHT HEAVILY: Smart money — institutional holdings, insider buying, congressional trades.
+WEIGHT NORMALLY: Short-term technicals (for entry timing only).
+TARGETS/STOPS: Wider stops (3–4× ATR), align with major monthly S/R. Time horizon: 6-13 weeks.
+NOTE: Minor technical noise is acceptable in a strong fundamental thesis. What matters is the 3-month trajectory.`
+
+    default: return ''
+  }
+}
+
 function parseJSON<T>(text: string): T {
   const clean = text.replace(/```json|```/g, '').trim()
   const start = clean.indexOf('{')
@@ -267,6 +303,7 @@ export async function runTargetedResearch(
     try {
       const model = getGenAI().getGenerativeModel({ model: modelName })
       const result = await model.generateContent(`You are the News Scout providing urgent real-time research during a live stock debate about ${bundle.ticker} (currently $${bundle.currentPrice.toFixed(2)}).
+DEBATE TIMEFRAME: ${bundle.timeframe} — keep your answer relevant to this horizon.
 
 A council member has asked: "${question}"
 ${liveData}
@@ -291,16 +328,23 @@ export async function runGemini(bundle: SignalBundle): Promise<GeminiResult> {
   for (const modelName of GEMINI_MODELS) {
     try {
       const model = getGenAI().getGenerativeModel({ model: modelName })
+      const tfFocus: Record<string, string> = {
+        '1D': 'FOCUS on TODAY only — intraday news, pre/post-market moves, breaking catalysts. Ignore multi-week trends.',
+        '1W': 'FOCUS on THIS WEEK — earnings this week, analyst actions, macro data releases in the next 5 days.',
+        '1M': 'FOCUS on THIS MONTH — upcoming earnings date, recent upgrades/downgrades, sector rotation.',
+        '3M': 'FOCUS on NEXT QUARTER — earnings trajectory, macro tailwinds/headwinds, institutional positioning.',
+      }
       const result = await model.generateContent(`You are the News Scout and Macro Analyst for an elite AI stock council.
 
 Analyze all news, macro, and market context for ${bundle.ticker}. You go first. Be specific.
+TIMEFRAME: ${bundle.timeframe} — ${tfFocus[bundle.timeframe] ?? ''}
 
 ${bundle.aiContext.newsSection}
 
 ${bundle.aiContext.marketSection}
 
 Respond JSON ONLY (no fences):
-{"summary":"3 sentence overview","headlines":["top 4-5 headlines"],"sentiment":"positive|negative|neutral|mixed","confidence":<0-100>,"keyEvents":["2-4 near-term catalysts"],"macroFactors":["2-3 macro conditions"],"regimeAssessment":"1 sentence on regime impact"}`)
+{"summary":"3 sentence overview","headlines":["top 4-5 headlines"],"sentiment":"positive|negative|neutral|mixed","confidence":<0-100>,"keyEvents":["2-4 near-term catalysts relevant to the ${bundle.timeframe} timeframe"],"macroFactors":["2-3 macro conditions"],"regimeAssessment":"1 sentence on regime impact"}`)
       return parseJSON<GeminiResult>(result.response.text())
     } catch (e) {
       lastError = e as Error
@@ -328,11 +372,15 @@ export async function runClaude(bundle: SignalBundle, gemini: GeminiResult): Pro
       const assetContext = isForexPair
         ? `This is a FOREX currency pair. Analysis focuses on: central bank policy divergence between the two currencies, macroeconomic data (inflation, employment, GDP) for each region, interest rate differentials, technical price action, and global risk sentiment. There are no earnings, P/E ratios, or insider data for forex. Use the technical signals and macro context as your primary evidence.`
         : `${pi[p] ?? pi.balanced}`
-      return `You are the Lead Analyst (${pn[p] ?? 'Balanced'} perspective) in an elite AI council for ${bundle.ticker}. ${assetContext} Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data — only use what you have. IMPORTANT: If the price data shows a period change exceeding ±200%, treat this as a potential data error and note it explicitly rather than building your analysis on it.`
+      return `You are the Lead Analyst (${pn[p] ?? 'Balanced'} perspective) in an elite AI council for ${bundle.ticker}. ${assetContext} Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data — only use what you have. IMPORTANT: If the price data shows a period change exceeding ±200%, treat this as a potential data error and note it explicitly rather than building your analysis on it.
+
+${timeframeContext(bundle.timeframe)}`
     })(),
     messages: [{
       role: 'user',
       content: `TICKER: ${bundle.ticker} | TIMEFRAME: ${bundle.timeframe} | PRICE: $${bundle.currentPrice.toFixed(2)}
+
+${timeframeContext(bundle.timeframe)}
 
 NEWS SCOUT BRIEF:
 ${gemini.summary}
@@ -364,7 +412,9 @@ export async function runGPT(bundle: SignalBundle, gemini: GeminiResult, claude:
     model: 'gpt-4o',
     max_tokens: 1000,
     messages: [
-      { role: 'system', content: `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. Challenge the Lead Analyst's conclusions with data. Do NOT simply agree. Never mention missing or unavailable data — only use what you have. Absence of a metric is not evidence of anything.` },
+      { role: 'system', content: `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. Challenge the Lead Analyst's conclusions with data. Do NOT simply agree. Never mention missing or unavailable data — only use what you have. Absence of a metric is not evidence of anything.
+
+${timeframeContext(bundle.timeframe)}` },
       { role: 'user', content: `TICKER: ${bundle.ticker} | PRICE: $${bundle.currentPrice.toFixed(2)}
 
 NEWS SCOUT: ${gemini.sentiment} sentiment, ${gemini.confidence}% confidence
@@ -552,10 +602,14 @@ export async function runJudge(
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 2000,
-    system: `You are the Judge of an elite AI stock council for ${bundle.ticker}. The council has three roles: News Scout, Lead Analyst, and Devil's Advocate. You hold NO prior position. ${judgePersona[judgePersonaKey] ?? judgePersona.balanced} Weigh argument QUALITY not vote count. Be decisive. Refer to council members by their role names only. IMPORTANT: Never cite missing or unavailable data as a reason for lower conviction — only cite the data you have. If a metric is unavailable, ignore it entirely rather than mentioning its absence.`,
+    system: `You are the Judge of an elite AI stock council for ${bundle.ticker}. The council has three roles: News Scout, Lead Analyst, and Devil's Advocate. You hold NO prior position. ${judgePersona[judgePersonaKey] ?? judgePersona.balanced} Weigh argument QUALITY not vote count. Be decisive. Refer to council members by their role names only. IMPORTANT: Never cite missing or unavailable data as a reason for lower conviction — only cite the data you have. If a metric is unavailable, ignore it entirely rather than mentioning its absence.
+
+${timeframeContext(bundle.timeframe)}`,
     messages: [{
       role: 'user',
-      content: `TICKER: ${bundle.ticker} | PRICE: $${bundle.currentPrice.toFixed(2)} | ROUND: ${round} | PERSPECTIVE: ${(( bundle as any).persona ?? 'balanced').toUpperCase()}
+      content: `TICKER: ${bundle.ticker} | PRICE: $${bundle.currentPrice.toFixed(2)} | ROUND: ${round} | PERSPECTIVE: ${(( bundle as any).persona ?? 'balanced').toUpperCase()} | TIMEFRAME: ${bundle.timeframe}
+
+${timeframeContext(bundle.timeframe)}
 
 NEWS SCOUT: ${gemini.sentiment} sentiment, ${gemini.confidence}% confidence
 ${gemini.summary}
@@ -618,7 +672,7 @@ JSON ONLY — include ALL fields below:
   "entryPrice": "recommended entry price or range e.g. $195-$198 on a pullback to support",
   "stopLoss": "where to cut losses — use the ATR-derived stop from the signal data if available, explain why e.g. '$189 — 2× ATR below entry, below SMA200 support'",
   "takeProfit": "where to take profits — use ATR-derived target if available. For BULLISH above entry, for BEARISH below entry. e.g. BULLISH: '$215 first (1.5× ATR), $225 full exit at resistance' | BEARISH: '$192 first target, $185 full exit'",
-  "timeHorizon": "realistic timeframe e.g. 2-3 weeks for base case to play out",
+  "timeHorizon": "MUST match the selected timeframe: 1D=same day to next session, 1W=3-10 trading days, 1M=3-6 weeks, 3M=6-13 weeks. Currently: ${bundle.timeframe}",
   "plainEnglish": "Explain the verdict in simple plain English as if talking to someone who has never traded before. 3-4 sentences. No jargon. What is this stock doing and what should someone know about it right now?",
   "technicalsExplained": "Explain what the technical signals mean in plain English. Cover: what the Ichimoku cloud position says about the trend, what ATR says about volatility and appropriate stop placement, what RSI/Williams/CCI oscillators agree or disagree on, and whether momentum (ROC) is accelerating or decelerating. 4-5 sentences a beginner would understand.",
   "fundamentalsExplained": "Explain what the fundamental signals mean in plain English. What do the analyst ratings mean? What does earnings date mean for the stock? If earnings implied move data is available, explain whether options are overpriced or underpriced. What does insider buying or selling tell us? 3-4 sentences.",

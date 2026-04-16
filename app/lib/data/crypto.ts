@@ -102,7 +102,7 @@ async function fetchAlpacaCryptoBars(ticker: string, timeframe: string, daysBack
     const tf = tfMap[timeframe] ?? '1Day'
 
     const res = await fetch(
-      `${BASE}/v1beta3/crypto/us/bars?symbols=${encodeURIComponent(symbol)}&timeframe=${tf}&start=${start}&end=${end}&limit=1000`,
+      `${BASE}/v1beta3/crypto/us/bars?symbols=${encodeURIComponent(symbol)}&timeframe=${tf}&start=${start}&end=${end}&limit=10000`,
       { headers, next: { revalidate: 300 } }
     )
     if (!res.ok) return []

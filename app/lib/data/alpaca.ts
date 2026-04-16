@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────
 // Alpaca Markets Data API
-// Free tier: news + IEX price data (15-min delayed)
+// Alpaca Trader Plus: SIP real-time feed, all US exchanges, 9+ years history, 10k calls/min
 // Sign up at alpaca.markets (paper trading account)
 // ─────────────────────────────────────────────────────────────
 
@@ -39,18 +39,25 @@ export async function fetchBars(ticker: string, timeframe: string): Promise<Alpa
     const startStr = start.toISOString().split('T')[0]
     const endStr   = end.toISOString().split('T')[0]
 
-    for (const feed of ['sip', 'iex']) {
-      try {
-        const url = `${BASE}/v2/stocks/${ticker}/bars?timeframe=${tf}&start=${startStr}&end=${endStr}&limit=1000&adjustment=all&feed=${feed}`
-        const res = await fetch(url, { headers: alpacaHeaders(), next: { revalidate: 300 } })
-        if (!res.ok) continue
+    // Trader Plus: SIP = real-time consolidated tape from all US exchanges
+    try {
+      const url = `${BASE}/v2/stocks/${ticker}/bars?timeframe=${tf}&start=${startStr}&end=${endStr}&limit=10000&adjustment=all&feed=sip`
+      const res = await fetch(url, { headers: alpacaHeaders(), next: { revalidate: 300 } })
+      if (res.ok) {
         const data = await res.json()
         const bars = (data.bars || []) as AlpacaBar[]
-        if (bars.length >= 20) return bars
-      } catch {
-        continue
+        if (bars.length >= 5) return bars
       }
-    }
+    } catch { /* fallthrough */ }
+    // IEX fallback for non-SIP-covered tickers (OTC etc)
+    try {
+      const url = `${BASE}/v2/stocks/${ticker}/bars?timeframe=${tf}&start=${startStr}&end=${endStr}&limit=10000&adjustment=all&feed=iex`
+      const res = await fetch(url, { headers: alpacaHeaders(), next: { revalidate: 300 } })
+      if (res.ok) {
+        const data = await res.json()
+        return (data.bars || []) as AlpacaBar[]
+      }
+    } catch { /* ignore */ }
     return []
   } catch {
     return []
@@ -61,7 +68,7 @@ export async function fetchBars(ticker: string, timeframe: string): Promise<Alpa
 export async function fetchQuote(ticker: string): Promise<AlpacaQuote | null> {
   try {
     const res = await fetch(
-      `${BASE}/v2/stocks/${ticker}/quotes/latest`,
+      `${BASE}/v2/stocks/${ticker}/quotes/latest?feed=sip`,
       { headers: alpacaHeaders(), next: { revalidate: 60 } }
     )
     if (!res.ok) return null
@@ -83,17 +90,22 @@ export async function fetchMultiBars(tickers: string[], timeframe: string): Prom
     const startStr = start.toISOString().split('T')[0]
     const endStr   = end.toISOString().split('T')[0]
 
-    for (const feed of ['sip', 'iex']) {
-      try {
-        const url = `${BASE}/v2/stocks/bars?symbols=${symbols}&timeframe=${tf}&start=${startStr}&end=${endStr}&limit=1000&adjustment=all&feed=${feed}`
-        const res = await fetch(url, { headers: alpacaHeaders(), next: { revalidate: 300 } })
-        if (!res.ok) continue
+    try {
+      const url = `${BASE}/v2/stocks/bars?symbols=${symbols}&timeframe=${tf}&start=${startStr}&end=${endStr}&limit=10000&adjustment=all&feed=sip`
+      const res = await fetch(url, { headers: alpacaHeaders(), next: { revalidate: 300 } })
+      if (res.ok) {
         const data = await res.json()
         if (data.bars && Object.keys(data.bars).length > 0) return data.bars
-      } catch {
-        continue
       }
-    }
+    } catch { /* fallthrough */ }
+    try {
+      const url = `${BASE}/v2/stocks/bars?symbols=${symbols}&timeframe=${tf}&start=${startStr}&end=${endStr}&limit=10000&adjustment=all&feed=iex`
+      const res = await fetch(url, { headers: alpacaHeaders(), next: { revalidate: 300 } })
+      if (res.ok) {
+        const data = await res.json()
+        if (data.bars && Object.keys(data.bars).length > 0) return data.bars
+      }
+    } catch { /* ignore */ }
     return {}
   } catch {
     return {}
@@ -124,15 +136,16 @@ export function formatBarsForAI(bars: AlpacaBar[], timeframe: string): string {
 
 // ── Helpers ────────────────────────────────────────────────────
 function barParams(timeframe: string) {
-  // Different bar resolutions per timeframe so indicators reflect that view.
-  // 1D and 1W use hourly bars — RSI/MACD on hourly tells a different story.
-  // 1M and 3M use daily bars with enough history for accurate SMA200.
+  // Each timeframe gets a distinct bar resolution and lookback window.
+  // This ensures RSI, MACD, Ichimoku, and momentum indicators reflect
+  // the correct lens — a 15min RSI and a daily RSI tell very different stories.
+  // Trader Plus: 9+ years of history available, 10k bar limit per request
   switch (timeframe) {
-    case '1D': return { tf: '1Hour', daysBack: 90  }   // 90 days of hourly ~1440 bars — better RSI warmup
-    case '1W': return { tf: '1Hour', daysBack: 120 }   // 120 days of hourly ~1920 bars
-    case '1M': return { tf: '1Day',  daysBack: 420 }   // 420 calendar days = ~290 trading days
-    case '3M': return { tf: '1Day',  daysBack: 420 }   // same — need SMA200
-    default:   return { tf: '1Day',  daysBack: 420 }
+    case '1D': return { tf: '15Min', daysBack: 30  }   // 30 days of 15-min bars ~2880 bars — much better RSI/MACD warmup
+    case '1W': return { tf: '1Hour', daysBack: 90  }   // 90 days of hourly bars ~1440 bars — strong swing signals
+    case '1M': return { tf: '1Day',  daysBack: 500 }   // 500 calendar days ~350 trading days — robust SMA200 + 1yr S/R
+    case '3M': return { tf: '1Day',  daysBack: 1200}   // ~3.3 years daily bars — long-term trend, multi-year S/R levels
+    default:   return { tf: '1Day',  daysBack: 500 }
   }
 }
 

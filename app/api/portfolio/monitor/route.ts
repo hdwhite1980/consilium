@@ -43,28 +43,29 @@ async function fetchLivePrice(ticker: string): Promise<number | null> {
 async function fetchSupportResistance(ticker: string): Promise<{ support: number; resistance: number; support2: number; resistance2: number } | null> {
   try {
     const end = new Date().toISOString().split('T')[0]
-    const start = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0]
-    for (const feed of ['sip', 'iex']) {
-      const r = await fetch(
-        `https://data.alpaca.markets/v2/stocks/${ticker}/bars?timeframe=1Day&start=${start}&end=${end}&limit=90&adjustment=all&feed=${feed}`,
-        { headers: ALPACA_HEADERS, next: { revalidate: 900 } }
-      )
-      if (!r.ok) continue
+    const start = new Date(Date.now() - 180 * 86400000).toISOString().split('T')[0] // 6 months for robust S/R
+    // Trader Plus: SIP feed, extend to 180 days for better S/R levels
+    const r = await fetch(
+      `https://data.alpaca.markets/v2/stocks/${ticker}/bars?timeframe=1Day&start=${start}&end=${end}&limit=10000&adjustment=all&feed=sip`,
+      { headers: ALPACA_HEADERS, next: { revalidate: 900 } }
+    )
+    if (r.ok) {
       const d = await r.json()
       const bars = d.bars ?? []
-      if (bars.length < 20) continue
+      if (bars.length >= 20) {
       const closes = bars.map((b: { c: number }) => b.c)
       const highs  = bars.map((b: { h: number }) => b.h)
       const lows   = bars.map((b: { l: number }) => b.l)
       // Simple pivot-based S/R
-      const recentHighs = highs.slice(-20).sort((a: number, b: number) => b - a)
-      const recentLows  = lows.slice(-20).sort((a: number, b: number) => a - b)
-      const current = closes[closes.length - 1]
+      // Use more bars for S/R now that we have 180 days
+      const recentHighs = highs.slice(-60).sort((a: number, b: number) => b - a)
+      const recentLows  = lows.slice(-60).sort((a: number, b: number) => a - b)
       const support    = recentLows[2]   ?? recentLows[0]
       const support2   = recentLows[4]   ?? recentLows[0]
       const resistance = recentHighs[2]  ?? recentHighs[0]
       const resistance2 = recentHighs[4] ?? recentHighs[0]
       return { support, resistance, support2, resistance2 }
+      }
     }
     return null
   } catch { return null }
@@ -92,6 +93,121 @@ async function scanNewsForTicker(ticker: string): Promise<string | null> {
     return text
   } catch { return null }
 }
+
+async function fetchOptionPrice(
+  ticker: string,
+  optionType: string,
+  strike: number,
+  expiry: string
+): Promise<{ price: number | null; delta: number | null; theta: number | null; iv: number | null; daysToExpiry: number } | null> {
+  const tradierKey = process.env.TRADIER_API_KEY
+  if (!tradierKey) return null
+  try {
+    const expiryFmt = expiry.replace(/-/g, '')
+    const strikePad = String(Math.round(strike * 1000)).padStart(8, '0')
+    const symbol = `${ticker}${expiryFmt.slice(2)}${optionType === 'call' ? 'C' : 'P'}${strikePad}`
+    const res = await fetch(
+      `https://api.tradier.com/v1/markets/quotes?symbols=${symbol}&greeks=true`,
+      { headers: { 'Authorization': `Bearer ${tradierKey}`, 'Accept': 'application/json' }, cache: 'no-store' }
+    )
+    if (!res.ok) return null
+    const data = await res.json()
+    const q = data?.quotes?.quote
+    if (!q) return null
+    const mid = (q.bid + q.ask) / 2
+    const daysToExpiry = Math.ceil((new Date(expiry).getTime() - Date.now()) / 86400000)
+    return {
+      price: mid > 0 ? mid : (q.last > 0 ? q.last : null),
+      delta: q.greeks?.delta ?? null,
+      theta: q.greeks?.theta ?? null,
+      iv: q.greeks?.mid_iv ? q.greeks.mid_iv * 100 : null,
+      daysToExpiry,
+    }
+  } catch { return null }
+}
+
+function detectOptionAlerts(
+  ticker: string,
+  underlying: string,
+  optionType: string,
+  strike: number,
+  contracts: number,
+  entryPremium: number | null,
+  optData: { price: number | null; delta: number | null; theta: number | null; iv: number | null; daysToExpiry: number },
+): Array<{ severity: string; alert_type: string; title: string; message: string; trigger_value: number }> {
+  const alerts = []
+  const { price, delta, theta, iv, daysToExpiry } = optData
+  const totalCost = entryPremium ? entryPremium * contracts * 100 : null
+  const currentValue = price ? price * contracts * 100 : null
+  const pnlPct = totalCost && currentValue ? ((currentValue - totalCost) / totalCost) * 100 : null
+  const displayName = `${underlying} $${strike} ${optionType.toUpperCase()}`
+
+  // DTE milestones
+  if (daysToExpiry <= 1) {
+    alerts.push({
+      severity: 'urgent', alert_type: 'expiry',
+      title: `${displayName} expires today`,
+      message: `This option expires today. Current value: ${price ? '$' + (price * 100).toFixed(0) + '/contract' : 'unknown'}. Decide now: close, roll, or let expire.`,
+      trigger_value: daysToExpiry,
+    })
+  } else if (daysToExpiry <= 7) {
+    alerts.push({
+      severity: 'alert', alert_type: 'expiry',
+      title: `${displayName} — ${daysToExpiry} days to expiry`,
+      message: `${daysToExpiry} days left. Theta decay is accelerating. ${theta ? `Losing ~$${Math.abs(theta * contracts * 100).toFixed(0)}/day.` : ''} Consider closing or rolling.`,
+      trigger_value: daysToExpiry,
+    })
+  } else if (daysToExpiry <= 21) {
+    alerts.push({
+      severity: 'watch', alert_type: 'expiry',
+      title: `${displayName} entering 21-DTE zone`,
+      message: `${daysToExpiry} days to expiry — theta decay accelerates from here. ${theta ? `Currently losing ~$${Math.abs(theta * contracts * 100).toFixed(0)}/day.` : ''}`,
+      trigger_value: daysToExpiry,
+    })
+  }
+
+  // P&L thresholds
+  if (pnlPct !== null) {
+    if (pnlPct <= -50) {
+      alerts.push({
+        severity: 'urgent', alert_type: 'pnl_threshold',
+        title: `${displayName} down ${Math.abs(pnlPct).toFixed(0)}%`,
+        message: `Option has lost ${Math.abs(pnlPct).toFixed(0)}% of its value. ${totalCost && currentValue ? `Paid $${totalCost.toFixed(0)}, now worth ~$${currentValue.toFixed(0)}.` : ''} Consider cutting the loss.`,
+        trigger_value: pnlPct,
+      })
+    } else if (pnlPct <= -30) {
+      alerts.push({
+        severity: 'alert', alert_type: 'pnl_threshold',
+        title: `${displayName} down ${Math.abs(pnlPct).toFixed(0)}%`,
+        message: `Option down ${Math.abs(pnlPct).toFixed(0)}% from entry. ${theta ? `Theta: -$${Math.abs(theta * contracts * 100).toFixed(0)}/day.` : ''}`,
+        trigger_value: pnlPct,
+      })
+    } else if (pnlPct >= 50) {
+      alerts.push({
+        severity: 'watch', alert_type: 'pnl_threshold',
+        title: `${displayName} up ${pnlPct.toFixed(0)}% — consider taking profits`,
+        message: `Option up ${pnlPct.toFixed(0)}%. ${totalCost && currentValue ? `Paid $${totalCost.toFixed(0)}, now worth ~$${currentValue.toFixed(0)}.` : ''} Consider closing half to lock in gains.`,
+        trigger_value: pnlPct,
+      })
+    }
+  }
+
+  // Theta burn rate
+  if (theta && price) {
+    const dailyBurnPct = Math.abs(theta) / price * 100
+    if (dailyBurnPct > 5) {
+      alerts.push({
+        severity: 'watch', alert_type: 'theta_burn',
+        title: `${displayName} burning ${dailyBurnPct.toFixed(1)}%/day`,
+        message: `Theta is consuming ${dailyBurnPct.toFixed(1)}% of the option's value per day (~$${Math.abs(theta * contracts * 100).toFixed(0)}/day). ${daysToExpiry} days left.`,
+        trigger_value: dailyBurnPct,
+      })
+    }
+  }
+
+  return alerts
+}
+
 
 function detectAlerts(
   ticker: string,
@@ -220,18 +336,84 @@ export async function POST() {
   const newStates: Record<string, PositionState> = {}
 
   // Process each position
-  await Promise.all(positions.map(async (pos) => {
+  await Promise.all(positions.map(async (pos: Record<string, unknown>) => {
+    const isOption = pos.position_type === 'option'
+    const ticker = String(pos.ticker)
+    const underlying = String(pos.underlying ?? pos.ticker)
+
+    if (isOption) {
+      // Options path
+      const optData = await fetchOptionPrice(
+        underlying,
+        String(pos.option_type ?? 'call'),
+        Number(pos.strike ?? 0),
+        String(pos.expiry ?? ''),
+      )
+      if (!optData) return
+
+      const stateKey = `${ticker}_opt`
+      newStates[stateKey] = {
+        price: optData.price ?? 0,
+        support: 0,
+        resistance: 0,
+        pnlPct: null,
+        lastAlertedSupport: null,
+        lastAlertedResistance: null,
+      }
+
+      const detected = detectOptionAlerts(
+        ticker, underlying,
+        String(pos.option_type ?? 'call'),
+        Number(pos.strike ?? 0),
+        Number(pos.contracts ?? 1),
+        pos.entry_premium ? Number(pos.entry_premium) : null,
+        optData,
+      )
+
+      // Dedup and push alerts for options
+      const { data: recentAlerts } = await admin()
+        .from('portfolio_alerts')
+        .select('alert_type, trigger_value')
+        .eq('user_id', user.id)
+        .eq('ticker', ticker)
+        .gt('created_at', new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString())
+
+      const recentSet = new Set((recentAlerts ?? []).map((a: Record<string, unknown>) => `${a.alert_type}:${a.trigger_value}`))
+      for (const alert of detected) {
+        const key = `${alert.alert_type}:${alert.trigger_value}`
+        if (!recentSet.has(key)) {
+          newAlerts.push({ ...alert, user_id: user.id, ticker, price: optData.price })
+        }
+      }
+
+      if (shouldScanNews) {
+        const news = await scanNewsForTicker(underlying)
+        if (news) {
+          newAlerts.push({
+            user_id: user.id, ticker,
+            severity: 'watch', alert_type: 'news',
+            title: `News: ${underlying}`,
+            message: news, price: optData.price, trigger_value: 0,
+          })
+        }
+      }
+      return
+    }
+
+    // Stock path (existing)
     const [price, sr] = await Promise.all([
-      fetchLivePrice(pos.ticker),
-      fetchSupportResistance(pos.ticker),
+      fetchLivePrice(ticker),
+      fetchSupportResistance(ticker),
     ])
 
     if (!price || !sr) return
 
-    const prevState = prevStates[pos.ticker] ?? null
-    const pnlPct = pos.avg_cost ? ((price - pos.avg_cost) / pos.avg_cost) * 100 : null
+    const prevState = prevStates[ticker] ?? null
+    const avgCost = pos.avg_cost ? Number(pos.avg_cost) : null
+    const shares = Number(pos.shares ?? 0)
+    const pnlPct = avgCost ? ((price - avgCost) / avgCost) * 100 : null
 
-    newStates[pos.ticker] = {
+    newStates[ticker] = {
       price,
       support: sr.support,
       resistance: sr.resistance,
@@ -240,38 +422,34 @@ export async function POST() {
       lastAlertedResistance: prevState?.lastAlertedResistance ?? null,
     }
 
-    const detected = detectAlerts(pos.ticker, price, pos.avg_cost, pos.shares, sr, prevState)
+    const detected = detectAlerts(ticker, price, avgCost, shares, sr, prevState)
 
     // Deduplicate — don't re-alert same type within 2 hours
     const { data: recentAlerts } = await admin()
       .from('portfolio_alerts')
       .select('alert_type, trigger_value')
       .eq('user_id', user.id)
-      .eq('ticker', pos.ticker)
+      .eq('ticker', ticker)
       .gt('created_at', new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString())
 
-    const recentSet = new Set((recentAlerts ?? []).map(a => `${a.alert_type}:${a.trigger_value}`))
+    const recentSet = new Set((recentAlerts ?? []).map((a: Record<string, unknown>) => `${a.alert_type}:${a.trigger_value}`))
 
     for (const alert of detected) {
       const key = `${alert.alert_type}:${alert.trigger_value}`
       if (!recentSet.has(key)) {
-        newAlerts.push({ ...alert, user_id: user.id, ticker: pos.ticker, price })
+        newAlerts.push({ ...alert, user_id: user.id, ticker, price })
       }
     }
 
     // Hourly news scan
     if (shouldScanNews) {
-      const news = await scanNewsForTicker(pos.ticker)
+      const news = await scanNewsForTicker(ticker)
       if (news) {
         newAlerts.push({
-          user_id: user.id,
-          ticker: pos.ticker,
-          severity: 'watch',
-          alert_type: 'news',
-          title: `News: ${pos.ticker}`,
-          message: news,
-          price,
-          trigger_value: 0,
+          user_id: user.id, ticker,
+          severity: 'watch', alert_type: 'news',
+          title: `News: ${ticker}`,
+          message: news, price, trigger_value: 0,
         })
       }
     }

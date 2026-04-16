@@ -12,6 +12,13 @@ interface Position {
   shares: number
   avg_cost: number | null
   notes: string | null
+  position_type: 'stock' | 'option'
+  option_type: 'call' | 'put' | null
+  strike: number | null
+  expiry: string | null
+  contracts: number | null
+  entry_premium: number | null
+  underlying: string | null
 }
 
 interface PositionData {
@@ -93,9 +100,16 @@ export default function PortfolioPage() {
 
   // Add position form
   const [showAdd, setShowAdd] = useState(false)
+  const [addType, setAddType] = useState<'stock' | 'option'>('stock')
   const [addTicker, setAddTicker] = useState('')
   const [addShares, setAddShares] = useState('')
   const [addCost, setAddCost] = useState('')
+  // Option-specific fields
+  const [addOptionType, setAddOptionType] = useState<'call' | 'put'>('call')
+  const [addStrike, setAddStrike] = useState('')
+  const [addExpiry, setAddExpiry] = useState('')
+  const [addContracts, setAddContracts] = useState('1')
+  const [addPremium, setAddPremium] = useState('')
   const [addLoading, setAddLoading] = useState(false)
 
   const loadPositions = useCallback(async () => {
@@ -245,33 +259,113 @@ export default function PortfolioPage() {
           {/* Add position form */}
           {showAdd && (
             <div className="rounded-2xl border p-5" style={{ background: '#111620', borderColor: 'rgba(167,139,250,0.25)' }}>
-              <h3 className="text-sm font-bold text-white mb-4">Add position</h3>
-              <div className="grid grid-cols-3 gap-3 mb-4">
-                <div>
-                  <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Ticker</label>
-                  <input value={addTicker} onChange={e => setAddTicker(e.target.value.toUpperCase())}
-                    placeholder="AAPL" maxLength={6}
-                    className="w-full rounded-xl px-3 py-2.5 text-sm font-mono font-bold tracking-widest outline-none border"
-                    style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }}
-                    onKeyDown={e => e.key === 'Enter' && addPosition()} />
-                </div>
-                <div>
-                  <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Shares</label>
-                  <input value={addShares} onChange={e => setAddShares(e.target.value)}
-                    placeholder="100" type="number" min="0"
-                    className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                    style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
-                </div>
-                <div>
-                  <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Avg cost (optional)</label>
-                  <input value={addCost} onChange={e => setAddCost(e.target.value)}
-                    placeholder="$0.00" type="number" min="0"
-                    className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                    style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-bold text-white">Add position</h3>
+                {/* Stock / Option toggle */}
+                <div className="flex rounded-lg overflow-hidden border" style={{ borderColor: 'rgba(255,255,255,0.1)' }}>
+                  {(['stock','option'] as const).map(t => (
+                    <button key={t} onClick={() => setAddType(t)}
+                      className="px-3 py-1.5 text-xs font-semibold capitalize transition-all"
+                      style={{
+                        background: addType === t ? 'rgba(167,139,250,0.2)' : 'transparent',
+                        color: addType === t ? '#a78bfa' : 'rgba(255,255,255,0.4)',
+                      }}>
+                      {t === 'option' ? '📊 Option' : '📈 Stock'}
+                    </button>
+                  ))}
                 </div>
               </div>
+
+              {addType === 'stock' ? (
+                <div className="grid grid-cols-3 gap-3 mb-4">
+                  <div>
+                    <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Ticker</label>
+                    <input value={addTicker} onChange={e => setAddTicker(e.target.value.toUpperCase())}
+                      placeholder="AAPL" maxLength={6}
+                      className="w-full rounded-xl px-3 py-2.5 text-sm font-mono font-bold tracking-widest outline-none border"
+                      style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }}
+                      onKeyDown={e => e.key === 'Enter' && addPosition()} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Shares</label>
+                    <input value={addShares} onChange={e => setAddShares(e.target.value)}
+                      placeholder="100" type="number" min="0"
+                      className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
+                      style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Avg cost (optional)</label>
+                    <input value={addCost} onChange={e => setAddCost(e.target.value)}
+                      placeholder="$0.00" type="number" min="0"
+                      className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
+                      style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                  </div>
+                </div>
+              ) : (
+                /* Options form */
+                <div className="space-y-3 mb-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Underlying ticker</label>
+                      <input value={addTicker} onChange={e => setAddTicker(e.target.value.toUpperCase())}
+                        placeholder="AAPL" maxLength={6}
+                        className="w-full rounded-xl px-3 py-2.5 text-sm font-mono font-bold tracking-widest outline-none border"
+                        style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Call or Put</label>
+                      <div className="flex rounded-xl overflow-hidden border" style={{ borderColor: 'rgba(255,255,255,0.1)' }}>
+                        {(['call','put'] as const).map(t => (
+                          <button key={t} onClick={() => setAddOptionType(t)}
+                            className="flex-1 py-2.5 text-sm font-semibold capitalize transition-all"
+                            style={{
+                              background: addOptionType === t ? (t === 'call' ? 'rgba(52,211,153,0.15)' : 'rgba(248,113,113,0.15)') : 'transparent',
+                              color: addOptionType === t ? (t === 'call' ? '#34d399' : '#f87171') : 'rgba(255,255,255,0.4)',
+                            }}>
+                            {t}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Strike price</label>
+                      <input value={addStrike} onChange={e => setAddStrike(e.target.value)}
+                        placeholder="150.00" type="number" min="0" step="0.5"
+                        className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
+                        style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Expiry date</label>
+                      <input value={addExpiry} onChange={e => setAddExpiry(e.target.value)}
+                        type="date"
+                        className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
+                        style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Contracts</label>
+                      <input value={addContracts} onChange={e => setAddContracts(e.target.value)}
+                        placeholder="1" type="number" min="1"
+                        className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
+                        style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Entry premium per share (optional)</label>
+                    <input value={addPremium} onChange={e => setAddPremium(e.target.value)}
+                      placeholder="e.g. 3.85 (multiply ×100 = cost per contract)" type="number" min="0" step="0.01"
+                      className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
+                      style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                    <p className="text-[10px] mt-1" style={{ color: 'rgba(255,255,255,0.3)' }}>
+                      1 contract = 100 shares. Cost = premium × 100 × contracts.
+                    </p>
+                  </div>
+                </div>
+              )}
               <div className="flex gap-2">
-                <button onClick={addPosition} disabled={addLoading || !addTicker || !addShares}
+                <button onClick={addPosition}
+                  disabled={addLoading || !addTicker || (addType === 'stock' ? !addShares : (!addStrike || !addExpiry))}
                   className="px-4 py-2 rounded-xl text-sm font-semibold text-white transition-all hover:opacity-90 disabled:opacity-40"
                   style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
                   {addLoading ? 'Adding...' : 'Add position'}
@@ -310,20 +404,56 @@ export default function PortfolioPage() {
                 {positions.map(pos => {
                   const data = positionData.find(p => p.ticker === pos.ticker)
                   const signalColor = data ? SIG_COLOR[data.signal] : 'rgba(255,255,255,0.3)'
+                  const isOption = pos.position_type === 'option'
+                  const daysToExpiry = pos.expiry ? Math.ceil((new Date(pos.expiry).getTime() - Date.now()) / 86400000) : null
+                  const optionPnlPct = pos.entry_premium && data ? ((data.currentPrice - pos.entry_premium) / pos.entry_premium) * 100 : null
+                  const dteBadgeColor = daysToExpiry != null ? (daysToExpiry <= 7 ? '#ef4444' : daysToExpiry <= 21 ? '#f97316' : '#fbbf24') : '#fbbf24'
+
                   return (
-                    <div key={pos.ticker} className="flex items-center gap-3 px-5 py-3.5">
+                    <div key={pos.id} className="flex items-center gap-3 px-5 py-3.5">
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2.5">
-                          <span className="font-mono font-bold text-sm text-white">{pos.ticker}</span>
-                          <span className="text-xs text-white/40">{pos.shares} shares</span>
-                          {pos.avg_cost && <span className="text-[10px] text-white/30">@ ${pos.avg_cost.toFixed(2)}</span>}
-                          {data && (
+                        <div className="flex items-center gap-2.5 flex-wrap">
+                          <span className="font-mono font-bold text-sm text-white">
+                            {isOption ? (pos.underlying ?? pos.ticker) : pos.ticker}
+                          </span>
+                          {isOption ? (
+                            <>
+                              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded font-semibold"
+                                style={{ background: pos.option_type === 'call' ? 'rgba(52,211,153,0.12)' : 'rgba(248,113,113,0.12)', color: pos.option_type === 'call' ? '#34d399' : '#f87171' }}>
+                                {pos.option_type?.toUpperCase()}
+                              </span>
+                              <span className="text-xs text-white/50 font-mono">${pos.strike} strike</span>
+                              <span className="text-xs text-white/40 font-mono">{pos.contracts ?? 1} contract{(pos.contracts ?? 1) > 1 ? 's' : ''}</span>
+                              {daysToExpiry !== null && (
+                                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded"
+                                  style={{ background: `${dteBadgeColor}15`, color: dteBadgeColor }}>
+                                  {daysToExpiry <= 0 ? 'EXPIRED' : `${daysToExpiry}d to expiry`}
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <span className="text-xs text-white/40">{pos.shares} shares</span>
+                              {pos.avg_cost && <span className="text-[10px] text-white/30">@ ${pos.avg_cost.toFixed(2)}</span>}
+                            </>
+                          )}
+                          {data && !isOption && (
                             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: `${signalColor}15`, color: signalColor }}>
                               {data.signal}
                             </span>
                           )}
                         </div>
-                        {data && (
+                        {isOption ? (
+                          <div className="flex items-center gap-3 mt-0.5 flex-wrap">
+                            {pos.entry_premium && <span className="text-xs text-white/40 font-mono">entry ${pos.entry_premium.toFixed(2)}/sh · cost ${(pos.entry_premium * (pos.contracts ?? 1) * 100).toFixed(0)}</span>}
+                            {optionPnlPct !== null && (
+                              <span className="text-[10px] font-mono" style={{ color: optionPnlPct >= 0 ? '#34d399' : '#f87171' }}>
+                                {optionPnlPct >= 0 ? '+' : ''}{optionPnlPct.toFixed(1)}% P&L
+                              </span>
+                            )}
+                            {pos.expiry && <span className="text-[10px] text-white/30">exp {pos.expiry}</span>}
+                          </div>
+                        ) : data && (
                           <div className="flex items-center gap-3 mt-0.5">
                             <span className="text-xs font-mono text-white/60">${fmt(data.currentPrice)}</span>
                             <span className="text-[10px] font-mono" style={{ color: data.priceChange1D >= 0 ? '#34d399' : '#f87171' }}>
