@@ -95,6 +95,7 @@ export default function PortfolioPage() {
   const [analysis, setAnalysis] = useState<PortfolioAnalysis | null>(null)
   const [loading, setLoading] = useState(true)
   const [analyzing, setAnalyzing] = useState(false)
+  const [cachedAge, setCachedAge] = useState<number | null>(null)  // minutes since last analysis
   const [statusMsg, setStatusMsg] = useState('')
   const [showTutorial, setShowTutorial] = useState(false)
 
@@ -112,13 +113,49 @@ export default function PortfolioPage() {
   const [addPremium, setAddPremium] = useState('')
   const [addLoading, setAddLoading] = useState(false)
 
+  const loadCachedAnalysis = useCallback(async (pos: typeof positions) => {
+    if (!pos.length) return
+    const res = await fetch('/api/portfolio', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ positions: pos.map(p => ({
+        ticker: p.ticker, shares: p.shares, avg_cost: p.avg_cost,
+        position_type: p.position_type, option_type: p.option_type,
+        strike: p.strike, expiry: p.expiry, contracts: p.contracts,
+        entry_premium: p.entry_premium, underlying: p.underlying,
+      })), forceRefresh: false })
+    })
+    const reader = res.body!.getReader()
+    const dec = new TextDecoder()
+    let buf = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += dec.decode(value, { stream: true })
+      const parts = buf.split('\n\n'); buf = parts.pop() || ''
+      for (const part of parts) {
+        const ev = part.split('\n').find(l => l.startsWith('event:'))?.replace('event:', '').trim()
+        const d = (() => { try { return JSON.parse(part.split('\n').find(l => l.startsWith('data:'))?.replace('data:', '').trim() || '{}') } catch { return {} } })()
+        if (ev === 'position_data' && d.length) setPositionData(d)
+        if (ev === 'complete' && d.cached) {
+          setPositionData(d.positionData ?? [])
+          setMetrics(d.metrics)
+          setAnalysis(d.analysis)
+          setCachedAge(d.ageMinutes ?? null)
+        }
+      }
+    }
+  }, [])
+
   const loadPositions = useCallback(async () => {
     setLoading(true)
     const res = await fetch('/api/portfolio/positions')
     const data = await res.json()
-    setPositions(data.positions ?? [])
+    const loaded = data.positions ?? []
+    setPositions(loaded)
     setLoading(false)
-  }, [])
+    if (loaded.length > 0) loadCachedAnalysis(loaded)
+  }, [loadCachedAnalysis])
 
   useEffect(() => { loadPositions() }, [loadPositions])
 
@@ -171,12 +208,14 @@ export default function PortfolioPage() {
     setPositionData(prev => prev.filter(p => p.ticker !== ticker))
   }
 
-  const runAnalysis = useCallback(async () => {
+  // Auto-load cached analysis when positions are available
+  const runAnalysis = useCallback(async (forceRefresh = false) => {
     if (!positions.length) return
     setAnalyzing(true)
     setAnalysis(null)
     setPositionData([])
     setMetrics(null)
+    setCachedAge(null)
     setStatusMsg('Starting analysis...')
 
     const res = await fetch('/api/portfolio', {
@@ -193,7 +232,7 @@ export default function PortfolioPage() {
         contracts: p.contracts,
         entry_premium: p.entry_premium,
         underlying: p.underlying,
-      })) })
+      })), forceRefresh })
     })
 
     const reader = res.body!.getReader()
@@ -214,6 +253,7 @@ export default function PortfolioPage() {
           setPositionData(d.positionData)
           setMetrics(d.metrics)
           setAnalysis(d.analysis)
+          setCachedAge(d.cached ? (d.ageMinutes ?? 0) : 0) // 0 = just analyzed
           setAnalyzing(false)
         }
         if (ev === 'error') { setStatusMsg(d.message); setAnalyzing(false) }
@@ -254,12 +294,19 @@ export default function PortfolioPage() {
             <Plus size={12} /> Add position
           </button>
           {positions.length > 0 && (
-            <button onClick={runAnalysis} disabled={analyzing}
-              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40"
-              style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', color: 'white' }}>
-              <RefreshCw size={12} className={analyzing ? 'animate-spin' : ''} />
-              {analyzing ? 'Analyzing...' : 'Analyze portfolio'}
-            </button>
+            <div className="flex items-center gap-2">
+              {cachedAge !== null && !analyzing && (
+                <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.3)' }}>
+                  {cachedAge === 0 ? 'just analyzed' : `analysis ${cachedAge < 60 ? `${cachedAge}m` : `${Math.round(cachedAge/60)}h`} old`}
+                </span>
+              )}
+              <button onClick={() => runAnalysis(true)} disabled={analyzing}
+                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40"
+                style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', color: 'white' }}>
+                <RefreshCw size={12} className={analyzing ? 'animate-spin' : ''} />
+                {analyzing ? 'Analyzing...' : cachedAge !== null ? '↻ Re-analyze' : 'Analyze portfolio'}
+              </button>
+            </div>
           )}
         </div>
       </header>

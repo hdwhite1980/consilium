@@ -169,8 +169,36 @@ export async function POST(req: NextRequest) {
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) { send('error', { message: 'Not authenticated' }); return }
 
-        const { positions }: { positions: Position[] } = await req.json()
+        const body = await req.json()
+        const { positions, forceRefresh }: { positions: Position[]; forceRefresh?: boolean } = body
         if (!positions?.length) { send('error', { message: 'No positions provided' }); return }
+
+        // Admin client for DB access
+        const admin = createAdmin(
+          process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          process.env.SUPABASE_SERVICE_ROLE_KEY!
+        )
+
+        // ── Cache check — serve saved analysis if < 24 hours old ─
+        if (!forceRefresh) {
+          const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+          const { data: cached } = await admin
+            .from('portfolio_analyses')
+            .select('analysis, created_at')
+            .eq('user_id', user.id)
+            .gte('created_at', cutoff)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+
+          if (cached?.analysis) {
+            const ageMinutes = Math.round((Date.now() - new Date(cached.created_at).getTime()) / 60000)
+            send('status', { message: `Loaded cached analysis from ${ageMinutes} minute${ageMinutes === 1 ? '' : 's'} ago` })
+            send('position_data', cached.analysis.positionData ?? [])
+            send('complete', { ...cached.analysis, cached: true, ageMinutes })
+            return
+          }
+        }
 
         send('status', { message: `Analyzing ${positions.length} positions...` })
 
@@ -316,10 +344,6 @@ Provide a holistic portfolio analysis in JSON only (no markdown):
         }
 
         // Cache the analysis
-        const admin = createAdmin(
-          process.env.NEXT_PUBLIC_SUPABASE_URL!,
-          process.env.SUPABASE_SERVICE_ROLE_KEY!
-        )
         const { data: portfolio } = await admin
           .from('portfolios')
           .select('id')
@@ -327,11 +351,13 @@ Provide a holistic portfolio analysis in JSON only (no markdown):
           .maybeSingle()
 
         if (portfolio) {
-          await admin.from('portfolio_analyses').insert({
+          // Upsert — replace previous analysis so only latest is stored
+          await admin.from('portfolio_analyses').upsert({
             portfolio_id: portfolio.id,
             user_id: user.id,
-            analysis: result,
-          })
+            analysis: { ...result, positionData },
+            created_at: new Date().toISOString(),
+          }, { onConflict: 'portfolio_id' })
         }
 
         send('complete', result)
