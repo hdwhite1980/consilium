@@ -447,34 +447,23 @@ export async function POST(req: NextRequest) {
     let expiriesUsed: string[] = []
     let dataSource = 'none'
 
-    // Primary: Yahoo Finance direct fetch (no key required)
-    contracts = await fetchYahooOptions(ticker, currentPrice)
-    if (contracts.length > 0) {
-      dataSource = 'Yahoo'
-      console.log(`Yahoo options: ${contracts.length} contracts for ${ticker}`)
-    }
-
-    // Fallback 1: Tradier production API
-    if (contracts.length === 0 && TRADIER_KEY()) {
+    // Primary: Tradier — confirmed working in production
+    if (TRADIER_KEY()) {
       const expiries = await fetchExpirations(ticker)
+      console.log(`Tradier expiries for ${ticker}:`, expiries.slice(0, 4))
       const targetExpiries = expiries.slice(0, 4)
       expiriesUsed = targetExpiries
       const chains = await Promise.all(targetExpiries.map(exp => fetchChain(ticker, exp)))
       const allContracts = chains.flat()
+      console.log(`Tradier raw contracts for ${ticker}:`, allContracts.length)
       contracts = labelMoneyness(allContracts, currentPrice)
       if (contracts.length > 0) dataSource = 'Tradier'
     }
 
-    // Fallback 2: Alpaca options
+    // Fallback: Alpaca options
     if (contracts.length === 0) {
       contracts = await fetchAlpacaOptions(ticker, currentPrice)
       if (contracts.length > 0) dataSource = 'Alpaca'
-    }
-
-    // Fallback 3: Yahoo Finance direct
-    if (contracts.length === 0) {
-      contracts = await fetchYahooOptions(ticker, currentPrice)
-      if (contracts.length > 0) dataSource = 'Yahoo'
     }
 
     const bestContracts = selectBestContracts(contracts, signal, currentPrice, timeHorizon || '30 days')

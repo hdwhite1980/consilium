@@ -2,51 +2,46 @@ import { NextResponse } from 'next/server'
 
 export async function GET() {
   const results: Record<string, unknown> = {}
-
-  // Test Yahoo Finance direct fetch
-  const yahooHeaders = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Accept': 'application/json, text/plain, */*',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Referer': 'https://finance.yahoo.com/',
-    'Origin': 'https://finance.yahoo.com',
-  }
-
-  for (const [label, url] of [
-    ['yahoo_q1', 'https://query1.finance.yahoo.com/v7/finance/options/PEP'],
-    ['yahoo_q2', 'https://query2.finance.yahoo.com/v7/finance/options/PEP'],
-  ]) {
-    try {
-      const res = await fetch(url, { headers: yahooHeaders, cache: 'no-store' })
-      results[label + '_status'] = res.status
-      if (res.ok) {
-        const data = await res.json()
-        const opts = data?.optionChain?.result?.[0]?.options?.[0]
-        results[label + '_puts_count'] = opts?.puts?.length ?? 0
-        results[label + '_calls_count'] = opts?.calls?.length ?? 0
-        results[label + '_sample_put'] = opts?.puts?.[0] ?? null
-        results[label + '_expiries'] = data?.optionChain?.result?.[0]?.expirationDates?.slice(0,3) ?? []
-      } else {
-        results[label + '_body'] = await res.text()
-      }
-    } catch(e) {
-      results[label + '_error'] = e instanceof Error ? e.message : String(e)
-    }
-  }
-
-  // Test Tradier
   const tradierKey = process.env.TRADIER_API_KEY
+  const base = 'https://api.tradier.com/v1'
+  const headers = { 'Authorization': `Bearer ${tradierKey}`, 'Accept': 'application/json' }
+
   results['tradier_key_present'] = !!tradierKey
-  if (tradierKey) {
+
+  // Step 1: expirations
+  try {
+    const r = await fetch(`${base}/markets/options/expirations?symbol=PEP&includeAllRoots=true`, { headers })
+    results['expirations_status'] = r.status
+    const d = await r.json()
+    const dates = d?.expirations?.date ?? []
+    results['expiration_dates'] = Array.isArray(dates) ? dates.slice(0, 6) : [dates].slice(0, 6)
+  } catch(e) { results['expirations_error'] = String(e) }
+
+  // Step 2: chain for nearest expiry
+  const expiries = results['expiration_dates'] as string[] | undefined
+  const firstExpiry = expiries?.[1] // skip today's, use next week
+  if (firstExpiry) {
     try {
-      const res = await fetch('https://api.tradier.com/v1/markets/options/expirations?symbol=PEP', {
-        headers: { 'Authorization': `Bearer ${tradierKey}`, 'Accept': 'application/json' }
-      })
-      results['tradier_status'] = res.status
-      results['tradier_body'] = (await res.text()).slice(0, 200)
-    } catch(e) {
-      results['tradier_error'] = e instanceof Error ? e.message : String(e)
-    }
+      const r = await fetch(`${base}/markets/options/chains?symbol=PEP&expiration=${firstExpiry}&greeks=true`, { headers })
+      results['chain_status'] = r.status
+      const d = await r.json()
+      const opts = d?.options?.option ?? []
+      const arr = Array.isArray(opts) ? opts : [opts]
+      results['chain_total_contracts'] = arr.length
+      // Find a near-the-money put
+      const puts = arr.filter((o: Record<string, unknown>) => o.option_type === 'put')
+        .sort((a: Record<string, unknown>, b: Record<string, unknown>) => 
+          Math.abs(Number(a.strike) - 155) - Math.abs(Number(b.strike) - 155)
+        ).slice(0, 2)
+      results['sample_puts'] = puts.map((o: Record<string, unknown>) => ({
+        symbol: o.symbol,
+        strike: o.strike,
+        bid: o.bid,
+        ask: o.ask,
+        volume: o.volume,
+        greeks: o.greeks,
+      }))
+    } catch(e) { results['chain_error'] = String(e) }
   }
 
   return NextResponse.json(results)
