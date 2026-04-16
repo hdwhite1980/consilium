@@ -102,7 +102,15 @@ export async function buildSignalBundle(
     }
 
     onProgress?.('Computing technical indicators...')
-    const technicals = calculateTechnicals(validatedBars)
+    // For intraday crypto timeframes, fetch daily bars for accurate RSI/MACD/SMA
+    let cryptoIndicatorBars = validatedBars
+    if (timeframe === '1D' || timeframe === '1W') {
+      try {
+        const daily = await fetchCryptoBars(sym, '1M')
+        if (daily.length >= 50) cryptoIndicatorBars = daily
+      } catch { /* use original */ }
+    }
+    const technicals = calculateTechnicals(cryptoIndicatorBars)
 
     onProgress?.('Fetching market context...')
     const [marketContext, optionsFlow] = await Promise.all([
@@ -219,7 +227,15 @@ Focus on technical signals, volume trends, and market structure for directional 
     }
 
     onProgress?.('Computing technical indicators...')
-    const technicals = calculateTechnicals(bars)
+    // For intraday forex timeframes, use daily bars for accurate indicators
+    let forexIndicatorBars = bars
+    if ((timeframe === '1D' || timeframe === '1W') && bars.length > 0) {
+      try {
+        const dailyForex = await fetchForexBars(sym, '1M')
+        if (dailyForex.length >= 50) forexIndicatorBars = dailyForex
+      } catch { /* use original bars */ }
+    }
+    const technicals = calculateTechnicals(forexIndicatorBars)
 
     onProgress?.('Fetching market context...')
     const [marketContext, optionsFlow] = await Promise.all([
@@ -295,8 +311,11 @@ Focus on central bank policy signals, economic data releases, and technical stru
   }
 
   // ── Equity path ─────────────────────────────────────────────
-  const [bars, news] = await Promise.all([
+  // Fetch timeframe bars (for price action context) AND daily bars (for indicators)
+  // in parallel. RSI/MACD/SMA/Bollinger must use daily bars — 15min RSI ≠ daily RSI.
+  const [bars, dailyBars, news] = await Promise.all([
     fetchBars(sym, timeframe),
+    timeframe === '1D' || timeframe === '1W' ? fetchBars(sym, '1M') : Promise.resolve([] as Awaited<ReturnType<typeof fetchBars>>),
     fetchNews(sym, 15),
   ])
 
@@ -315,8 +334,14 @@ Focus on central bank policy signals, economic data releases, and technical stru
     }
   } catch { /* fall back to bar close */ }
 
+  // Use daily bars for indicators when available — prevents intraday RSI/MACD confusion
+  // For 1M/3M timeframes, the bars are already daily so no separate fetch needed
+  const indicatorBars = (timeframe === '1D' || timeframe === '1W') && dailyBars.length >= 50
+    ? dailyBars
+    : bars
+
   onProgress?.('Computing technical indicators...')
-  const technicals = calculateTechnicals(bars)
+  const technicals = calculateTechnicals(indicatorBars)
 
   // Phases 1-4 in parallel
   onProgress?.('Fetching market context, fundamentals, smart money, options...')

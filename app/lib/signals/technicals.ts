@@ -1010,6 +1010,7 @@ export function technicalsToPayload(t: TechnicalSignals, currentPrice: number): 
     resistance: t.resistance,
     resistance2: t.resistance2,
     goldenCross: t.goldenCross,
+    deathCross: t.deathCross,
     ema9CrossEma20: t.ema9CrossEma20,
     macdLine: t.macdLine,
     macdSignal: t.macdSignal,

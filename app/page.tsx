@@ -36,7 +36,7 @@ interface MarketData {
     rsi: number; technicalBias: string; technicalScore: number
     sma50: number; sma200: number; ema9: number; ema20: number
     support: number; support2: number; resistance: number; resistance2: number
-    goldenCross: boolean; ema9CrossEma20: string
+    goldenCross: boolean; deathCross: boolean; ema9CrossEma20: string
     macdLine: number; macdSignal: number; macdHistogram: number; macdCrossover: string
     bbSignal: string; bbPosition: number; bbUpper: number; bbMiddle: number; bbLower: number
     stochK: number; stochD: number; stochSignal: string; stochCrossover: string
@@ -750,14 +750,21 @@ function HomeInner() {
                 ['MACD', <span style={{ color: md!.technicals?.macdHistogram >= 0 ? '#34d399' : '#f87171' }}>{md!.technicals?.macdHistogram >= 0 ? '▲ pos' : '▼ neg'}</span>],
                 ['MA cross', (() => {
                     const t = md!.technicals
-                    if (!t?.sma200 || !t?.sma50 || Math.abs(t.sma200 - t.sma50) / t.sma50 < 0.0001) {
+                    // Only show cross if we have real SMA200 data (not fallback)
+                    if (!t?.sma200 || !t?.sma50 || t.sma200 <= 0) {
+                      return <span style={{ color: 'rgba(255,255,255,0.3)' }}>N/A</span>
+                    }
+                    if (!t.goldenCross && !t.deathCross) {
+                      // Not enough bars for a valid cross signal
                       return <span style={{ color: 'rgba(255,255,255,0.3)' }}>N/A</span>
                     }
                     return <span style={{ color: t.goldenCross ? '#34d399' : '#f87171' }}>{t.goldenCross ? 'Golden ✓' : 'Death ✗'}</span>
                   })()],
                 ['vs SMA200', (() => {
-                    const sma200 = md!.technicals?.sma200
-                    if (!sma200 || sma200 <= 0) return <span style={{ color: 'rgba(255,255,255,0.3)' }}>N/A</span>
+                    const t = md!.technicals
+                    const sma200 = t?.sma200
+                    // Only show if we have a real SMA200 (goldenCross or deathCross means we have 200 bars)
+                    if (!sma200 || sma200 <= 0 || (!t?.goldenCross && !t?.deathCross)) return <span style={{ color: 'rgba(255,255,255,0.3)' }}>N/A</span>
                     const pct = (md!.currentPrice / sma200 - 1) * 100
                     return <span style={{ color: pct >= 0 ? '#34d399' : '#f87171' }}>{(pct >= 0 ? '+' : '') + pct.toFixed(1) + '%'}</span>
                   })()],
