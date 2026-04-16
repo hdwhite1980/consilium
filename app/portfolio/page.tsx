@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Tutorial, TutorialLauncher, PORTFOLIO_TUTORIAL } from '@/app/components/Tutorial'
-import PortfolioAlerts from '@/app/components/PortfolioAlerts'
 import { ArrowLeft, Plus, Trash2, RefreshCw, TrendingUp, TrendingDown, Minus, AlertTriangle, BarChart2, DollarSign, Calendar, ChevronDown, ChevronUp } from 'lucide-react'
 
 interface Position {
@@ -286,7 +285,6 @@ export default function PortfolioPage() {
           )}
         </div>
         <div className="ml-auto flex items-center gap-2">
-          <PortfolioAlerts isDark={true} />
           <TutorialLauncher tutorialId="portfolio" label="How it works" />
           <button onClick={() => setShowAdd(!showAdd)} data-tutorial="add-position-btn" 
             className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"

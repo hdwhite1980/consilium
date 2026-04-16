@@ -14,7 +14,11 @@ function LoginPageInner() {
   const [loading, setLoading]   = useState(false)
   const [error, setError]       = useState<string | null>(null)
   const [mode, setMode]         = useState<'login' | 'signup' | 'reset'>('login')
-  const [resetSent, setResetSent] = useState(false)
+  const [resetSent, setResetSent]   = useState(false)
+  const [mfaRequired, setMfaRequired] = useState(false)
+  const [mfaCode, setMfaCode]         = useState('')
+  const [mfaFactorId, setMfaFactorId] = useState<string | null>(null)
+  const [mfaError, setMfaError]       = useState<string | null>(null)
 
   const redirect = searchParams.get('redirect') || '/'
 
@@ -58,8 +62,20 @@ function LoginPageInner() {
       const { data, error } = await supabase.auth.signInWithPassword({ email, password })
       if (error) throw error
 
+      // Check if MFA is required
+      if (data.session === null) {
+        // No session yet — MFA required
+        const { data: factors } = await supabase.auth.mfa.listFactors()
+        const totp = factors?.totp?.find(f => f.status === 'verified')
+        if (totp) {
+          setMfaFactorId(totp.id)
+          setMfaRequired(true)
+          setLoading(false)
+          return
+        }
+      }
+
       // Register this device as the only active session
-      // This kicks out any other device currently using this account
       if (data.session?.access_token) {
         const sessionToken = data.session.access_token.slice(-32)
         await fetch('/api/auth/session', {
@@ -85,6 +101,36 @@ function LoginPageInner() {
     }
   }
 
+  const handleMFA = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!mfaFactorId || mfaCode.length !== 6) return
+    setLoading(true)
+    setMfaError(null)
+    const supabase = createClient()
+    const { data: challenge } = await supabase.auth.mfa.challenge({ factorId: mfaFactorId })
+    if (!challenge) { setMfaError('Challenge failed. Try again.'); setLoading(false); return }
+    const { error: verifyError } = await supabase.auth.mfa.verify({
+      factorId: mfaFactorId, challengeId: challenge.id, code: mfaCode,
+    })
+    if (verifyError) {
+      setMfaError('Incorrect code. Try again.')
+      setLoading(false)
+      return
+    }
+    // Get session after MFA verification
+    const { data: sessionData } = await supabase.auth.getSession()
+    if (sessionData.session?.access_token) {
+      const sessionToken = sessionData.session.access_token.slice(-32)
+      await fetch('/api/auth/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionToken }),
+      })
+    }
+    router.push(redirect)
+    router.refresh()
+  }
+
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-4"
       style={{ background: '#0a0d12' }}>
@@ -96,7 +142,7 @@ function LoginPageInner() {
           Σ
         </div>
         <div>
-          <div className="text-lg font-bold tracking-tight text-white">CONSILIUM</div>
+          <div className="text-lg font-bold tracking-tight text-white">WALI-OS</div>
           <div className="text-[10px] font-mono text-white/25">Signal Convergence Engine</div>
         </div>
       </div>

@@ -7,6 +7,7 @@ import TechnicalCharts from '@/app/components/TechnicalCharts'
 import OptionsRecommendations from '@/app/components/OptionsRecommendations'
 import { useTheme } from '@/app/lib/theme'
 import { Tutorial, TutorialLauncher, MAIN_TUTORIAL } from '@/app/components/Tutorial'
+import PortfolioAlerts from '@/app/components/PortfolioAlerts'
 import {
   TrendingUp, TrendingDown, Minus, Clock, AlertTriangle,
   BarChart2, Globe, DollarSign, Activity, Shield, Zap, LogOut, BookOpen,
@@ -304,9 +305,14 @@ function HomeInner() {
     const handler = (e: Event) => {
       const { tutorialId } = (e as CustomEvent).detail
       if (tutorialId === 'main') {
-        // Force remount by toggling off then on
+        // Reset progress so tutorial can replay, then remount
+        fetch('/api/tutorial', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tutorialId: 'main', step: 0, completed: false, skipped: false }),
+        }).catch(() => null)
         setShowTutorial(false)
-        setTimeout(() => setShowTutorial(true), 0)
+        setTimeout(() => setShowTutorial(true), 50)
       }
     }
     window.addEventListener('wali_os:launch_tutorial', handler)
@@ -515,7 +521,7 @@ function HomeInner() {
         <div className="flex items-center gap-2 shrink-0 mr-1">
           <div className="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold text-white shrink-0"
             style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>Σ</div>
-          <span className="text-sm font-bold tracking-tight hidden sm:block" style={{ color: txt }}>CONSILIUM</span>
+          <span className="text-sm font-bold tracking-tight hidden sm:block" style={{ color: txt }}>WALI-OS</span>
         </div>
 
         {/* ── Analysis controls ── */}
@@ -581,6 +587,9 @@ function HomeInner() {
             ))}
             <TutorialLauncher tutorialId="main" />
           </div>
+
+          {/* Portfolio Alerts — mounted globally so polling runs everywhere */}
+          <PortfolioAlerts isDark={isDark} />
 
           {/* Theme toggle */}
           <button onClick={toggleTheme}

@@ -66,7 +66,7 @@ function SignupInner() {
             <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold text-white"
               style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>Σ</div>
             <div className="text-left">
-              <div className="text-lg font-bold tracking-tight text-white">CONSILIUM</div>
+              <div className="text-lg font-bold tracking-tight text-white">WALI-OS</div>
               <div className="text-[10px] font-mono text-white/25">Signal Convergence Engine</div>
             </div>
           </div>
@@ -110,7 +110,7 @@ function SignupInner() {
             <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-xl font-bold text-white"
               style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>Σ</div>
             <div>
-              <div className="text-xl font-bold tracking-tight text-white">CONSILIUM</div>
+              <div className="text-xl font-bold tracking-tight text-white">WALI-OS</div>
               <div className="text-[10px] font-mono text-white/25">Signal Convergence Engine</div>
             </div>
           </div>
@@ -157,7 +157,7 @@ function SignupInner() {
           <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold text-white"
             style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>Σ</div>
           <div>
-            <div className="text-lg font-bold tracking-tight text-white">CONSILIUM</div>
+            <div className="text-lg font-bold tracking-tight text-white">WALI-OS</div>
             <div className="text-[10px] font-mono text-white/25">Signal Convergence Engine</div>
           </div>
         </div>
