@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "NODE_OPTIONS=\"--max-old-space-size=2048\" next build",
-    "start": "next start",
+    "start": "next start -p $PORT",
     "lint": "next lint",
     "prebuild": "rm -rf .next/static .next/server .next/BUILD_ID tsconfig.tsbuildinfo *.tsbuildinfo 2>/dev/null || true"
   },
