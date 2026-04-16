@@ -55,26 +55,27 @@ export interface CongressionalTrade {
   date: string
 }
 
-// ── Quiver Quantitative (free congressional data) ─────────────
+// ── Congressional trades via Finnhub ──────────────────────────
 async function fetchCongressionalTrades(ticker: string): Promise<CongressionalTrade[]> {
+  const key = process.env.FINNHUB_API_KEY
+  if (!key) return []
   try {
+    const from = new Date(Date.now() - 365 * 86400000).toISOString().split('T')[0]
+    const to   = new Date().toISOString().split('T')[0]
     const res = await fetch(
-      `https://www.quiverquant.com/quiverapi/v1/historical/congresstrading/${ticker}`,
+      `https://finnhub.io/api/v1/stock/congressional-trading?symbol=${ticker}&from=${from}&to=${to}&token=${key}`,
       { next: { revalidate: 86400 } }
     )
     if (!res.ok) return []
     const data = await res.json()
-    const cutoff = new Date(Date.now() - 180 * 86400000).toISOString().split('T')[0]
-    return (data || [])
-      .filter((t: Record<string, string>) => t.TransactionDate >= cutoff)
-      .slice(0, 10)
-      .map((t: Record<string, string>) => ({
-        member: t.Representative || t.Senator || 'Unknown',
-        chamber: t.Senator ? 'senate' : 'house',
-        type: t.Transaction?.toLowerCase().includes('purchase') ? 'purchase' : 'sale',
-        amount: t.Amount || 'undisclosed',
-        date: t.TransactionDate,
-      }))
+    const trades: Array<Record<string, unknown>> = data?.data ?? []
+    return trades.slice(0, 10).map(t => ({
+      member:   String(t.name ?? 'Unknown'),
+      chamber:  String(t.chamber ?? '').toLowerCase().includes('senate') ? 'senate' as const : 'house' as const,
+      type:     String(t.transactionType ?? '').toLowerCase().includes('purchase') ? 'purchase' as const : 'sale' as const,
+      amount:   String(t.amount ?? t.transactionAmount ?? 'undisclosed'),
+      date:     String(t.transactionDate ?? t.reportDate ?? ''),
+    }))
   } catch {
     return []
   }
@@ -158,14 +159,20 @@ const NOTABLE_FUNDS: Record<string, string[]> = {
 }
 
 export async function fetchSmartMoney(ticker: string): Promise<SmartMoneySignals> {
-  const [insiderTxns, congressTrades] = await Promise.all([
+  const [insiderTxns, congressTrades, institutionalOwnership] = await Promise.all([
     fetchInsiderTransactions(ticker),
     fetchCongressionalTrades(ticker),
+    fetchInstitutionalHoldings(ticker),
   ])
 
-  const institutionalOwnership: InstitutionalHolder[] = []
-  const totalInstitutionalPct = 0 // requires paid data for accurate figure
-  const notableHolders = NOTABLE_FUNDS[ticker.toUpperCase()] ?? []
+  const totalInstitutionalPct = 0
+  // Build notable holders from Finnhub data — top 3 largest by shares held
+  const notableHolders = institutionalOwnership
+    .slice(0, 3)
+    .map(h => {
+      const changeLabel = h.changeInShares > 0 ? '▲' : h.changeInShares < 0 ? '▼' : '='
+      return `${h.name} ${changeLabel}`
+    })
 
   // ── Insider signal ─────────────────────────────────────────
   const insiderNetValue = insiderTxns.reduce((sum, t) =>
@@ -211,12 +218,17 @@ export async function fetchSmartMoney(ticker: string): Promise<SmartMoneySignals
     insiderHighlight ? `  Notable: ${insiderHighlight}` : '',
     ``,
     `Institutional ownership:`,
-    notableHolders.length > 0
-      ? `  Known major holders: ${notableHolders.join(', ')}`
-      : `  No notable institutional holder data available`,
-    totalInstitutionalPct > 0
-      ? `  Institutional ownership: ${totalInstitutionalPct.toFixed(1)}% of float`
-      : `  Exact institutional % requires premium data feed`,
+    institutionalOwnership.length > 0
+      ? [
+          `  Top holders (13F data):`,
+          ...institutionalOwnership.slice(0, 3).map(h => {
+            const dir = h.changeInShares > 0 ? `added ${h.changeInShares.toLocaleString()} shares` :
+                        h.changeInShares < 0 ? `reduced by ${Math.abs(h.changeInShares).toLocaleString()} shares` :
+                        'unchanged'
+            return `  • ${h.name}: ${h.sharesHeld.toLocaleString()} shares held, ${dir}`
+          })
+        ].join('\n')
+      : `  No institutional 13F holder data available`,
     ``,
     `Congressional trading (180d):`,
     congressTrades.length > 0

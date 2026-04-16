@@ -150,7 +150,7 @@ export async function fetchForexBars(ticker: string, timeframe: string): Promise
       h: parseFloat(high.toFixed(6)),
       l: parseFloat(low.toFixed(6)),
       c: parseFloat(close.toFixed(6)),
-      v: 1000000, // placeholder — ECB doesn't provide volume
+      v: 0, // ECB doesn't provide volume — zero so technicals can detect and suppress volume signals
     }
   })
 }

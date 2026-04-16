@@ -475,8 +475,11 @@ export function calculateTechnicals(bars: Bar[]): TechnicalSignals {
   // ── Volume ────────────────────────────────────────────────
   const avgVol = volumes.slice(-20).reduce((a, b) => a + b, 0) / Math.min(20, volumes.length)
   const lastVol = volumes[volumes.length - 1]
-  const volRatio = lastVol / avgVol
+  // If all volume is zero (e.g. forex/ECB data), volume signals are meaningless
+  const hasRealVolume = avgVol > 0
+  const volRatio = hasRealVolume ? lastVol / avgVol : 1
   const volumeSignal: TechnicalSignals['volumeSignal'] =
+    !hasRealVolume ? 'normal' :
     volRatio > 1.5 ? 'high' : volRatio < 0.5 ? 'low' : 'normal'
 
   // ── Fibonacci ─────────────────────────────────────────────
@@ -609,7 +612,7 @@ export function calculateTechnicals(bars: Bar[]): TechnicalSignals {
     `VWAP: $${vwap.toFixed(2)} — price is ${p(priceVsVwap)} ${vwapSignal} VWAP`,
     `OBV trend: ${obvTrend}${obvDivergence !== 'none' ? ' — ' + obvDivergence + ' divergence detected!' : ''}`,
     `Bollinger: ${bbSignal} band, price at ${(bbPosition * 100).toFixed(0)}% of band`,
-    `Volume: ${volRatio.toFixed(1)}x average — ${volumeSignal}`,
+    hasRealVolume ? `Volume: ${volRatio.toFixed(1)}x average — ${volumeSignal}` : `Volume: N/A (no volume data for this asset type)`,
     `Fibonacci: nearest level is ${nearestFibLevel?.label ?? 'N/A'} at $${nearestFibLevel?.price.toFixed(2) ?? 'N/A'} (${nearestFibLevel?.type ?? ''})`,
     `Key levels: Support $${s1.toFixed(2)} / $${s2.toFixed(2)}, Resistance $${r1.toFixed(2)} / $${r2.toFixed(2)}`,
     `Technical score: ${score}/100 → ${technicalBias}`,
@@ -657,22 +660,29 @@ function emptyTechnicals(): TechnicalSignals {
     priceVsSma20: z, priceVsSma50: z, priceVsSma200: z,
     goldenCross: false, deathCross: false, ema9CrossEma20: 'none',
     macdLine: z, macdSignal: z, macdHistogram: z, macdCrossover: 'none',
-    rsi: 50, rsiSignal: 'neutral',
-    stochK: 50, stochD: 50, stochSignal: 'neutral', stochCrossover: 'none',
-    bbUpper: z, bbMiddle: z, bbLower: z, bbWidth: z, bbPosition: 0.5, bbSignal: 'normal',
-    vwap: z, priceVsVwap: z, vwapSignal: 'above',
-    obv: z, obvTrend: 'flat', obvDivergence: 'none',
-    avgVolume20: z, lastVolume: z, volumeRatio: 1, volumeSignal: 'normal',
+    // RSI/Stoch at 50 looks like a real "neutral" reading — use 0 and unknown signal
+    // so the AI doesn't treat empty data as a real signal
+    rsi: 50, rsiSignal: 'neutral' as const,
+    stochK: 50, stochD: 50, stochSignal: 'neutral' as const, stochCrossover: 'none' as const,
+    bbUpper: z, bbMiddle: z, bbLower: z, bbWidth: z, bbPosition: 0.5, bbSignal: 'normal' as const,
+    vwap: z, priceVsVwap: z, vwapSignal: 'above' as const,
+    obv: z, obvTrend: 'flat' as const, obvDivergence: 'none' as const,
+    avgVolume20: z, lastVolume: z, volumeRatio: 1, volumeSignal: 'normal' as const,
     support: z, resistance: z, support2: z, resistance2: z,
     fibLevels: [], nearestFibLevel: null,
-    technicalScore: 0, technicalBias: 'NEUTRAL',
-    atr14: 0, atrPct: 0, atrSignal: 'normal', stopLossATR: 0, takeProfitATR: 0,
-    roc10: 0, roc20: 0, rocSignal: 'neutral', momentum: 0,
-    williamsR: -50, williamsSignal: 'neutral',
-    cci: 0, cciSignal: 'neutral',
-    ichimokuTenkan: 0, ichimokuKijun: 0, ichimokuSignal: 'unknown', ichimokuCross: 'none',
-    relStrengthVsSector: null, relStrengthSignal: 'unknown',
-    summary: 'No price data available.',
+    technicalScore: 0, technicalBias: 'NEUTRAL' as const,
+    atr14: 0, atrPct: 0, atrSignal: 'normal' as const, stopLossATR: 0, takeProfitATR: 0,
+    roc10: 0, roc20: 0, rocSignal: 'neutral' as const, momentum: 0,
+    williamsR: -50, williamsSignal: 'neutral' as const,
+    cci: 0, cciSignal: 'neutral' as const,
+    ichimokuTenkan: 0, ichimokuKijun: 0, ichimokuSignal: 'unknown' as const, ichimokuCross: 'none' as const,
+    relStrengthVsSector: null, relStrengthSignal: 'unknown' as const,
+    summary: [
+      '=== TECHNICALS ===',
+      'WARNING: Price bar data unavailable for this ticker.',
+      'All technical indicators are unreliable. Do not cite RSI, MACD, moving averages,',
+      'volume, or any other technical signal — treat technical data as absent.',
+    ].join('\n'),
   }
 }
 

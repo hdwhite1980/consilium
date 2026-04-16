@@ -88,51 +88,6 @@ async function getAvgVolumes(tickers: string[]): Promise<Map<string, number>> {
   return map
 }
 
-// Main export — get real volume movers in a price range
-export async function getVolumeMovers(
-  minPrice: number,
-  maxPrice: number,
-  topN = 8
-): Promise<Mover[]> {
-  // Step 1: Get today's most active by volume
-  const actives = await fetchMostActives(50)
-  if (!actives.length) return []
-
-  // Step 2: Filter by price range using Finnhub quotes
-  const priceMap = await enrichWithPrices(actives)
-
-  const inRange = actives.filter(ticker => {
-    const p = priceMap.get(ticker)
-    return p && p.price >= minPrice && p.price <= maxPrice
-  })
-
-  if (!inRange.length) return []
-
-  // Step 3: Get average volumes for ratio calculation
-  const avgVols = await getAvgVolumes(inRange.slice(0, 20))
-
-  // Step 4: Build mover objects and sort by volume ratio
-  const movers: Mover[] = inRange.slice(0, 20).map(ticker => {
-    const p = priceMap.get(ticker)!
-    const avg = avgVols.get(ticker) ?? 1
-    const todayVol = 1000000 // placeholder — actual from screener response
-    const ratio = avg > 0 ? todayVol / avg : 1
-    return {
-      ticker,
-      price: p.price,
-      changePercent: p.change,
-      volume: todayVol,
-      avgVolume: avg,
-      volumeRatio: parseFloat(ratio.toFixed(1)),
-      priceRange: `$${p.price.toFixed(2)}`,
-    }
-  })
-  .filter(m => m.price >= minPrice && m.price <= maxPrice)
-  .sort((a, b) => b.changePercent - a.changePercent) // sort by today's move
-  .slice(0, topN)
-
-  return movers
-}
 
 // Simpler version that uses Alpaca screener response volume directly
 export async function getVolumeMoversEnhanced(
