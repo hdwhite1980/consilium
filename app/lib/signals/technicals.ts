@@ -129,6 +129,48 @@ export interface TechnicalSignals {
   technicalScore: number
   technicalBias: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
   summary: string
+
+  // ── Pattern Detection ─────────────────────────────────────
+  candlePattern: CandlePattern | null
+  chartPattern: ChartPattern | null
+  gapPattern: GapPattern | null
+  trendLines: TrendLines
+}
+
+export interface CandlePattern {
+  name: string
+  type: 'bullish' | 'bearish' | 'neutral'
+  strength: 'strong' | 'moderate' | 'weak'
+  description: string
+}
+
+export interface ChartPattern {
+  name: string
+  type: 'bullish' | 'bearish' | 'neutral'
+  target: number | null       // price target implied by pattern
+  invalidation: number | null // level that breaks the pattern
+  description: string
+  confidence: 'high' | 'medium' | 'low'
+}
+
+export interface GapPattern {
+  type: 'gap_up' | 'gap_down'
+  size: number          // gap size in %
+  filled: boolean       // has price come back to fill the gap
+  gapHigh: number
+  gapLow: number
+  bullish: boolean
+  description: string
+}
+
+export interface TrendLines {
+  higherHighs: boolean        // uptrend structure
+  lowerLows: boolean          // downtrend structure
+  higherLows: boolean         // bullish accumulation
+  lowerHighs: boolean         // bearish distribution
+  trend: 'uptrend' | 'downtrend' | 'sideways'
+  dynamicSupport: number | null   // trend line support price now
+  dynamicResistance: number | null // trend line resistance price now
 }
 
 export interface FibLevel {
@@ -393,6 +435,235 @@ function calcPivots(bars: Bar[]): { s1: number; s2: number; r1: number; r2: numb
   }
 }
 
+
+// ═══════════════════════════════════════════════════════════
+// PATTERN DETECTION ENGINE
+// ═══════════════════════════════════════════════════════════
+
+function detectCandlePattern(bars: Bar[]): CandlePattern | null {
+  if (bars.length < 3) return null
+  const n  = bars.length - 1
+  const c  = bars[n]
+  const p  = bars[n - 1]
+  const p2 = bars[n - 2]
+  const bodyC  = Math.abs(c.c - c.o)
+  const bodyP  = Math.abs(p.c - p.o)
+  const rangeC = c.h - c.l
+  const bullC  = c.c > c.o
+  const bullP  = p.c > p.o
+  const midP   = (p.o + p.c) / 2
+  const upperWick = (b: Bar) => b.h - Math.max(b.o, b.c)
+  const lowerWick = (b: Bar) => Math.min(b.o, b.c) - b.l
+  const isSmallBody = (b: Bar) => Math.abs(b.c - b.o) < (b.h - b.l) * 0.25
+
+  if (!bullP && bullC && c.o < p.c && c.c > p.o && bodyC > bodyP * 1.2)
+    return { name: 'Bullish Engulfing', type: 'bullish', strength: 'strong',
+      description: 'Buyers overwhelmed prior bearish bar — strong reversal signal.' }
+
+  if (bullP && !bullC && c.o > p.c && c.c < p.o && bodyC > bodyP * 1.2)
+    return { name: 'Bearish Engulfing', type: 'bearish', strength: 'strong',
+      description: 'Sellers overwhelmed prior bullish bar — strong reversal signal.' }
+
+  if (!bullP && lowerWick(c) > bodyC * 2 && upperWick(c) < bodyC * 0.5 && c.l < p.l)
+    return { name: 'Hammer', type: 'bullish', strength: 'moderate',
+      description: 'Long lower wick after decline — buyers stepped in hard at lows.' }
+
+  if (bullP && upperWick(c) > bodyC * 2 && lowerWick(c) < bodyC * 0.5 && c.h > p.h)
+    return { name: 'Shooting Star', type: 'bearish', strength: 'moderate',
+      description: 'Long upper wick after rally — sellers rejected the push to new highs.' }
+
+  if (bodyC < rangeC * 0.1 && rangeC > 0) {
+    const name = upperWick(c) > lowerWick(c) * 2 ? 'Gravestone Doji'
+               : lowerWick(c) > upperWick(c) * 2 ? 'Dragonfly Doji' : 'Doji'
+    const type: CandlePattern['type'] = name === 'Gravestone Doji' ? 'bearish' : name === 'Dragonfly Doji' ? 'bullish' : 'neutral'
+    return { name, type, strength: 'weak', description: 'Open and close nearly identical — market indecision. Next bar confirms direction.' }
+  }
+
+  if (!bullP && isSmallBody(p) && bullC && c.c > midP && p2.c < p2.o)
+    return { name: 'Morning Star', type: 'bullish', strength: 'strong',
+      description: 'Three-bar bullish reversal: down, indecision, then strong up — classic bottom.' }
+
+  if (bullP && isSmallBody(p) && !bullC && c.c < midP && p2.c > p2.o)
+    return { name: 'Evening Star', type: 'bearish', strength: 'strong',
+      description: 'Three-bar bearish reversal: up, indecision, then strong down — classic top.' }
+
+  if (!bullP && bullC && c.o > p.c && c.c < p.o && bodyC < bodyP * 0.5)
+    return { name: 'Bullish Harami', type: 'bullish', strength: 'weak',
+      description: 'Small bullish bar inside prior bearish bar — selling momentum fading.' }
+
+  if (bullP && !bullC && c.o < p.c && c.c > p.o && bodyC < bodyP * 0.5)
+    return { name: 'Bearish Harami', type: 'bearish', strength: 'weak',
+      description: 'Small bearish bar inside prior bullish bar — buying momentum fading.' }
+
+  const b1 = bars[n-2], b2 = bars[n-1], b3 = bars[n]
+  if (b1.c > b1.o && b2.c > b2.o && b3.c > b3.o && b2.o > b1.o && b3.o > b2.o && b3.c > b2.c)
+    return { name: 'Three White Soldiers', type: 'bullish', strength: 'strong',
+      description: 'Three consecutive bullish bars each opening and closing higher — sustained buying pressure.' }
+
+  if (b1.c < b1.o && b2.c < b2.o && b3.c < b3.o && b2.o < b1.o && b3.o < b2.o && b3.c < b2.c)
+    return { name: 'Three Black Crows', type: 'bearish', strength: 'strong',
+      description: 'Three consecutive bearish bars each opening and closing lower — sustained selling pressure.' }
+
+  if (upperWick(c) < rangeC * 0.02 && lowerWick(c) < rangeC * 0.02 && bodyC > rangeC * 0.95)
+    return { name: bullC ? 'Bullish Marubozu' : 'Bearish Marubozu',
+      type: bullC ? 'bullish' : 'bearish', strength: 'strong',
+      description: bullC ? 'Full bullish body, no wicks — buyers in complete control.' : 'Full bearish body, no wicks — sellers in complete control.' }
+
+  return null
+}
+
+function detectGap(bars: Bar[]): GapPattern | null {
+  if (bars.length < 3) return null
+  const n = bars.length - 1
+  for (let i = n; i >= Math.max(1, n - 5); i--) {
+    const curr = bars[i], prev = bars[i - 1]
+    const gapUp = curr.l > prev.h, gapDown = curr.h < prev.l
+    if (!gapUp && !gapDown) continue
+    const gapSize = gapUp ? ((curr.l - prev.h) / prev.h) * 100 : ((prev.l - curr.h) / curr.h) * 100
+    if (gapSize < 0.3) continue
+    const gapHigh = gapUp ? curr.l : prev.h
+    const gapLow  = gapUp ? prev.h : curr.l
+    let filled = false
+    for (let j = i + 1; j <= n; j++) {
+      if (bars[j].l <= gapHigh && bars[j].h >= gapLow) { filled = true; break }
+    }
+    const ageLabel = i === n ? 'today' : i === n - 1 ? 'yesterday' : `${n - i} bars ago`
+    if (gapUp) return {
+      type: 'gap_up', size: parseFloat(gapSize.toFixed(2)), filled,
+      gapHigh, gapLow: prev.h, bullish: true,
+      description: `Gap up ${gapSize.toFixed(1)}% from $${prev.h.toFixed(2)} to $${curr.l.toFixed(2)} (${ageLabel})${filled ? ' — filled.' : ' — unfilled, acts as support.'}`
+    }
+    return {
+      type: 'gap_down', size: parseFloat(gapSize.toFixed(2)), filled,
+      gapHigh: prev.l, gapLow: curr.h, bullish: false,
+      description: `Gap down ${gapSize.toFixed(1)}% from $${prev.l.toFixed(2)} to $${curr.h.toFixed(2)} (${ageLabel})${filled ? ' — filled.' : ' — unfilled, acts as resistance.'}`
+    }
+  }
+  return null
+}
+
+function analyzeTrendLines(bars: Bar[]): TrendLines {
+  if (bars.length < 10) return { higherHighs: false, lowerLows: false, higherLows: false, lowerHighs: false, trend: 'sideways', dynamicSupport: null, dynamicResistance: null }
+  const window = bars.slice(-20), n = window.length
+  const swingHighs: { i: number; price: number }[] = []
+  const swingLows:  { i: number; price: number }[] = []
+  for (let i = 2; i < n - 2; i++) {
+    if (window[i].h > window[i-1].h && window[i].h > window[i-2].h && window[i].h > window[i+1].h && window[i].h > window[i+2].h)
+      swingHighs.push({ i, price: window[i].h })
+    if (window[i].l < window[i-1].l && window[i].l < window[i-2].l && window[i].l < window[i+1].l && window[i].l < window[i+2].l)
+      swingLows.push({ i, price: window[i].l })
+  }
+  const higherHighs = swingHighs.length >= 2 && swingHighs[swingHighs.length-1].price > swingHighs[swingHighs.length-2].price
+  const lowerHighs  = swingHighs.length >= 2 && swingHighs[swingHighs.length-1].price < swingHighs[swingHighs.length-2].price
+  const higherLows  = swingLows.length >= 2  && swingLows[swingLows.length-1].price  > swingLows[swingLows.length-2].price
+  const lowerLows   = swingLows.length >= 2  && swingLows[swingLows.length-1].price  < swingLows[swingLows.length-2].price
+  const trend: TrendLines['trend'] = (higherHighs && higherLows) ? 'uptrend' : (lowerHighs && lowerLows) ? 'downtrend' : 'sideways'
+  let dynamicSupport: number | null = null, dynamicResistance: number | null = null
+  if (swingLows.length >= 2) {
+    const sl1 = swingLows[swingLows.length-2], sl2 = swingLows[swingLows.length-1]
+    dynamicSupport = parseFloat((sl2.price + (sl2.price - sl1.price) / (sl2.i - sl1.i) * (n - 1 - sl2.i)).toFixed(2))
+  }
+  if (swingHighs.length >= 2) {
+    const sh1 = swingHighs[swingHighs.length-2], sh2 = swingHighs[swingHighs.length-1]
+    dynamicResistance = parseFloat((sh2.price + (sh2.price - sh1.price) / (sh2.i - sh1.i) * (n - 1 - sh2.i)).toFixed(2))
+  }
+  return { higherHighs, lowerLows, higherLows, lowerHighs, trend, dynamicSupport, dynamicResistance }
+}
+
+function detectChartPattern(bars: Bar[], currentPrice: number): ChartPattern | null {
+  if (bars.length < 20) return null
+  const w = bars.slice(-40), n = w.length
+  const highs = w.map(b => b.h), lows = w.map(b => b.l), closes = w.map(b => b.c)
+  const swingH: { i: number; price: number }[] = [], swingL: { i: number; price: number }[] = []
+  for (let i = 3; i < n - 3; i++) {
+    if (highs[i] === Math.max(...highs.slice(i-3, i+4))) swingH.push({ i, price: highs[i] })
+    if (lows[i] === Math.min(...lows.slice(i-3, i+4))) swingL.push({ i, price: lows[i] })
+  }
+
+  if (swingH.length >= 2) {
+    const h1 = swingH[swingH.length-2], h2 = swingH[swingH.length-1]
+    if (Math.abs(h1.price - h2.price) / h1.price < 0.03 && h2.i - h1.i >= 5) {
+      const neck = Math.min(...lows.slice(h1.i, h2.i))
+      if (currentPrice < neck * 1.01) {
+        const tgt = neck - (h1.price - neck)
+        return { name: 'Double Top', type: 'bearish', confidence: 'high', target: parseFloat(tgt.toFixed(2)), invalidation: parseFloat((Math.max(h1.price, h2.price) * 1.01).toFixed(2)),
+          description: `Two peaks at ~$${h1.price.toFixed(2)} and ~$${h2.price.toFixed(2)}, neckline $${neck.toFixed(2)} broken. Target: $${tgt.toFixed(2)}.` }
+      }
+    }
+  }
+
+  if (swingL.length >= 2) {
+    const l1 = swingL[swingL.length-2], l2 = swingL[swingL.length-1]
+    if (Math.abs(l1.price - l2.price) / l1.price < 0.03 && l2.i - l1.i >= 5) {
+      const neck = Math.max(...highs.slice(l1.i, l2.i))
+      if (currentPrice > neck * 0.99) {
+        const tgt = neck + (neck - l1.price)
+        return { name: 'Double Bottom', type: 'bullish', confidence: 'high', target: parseFloat(tgt.toFixed(2)), invalidation: parseFloat((Math.min(l1.price, l2.price) * 0.99).toFixed(2)),
+          description: `Two troughs at ~$${l1.price.toFixed(2)} and ~$${l2.price.toFixed(2)}, neckline $${neck.toFixed(2)} broken. Target: $${tgt.toFixed(2)}.` }
+      }
+    }
+  }
+
+  if (swingH.length >= 3) {
+    const [ls, hd, rs] = swingH.slice(-3)
+    if (hd.price > ls.price * 1.02 && hd.price > rs.price * 1.02 && Math.abs(ls.price - rs.price) / ls.price < 0.05) {
+      const neck = ((Math.min(...lows.slice(ls.i, hd.i))) + (Math.min(...lows.slice(hd.i, rs.i)))) / 2
+      const tgt = neck - (hd.price - neck)
+      return { name: 'Head & Shoulders', type: 'bearish', confidence: 'medium', target: parseFloat(tgt.toFixed(2)), invalidation: parseFloat((hd.price * 1.01).toFixed(2)),
+        description: `Shoulders at $${ls.price.toFixed(2)}/$${rs.price.toFixed(2)}, head $${hd.price.toFixed(2)}, neckline ~$${neck.toFixed(2)}. Target: $${tgt.toFixed(2)}.` }
+    }
+  }
+
+  if (swingL.length >= 3) {
+    const [ls, hd, rs] = swingL.slice(-3)
+    if (hd.price < ls.price * 0.98 && hd.price < rs.price * 0.98 && Math.abs(ls.price - rs.price) / ls.price < 0.05) {
+      const neck = ((Math.max(...highs.slice(ls.i, hd.i))) + (Math.max(...highs.slice(hd.i, rs.i)))) / 2
+      const tgt = neck + (neck - hd.price)
+      return { name: 'Inverse Head & Shoulders', type: 'bullish', confidence: 'medium', target: parseFloat(tgt.toFixed(2)), invalidation: parseFloat((hd.price * 0.99).toFixed(2)),
+        description: `Inv. shoulders $${ls.price.toFixed(2)}/$${rs.price.toFixed(2)}, head $${hd.price.toFixed(2)}, neckline ~$${neck.toFixed(2)}. Target: $${tgt.toFixed(2)}.` }
+    }
+  }
+
+  if (swingH.length >= 2 && swingL.length >= 2) {
+    const rH = swingH.slice(-3), rL = swingL.slice(-3)
+    if (rH.length >= 2 && rL.length >= 2) {
+      const flatTop   = rH.every(h => Math.abs(h.price - rH[0].price) / rH[0].price < 0.02)
+      const risingLow = rL.every((l, i) => i === 0 || l.price > rL[i-1].price)
+      if (flatTop && risingLow) {
+        const tgt = rH[0].price + (rH[0].price - rL[0].price)
+        return { name: 'Ascending Triangle', type: 'bullish', confidence: 'medium', target: parseFloat(tgt.toFixed(2)), invalidation: parseFloat((rL[rL.length-1].price * 0.98).toFixed(2)),
+          description: `Flat resistance ~$${rH[0].price.toFixed(2)} with rising lows. Breakout target: $${tgt.toFixed(2)}.` }
+      }
+      const flatBot    = rL.every(l => Math.abs(l.price - rL[0].price) / rL[0].price < 0.02)
+      const fallingHigh = rH.every((h, i) => i === 0 || h.price < rH[i-1].price)
+      if (flatBot && fallingHigh) {
+        const tgt = rL[0].price - (rH[0].price - rL[0].price)
+        return { name: 'Descending Triangle', type: 'bearish', confidence: 'medium', target: parseFloat(tgt.toFixed(2)), invalidation: parseFloat((rH[rH.length-1].price * 1.02).toFixed(2)),
+          description: `Flat support ~$${rL[0].price.toFixed(2)} with falling highs. Breakdown target: $${tgt.toFixed(2)}.` }
+      }
+    }
+  }
+
+  const rc = closes.slice(-15)
+  const fh = rc.slice(0, 7), sh = rc.slice(7)
+  const pole = (fh[fh.length-1] - fh[0]) / fh[0]
+  const drift = (sh[sh.length-1] - sh[0]) / sh[0]
+  if (pole > 0.05 && drift < 0 && drift > -0.04) {
+    const tgt = currentPrice * (1 + pole)
+    return { name: 'Bull Flag', type: 'bullish', confidence: 'medium', target: parseFloat(tgt.toFixed(2)), invalidation: parseFloat((sh[0] * 0.98).toFixed(2)),
+      description: `Pole +${(pole*100).toFixed(1)}% with tight bearish consolidation. Continuation target: $${tgt.toFixed(2)}.` }
+  }
+  const drop = (fh[0] - fh[fh.length-1]) / fh[0]
+  const bounce = (sh[sh.length-1] - sh[0]) / sh[0]
+  if (drop > 0.05 && bounce > 0 && bounce < 0.04) {
+    const tgt = currentPrice * (1 - drop)
+    return { name: 'Bear Flag', type: 'bearish', confidence: 'medium', target: parseFloat(tgt.toFixed(2)), invalidation: parseFloat((sh[sh.length-1] * 1.02).toFixed(2)),
+      description: `Pole −${(drop*100).toFixed(1)}% with weak bullish consolidation. Continuation target: $${tgt.toFixed(2)}.` }
+  }
+
+  return null
+}
+
 // ── Main Calculator ───────────────────────────────────────────
 export function calculateTechnicals(bars: Bar[]): TechnicalSignals {
   if (!bars.length) return emptyTechnicals()
@@ -634,6 +905,22 @@ export function calculateTechnicals(bars: Bar[]): TechnicalSignals {
     `Technical score: ${score}/100 → ${technicalBias}`,
   ].join('\n')
 
+  // ── Pattern Detection ───────────────────────────────────
+  const candlePattern  = detectCandlePattern(bars)
+  const chartPattern   = detectChartPattern(bars, current)
+  const gapPattern     = detectGap(bars)
+  const trendLines     = analyzeTrendLines(bars)
+
+  // Append pattern summary to AI context
+  const patternLines = [
+    candlePattern  ? `Candle pattern: ${candlePattern.name} (${candlePattern.type}, ${candlePattern.strength}) — ${candlePattern.description}` : '',
+    chartPattern   ? `Chart pattern: ${chartPattern.name} (${chartPattern.type}, ${chartPattern.confidence} confidence) — ${chartPattern.description}` : '',
+    gapPattern     ? `Gap: ${gapPattern.description}` : '',
+    `Trend structure: ${trendLines.trend.toUpperCase()}${trendLines.dynamicSupport ? ` | Dynamic support: $${trendLines.dynamicSupport}` : ''}${trendLines.dynamicResistance ? ` | Dynamic resistance: $${trendLines.dynamicResistance}` : ''}`,
+  ].filter(Boolean).join('\n')
+
+  const summaryWithPatterns = patternLines ? summary + '\n\n' + patternLines : summary
+
   return {
     currentPrice: current, priceChange1D, priceChangePeriod,
     high52w, low52w, distFromHigh, distFromLow,
@@ -654,7 +941,6 @@ export function calculateTechnicals(bars: Bar[]): TechnicalSignals {
     avgVolume20: avgVol, lastVolume: lastVol, volumeRatio: volRatio, volumeSignal,
     support: s1, resistance: r1, support2: s2, resistance2: r2,
     fibLevels, nearestFibLevel,
-    // New indicators
     atr14, atrPct, atrSignal, stopLossATR, takeProfitATR,
     roc10, roc20, rocSignal, momentum,
     williamsR, williamsSignal,
@@ -662,7 +948,9 @@ export function calculateTechnicals(bars: Bar[]): TechnicalSignals {
     ichimokuTenkan, ichimokuKijun, ichimokuSignal, ichimokuCross,
     relStrengthVsSector, relStrengthSignal,
     technicalScore: score, technicalBias,
-    summary,
+    summary: summaryWithPatterns,
+    // Pattern detection
+    candlePattern, chartPattern, gapPattern, trendLines,
   }
 }
 
@@ -693,6 +981,8 @@ function emptyTechnicals(): TechnicalSignals {
     cci: 0, cciSignal: 'neutral' as const,
     ichimokuTenkan: 0, ichimokuKijun: 0, ichimokuSignal: 'unknown' as const, ichimokuCross: 'none' as const,
     relStrengthVsSector: null, relStrengthSignal: 'unknown' as const,
+    candlePattern: null, chartPattern: null, gapPattern: null,
+    trendLines: { higherHighs: false, lowerLows: false, higherLows: false, lowerHighs: false, trend: 'sideways' as const, dynamicSupport: null, dynamicResistance: null },
     summary: [
       '=== TECHNICALS ===',
       'WARNING: Price bar data unavailable for this ticker.',
@@ -763,6 +1053,10 @@ export function technicalsToPayload(t: TechnicalSignals, currentPrice: number): 
     ichimokuCross: t.ichimokuCross,
     relStrengthVsSector: t.relStrengthVsSector,
     relStrengthSignal: t.relStrengthSignal,
+    candlePattern: t.candlePattern,
+    chartPattern: t.chartPattern,
+    gapPattern: t.gapPattern,
+    trendLines: t.trendLines,
     currentPrice,
   }
 }

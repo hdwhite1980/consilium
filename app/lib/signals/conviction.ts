@@ -219,6 +219,33 @@ export function buildConvictionOutput(
     score:  s.score  * (categoryMult[s.category] ?? 1.0),
   }))
 
+  // ── Pattern signals ────────────────────────────────────────
+  // Patterns are high-conviction signals — scored separately and added to scaledSignals
+  if (technicals.candlePattern) {
+    const strengthScore = technicals.candlePattern.strength === 'strong' ? 8 : technicals.candlePattern.strength === 'moderate' ? 5 : 2
+    const dir = technicals.candlePattern.type === 'bullish' ? 'bullish' : technicals.candlePattern.type === 'bearish' ? 'bearish' : 'neutral'
+    const s = dir === 'bullish' ? strengthScore : dir === 'bearish' ? -strengthScore : 0
+    scaledSignals.push({ category: 'Technical', signal: `Candle: ${technicals.candlePattern.name}`, direction: dir, weight: 7 * tw_tech, score: s * tw_tech })
+  }
+  if (technicals.chartPattern) {
+    const confScore = technicals.chartPattern.confidence === 'high' ? 10 : technicals.chartPattern.confidence === 'medium' ? 7 : 4
+    const dir = technicals.chartPattern.type === 'bullish' ? 'bullish' : technicals.chartPattern.type === 'bearish' ? 'bearish' : 'neutral'
+    const s = dir === 'bullish' ? confScore : dir === 'bearish' ? -confScore : 0
+    scaledSignals.push({ category: 'Technical', signal: `Chart: ${technicals.chartPattern.name}`, direction: dir, weight: 9 * tw_tech, score: s * tw_tech })
+  }
+  if (technicals.gapPattern && !technicals.gapPattern.filled) {
+    const dir = technicals.gapPattern.bullish ? 'bullish' : 'bearish'
+    const s = dir === 'bullish' ? 5 : -5
+    scaledSignals.push({ category: 'Technical', signal: `Unfilled ${technicals.gapPattern.type.replace('_', ' ')} ${technicals.gapPattern.size.toFixed(1)}%`, direction: dir, weight: 5 * tw_tech, score: s * tw_tech })
+  }
+  if (technicals.trendLines) {
+    const tl = technicals.trendLines
+    if (tl.higherHighs && tl.higherLows)
+      scaledSignals.push({ category: 'Technical', signal: 'Trend structure: higher highs + higher lows', direction: 'bullish', weight: 6 * tw_tech, score: 5 * tw_tech })
+    else if (tl.lowerHighs && tl.lowerLows)
+      scaledSignals.push({ category: 'Technical', signal: 'Trend structure: lower highs + lower lows', direction: 'bearish', weight: 6 * tw_tech, score: -5 * tw_tech })
+  }
+
   // ── Convergence score ─────────────────────────────────────
   const totalWeight = scaledSignals.reduce((s, r) => s + r.weight, 0)
   const weightedScore = scaledSignals.reduce((s, r) => s + r.score * r.weight, 0)

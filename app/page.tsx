@@ -53,6 +53,11 @@ interface MarketData {
     ichimokuTenkan: number; ichimokuKijun: number
     ichimokuSignal: string; ichimokuCross: string
     relStrengthVsSector: number | null; relStrengthSignal: string
+    // Pattern detection
+    candlePattern: { name: string; type: string; strength: string; description: string } | null
+    chartPattern: { name: string; type: string; target: number | null; invalidation: number | null; description: string; confidence: string } | null
+    gapPattern: { type: string; size: number; filled: boolean; gapHigh: number; gapLow: number; bullish: boolean; description: string } | null
+    trendLines: { higherHighs: boolean; lowerLows: boolean; higherLows: boolean; lowerHighs: boolean; trend: string; dynamicSupport: number | null; dynamicResistance: number | null }
   }
   conviction: {
     direction: Signal; conviction: string; convergenceScore: number
@@ -840,6 +845,70 @@ function HomeInner() {
                 <div className="flex justify-between text-xs">
                   <span style={{ color: txt3 }}>Sweeps</span>
                   <span className="font-mono text-[10px]" style={{ color: '#fbbf24' }}>{md!.options?.unusualCount} unusual</span>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Patterns */}
+          {md?.technicals && (md.technicals.candlePattern || md.technicals.chartPattern || md.technicals.gapPattern || md.technicals.trendLines?.trend !== 'sideways') && (
+            <Card title="Patterns" icon={<Activity size={11}/>} color="#e879f9" surf={surf} brd={brd} txt3={txt3}>
+              {/* Trend structure */}
+              {md.technicals.trendLines && (
+                <div className="flex justify-between text-xs mb-1">
+                  <span style={{ color: txt3 }}>Trend</span>
+                  <span className="font-mono text-[10px] capitalize" style={{ color: md.technicals.trendLines.trend === 'uptrend' ? '#34d399' : md.technicals.trendLines.trend === 'downtrend' ? '#f87171' : txt }}>
+                    {md.technicals.trendLines.trend}
+                    {md.technicals.trendLines.higherHighs && md.technicals.trendLines.higherLows ? ' ↑↑' : md.technicals.trendLines.lowerHighs && md.technicals.trendLines.lowerLows ? ' ↓↓' : ''}
+                  </span>
+                </div>
+              )}
+              {md.technicals.trendLines?.dynamicSupport && (
+                <div className="flex justify-between text-xs">
+                  <span style={{ color: txt3 }}>Dyn. support</span>
+                  <span className="font-mono text-[10px]" style={{ color: '#34d399' }}>${md.technicals.trendLines.dynamicSupport.toFixed(2)}</span>
+                </div>
+              )}
+              {md.technicals.trendLines?.dynamicResistance && (
+                <div className="flex justify-between text-xs mb-1">
+                  <span style={{ color: txt3 }}>Dyn. resist.</span>
+                  <span className="font-mono text-[10px]" style={{ color: '#f87171' }}>${md.technicals.trendLines.dynamicResistance.toFixed(2)}</span>
+                </div>
+              )}
+              {/* Candle pattern */}
+              {md.technicals.candlePattern && (
+                <div className="mt-1 px-2 py-1.5 rounded-lg" style={{ background: md.technicals.candlePattern.type === 'bullish' ? 'rgba(52,211,153,0.08)' : md.technicals.candlePattern.type === 'bearish' ? 'rgba(248,113,113,0.08)' : 'rgba(255,255,255,0.04)', border: `1px solid ${md.technicals.candlePattern.type === 'bullish' ? 'rgba(52,211,153,0.2)' : md.technicals.candlePattern.type === 'bearish' ? 'rgba(248,113,113,0.2)' : 'rgba(255,255,255,0.08)'}` }}>
+                  <div className="text-[10px] font-semibold mb-0.5" style={{ color: md.technicals.candlePattern.type === 'bullish' ? '#34d399' : md.technicals.candlePattern.type === 'bearish' ? '#f87171' : txt }}>
+                    🕯 {md.technicals.candlePattern.name}
+                    <span className="ml-1 font-normal opacity-60">({md.technicals.candlePattern.strength})</span>
+                  </div>
+                  <div className="text-[10px] leading-relaxed" style={{ color: txt3 }}>{md.technicals.candlePattern.description}</div>
+                </div>
+              )}
+              {/* Chart pattern */}
+              {md.technicals.chartPattern && (
+                <div className="mt-1 px-2 py-1.5 rounded-lg" style={{ background: md.technicals.chartPattern.type === 'bullish' ? 'rgba(52,211,153,0.08)' : md.technicals.chartPattern.type === 'bearish' ? 'rgba(248,113,113,0.08)' : 'rgba(255,255,255,0.04)', border: `1px solid ${md.technicals.chartPattern.type === 'bullish' ? 'rgba(52,211,153,0.2)' : md.technicals.chartPattern.type === 'bearish' ? 'rgba(248,113,113,0.2)' : 'rgba(255,255,255,0.08)'}` }}>
+                  <div className="text-[10px] font-semibold mb-0.5 flex items-center justify-between" style={{ color: md.technicals.chartPattern.type === 'bullish' ? '#34d399' : md.technicals.chartPattern.type === 'bearish' ? '#f87171' : txt }}>
+                    <span>📊 {md.technicals.chartPattern.name}</span>
+                    <span className="font-normal opacity-60 text-[9px]">{md.technicals.chartPattern.confidence}</span>
+                  </div>
+                  <div className="text-[10px] leading-relaxed" style={{ color: txt3 }}>{md.technicals.chartPattern.description}</div>
+                  {md.technicals.chartPattern.target && (
+                    <div className="text-[10px] mt-1 font-mono" style={{ color: md.technicals.chartPattern.type === 'bullish' ? '#34d399' : '#f87171' }}>
+                      Target: ${md.technicals.chartPattern.target.toFixed(2)}
+                      {md.technicals.chartPattern.invalidation && ` · Invalidation: $${md.technicals.chartPattern.invalidation.toFixed(2)}`}
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* Gap */}
+              {md.technicals.gapPattern && (
+                <div className="mt-1 px-2 py-1.5 rounded-lg" style={{ background: md.technicals.gapPattern.bullish ? 'rgba(52,211,153,0.06)' : 'rgba(248,113,113,0.06)', border: `1px solid ${md.technicals.gapPattern.bullish ? 'rgba(52,211,153,0.15)' : 'rgba(248,113,113,0.15)'}` }}>
+                  <div className="text-[10px] font-semibold mb-0.5" style={{ color: md.technicals.gapPattern.bullish ? '#34d399' : '#f87171' }}>
+                    ⬆ {md.technicals.gapPattern.type === 'gap_up' ? 'Gap Up' : 'Gap Down'} {md.technicals.gapPattern.size.toFixed(1)}%
+                    {md.technicals.gapPattern.filled && <span className="ml-1 opacity-60">(filled)</span>}
+                  </div>
+                  <div className="text-[10px] leading-relaxed" style={{ color: txt3 }}>{md.technicals.gapPattern.description}</div>
                 </div>
               )}
             </Card>
