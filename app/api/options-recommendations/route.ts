@@ -138,22 +138,23 @@ function selectBestContractsWithLevels(
     return strikeProx + liquidity
   }
 
+  const includeLeaps = targetDTE >= 30 // only show LEAPs for 1W+ timeframes
+
   const selectWithLeaps = (filtered: OptionsContract[], idealStrike: number): OptionsContract[] => {
     const nearTerm = filtered.filter(c => c.daysToExpiry <= 180)
     const leaps    = filtered.filter(c => c.daysToExpiry > 180)
 
-    // Best 2 near-term + best 1 LEAP (if available), deduped
     const bestNear = nearTerm
       .sort((a, b) => scoreNearTerm(b, idealStrike) - scoreNearTerm(a, idealStrike))
-      .slice(0, 2)
+      .slice(0, includeLeaps ? 2 : 3)
+
+    if (!includeLeaps || leaps.length === 0) return bestNear
 
     const bestLeap = leaps
       .sort((a, b) => scoreLeap(b, idealStrike) - scoreLeap(a, idealStrike))
       .slice(0, 1)
 
-    // Combine: 2 near-term + 1 LEAP, or 3 near-term if no LEAPs available
-    const combined = [...bestNear, ...bestLeap]
-    return combined.length > 0 ? combined : nearTerm.slice(0, 3)
+    return [...bestNear, ...bestLeap]
   }
 
   if (signal === 'BULLISH') {
@@ -313,13 +314,14 @@ export async function POST(req: NextRequest) {
     // Primary: Tradier — confirmed working in production
     if (TRADIER_KEY()) {
       const expiries = await fetchExpirations(ticker)
-      // Include near-term AND LEAP expirations (up to 2 years out)
-      // Near-term: first 4 expirations; LEAPs: any expiry > 180 days
+      // Near-term expirations always included
+      // LEAP expirations (>180d) only for 1W+ timeframes — irrelevant for 1D signals
       const nearTerm = expiries.slice(0, 4)
-      const leapExpiries = expiries.filter((e: string) => {
+      const routeIncludeLeaps = !timeHorizon?.includes('day') && !timeHorizon?.includes('session') && !timeHorizon?.includes('intraday')
+      const leapExpiries = routeIncludeLeaps ? expiries.filter((e: string) => {
         const dte = Math.ceil((new Date(e).getTime() - Date.now()) / 86400000)
         return dte > 180 && dte <= 730
-      }).slice(0, 4) // max 4 LEAP expirations
+      }).slice(0, 3) : []
       const targetExpiries = [...new Set([...nearTerm, ...leapExpiries])]
       expiriesUsed = targetExpiries
       const chains = await Promise.all(targetExpiries.map(exp => fetchChain(ticker, exp)))
@@ -371,12 +373,13 @@ IMPORTANT — Use the Council's specific price levels in your recommendation:
 - Take profit at ${judgeTarget ? '$' + judgeTarget.toFixed(2) : 'N/A'} is the realistic target
 - Choose strikes that make sense given these levels — don't suggest contracts that expire before the move can develop
 
-LEAP OPTIONS (expiry > 180 days): If contracts with 180+ days to expiry are shown, consider recommending them when:
-- The time horizon is 3M or longer
-- The thesis requires time to play out (fundamental catalyst, sector rotation)
-- High IV makes short-term options expensive — LEAPs have lower theta decay per day
-- The user wants stock-like exposure with less capital at risk
-LEAPs behave more like stock (delta 0.7-0.9) and less like lottery tickets. Explain this clearly.
+LEAP OPTIONS (expiry > 180 days): Only relevant for 1W+ timeframes. Never recommend for 1D signals.
+If LEAP contracts are shown and time horizon is 1W or longer, consider recommending when:
+- The thesis requires weeks/months to play out (fundamental catalyst, earnings, sector rotation)
+- High IV makes short-term options expensive — LEAPs have much lower theta decay per day
+- The user wants stock-like directional exposure with defined risk
+For 1D signals: IGNORE any LEAP contracts shown — they are displayed for reference only.
+LEAPs behave more like stock (delta 0.5-0.8) and less like lottery tickets. Lower theta = more forgiving.
 
 CRITICAL RULES:
 - If signal is NEUTRAL: strategyType MUST be "neutral". Recommend waiting or income strategies.
