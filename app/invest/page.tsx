@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { ArrowLeft, Plus, X, TrendingUp, TrendingDown, Flame, Zap, Target, RefreshCw, CheckCircle, Trophy } from 'lucide-react'
+import InvestLessons from '@/app/components/InvestLessons'
 import { Tutorial, TutorialLauncher, INVEST_TUTORIAL } from '@/app/components/Tutorial'
 
 // ── Milestone config ──────────────────────────────────────────
@@ -407,7 +408,7 @@ function InvestInner() {
   const [closeTarget, setCloseTarget] = useState<Trade | null>(null)
   const [showFirstWin, setShowFirstWin] = useState(false)
   const [firstWinAmount, setFirstWinAmount] = useState(0)
-  const [tab, setTab] = useState<'ideas' | 'trades' | 'history'>('ideas')
+  const [tab, setTab] = useState<'ideas' | 'trades' | 'history' | 'lessons'>('ideas')
   const [showTutorial, setShowTutorial] = useState(false)
   const [priceUpdatedAt, setPriceUpdatedAt] = useState<Date | null>(null)
   const isDark = useDarkMode()
@@ -622,11 +623,11 @@ function InvestInner() {
 
       {/* Tabs */}
       <div className="flex border-b px-4 shrink-0" style={{ borderColor: brd, background: surf }}>
-        {(['ideas', 'trades', 'history'] as const).map(t => (
+        {(['ideas', 'trades', 'history', 'lessons'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)}
             className="px-4 py-2.5 text-xs font-semibold capitalize border-b-2 transition-all"
             style={{ color: tab === t ? '#f97316' : txt3, borderColor: tab === t ? '#f97316' : 'transparent' }}>
-            {t === 'ideas' ? '⚡ Ideas' : t === 'trades' ? `📊 Open (${openTrades.length})` : `📋 History (${closedTrades.length})`}
+            {t === 'ideas' ? '⚡ Ideas' : t === 'trades' ? `📊 Open (${openTrades.length})` : t === 'history' ? `📋 History (${closedTrades.length})` : '📚 Learn'}
           </button>
         ))}
       </div>
@@ -853,6 +854,15 @@ function InvestInner() {
                 </>
               )}
             </div>
+          )}
+          {/* LESSONS tab */}
+          {tab === 'lessons' && (
+            <InvestLessons
+              currentStage={milestone.name}
+              totalTrades={journey.total_trades}
+              closedTrades={closedTrades.length}
+              isDark={isDark}
+            />
           )}
         </div>
       </div>
