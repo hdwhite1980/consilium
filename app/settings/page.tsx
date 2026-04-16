@@ -493,7 +493,7 @@ export default function SettingsPage() {
         </Section>
 
         <p className="text-center text-[11px] pb-4" style={{ color: txt3 }}>
-          Consilium · <a href="mailto:support@wali-os.com" style={{ color: txt3 }}>support@wali-os.com</a>
+          Wali-OS · <a href="mailto:support@wali-os.com" style={{ color: txt3 }}>support@wali-os.com</a>
         </p>
       </div>
     </div>

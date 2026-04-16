@@ -31,9 +31,6 @@ function SignupInner() {
 
     const supabase = createClient()
     const redirectUrl = 'https://wali-os.com/auth/callback'
-    console.log('Signing up with redirectTo:', redirectUrl)
-    alert('Debug - redirectTo: ' + redirectUrl) // temporary
-
     const { error } = await supabase.auth.signUp({
       email,
       password,

@@ -61,7 +61,7 @@ export async function middleware(request: NextRequest) {
       .from('active_sessions')
       .select('session_token')
       .eq('user_id', user.id)
-      .single()
+      .maybeSingle()
 
     if (activeSession && activeSession.session_token !== sessionToken) {
       await supabase.auth.signOut()
@@ -78,7 +78,7 @@ export async function middleware(request: NextRequest) {
       .from('disclaimer_accepted')
       .select('user_id')
       .eq('user_id', user.id)
-      .single()
+      .maybeSingle()
 
     if (!disclaimer) {
       return NextResponse.redirect(new URL('/disclaimer', request.url))
@@ -89,11 +89,15 @@ export async function middleware(request: NextRequest) {
   // Skip for disclaimer page
   if (pathname === '/disclaimer') return supabaseResponse
 
-  const { data: sub } = await admin
+  const { data: sub, error: subError } = await admin
     .from('subscriptions')
     .select('status, trial_ends_at, current_period_end, is_exempt')
     .eq('user_id', user.id)
-    .single()
+    .maybeSingle()
+
+  if (subError) {
+    console.error('Subscription check error:', subError.message)
+  }
 
   const now = new Date()
   let hasAccess = false
@@ -102,13 +106,16 @@ export async function middleware(request: NextRequest) {
     // First login — create 7-day trial
     const trialEndsAt = new Date()
     trialEndsAt.setDate(trialEndsAt.getDate() + 7)
-    await admin.from('subscriptions').insert({
+    const { error: insertError } = await admin.from('subscriptions').insert({
       user_id: user.id,
       status: 'trialing',
       trial_ends_at: trialEndsAt.toISOString(),
       is_exempt: false,
     })
-    hasAccess = true
+    if (insertError) {
+      console.error('Trial insert error:', insertError.message)
+    }
+    hasAccess = true  // always grant access on first visit even if insert fails
   } else if (sub.is_exempt) {
     hasAccess = true
   } else if (sub.status === 'trialing') {

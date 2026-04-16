@@ -69,7 +69,7 @@ export default function DisclaimerPage() {
 
           <div>
             <h2 className="text-white/80 font-semibold mb-1.5">No Professional Relationship</h2>
-            <p>Use of Consilium does not create a client, advisory, fiduciary, or professional relationship of any kind between you and Wali-OS or its operators. We are not a registered investment advisor, broker-dealer, or financial planner. Before making any financial decisions, consult a qualified financial professional who understands your personal situation.</p>
+            <p>Use of Wali-OS does not create a client, advisory, fiduciary, or professional relationship of any kind between you and Wali-OS or its operators. We are not a registered investment advisor, broker-dealer, or financial planner. Before making any financial decisions, consult a qualified financial professional who understands your personal situation.</p>
           </div>
 
           <div>
