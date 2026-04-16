@@ -164,7 +164,7 @@ export async function POST(req: NextRequest) {
     const sig = candidateSignals[c]
     const isAdd = c.endsWith(':ADD')
     const ticker = c.replace(':ADD', '')
-    if (!sig) return `${ticker}${isAdd ? ' (add to existing)' : ''}: no recent Consilium analysis`
+    if (!sig) return `${ticker}${isAdd ? ' (add to existing)' : ''}: no recent Wali-OS analysis`
     return `${ticker}${isAdd ? ' (add to existing)' : ''}: ${sig.signal} ${sig.confidence}% — ${sig.reasoning}`
   }).join('\n')
 

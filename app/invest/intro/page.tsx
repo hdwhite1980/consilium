@@ -60,7 +60,7 @@ export default function InvestIntroPage() {
             <Flame size={18} style={{ color: '#f97316' }} />
           </div>
           <div>
-            <div className="text-xs font-semibold tracking-widest uppercase" style={{ color: 'rgba(249,115,22,0.7)' }}>Consilium</div>
+            <div className="text-xs font-semibold tracking-widest uppercase" style={{ color: 'rgba(249,115,22,0.7)' }}>Wali-OS</div>
             <div className="text-sm font-bold text-white">Investment Journey</div>
           </div>
         </div>

@@ -294,7 +294,7 @@ export default function NewsPage() {
           </div>
           <p className="text-sm text-white/40 font-mono">{statusMsg}</p>
           <p className="text-xs text-white/20 text-center max-w-sm">
-            Gemini is scanning today&apos;s news and identifying stocks and crypto that could move significantly
+            The council is scanning today&apos;s news and identifying stocks and crypto that could move significantly
           </p>
         </div>
       )}
@@ -437,7 +437,7 @@ export default function NewsPage() {
             {/* Disclaimer */}
             <div className="text-[10px] font-mono text-white/15 text-center pb-4 leading-relaxed">
               AI-generated analysis based on news headlines. Not financial advice. Always do your own research before trading.
-              News data from Alpaca Markets · Analysis by Gemini
+              News data from Alpaca Markets · Powered by Wali-OS
             </div>
           </div>
         </div>

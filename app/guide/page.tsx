@@ -60,7 +60,7 @@ const SECTIONS: GuideSection[] = [
     color: '#a78bfa',
     content: (
       <>
-        <P>Consilium runs a six-stage adversarial debate before giving you a verdict. The stages stream in real time — you watch the debate happen.</P>
+        <P>Wali-OS runs a six-stage adversarial debate before giving you a verdict. The stages stream in real time — you watch the debate happen.</P>
         <H>Stage 1 — News Scout</H>
         <P>Scans recent headlines, assesses macro conditions (VIX level, SPY trend, sector performance), and reports the current market regime (RISK ON, HIGH FEAR, etc.). This context feeds every subsequent stage.</P>
         <H>Stage 2 — Lead Analyst</H>
@@ -213,7 +213,7 @@ const SECTIONS: GuideSection[] = [
         <H>Institutional Holdings</H>
         <P>13F filing data showing major holders and whether notable funds are increasing or decreasing positions. Heavy institutional concentration can be bullish (smart money agrees) or risky (crowded trade vulnerable to simultaneous exits).</P>
         <H>Congressional Trades</H>
-        <P>Disclosures of US Congress member trades from QuiverQuant. Congress members have historically outperformed the market significantly. Recent buys from multiple Congress members in the same sector are worth noting.</P>
+        <P>Disclosures of US Congress member trades sourced from SEC EDGAR filings. Congress members have historically outperformed the market significantly. Recent buys from multiple Congress members in the same sector are worth noting.</P>
         <H>Short Interest</H>
         <P>Percentage of float sold short and days to cover. Above 25% = squeeze candidate — good news can trigger rapid covering. Above 15% = heavily shorted. The council uses the put/call ratio as a proxy when direct short interest data is unavailable.</P>
       </>
@@ -223,9 +223,9 @@ const SECTIONS: GuideSection[] = [
 
 const FAQ_GENERAL: FAQItem[] = [
   { q: 'What is the Invest page?', a: "The Invest page is a journey-based tracker for growing any starting balance. You enter how much you have to invest, and the council finds stage-appropriate stocks sized to your exact capital. Six fire milestones track your progress from Spark ($0–$10) to Free ($10K+). At each stage, the stock price range adjusts automatically so every position feels like a real holding — not a lottery ticket. It uses live sector data from the Macro dashboard to find 5 picks from today's strongest sectors." },
-  { q: "What's the difference between Invest and Reinvestment Tracker?", a: "Invest is for building a portfolio from scratch — any starting amount, with stage-matched picks and milestone tracking. Reinvestment Tracker is for existing investors who have gains from council analyses and want AI-powered strategies for deploying those gains. If you're just starting out or have under $200 to invest, use Invest. If you've been using Consilium for a while and have accumulated gains, use Reinvest." },
-  { q: 'What is Consilium?', a: "Consilium is an AI-powered stock and crypto analysis platform that runs a six-stage adversarial debate between multiple AI roles before giving you a verdict. You get a specific signal (BULLISH/BEARISH/NEUTRAL), entry price, ATR-derived stop loss, take profit levels, time horizon, and a full plain English explanation. It covers US stocks, major crypto, and your own portfolio." },
-  { q: 'How is this different from other AI stock tools?', a: "Most AI analysis tools give you one model's opinion. Consilium forces its AI council to argue against itself — the Lead Analyst makes a call, the Devil's Advocate attacks it with data, both sides rebut each other using fresh live data fetched mid-debate, and a Judge who has read the full transcript delivers the final verdict. You see every argument made and what got conceded." },
+  { q: "What's the difference between Invest and Reinvestment Tracker?", a: "Invest is for building a portfolio from scratch — any starting amount, with stage-matched picks and milestone tracking. Reinvestment Tracker is for existing investors who have gains from council analyses and want AI-powered strategies for deploying those gains. If you're just starting out or have under $200 to invest, use Invest. If you've been using Wali-OS for a while and have accumulated gains, use Reinvest." },
+  { q: 'What is Wali-OS?', a: "Wali-OS is an AI-powered stock and crypto analysis platform that runs a six-stage adversarial debate between multiple AI roles before giving you a verdict. You get a specific signal (BULLISH/BEARISH/NEUTRAL), entry price, ATR-derived stop loss, take profit levels, time horizon, and a full plain English explanation. It covers US stocks, major crypto, and your own portfolio." },
+  { q: 'How is this different from other AI stock tools?', a: "Most AI analysis tools give you one model's opinion. Wali-OS forces its AI council to argue against itself — the Lead Analyst makes a call, the Devil's Advocate attacks it with data, both sides rebut each other using fresh live data fetched mid-debate, and a Judge who has read the full transcript delivers the final verdict. You see every argument made and what got conceded." },
   { q: 'How current is the data?', a: "Live prices come from Finnhub in real time. Historical bar data comes from Alpaca Markets with full dividend adjustment. Options data comes from Tradier's production API. Cached analyses are invalidated automatically when price moves more than 1.5% from the cached price, or after 2 hours maximum — whichever comes first. You'll see a status message when a fresh analysis runs." },
   { q: 'Does it support crypto?', a: "Yes — BTC, ETH, SOL, BNB, XRP, ADA, AVAX, DOGE, and 15+ more. Crypto uses CoinGecko for real-time prices and OHLCV data. All 24+ technical indicators work identically. Fundamentals are replaced with on-chain metadata (market cap, 24h/7d change, ATH, circulating supply). The full 6-stage debate runs on crypto exactly as it does for equities." },
   { q: 'What does the free trial include?', a: "The 7-day free trial includes full access to every feature — main analysis, crypto, Macro dashboard, Portfolio, Reinvestment Tracker, Compare, Trading Academy, and all indicator data. No credit card required to start." },
@@ -255,10 +255,10 @@ const FAQ_OPTIONS: FAQItem[] = [
 ]
 
 const FAQ_BILLING: FAQItem[] = [
-  { q: 'How much does Consilium cost?', a: "Standard is $29/month and Pro is $49/month, both with a 7-day free trial. During the trial you get full Pro access regardless of which plan you choose. No credit card required to start." },
+  { q: 'How much does Wali-OS cost?', a: "Standard is $29/month and Pro is $49/month, both with a 7-day free trial. During the trial you get full Pro access regardless of which plan you choose. No credit card required to start." },
   { q: 'Can I cancel anytime?', a: "Yes. You can cancel from the Account Settings page at any time. You'll retain access until the end of your billing period." },
   { q: 'What happens when my trial ends?', a: "You'll see a Subscribe prompt on next login. Your saved analyses, portfolio positions, and trading history are preserved — you just need to subscribe to run new analyses." },
-  { q: 'Does Consilium store my financial data?', a: "Consilium stores analysis results, portfolio positions you manually enter, and reinvestment trades you log. It does not connect to your brokerage, does not have access to your actual trades, and does not store payment information (Stripe handles payments)." },
+  { q: 'Does Wali-OS store my financial data?', a: "Wali-OS stores analysis results, portfolio positions you manually enter, and reinvestment trades you log. It does not connect to your brokerage, does not have access to your actual trades, and does not store payment information (Stripe handles payments)." },
 ]
 
 export default function GuidePage() {

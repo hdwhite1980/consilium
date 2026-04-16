@@ -152,7 +152,7 @@ function SubscribeInner() {
         <div className="flex-1" />
         <div className="flex items-center gap-2">
           <Zap size={14} style={{ color: '#a78bfa' }} />
-          <span className="text-sm font-bold">Consilium</span>
+          <span className="text-sm font-bold">Wali-OS</span>
         </div>
       </div>
 

@@ -100,7 +100,7 @@ export default function SettingsPage() {
   const enrollMFA = async () => {
     setMfaError('')
     const supabase = createClient()
-    const { data, error } = await supabase.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Consilium' })
+    const { data, error } = await supabase.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Wali-OS' })
     if (error || !data) { setMfaError(error?.message ?? 'Failed to enroll'); return }
     setQrCode(data.totp.qr_code)
     setFactorId(data.id)
@@ -493,7 +493,7 @@ export default function SettingsPage() {
         </Section>
 
         <p className="text-center text-[11px] pb-4" style={{ color: txt3 }}>
-          Consilium · <a href="mailto:support@consilium.app" style={{ color: txt3 }}>support@consilium.app</a>
+          Consilium · <a href="mailto:support@wali-os.com" style={{ color: txt3 }}>support@wali-os.com</a>
         </p>
       </div>
     </div>

@@ -13,7 +13,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<Theme>('dark')
 
   useEffect(() => {
-    const saved = localStorage.getItem('consilium_theme') as Theme | null
+    const saved = localStorage.getItem('wali_os_theme') as Theme | null
     const t = saved ?? 'dark'
     setTheme(t)
     document.documentElement.setAttribute('data-theme', t)
@@ -22,7 +22,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const toggle = () => {
     const next: Theme = theme === 'dark' ? 'light' : 'dark'
     setTheme(next)
-    localStorage.setItem('consilium_theme', next)
+    localStorage.setItem('wali_os_theme', next)
     document.documentElement.setAttribute('data-theme', next)
   }
 

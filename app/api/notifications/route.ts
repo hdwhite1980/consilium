@@ -16,7 +16,7 @@ async function sendEmail(to: string, subject: string, html: string): Promise<boo
       method: 'POST',
       headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        from: process.env.RESEND_FROM ?? 'Consilium Alerts <alerts@consilium.app>',
+        from: process.env.RESEND_FROM ?? 'Wali-OS Alerts <alerts@wali-os.com>',
         to,
         subject,
         html,
@@ -88,7 +88,7 @@ function alertEmailHTML(alerts: Array<{ ticker: string; severity: string; title:
         <span style="font-size:18px;">⚡</span>
       </div>
       <div>
-        <div style="color:#a78bfa;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;">Consilium</div>
+        <div style="color:#a78bfa;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;">Wali-OS</div>
         <div style="color:#e2e8f0;font-size:16px;font-weight:700;">Portfolio Alert${alerts.length > 1 ? 's' : ''}</div>
       </div>
     </div>
@@ -191,8 +191,8 @@ export async function PUT() {
   if (prefs.email_enabled && user.email) {
     const urgentCount = toNotify.filter(a => a.severity === 'urgent').length
     const subject = urgentCount > 0
-      ? `🚨 ${urgentCount} urgent portfolio alert${urgentCount > 1 ? 's' : ''} — Consilium`
-      : `📊 ${toNotify.length} portfolio alert${toNotify.length > 1 ? 's' : ''} — Consilium`
+      ? `🚨 ${urgentCount} urgent portfolio alert${urgentCount > 1 ? 's' : ''} — Wali-OS`
+      : `📊 ${toNotify.length} portfolio alert${toNotify.length > 1 ? 's' : ''} — Wali-OS`
 
     results.email = await sendEmail(user.email, subject, alertEmailHTML(toNotify))
   }
@@ -202,8 +202,8 @@ export async function PUT() {
     const urgents = toNotify.filter(a => a.severity === 'urgent')
     const most = urgents[0] ?? toNotify[0]
     const smsBody = urgents.length > 0
-      ? `⚠️ Consilium URGENT: ${most.ticker} — ${most.title}. Price: $${most.price?.toFixed(2) ?? 'N/A'}. View: ${process.env.NEXT_PUBLIC_APP_URL}/portfolio`
-      : `📊 Consilium: ${toNotify.length} portfolio alert${toNotify.length > 1 ? 's' : ''}. Top: ${most.title}. View: ${process.env.NEXT_PUBLIC_APP_URL}/portfolio`
+      ? `⚠️ Wali-OS URGENT: ${most.ticker} — ${most.title}. Price: $${most.price?.toFixed(2) ?? 'N/A'}. View: ${process.env.NEXT_PUBLIC_APP_URL}/portfolio`
+      : `📊 Wali-OS: ${toNotify.length} portfolio alert${toNotify.length > 1 ? 's' : ''}. Top: ${most.title}. View: ${process.env.NEXT_PUBLIC_APP_URL}/portfolio`
 
     results.sms = await sendSMS(prefs.phone, smsBody)
   }

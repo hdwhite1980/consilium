@@ -309,8 +309,8 @@ function HomeInner() {
         setTimeout(() => setShowTutorial(true), 0)
       }
     }
-    window.addEventListener('consilium:launch_tutorial', handler)
-    return () => window.removeEventListener('consilium:launch_tutorial', handler)
+    window.addEventListener('wali_os:launch_tutorial', handler)
+    return () => window.removeEventListener('wali_os:launch_tutorial', handler)
   }, [])
 
   const handleSignOut = async () => {
@@ -328,7 +328,7 @@ function HomeInner() {
   useEffect(() => {
     if (stage === 'done' && md && gem && jud) {
       try {
-        sessionStorage.setItem('consilium_last', JSON.stringify({
+        sessionStorage.setItem('wali_os_last', JSON.stringify({
           ticker, tf, stage, md, gem, cla, gpt, reb, ctr, jud, cached
         }))
       } catch { /* storage full or unavailable */ }
@@ -340,7 +340,7 @@ function HomeInner() {
     const urlTicker = searchParams.get('ticker')
     if (!urlTicker) {
       try {
-        const saved = sessionStorage.getItem('consilium_last')
+        const saved = sessionStorage.getItem('wali_os_last')
         if (saved) {
           const s = JSON.parse(saved)
           setTicker(s.ticker ?? 'AAPL')

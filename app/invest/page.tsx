@@ -487,8 +487,8 @@ function InvestInner() {
         setTimeout(() => setShowTutorial(true), 0)
       }
     }
-    window.addEventListener('consilium:launch_tutorial', handler)
-    return () => window.removeEventListener('consilium:launch_tutorial', handler)
+    window.addEventListener('wali_os:launch_tutorial', handler)
+    return () => window.removeEventListener('wali_os:launch_tutorial', handler)
   }, [])
 
   // Auto-refresh prices every 5 min during market hours

@@ -3,7 +3,7 @@ import './globals.css'
 import { ThemeProvider } from './lib/theme'
 
 export const metadata: Metadata = {
-  title: 'Consilium — AI Stock Analysis Council',
+  title: 'Wali-OS — AI Stock Analysis',
   description: 'Three AI models debate stock direction and converge on a consensus verdict.',
 }
 
@@ -24,7 +24,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: `
           (function(){
             try {
-              var t = localStorage.getItem('consilium_theme') || 'dark';
+              var t = localStorage.getItem('wali_os_theme') || 'dark';
               document.documentElement.setAttribute('data-theme', t);
             } catch(e){}
           })();

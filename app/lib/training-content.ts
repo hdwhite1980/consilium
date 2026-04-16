@@ -69,7 +69,7 @@ const track1: Track = {
         },
         {
           type: 'text',
-          text: "Consilium's council forces three separate roles with opposing incentives. The Lead Analyst is rewarded for a decisive directional call. The Devil's Advocate is rewarded for finding holes in that call. Neither can ignore the other. The debate creates genuine intellectual conflict — and conflict is what surfaces real risks.",
+          text: "Wali-OS's council forces three separate roles with opposing incentives. The Lead Analyst is rewarded for a decisive directional call. The Devil's Advocate is rewarded for finding holes in that call. Neither can ignore the other. The debate creates genuine intellectual conflict — and conflict is what surfaces real risks.",
         },
         {
           type: 'tip',
@@ -115,7 +115,7 @@ const track1: Track = {
       content: [
         {
           type: 'text',
-          text: "Each of the six stages tells you something different. Most users read the verdict and nothing else. The users who get the most out of Consilium read the rebuttal.",
+          text: "Each of the six stages tells you something different. Most users read the verdict and nothing else. The users who get the most out of Wali-OS read the rebuttal.",
         },
         {
           type: 'debate_block',

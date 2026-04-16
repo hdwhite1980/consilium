@@ -143,7 +143,7 @@ function ConfirmInner() {
             <div className="text-5xl">✓</div>
             <div>
               <h1 className="text-xl font-bold text-white mb-2">Email confirmed!</h1>
-              <p className="text-sm text-white/50">Taking you to Consilium…</p>
+              <p className="text-sm text-white/50">Taking you to Wali-OS…</p>
             </div>
           </div>
         )}

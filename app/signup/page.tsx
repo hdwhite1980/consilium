@@ -30,7 +30,7 @@ function SignupInner() {
     setError(null)
 
     const supabase = createClient()
-    const redirectUrl = 'https://consilium-production-d8e6.up.railway.app/auth/callback'
+    const redirectUrl = 'https://wali-os.com/auth/callback'
     console.log('Signing up with redirectTo:', redirectUrl)
     alert('Debug - redirectTo: ' + redirectUrl) // temporary
 
@@ -119,7 +119,7 @@ function SignupInner() {
             Stop guessing.<br />Start knowing.
           </h1>
           <p className="text-white/50 text-base mb-10 leading-relaxed">
-            Consilium analyzes any stock and tells you exactly what to do — with a clear signal, a price target, and entry and exit levels explained in plain English.
+            Wali-OS analyzes any stock and tells you exactly what to do — with a clear signal, a price target, and entry and exit levels explained in plain English.
           </p>
 
           <div className="space-y-4">
@@ -232,7 +232,7 @@ function SignupInner() {
                 className="underline hover:text-white/40 transition-colors">
                 disclaimer and terms
               </button>
-              . Consilium does not provide financial advice.
+              . Wali-OS does not provide financial advice.
             </p>
           </div>
         </div>
