@@ -1179,6 +1179,46 @@ function HomeInner() {
                     <div className="grid grid-cols-2 gap-3">
                       {(() => {
                         const isBearish = jud.signal === 'BEARISH'
+                        const currentP = md?.currentPrice ?? 0
+                        const atr = md?.technicals?.atr14 ?? 0
+
+                        // Extract first $ price from AI string
+                        const extractP = (s: string) => { const m = s?.match(/\$(\d{1,6}(?:\.\d{1,2})?)/) ; return m ? parseFloat(m[1]) : null }
+                        const entryP = extractP(jud.entryPrice) ?? currentP
+                        const stopP  = extractP(jud.stopLoss)
+                        const tpP    = extractP(jud.takeProfit)
+
+                        // Validate and auto-correct inverted values
+                        let stopVal  = jud.stopLoss
+                        let tpVal    = jud.takeProfit
+                        let stopFixed = false, tpFixed = false
+
+                        if (!isBearish) {
+                          // BULLISH: stop must be < entry, target must be > entry
+                          if (stopP !== null && stopP >= entryP) {
+                            const c = (atr > 0 ? entryP - atr * 2 : entryP * 0.93).toFixed(2)
+                            stopVal = `$${c} — 2× ATR below entry`
+                            stopFixed = true
+                          }
+                          if (tpP !== null && tpP <= entryP) {
+                            const c = (atr > 0 ? entryP + atr * 3 : entryP * 1.08).toFixed(2)
+                            tpVal = `$${c} first target (3× ATR above entry)`
+                            tpFixed = true
+                          }
+                        } else {
+                          // BEARISH: stop must be > entry, target must be < entry
+                          if (stopP !== null && stopP <= entryP) {
+                            const c = (atr > 0 ? entryP + atr * 2 : entryP * 1.07).toFixed(2)
+                            stopVal = `$${c} — 2× ATR above entry`
+                            stopFixed = true
+                          }
+                          if (tpP !== null && tpP >= entryP) {
+                            const c = (atr > 0 ? entryP - atr * 3 : entryP * 0.92).toFixed(2)
+                            tpVal = `$${c} first target (3× ATR below entry)`
+                            tpFixed = true
+                          }
+                        }
+
                         return ([
                           {
                             label: 'Entry',
@@ -1188,24 +1228,27 @@ function HomeInner() {
                             bg: isBearish ? 'rgba(248,113,113,0.1)' : 'rgba(52,211,153,0.1)',
                             border: isBearish ? 'rgba(248,113,113,0.25)' : 'rgba(52,211,153,0.25)',
                             hint: isBearish ? 'short / wait for drop' : 'buy zone',
+                            fixed: false,
                           },
                           {
                             label: 'Stop Loss',
-                            val: jud.stopLoss,
+                            val: stopVal,
                             color: '#f87171',
                             icon: '✕',
                             bg: 'rgba(248,113,113,0.1)',
                             border: 'rgba(248,113,113,0.25)',
                             hint: isBearish ? 'exit if price rises here' : 'exit if price falls here',
+                            fixed: stopFixed,
                           },
                           {
                             label: 'Take Profit',
-                            val: jud.takeProfit,
+                            val: tpVal,
                             color: '#34d399',
                             icon: '★',
                             bg: 'rgba(52,211,153,0.1)',
                             border: 'rgba(52,211,153,0.25)',
                             hint: isBearish ? 'target below entry' : 'target above entry',
+                            fixed: tpFixed,
                           },
                           {
                             label: 'Time Horizon',
@@ -1215,14 +1258,16 @@ function HomeInner() {
                             bg: 'rgba(167,139,250,0.1)',
                             border: 'rgba(167,139,250,0.25)',
                             hint: '',
+                            fixed: false,
                           },
-                        ] as Array<{label:string;val:string;color:string;icon:string;bg:string;border:string;hint:string}>)
-                      })().map(({ label, val, color, icon, bg, border, hint }) => (
+                        ] as Array<{label:string;val:string;color:string;icon:string;bg:string;border:string;hint:string;fixed:boolean}>)
+                      })().map(({ label, val, color, icon, bg, border, hint, fixed }) => (
                         <div key={label} className="rounded-xl p-3 flex flex-col gap-1"
                           style={{ background: bg, border: `1px solid ${border}` }}>
                           <div className="flex items-center gap-1.5">
                             <span className="text-sm" style={{ color }}>{icon}</span>
                             <span className="text-[10px] font-mono uppercase tracking-widest" style={{ color: `${color}99` }}>{label}</span>
+                            {fixed && <span className="text-[9px] px-1 rounded" style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>corrected</span>}
                           </div>
                           <div className="text-sm font-bold leading-snug" style={{ color }}>{val}</div>
                           {hint && <div className="text-[10px] leading-snug" style={{ color: `${color}70` }}>{hint}</div>}
@@ -1299,12 +1344,28 @@ function HomeInner() {
                 )}
 
                 {/* Action plan — always visible */}
-                {jud.actionPlan && (
-                  <div className="rounded-xl p-4" style={{ background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)' }}>
-                    <div className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: '#fbbf24' }}>Action plan</div>
-                    <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{jud.actionPlan}</p>
-                  </div>
-                )}
+                {jud.actionPlan && (() => {
+                  const isBearish2 = jud.signal === 'BEARISH'
+                  const currentP2 = md?.currentPrice ?? 0
+                  const atr2 = md?.technicals?.atr14 ?? 0
+                  const xP = (s: string) => { const m = s?.match(/\$(\d{1,6}(?:\.\d{1,2})?)/) ; return m ? parseFloat(m[1]) : null }
+                  const entryP2 = xP(jud.entryPrice) ?? currentP2
+                  const stopWrong2 = (() => { const p = xP(jud.stopLoss); return p !== null && (!isBearish2 ? p >= entryP2 : p <= entryP2) })()
+                  const tpWrong2   = (() => { const p = xP(jud.takeProfit); return p !== null && (!isBearish2 ? p <= entryP2 : p >= entryP2) })()
+                  const cStop = stopWrong2 ? `$${(atr2 > 0 ? (isBearish2 ? entryP2 + atr2 * 2 : entryP2 - atr2 * 2) : entryP2 * (isBearish2 ? 1.07 : 0.93)).toFixed(2)}` : null
+                  const cTp   = tpWrong2   ? `$${(atr2 > 0 ? (isBearish2 ? entryP2 - atr2 * 3 : entryP2 + atr2 * 3) : entryP2 * (isBearish2 ? 0.92 : 1.08)).toFixed(2)}` : null
+                  return (
+                    <div className="rounded-xl p-4" style={{ background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)' }}>
+                      <div className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: '#fbbf24' }}>Action plan</div>
+                      <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{jud.actionPlan}</p>
+                      {(cStop || cTp) && (
+                        <div className="mt-2 text-[11px] leading-relaxed px-3 py-2 rounded-lg" style={{ background: 'rgba(251,191,36,0.08)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)' }}>
+                          ⚠ Note: price levels in the text above were recalculated — {cStop ? `stop corrected to ${cStop}` : ''}{cStop && cTp ? ', ' : ''}{cTp ? `target corrected to ${cTp}` : ''} (ATR-derived, direction-validated). Use the Trade Plan boxes above.
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()}
 
                 {/* Log Trade CTA */}
                 {jud.signal && (jud.signal === 'BULLISH' || jud.signal === 'NEUTRAL') && (

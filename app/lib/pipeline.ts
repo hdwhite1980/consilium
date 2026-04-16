@@ -671,8 +671,8 @@ JSON ONLY — include ALL fields below:
   "invalidationTrigger": "the single clearest signal this thesis is wrong",
   "rounds": ${round},
   "entryPrice": "recommended entry price or range e.g. $195-$198 on a pullback to support",
-  "stopLoss": "where to cut losses — use the ATR-derived stop from the signal data if available, explain why e.g. '$189 — 2× ATR below entry, below SMA200 support'",
-  "takeProfit": "where to take profits — use ATR-derived target if available. For BULLISH above entry, for BEARISH below entry. e.g. BULLISH: '$215 first (1.5× ATR), $225 full exit at resistance' | BEARISH: '$192 first target, $185 full exit'",
+  "stopLoss": "CRITICAL: For BULLISH signal this MUST be a price BELOW the entry price. For BEARISH signal this MUST be ABOVE entry. Use ATR-derived stop. e.g. BULLISH at $197: '$171 — 2× ATR below entry' NOT a price above $197",
+  "takeProfit": "CRITICAL: For BULLISH signal this MUST be a price ABOVE entry. For BEARISH signal this MUST be BELOW entry. e.g. BULLISH at $197: '$236 first target (3× ATR above entry)' NOT a price below $197",
   "timeHorizon": "MUST match the selected timeframe: 1D=same day to next session, 1W=3-10 trading days, 1M=3-6 weeks, 3M=6-13 weeks. Currently: ${bundle.timeframe}",
   "plainEnglish": "Explain the verdict in simple plain English as if talking to someone who has never traded before. 3-4 sentences. No jargon. What is this stock doing and what should someone know about it right now?",
   "technicalsExplained": "Explain what the technical signals mean in plain English. Cover: (1) any candlestick or chart patterns detected and what they signal, (2) any gaps and whether they act as support/resistance, (3) the trend structure (higher highs/lows), (4) Ichimoku cloud position, (5) RSI/Williams/CCI agreement or disagreement. 4-5 sentences a beginner would understand.",
@@ -683,7 +683,70 @@ JSON ONLY — include ALL fields below:
 }`
     }]
   })
-  return parseJSON<JudgeResult>((msg.content[0] as { text: string }).text)
+  const raw = parseJSON<JudgeResult>((msg.content[0] as { text: string }).text)
+  return sanitizeJudgeResult(raw, bundle)
+}
+
+// ── Extract first dollar price from a string ────────────────
+function extractPrice(s: string): number | null {
+  const m = s?.match(/\$(\d{1,6}(?:\.\d{1,2})?)/)
+  return m ? parseFloat(m[1]) : null
+}
+
+// ── Fix inverted stop/target — the AI sometimes gets direction wrong ─
+function sanitizeJudgeResult(judge: JudgeResult, bundle: SignalBundle): JudgeResult {
+  const currentPrice = bundle.technicals?.currentPrice ?? 0
+  if (!currentPrice) return judge
+
+  const signal = judge.signal
+  const entry  = extractPrice(judge.entryPrice) ?? currentPrice
+  const stop   = extractPrice(judge.stopLoss)
+  const tp     = extractPrice(judge.takeProfit)
+  const atr    = bundle.technicals?.atr14 ?? 0
+
+  // For BULLISH: stop MUST be below entry, takeProfit MUST be above entry
+  if (signal === 'BULLISH') {
+    let fixedStop   = judge.stopLoss
+    let fixedTarget = judge.takeProfit
+
+    if (stop !== null && stop >= entry) {
+      // Stop is above or at entry — fix it using ATR
+      const corrected = (atr > 0 ? entry - atr * 2 : entry * 0.93).toFixed(2)
+      fixedStop = `$${corrected} — 2× ATR below entry (auto-corrected)`
+      console.warn(`[pipeline] BULLISH stop ${stop} was >= entry ${entry} — corrected to ${corrected}`)
+    }
+
+    if (tp !== null && tp <= entry) {
+      // Target is below or at entry — fix it using ATR
+      const corrected = (atr > 0 ? entry + atr * 3 : entry * 1.08).toFixed(2)
+      fixedTarget = `$${corrected} first target (auto-corrected), extended target at resistance`
+      console.warn(`[pipeline] BULLISH target ${tp} was <= entry ${entry} — corrected to ${corrected}`)
+    }
+
+    return { ...judge, stopLoss: fixedStop, takeProfit: fixedTarget }
+  }
+
+  // For BEARISH: stop MUST be above entry, takeProfit MUST be below entry
+  if (signal === 'BEARISH') {
+    let fixedStop   = judge.stopLoss
+    let fixedTarget = judge.takeProfit
+
+    if (stop !== null && stop <= entry) {
+      const corrected = (atr > 0 ? entry + atr * 2 : entry * 1.07).toFixed(2)
+      fixedStop = `$${corrected} — 2× ATR above entry (auto-corrected)`
+      console.warn(`[pipeline] BEARISH stop ${stop} was <= entry ${entry} — corrected to ${corrected}`)
+    }
+
+    if (tp !== null && tp >= entry) {
+      const corrected = (atr > 0 ? entry - atr * 3 : entry * 0.92).toFixed(2)
+      fixedTarget = `$${corrected} first target (auto-corrected)`
+      console.warn(`[pipeline] BEARISH target ${tp} was >= entry ${entry} — corrected to ${corrected}`)
+    }
+
+    return { ...judge, stopLoss: fixedStop, takeProfit: fixedTarget }
+  }
+
+  return judge
 }
 
 export async function runPipeline(
