@@ -1079,12 +1079,47 @@ function HomeInner() {
                       ⚡ Trade Plan
                     </div>
                     <div className="grid grid-cols-2 gap-3">
-                      {([
-                        { label: 'Entry',        val: jud.entryPrice,   color: '#34d399',  icon: '▶',  bg: 'rgba(52,211,153,0.1)',   border: 'rgba(52,211,153,0.25)' },
-                        { label: 'Stop Loss',    val: jud.stopLoss,     color: '#f87171',  icon: '✕',  bg: 'rgba(248,113,113,0.1)',  border: 'rgba(248,113,113,0.25)' },
-                        { label: 'Take Profit',  val: jud.takeProfit,   color: '#fbbf24',  icon: '★',  bg: 'rgba(251,191,36,0.1)',   border: 'rgba(251,191,36,0.25)' },
-                        { label: 'Time Horizon', val: jud.timeHorizon,  color: '#a78bfa',  icon: '◷',  bg: 'rgba(167,139,250,0.1)',  border: 'rgba(167,139,250,0.25)' },
-                      ] as Array<{label:string;val:string;color:string;icon:string;bg:string;border:string}>).map(({ label, val, color, icon, bg, border }) => (
+                      {(() => {
+                        const isBearish = jud.signal === 'BEARISH'
+                        return ([
+                          {
+                            label: 'Entry',
+                            val: jud.entryPrice,
+                            color: isBearish ? '#f87171' : '#34d399',
+                            icon: isBearish ? '▼' : '▶',
+                            bg: isBearish ? 'rgba(248,113,113,0.1)' : 'rgba(52,211,153,0.1)',
+                            border: isBearish ? 'rgba(248,113,113,0.25)' : 'rgba(52,211,153,0.25)',
+                            hint: isBearish ? 'short / wait for drop' : 'buy zone',
+                          },
+                          {
+                            label: 'Stop Loss',
+                            val: jud.stopLoss,
+                            color: '#f87171',
+                            icon: '✕',
+                            bg: 'rgba(248,113,113,0.1)',
+                            border: 'rgba(248,113,113,0.25)',
+                            hint: isBearish ? 'exit if price rises here' : 'exit if price falls here',
+                          },
+                          {
+                            label: 'Take Profit',
+                            val: jud.takeProfit,
+                            color: '#34d399',
+                            icon: '★',
+                            bg: 'rgba(52,211,153,0.1)',
+                            border: 'rgba(52,211,153,0.25)',
+                            hint: isBearish ? 'target below entry' : 'target above entry',
+                          },
+                          {
+                            label: 'Time Horizon',
+                            val: jud.timeHorizon,
+                            color: '#a78bfa',
+                            icon: '◷',
+                            bg: 'rgba(167,139,250,0.1)',
+                            border: 'rgba(167,139,250,0.25)',
+                            hint: '',
+                          },
+                        ] as Array<{label:string;val:string;color:string;icon:string;bg:string;border:string;hint:string}>)
+                      })().map(({ label, val, color, icon, bg, border, hint }) => (
                         <div key={label} className="rounded-xl p-3 flex flex-col gap-1"
                           style={{ background: bg, border: `1px solid ${border}` }}>
                           <div className="flex items-center gap-1.5">
@@ -1092,6 +1127,7 @@ function HomeInner() {
                             <span className="text-[10px] font-mono uppercase tracking-widest" style={{ color: `${color}99` }}>{label}</span>
                           </div>
                           <div className="text-sm font-bold leading-snug" style={{ color }}>{val}</div>
+                          {hint && <div className="text-[10px] leading-snug" style={{ color: `${color}70` }}>{hint}</div>}
                         </div>
                       ))}
                     </div>
@@ -1252,6 +1288,9 @@ function HomeInner() {
                 signal={jud.signal}
                 timeHorizon={jud.timeHorizon ?? '2-4 weeks'}
                 target={jud.target ?? ''}
+                stopLoss={jud.stopLoss ?? ''}
+                entryPrice={jud.entryPrice ?? ''}
+                takeProfit={jud.takeProfit ?? ''}
                 technicals={md.technicals ? {
                   technicalScore: md.technicals.technicalScore,
                   goldenCross: md.technicals.goldenCross,

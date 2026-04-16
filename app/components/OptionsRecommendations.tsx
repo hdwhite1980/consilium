@@ -39,6 +39,9 @@ interface OptionsRecommendationsProps {
   signal: string
   timeHorizon: string
   target: string
+  stopLoss?: string
+  entryPrice?: string
+  takeProfit?: string
   technicals: { technicalScore: number; goldenCross: boolean; rsi: number } | null
   verdict: string
 }

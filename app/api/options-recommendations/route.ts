@@ -389,59 +389,84 @@ function labelMoneyness(contracts: OptionsContract[], currentPrice: number): Opt
   }))
 }
 
-function selectBestContracts(
+function selectBestContractsWithLevels(
   contracts: OptionsContract[],
   signal: string,
   currentPrice: number,
-  timeHorizon: string
+  timeHorizon: string,
+  entryPrice: number,
+  stopLoss: number | null,
+  takeProfit: number | null,
 ): OptionsContract[] {
-  // Determine target DTE based on time horizon
   const targetDTE = timeHorizon.includes('week') ? 14
     : timeHorizon.includes('month') ? 30
     : timeHorizon.includes('2-3') ? 21
+    : timeHorizon.includes('2-4') ? 21
     : 30
-
-  const scoreContract = (c: OptionsContract) =>
-    (c.moneyness === 'ATM' ? 10 : c.moneyness === 'OTM' ? 5 : 2) +
-    Math.min((c.volume || c.openInterest / 100) / 100, 5) +
-    // Prefer contracts near the target DTE
-    Math.max(0, 5 - Math.abs(c.daysToExpiry - targetDTE) / 3)
 
   const baseFilter = (c: OptionsContract) =>
     c.bid !== null && c.bid > 0 &&
     c.daysToExpiry >= 3 &&
     c.daysToExpiry <= 90
 
+  const scoreContract = (c: OptionsContract, idealStrike: number) => {
+    const strikeProximity = Math.max(0, 10 - Math.abs(c.strike - idealStrike) / currentPrice * 100)
+    const dteScore = Math.max(0, 5 - Math.abs(c.daysToExpiry - targetDTE) / 3)
+    const liquidityScore = Math.min(c.volume / 100 + c.openInterest / 1000, 5)
+    return strikeProximity + dteScore + liquidityScore
+  }
+
   if (signal === 'BULLISH') {
+    // For calls: ideal strike is near entry price (ATM to slight OTM)
+    // If we have a target, find a strike between entry and target
+    const idealStrike = entryPrice ?? currentPrice
     return contracts
       .filter(c => c.type === 'call' && baseFilter(c))
-      .sort((a, b) => scoreContract(b) - scoreContract(a))
+      .sort((a, b) => scoreContract(b, idealStrike) - scoreContract(a, idealStrike))
       .slice(0, 3)
   }
 
   if (signal === 'BEARISH') {
+    // For puts: ideal strike near current price or entry
+    // Stop loss is the max risk level — use it to size the trade
+    const idealStrike = entryPrice ?? currentPrice
     return contracts
       .filter(c => c.type === 'put' && baseFilter(c))
-      .sort((a, b) => scoreContract(b) - scoreContract(a))
+      .sort((a, b) => scoreContract(b, idealStrike) - scoreContract(a, idealStrike))
       .slice(0, 3)
   }
 
-  // NEUTRAL — show 2 ATM/near-ATM calls and 2 puts so user can see the market
-  // These are for reference/education, not a directional recommendation
-  const calls = contracts
-    .filter(c => c.type === 'call' && baseFilter(c))
-    .sort((a, b) => scoreContract(b) - scoreContract(a))
-    .slice(0, 2)
-  const puts = contracts
-    .filter(c => c.type === 'put' && baseFilter(c))
-    .sort((a, b) => scoreContract(b) - scoreContract(a))
-    .slice(0, 2)
+  // NEUTRAL — show ATM calls and puts for reference
+  const atm = entryPrice ?? currentPrice
+  const calls = contracts.filter(c => c.type === 'call' && baseFilter(c))
+    .sort((a, b) => scoreContract(b, atm) - scoreContract(a, atm)).slice(0, 2)
+  const puts = contracts.filter(c => c.type === 'put' && baseFilter(c))
+    .sort((a, b) => scoreContract(b, atm) - scoreContract(a, atm)).slice(0, 2)
   return [...calls, ...puts]
+}
+
+function selectBestContracts(
+  contracts: OptionsContract[],
+  signal: string,
+  currentPrice: number,
+  timeHorizon: string,
+): OptionsContract[] {
+  return selectBestContractsWithLevels(contracts, signal, currentPrice, timeHorizon, currentPrice, null, null)
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const { ticker, currentPrice, signal, timeHorizon, target, technicals, verdict } = await req.json()
+    const { ticker, currentPrice, signal, timeHorizon, target, technicals, verdict, stopLoss, entryPrice, takeProfit } = await req.json()
+
+    // Parse Judge's specific price levels for intelligent strike selection
+    const parsePrice = (s: string | number | undefined): number | null => {
+      if (!s) return null
+      const n = parseFloat(String(s).replace(/[^0-9.-]/g, ''))
+      return isNaN(n) ? null : n
+    }
+    const judgeStop    = parsePrice(stopLoss)
+    const judgeEntry   = parsePrice(entryPrice) ?? currentPrice
+    const judgeTarget  = parsePrice(takeProfit) ?? parsePrice(target)
 
     // ── Fetch options chain ───────────────────────────────────
     let contracts: OptionsContract[] = []
@@ -467,7 +492,7 @@ export async function POST(req: NextRequest) {
       if (contracts.length > 0) dataSource = 'Alpaca'
     }
 
-    const bestContracts = selectBestContracts(contracts, signal, currentPrice, timeHorizon || '30 days')
+    const bestContracts = selectBestContractsWithLevels(contracts, signal, currentPrice, timeHorizon || '30 days', judgeEntry, judgeStop, judgeTarget)
 
     // ── AI strategy recommendation ────────────────────────────
     const anthropic = new Anthropic()
@@ -487,37 +512,44 @@ export async function POST(req: NextRequest) {
         content: `Ticker: ${ticker}
 Current Price: $${currentPrice}
 Council Verdict: ${signal}
-Price Target: ${target}
+Council Entry Zone: ${judgeEntry ? '$' + judgeEntry.toFixed(2) : 'N/A'}
+Council Stop Loss: ${judgeStop ? '$' + judgeStop.toFixed(2) + ' (' + (((judgeStop - currentPrice) / currentPrice) * 100).toFixed(1) + '%)' : 'N/A'}
+Council Take Profit: ${judgeTarget ? '$' + judgeTarget.toFixed(2) + ' (' + (((judgeTarget - currentPrice) / currentPrice) * 100).toFixed(1) + '%)' : 'N/A'}
 Time Horizon: ${timeHorizon}
 Technical Score: ${technicals?.technicalScore ?? 'N/A'}
-MA Cross: ${technicals?.goldenCross ? 'Golden Cross (bullish)' : 'Death Cross (bearish)'}
 RSI: ${technicals?.rsi ?? 'N/A'}
 
 Verdict Summary: ${verdict}
 
-Available Options Contracts:
+Available Options Contracts (pre-selected near the council's entry zone):
 ${contractSummary}
 
-CRITICAL RULES:
-- If signal is NEUTRAL: strategyType MUST be "neutral". Do NOT recommend buying calls or puts on a neutral signal. Instead recommend strategies that profit from time decay or sideways movement (covered calls, cash-secured puts, iron condors).
-- If signal is BULLISH: strategyType should be "long_call" or "bull_call_spread"
-- If signal is BEARISH: strategyType should be "long_put" or "bear_put_spread"
-- NEVER contradict the signal. A NEUTRAL signal means the council sees no clear direction — respect that.
-- If NEUTRAL, the strategy name should reflect this e.g. "Sell Covered Calls", "Wait for Clearer Signal", "Cash-Secured Put for Entry"
+IMPORTANT — Use the Council's specific price levels in your recommendation:
+- Stop loss at ${judgeStop ? '$' + judgeStop.toFixed(2) : 'N/A'} defines the maximum risk on this trade
+- Take profit at ${judgeTarget ? '$' + judgeTarget.toFixed(2) : 'N/A'} is the realistic target
+- Choose strikes that make sense given these levels — don't suggest contracts that expire before the move can develop
 
-Based on this analysis, provide a specific options recommendation in JSON only (no markdown):
+CRITICAL RULES:
+- If signal is NEUTRAL: strategyType MUST be "neutral". Recommend waiting or income strategies.
+- If signal is BULLISH: recommend calls near the entry zone ($${judgeEntry?.toFixed(2) ?? currentPrice.toFixed(2)})
+- If signal is BEARISH: recommend puts near the entry zone ($${judgeEntry?.toFixed(2) ?? currentPrice.toFixed(2)})
+- NEVER contradict the signal direction.
+- Always reference the specific contracts shown above by strike and expiry.
+
+Respond in JSON only (no markdown):
 {
-  "strategy": "short name matching the signal e.g. 'Sell Covered Calls' for NEUTRAL, 'Buy Call Options' for BULLISH",
+  "strategy": "specific strategy name e.g. 'Buy $${judgeEntry?.toFixed(0) ?? ''}  Put — targeting $${judgeTarget?.toFixed(0) ?? ''}'",
   "strategyType": "long_call|long_put|covered_call|cash_secured_put|bull_call_spread|bear_put_spread|neutral",
-  "rationale": "2-3 sentences explaining WHY this strategy fits the verdict signal in plain English. Must be consistent with the ${signal} signal. Reference the actual price target and time horizon.",
+  "specificContract": "Which exact contract from the list above you'd choose and why — reference strike and expiry",
+  "rationale": "2-3 sentences: why this contract fits the council's verdict. Reference entry $${judgeEntry?.toFixed(2) ?? ''}, stop $${judgeStop?.toFixed(2) ?? ''}, target $${judgeTarget?.toFixed(2) ?? ''}",
   "riskLevel": "high|medium|low",
-  "maxLoss": "plain English description of worst case e.g. 'You lose the entire premium paid, which is $X per contract ($X total for 1 contract controlling 100 shares)'",
-  "maxGain": "plain English description of best case with realistic numbers based on the price target",
+  "maxLoss": "Specific dollar amount: premium paid × 100 shares per contract. If stop is hit at $${judgeStop?.toFixed(2) ?? ''}, the put/call is worth approx X.",
+  "maxGain": "If ${ticker} reaches $${judgeTarget?.toFixed(2) ?? 'target'}, the contract is worth approx X — a Y% gain on premium paid.",
   "idealFor": "who this strategy is suitable for",
-  "timeHorizon": "specific recommendation e.g. 'Look for contracts expiring in 3-4 weeks'",
-  "alternativeStrategy": "A safer/simpler alternative. For NEUTRAL signal, suggest simply waiting for a clearer signal before trading options.",
-  "beginnerWarning": "A clear, honest warning about options risk. If signal is NEUTRAL, emphasize that trading options on a neutral signal is especially risky because there is no clear direction.",
-  "greeksExplained": "Explain what delta, theta, and IV mean for the specific contracts above in plain English."
+  "timeHorizon": "Specific expiry recommendation that covers the ${timeHorizon} time horizon",
+  "alternativeStrategy": "A simpler alternative. If NEUTRAL, suggest waiting for verdict to change.",
+  "beginnerWarning": "Honest risk warning specific to this trade.",
+  "greeksExplained": "Delta: for every $1 move in ${ticker}, the option moves $X. Theta: you lose $X per day in time value. Reference the specific contracts."
 }`
       }]
     })
