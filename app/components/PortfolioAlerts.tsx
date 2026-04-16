@@ -48,6 +48,8 @@ export default function PortfolioAlerts({ isDark }: Props) {
   const [open, setOpen] = useState(false)
   const [checking, setChecking] = useState(false)
   const [lastChecked, setLastChecked] = useState<Date | null>(null)
+  const [nextCheck, setNextCheck] = useState<Date | null>(null)
+  const [countdown, setCountdown] = useState<string>('')
 
   const txt  = isDark ? 'rgba(255,255,255,0.9)'  : 'rgba(0,0,0,0.9)'
   const txt2 = isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)'
@@ -80,17 +82,52 @@ export default function PortfolioAlerts({ isDark }: Props) {
     setChecking(false)
   }, [checking, loadAlerts])
 
-  // Initial load
-  useEffect(() => { loadAlerts() }, [loadAlerts])
-
-  // Auto-check every 15 min during market hours, every 60 min after hours
+  // Initial load + immediate first check on mount
   useEffect(() => {
-    const tick = async () => {
-      await runCheck()
-    }
-    const interval = setInterval(tick, isMarketOpen() ? 15 * 60 * 1000 : 60 * 60 * 1000)
+    loadAlerts()
+    // Run first check immediately after mount (don't wait 15 min)
+    runCheck()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // intentionally empty — run once on mount
+
+  // Auto-check interval — stable, not dependent on runCheck to avoid reset
+  useEffect(() => {
+    const intervalMs = isMarketOpen() ? 15 * 60 * 1000 : 60 * 60 * 1000
+    const next = new Date(Date.now() + intervalMs)
+    setNextCheck(next)
+
+    const interval = setInterval(() => {
+      const newNext = new Date(Date.now() + intervalMs)
+      setNextCheck(newNext)
+      // Use fetch directly to avoid stale closure issues
+      fetch('/api/portfolio/monitor', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+          if (d.newAlertsCount > 0) {
+            fetch('/api/portfolio/monitor')
+              .then(r => r.json())
+              .then(d2 => setAlerts(d2.alerts ?? []))
+              .catch(() => null)
+          }
+          setLastChecked(new Date())
+        })
+        .catch(() => null)
+    }, intervalMs)
+
     return () => clearInterval(interval)
-  }, [runCheck])
+  }, []) // intentionally empty — stable interval, no re-registration
+
+  // Countdown ticker — updates every second
+  useEffect(() => {
+    const tick = setInterval(() => {
+      if (!nextCheck) return
+      const secsLeft = Math.max(0, Math.round((nextCheck.getTime() - Date.now()) / 1000))
+      const mins = Math.floor(secsLeft / 60)
+      const secs = secsLeft % 60
+      setCountdown(secsLeft <= 0 ? 'checking...' : `${mins}:${secs.toString().padStart(2, '0')}`)
+    }, 1000)
+    return () => clearInterval(tick)
+  }, [nextCheck])
 
   const acknowledge = async (alertId?: string) => {
     await fetch('/api/portfolio/monitor', {
@@ -144,11 +181,15 @@ export default function PortfolioAlerts({ isDark }: Props) {
               )}
             </div>
             <div className="flex items-center gap-2">
-              {lastChecked && (
-                <span className="text-[10px]" style={{ color: txt3 }}>
-                  {isMarketOpen() ? '🟢 live' : '⚫ after hours'} · {lastChecked.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
-              )}
+              <span className="text-[10px] flex items-center gap-1.5" style={{ color: txt3 }}>
+                <span>{isMarketOpen() ? '🟢' : '⚫'}</span>
+                {lastChecked && (
+                  <span>last {lastChecked.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                )}
+                {countdown && !checking && (
+                  <span style={{ color: 'rgba(167,139,250,0.6)' }}>· next {countdown}</span>
+                )}
+              </span>
               {alerts.length > 0 && (
                 <button onClick={() => acknowledge()} className="text-[10px] hover:opacity-70 flex items-center gap-1" style={{ color: txt3 }}>
                   <CheckCheck size={11} /> All read
@@ -167,7 +208,7 @@ export default function PortfolioAlerts({ isDark }: Props) {
                 <Bell size={20} style={{ color: txt3, margin: '0 auto 8px' }} />
                 <p className="text-xs" style={{ color: txt3 }}>No active alerts</p>
                 <p className="text-[10px] mt-1" style={{ color: txt3 }}>
-                  {isMarketOpen() ? 'Checking every 15 minutes' : 'Market closed — checking hourly'}
+                  {checking ? 'Running check now...' : countdown ? `Next check in ${countdown}` : isMarketOpen() ? 'Every 15 minutes' : 'Market closed — hourly'}
                 </p>
                 <button
                   onClick={() => { runCheck(); }}
@@ -226,9 +267,11 @@ export default function PortfolioAlerts({ isDark }: Props) {
 
           {/* Footer */}
           <div className="px-4 py-2 border-t text-[10px] flex items-center justify-between" style={{ borderColor: brd, background: surf2, color: txt3 }}>
-            <span>Support/resistance · P&L thresholds · Hourly news</span>
-            <button onClick={runCheck} disabled={checking} className="hover:opacity-70 disabled:opacity-40">
-              {checking ? 'Checking...' : 'Check now'}
+            <span style={{ color: txt3 }}>
+              {isMarketOpen() ? `Every 15 min · next in ${countdown || '...'}` : `After hours · next in ${countdown || '...'}`}
+            </span>
+            <button onClick={runCheck} disabled={checking} className="hover:opacity-70 disabled:opacity-40" style={{ color: checking ? txt3 : '#a78bfa' }}>
+              {checking ? 'Checking...' : '↻ Check now'}
             </button>
           </div>
         </div>
