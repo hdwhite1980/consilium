@@ -248,7 +248,25 @@ export default function OptionsRecommendations({
             </div>
           )}
 
-          {/* Live contracts — only show when we have Greeks for responsible display */}
+          {/* Live contracts */}
+          {data.hasLiveData && data.contracts.length > 0 && data.dataSource === 'Gemini' && (
+            <div>
+              <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2 flex items-center gap-2">
+                <span>{signal === 'NEUTRAL' ? 'Market reference' : 'Live contracts matching this strategy'}</span>
+                <span className="px-1.5 py-0.5 rounded text-[9px]"
+                  style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399' }}>
+                  live via Yahoo Finance
+                </span>
+              </div>
+              <div className="space-y-2">
+                {data.contracts.map((c, i) => <ContractCard key={i} c={c} />)}
+              </div>
+              <p className="text-[10px] text-white/20 mt-2 leading-relaxed">
+                One contract = 100 shares. Cost = ask price × 100. Verify current pricing with your broker before trading.
+              </p>
+            </div>
+          )}
+
           {data.hasLiveData && data.contracts.length > 0 && data.dataSource === 'Tradier' && (
             <div>
               <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2 flex items-center gap-2">

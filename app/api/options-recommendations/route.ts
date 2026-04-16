@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
+import { GoogleGenerativeAI } from '@google/generative-ai'
 
 // Evaluated at request time so env vars are always fresh
 const TRADIER_KEY = () => process.env.TRADIER_API_KEY || ''
@@ -145,7 +146,7 @@ async function fetchAlpacaOptions(ticker: string, currentPrice: number): Promise
             ? 'ATM'
             : type === 'call'
               ? strike < currentPrice ? 'ITM' : 'OTM'
-              : strike > currentPrice ? 'ITM' : 'OTM',
+              : strike > currentPrice ? 'ITM' : 'OTM' as 'ITM' | 'ATM' | 'OTM',
         }
       } catch { return null }
     }
@@ -238,6 +239,95 @@ async function fetchYahooOptions(ticker: string, currentPrice: number): Promise<
   }
 }
 
+
+// Gemini web search — pulls live options data from Yahoo Finance
+async function fetchOptionsViaGemini(
+  ticker: string,
+  currentPrice: number,
+  signal: string,
+  targetPrice: string,
+  timeHorizon: string
+): Promise<OptionsContract[]> {
+  const geminiKey = process.env.GEMINI_API_KEY
+  if (!geminiKey) return []
+
+  try {
+    const genAI = new GoogleGenerativeAI(geminiKey)
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-2.5-flash',
+      tools: [{ googleSearch: {} } as never],
+    })
+
+    const optionType = signal === 'BEARISH' ? 'put' : 'call'
+    const prompt = `Search Yahoo Finance options for ${ticker} right now.
+
+Current price: $${currentPrice}
+Council verdict: ${signal}
+Target: ${targetPrice}
+Time horizon: ${timeHorizon}
+
+I need the ${optionType} options chain for ${ticker} from Yahoo Finance (finance.yahoo.com/quote/${ticker}/options).
+
+Return ONLY a JSON array of the 4-6 most liquid ${optionType} contracts near the money. No markdown, no backticks, just raw JSON:
+[
+  {
+    "type": "${optionType}",
+    "strike": 150,
+    "expiry": "2025-05-16",
+    "bid": 2.35,
+    "ask": 2.45,
+    "last": 2.40,
+    "volume": 1250,
+    "openInterest": 4500,
+    "iv": 28.5,
+    "delta": -0.45,
+    "theta": -0.08,
+    "daysToExpiry": 21
+  }
+]
+
+Only include contracts with volume > 100 and expiring in 7-60 days. Use real data from Yahoo Finance.`
+
+    const result = await model.generateContent(prompt)
+    const text = result.response.text().trim()
+
+    // Parse JSON from response
+    const jsonMatch = text.match(/\[[\s\S]*\]/)
+    if (!jsonMatch) {
+      console.log('Gemini options response (no JSON found):', text.slice(0, 300))
+      return []
+    }
+
+    const raw = JSON.parse(jsonMatch[0])
+    if (!Array.isArray(raw) || raw.length === 0) return []
+
+    return raw.map((c: Record<string, unknown>) => ({
+      symbol: `${ticker}${c.expiry?.toString().replace(/-/g, '').slice(2)}${c.type === 'call' ? 'C' : 'P'}${String(Math.round(Number(c.strike) * 1000)).padStart(8, '0')}`,
+      type: (c.type === 'put' ? 'put' : 'call') as 'call' | 'put',
+      strike: Number(c.strike),
+      expiry: String(c.expiry ?? ''),
+      last: c.last ? Number(c.last) : null,
+      bid: c.bid ? Number(c.bid) : null,
+      ask: c.ask ? Number(c.ask) : null,
+      volume: Number(c.volume ?? 0),
+      openInterest: Number(c.openInterest ?? 0),
+      iv: c.iv ? Number(c.iv) : null,
+      delta: c.delta ? Number(c.delta) : null,
+      theta: c.theta ? Number(c.theta) : null,
+      gamma: null,
+      daysToExpiry: Number(c.daysToExpiry ?? 30),
+      moneyness: Math.abs(Number(c.strike) - currentPrice) / currentPrice < 0.03
+        ? 'ATM'
+        : c.type === 'call'
+          ? Number(c.strike) < currentPrice ? 'ITM' : 'OTM'
+          : Number(c.strike) > currentPrice ? 'ITM' : 'OTM' as 'ITM' | 'ATM' | 'OTM',
+    })).filter(c => c.strike > 0 && c.daysToExpiry > 0)
+  } catch (e) {
+    console.error('Gemini options exception:', e)
+    return []
+  }
+}
+
 async function fetchChain(ticker: string, expiry: string): Promise<OptionsContract[]> {
   try {
     const url = `${TRADIER_BASE()}/markets/options/chains?symbol=${ticker}&expiration=${expiry}&greeks=true`
@@ -280,7 +370,7 @@ function labelMoneyness(contracts: OptionsContract[], currentPrice: number): Opt
       ? 'ATM'
       : c.type === 'call'
         ? c.strike < currentPrice ? 'ITM' : 'OTM'
-        : c.strike > currentPrice ? 'ITM' : 'OTM',
+        : c.strike > currentPrice ? 'ITM' : 'OTM' as 'ITM' | 'ATM' | 'OTM',
   }))
 }
 
@@ -342,7 +432,15 @@ export async function POST(req: NextRequest) {
     let expiriesUsed: string[] = []
     let dataSource = 'none'
 
-    if (TRADIER_KEY()) {
+    // Primary: Gemini with Google Search — pulls live Yahoo Finance data, no API restrictions
+    contracts = await fetchOptionsViaGemini(ticker, currentPrice, signal, target || '', timeHorizon || '')
+    if (contracts.length > 0) {
+      dataSource = 'Gemini'
+      console.log(`Gemini options: ${contracts.length} contracts for ${ticker}`)
+    }
+
+    // Fallback 1: Tradier production API
+    if (contracts.length === 0 && TRADIER_KEY()) {
       const expiries = await fetchExpirations(ticker)
       const targetExpiries = expiries.slice(0, 4)
       expiriesUsed = targetExpiries
@@ -352,13 +450,13 @@ export async function POST(req: NextRequest) {
       if (contracts.length > 0) dataSource = 'Tradier'
     }
 
-    // Fallback to Alpaca options if no Tradier data
+    // Fallback 2: Alpaca options
     if (contracts.length === 0) {
       contracts = await fetchAlpacaOptions(ticker, currentPrice)
       if (contracts.length > 0) dataSource = 'Alpaca'
     }
 
-    // Final fallback to Yahoo Finance (no key required)
+    // Fallback 3: Yahoo Finance direct
     if (contracts.length === 0) {
       contracts = await fetchYahooOptions(ticker, currentPrice)
       if (contracts.length > 0) dataSource = 'Yahoo'
