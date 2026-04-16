@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
 
   const [{ data: trades }, { data: journey }] = await Promise.all([
     getAdmin().from('invest_trades').select('*').eq('user_id', user.id).order('opened_at', { ascending: false }),
-    getAdmin().from('invest_journey').select('*').eq('user_id', user.id).single(),
+    getAdmin().from('invest_journey').select('*').eq('user_id', user.id).maybeSingle(),
   ])
 
   return NextResponse.json({ trades: trades ?? [], journey: journey ?? null })
@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
     const { id, exit_price } = body
     const exitP = parseFloat(exit_price)
 
-    const { data: trade } = await getAdmin().from('invest_trades').select('*').eq('id', id).eq('user_id', user.id).single()
+    const { data: trade } = await getAdmin().from('invest_trades').select('*').eq('id', id).eq('user_id', user.id).maybeSingle()
     if (!trade) return NextResponse.json({ error: 'Trade not found' }, { status: 404 })
 
     await getAdmin().from('invest_trades').update({
@@ -78,7 +78,7 @@ export async function POST(req: NextRequest) {
 
     // Update journey stats
     const isWin = exitP > trade.entry_price
-    const { data: journey } = await getAdmin().from('invest_journey').select('*').eq('user_id', user.id).single()
+    const { data: journey } = await getAdmin().from('invest_journey').select('*').eq('user_id', user.id).maybeSingle()
 
     if (journey) {
       const newStreak = isWin ? (journey.win_streak ?? 0) + 1 : 0

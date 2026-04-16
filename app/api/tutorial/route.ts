@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
     .select('*')
     .eq('user_id', user.id)
     .eq('tutorial_id', tutorialId)
-    .single()
+    .maybeSingle()
 
   return NextResponse.json({ progress: data ?? null })
 }

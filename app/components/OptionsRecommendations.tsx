@@ -252,13 +252,13 @@ export default function OptionsRecommendations({
           )}
 
           {/* Live contracts */}
-          {data.hasLiveData && data.contracts.length > 0 && data.dataSource === 'Gemini' && (
+          {data.hasLiveData && data.contracts.length > 0 && (
             <div>
               <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2 flex items-center gap-2">
                 <span>{signal === 'NEUTRAL' ? 'Market reference' : 'Live contracts matching this strategy'}</span>
                 <span className="px-1.5 py-0.5 rounded text-[9px]"
                   style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399' }}>
-                  live via Yahoo Finance
+                  live · real-time data
                 </span>
               </div>
               <div className="space-y-2">

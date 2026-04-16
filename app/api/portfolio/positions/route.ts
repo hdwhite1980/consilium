@@ -9,7 +9,7 @@ const admin = () => createAdmin(
 
 async function getOrCreatePortfolio(userId: string) {
   const db = admin()
-  const { data } = await db.from('portfolios').select('*').eq('user_id', userId).single()
+  const { data } = await db.from('portfolios').select('*').eq('user_id', userId).maybeSingle()
   if (data) return data
   const { data: created } = await db.from('portfolios').insert({ user_id: userId }).select().single()
   return created

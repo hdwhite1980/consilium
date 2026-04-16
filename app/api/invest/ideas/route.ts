@@ -243,7 +243,6 @@ Return JSON ONLY — no markdown, no backticks:
 
       // Hard reject if outside dynamic price range
       if (livePrice && (livePrice > maxPrice || livePrice < minPrice)) {
-        console.log(`Rejected ${idea.ticker}: $${livePrice} outside $${minPrice}–$${maxPrice}`)
         continue
       }
 

@@ -148,9 +148,9 @@ export async function syncSubscription(stripeSubId: string) {
     .from('subscriptions')
     .select('user_id')
     .eq('stripe_customer_id', customerId)
-    .single()
+    .maybeSingle()
 
-  if (!subRow) return
+  if (!subRow) return  // No subscription row yet — webhook may arrive before row is created
 
   // Determine tier from the price ID on the subscription
   const priceId = sub.items?.data?.[0]?.price?.id ?? ''

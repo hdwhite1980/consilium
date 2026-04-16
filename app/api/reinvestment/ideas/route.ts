@@ -59,7 +59,7 @@ async function getCachedSignal(ticker: string): Promise<CachedSignal | null> {
       .eq('ticker', ticker.toUpperCase())
       .order('created_at', { ascending: false })
       .limit(1)
-      .single()
+      .maybeSingle()
 
     if (!data?.result) return null
     const r = data.result as Record<string, unknown>

@@ -13,6 +13,13 @@ interface Position {
   ticker: string
   shares: number
   avg_cost: number | null
+  position_type?: 'stock' | 'option'
+  option_type?: 'call' | 'put' | null
+  strike?: number | null
+  expiry?: string | null
+  contracts?: number | null
+  entry_premium?: number | null
+  underlying?: string | null
 }
 
 interface PositionData {
@@ -167,24 +174,45 @@ export async function POST(req: NextRequest) {
 
         send('status', { message: `Analyzing ${positions.length} positions...` })
 
-        // Fetch data for all positions in parallel (batched)
+        // Fetch data for all positions in parallel
         const positionData: PositionData[] = await Promise.all(
           positions.map(async (pos) => {
+            const isOption = pos.position_type === 'option'
+            // For options, use the underlying ticker for price/technical data
+            const analysisTicker = isOption ? (pos.underlying ?? pos.ticker) : pos.ticker
+
             const [quote, bars, fundamentals] = await Promise.all([
-              fetchQuote(pos.ticker),
-              fetchBarsForPosition(pos.ticker),
-              fetchFundamentalsForPosition(pos.ticker, 0),
+              fetchQuote(analysisTicker),
+              fetchBarsForPosition(analysisTicker),
+              fetchFundamentalsForPosition(analysisTicker, 0),
             ])
 
             const currentPrice = quote.price
-            const marketValue = currentPrice * pos.shares
-            const gainLoss = pos.avg_cost ? (currentPrice - pos.avg_cost) * pos.shares : null
-            const gainLossPct = pos.avg_cost ? ((currentPrice - pos.avg_cost) / pos.avg_cost) * 100 : null
+
+            // Options P&L uses entry premium vs current option price (approximated)
+            // Since we don't have live option price here, use entry_premium as cost basis
+            let marketValue: number, gainLoss: number | null, gainLossPct: number | null
+            if (isOption && pos.entry_premium && pos.contracts) {
+              const totalPremiumPaid = pos.entry_premium * pos.contracts * 100
+              // Approximate current value using underlying price change
+              const underlyingChange = currentPrice > 0 && pos.strike
+                ? (pos.option_type === 'call'
+                    ? Math.max(0, currentPrice - pos.strike) * pos.contracts * 100
+                    : Math.max(0, pos.strike - currentPrice) * pos.contracts * 100)
+                : totalPremiumPaid
+              marketValue = underlyingChange > 0 ? underlyingChange : totalPremiumPaid * 0.5
+              gainLoss = marketValue - totalPremiumPaid
+              gainLossPct = ((marketValue - totalPremiumPaid) / totalPremiumPaid) * 100
+            } else {
+              marketValue = currentPrice * pos.shares
+              gainLoss = pos.avg_cost ? (currentPrice - pos.avg_cost) * pos.shares : null
+              gainLossPct = pos.avg_cost ? ((currentPrice - pos.avg_cost) / pos.avg_cost) * 100 : null
+            }
 
             return {
               ticker: pos.ticker,
               shares: pos.shares,
-              avg_cost: pos.avg_cost,
+              avg_cost: isOption ? (pos.entry_premium ?? null) as number | null : pos.avg_cost,
               currentPrice,
               marketValue,
               gainLoss,
@@ -296,7 +324,7 @@ Provide a holistic portfolio analysis in JSON only (no markdown):
           .from('portfolios')
           .select('id')
           .eq('user_id', user.id)
-          .single()
+          .maybeSingle()
 
         if (portfolio) {
           await admin.from('portfolio_analyses').insert({

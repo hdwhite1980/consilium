@@ -311,7 +311,7 @@ export async function POST() {
     .from('portfolios')
     .select('id')
     .eq('user_id', user.id)
-    .single()
+    .maybeSingle()
   if (!portfolioData) return NextResponse.json({ alerts: [], checked: 0 })
 
   const { data: positions } = await admin()
@@ -325,7 +325,7 @@ export async function POST() {
     .from('portfolio_monitor_state')
     .select('*')
     .eq('user_id', user.id)
-    .single()
+    .maybeSingle()
 
   const prevStates: Record<string, PositionState> = monitorState?.position_states ?? {}
   const now = new Date()

@@ -41,9 +41,10 @@ async function fetchQuotes(tickers: string[]): Promise<Record<string, { price: n
       const end = new Date().toISOString().split('T')[0]
       const start = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
 
+      // Trader Plus: SIP feed, no fallback loop needed
       for (const feed of ['sip', 'iex']) {
         const res = await fetch(
-          `https://data.alpaca.markets/v2/stocks/${ticker}/bars?timeframe=1Day&start=${start}&end=${end}&limit=60&adjustment=all&feed=${feed}`,
+          `https://data.alpaca.markets/v2/stocks/${ticker}/bars?timeframe=1Day&start=${start}&end=${end}&limit=10000&adjustment=all&feed=${feed}`,
           { headers: ALPACA_HEADERS }
         )
         if (!res.ok) continue
@@ -119,7 +120,7 @@ export async function GET() {
     .select('*')
     .eq('cache_key', cacheKey)
     .gte('created_at', cutoff)
-    .single()
+    .maybeSingle()
 
   if (cached?.content) {
     return NextResponse.json({ ...cached.content, cached: true })

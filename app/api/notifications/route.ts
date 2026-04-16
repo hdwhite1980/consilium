@@ -120,7 +120,7 @@ export async function GET() {
     .from('notification_preferences')
     .select('*')
     .eq('user_id', user.id)
-    .single()
+    .maybeSingle()
 
   return NextResponse.json({
     prefs: data ?? {
@@ -163,7 +163,7 @@ export async function PUT() {
     .from('notification_preferences')
     .select('*')
     .eq('user_id', user.id)
-    .single()
+    .maybeSingle()
 
   if (!prefs?.email_enabled && !prefs?.sms_enabled) {
     return NextResponse.json({ sent: 0, reason: 'notifications disabled' })

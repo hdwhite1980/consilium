@@ -182,7 +182,18 @@ export default function PortfolioPage() {
     const res = await fetch('/api/portfolio', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ positions: positions.map(p => ({ ticker: p.ticker, shares: p.shares, avg_cost: p.avg_cost })) })
+      body: JSON.stringify({ positions: positions.map(p => ({
+        ticker: p.ticker,
+        shares: p.shares,
+        avg_cost: p.avg_cost,
+        position_type: p.position_type,
+        option_type: p.option_type,
+        strike: p.strike,
+        expiry: p.expiry,
+        contracts: p.contracts,
+        entry_premium: p.entry_premium,
+        underlying: p.underlying,
+      })) })
     })
 
     const reader = res.body!.getReader()

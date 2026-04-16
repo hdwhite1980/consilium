@@ -3,6 +3,7 @@ import { buildSignalBundle } from '@/app/lib/aggregator'
 import { technicalsToPayload } from '@/app/lib/signals/technicals'
 import { runPipeline } from '@/app/lib/pipeline'
 import { createServerClient } from '@/app/lib/supabase'
+import { createClient as createAuthClient } from '@/app/lib/auth/server'
 
 export const maxDuration = 120
 
@@ -15,12 +16,26 @@ const CACHE_MINUTES: Record<string, number> = {
 }
 
 export async function POST(req: NextRequest) {
-  const { ticker, timeframe, forceRefresh, persona } = await req.json()
+  let ticker: string, timeframe: string, forceRefresh: boolean, persona: string
+  try {
+    const body = await req.json()
+    ticker = body.ticker; timeframe = body.timeframe; forceRefresh = body.forceRefresh; persona = body.persona
+  } catch {
+    return Response.json({ error: 'Invalid request body' }, { status: 400 })
+  }
   if (!ticker) return Response.json({ error: 'ticker required' }, { status: 400 })
 
   const symbol = ticker.toUpperCase().trim()
   const tf = timeframe || '1W'
   const encoder = new TextEncoder()
+
+  // Get user ID for track record logging — non-blocking, null if not authed
+  let currentUserId: string | null = null
+  try {
+    const authClient = await createAuthClient()
+    const { data: { user } } = await authClient.auth.getUser()
+    currentUserId = user?.id ?? null
+  } catch { /* not blocking */ }
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -44,7 +59,7 @@ export async function POST(req: NextRequest) {
             .gte('created_at', cutoff)
             .order('created_at', { ascending: false })
             .limit(1)
-            .single()
+            .maybeSingle()
 
           if (cached) {
             // ── Price staleness check ──────────────────────────
@@ -282,23 +297,37 @@ export async function POST(req: NextRequest) {
           },
         }).select().single()
 
-        // Auto-log to track record (fire-and-forget)
-        if (result.judge?.signal && result.judge.signal !== 'NEUTRAL') {
-          fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/track-record`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Cookie': req.headers.get('cookie') ?? '' },
-            body: JSON.stringify({
-              ticker: symbol,
-              signal: result.judge.signal,
-              confidence: result.judge.confidence,
-              entry_price: result.judge.entryPrice,
-              stop_loss: result.judge.stopLoss,
-              take_profit: result.judge.takeProfit,
-              time_horizon: result.judge.timeHorizon,
-              persona: persona ?? 'balanced',
-              timeframe: tf,
-            }),
-          }).catch(() => null)
+        // Auto-log to track record directly via service role (no HTTP round-trip)
+        if (currentUserId && result.judge?.signal && result.judge.signal !== 'NEUTRAL') {
+          const today = new Date().toISOString().split('T')[0]
+          const parseP = (s: string | undefined) => s ? parseFloat(String(s).replace(/[^0-9.-]/g,'')) || null : null
+          // Dedup — don't log same ticker+signal on same day
+          const { data: existing } = await supabase
+            .from('verdict_log')
+            .select('id')
+            .eq('user_id', currentUserId)
+            .eq('ticker', symbol)
+            .eq('verdict_date', today)
+            .eq('signal', result.judge.signal)
+            .maybeSingle()
+          if (!existing) {
+            try {
+              await supabase.from('verdict_log').insert({
+                user_id: currentUserId,
+                ticker: symbol,
+                signal: result.judge.signal,
+                confidence: result.judge.confidence ?? null,
+                entry_price: parseP(result.judge.entryPrice),
+                stop_loss: parseP(result.judge.stopLoss),
+                take_profit: parseP(result.judge.takeProfit),
+                time_horizon: result.judge.timeHorizon ?? null,
+                persona: persona ?? 'balanced',
+                timeframe: tf,
+                outcome_1w: 'pending',
+                outcome_1m: 'pending',
+              })
+            } catch { /* non-critical */ }
+          }
         }
 
         send('complete', {

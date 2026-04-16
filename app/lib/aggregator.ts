@@ -171,7 +171,8 @@ Focus on technical signals, volume trends, and market structure for directional 
     onProgress?.('Running conviction engine...')
     const conviction = buildConvictionOutput(
       sym, currentPrice,
-      technicals, cryptoFundamentals, cryptoSmartMoney, optionsFlow, marketContext
+      technicals, cryptoFundamentals, cryptoSmartMoney, optionsFlow, marketContext,
+      timeframe
     )
 
     const newsSection = `=== NEWS & SENTIMENT ===\n${formatNewsForAI(news)}`
@@ -268,7 +269,8 @@ Focus on central bank policy signals, economic data releases, and technical stru
     onProgress?.('Running conviction engine...')
     const conviction = buildConvictionOutput(
       sym, currentPrice,
-      technicals, forexFundamentals, forexSmartMoney, optionsFlow, marketContext
+      technicals, forexFundamentals, forexSmartMoney, optionsFlow, marketContext,
+      timeframe
     )
 
     const newsSection = `=== NEWS & FOREX EVENTS ===\n${formatNewsForAI(news)}`
@@ -344,7 +346,8 @@ Focus on central bank policy signals, economic data releases, and technical stru
   onProgress?.('Running conviction engine...')
   const conviction = buildConvictionOutput(
     sym, currentPrice,
-    technicals, fundamentals, smartMoney, optionsFlow, marketContext
+    technicals, fundamentals, smartMoney, optionsFlow, marketContext,
+    timeframe
   )
 
   // Build AI-ready text sections

@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
     .eq('ticker', ticker.toUpperCase())
     .eq('verdict_date', today)
     .eq('signal', signal)
-    .single()
+    .maybeSingle()
 
   if (existing) return NextResponse.json({ logged: false, reason: 'duplicate' })
 

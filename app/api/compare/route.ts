@@ -3,6 +3,8 @@ import { buildSignalBundle } from '@/app/lib/aggregator'
 import { technicalsToPayload } from '@/app/lib/signals/technicals'
 import { runGemini, runClaude, runGPT, runRebuttal, runCounter, runJudge } from '@/app/lib/pipeline'
 import Anthropic from '@anthropic-ai/sdk'
+import { createClient as createAuthClient } from '@/app/lib/auth/server'
+import { createServerClient } from '@/app/lib/supabase'
 
 export async function POST(req: NextRequest) {
   const encoder = new TextEncoder()
@@ -107,6 +109,35 @@ export async function POST(req: NextRequest) {
         ])
 
         send('verdicts', { tickerA: symA, tickerB: symB, judgeA, judgeB })
+
+        // Log both verdicts to track record
+        try {
+          const authClient = await createAuthClient()
+          const { data: { user } } = await authClient.auth.getUser()
+          if (user?.id) {
+            const db = createServerClient()
+            const today = new Date().toISOString().split('T')[0]
+            const parseP = (s: string | undefined) => s ? parseFloat(String(s).replace(/[^0-9.-]/g,'')) || null : null
+            for (const [sym, judge, bundle] of [
+              [symA, judgeA, bundleA] as const,
+              [symB, judgeB, bundleB] as const,
+            ]) {
+              if (judge.signal === 'NEUTRAL') continue
+              const { data: exists } = await db.from('verdict_log').select('id')
+                .eq('user_id', user.id).eq('ticker', sym).eq('verdict_date', today).eq('signal', judge.signal).maybeSingle()
+              if (!exists) {
+                await db.from('verdict_log').insert({
+                  user_id: user.id, ticker: sym, signal: judge.signal,
+                  confidence: judge.confidence ?? null,
+                  entry_price: parseP(judge.entryPrice), stop_loss: parseP(judge.stopLoss),
+                  take_profit: parseP(judge.takeProfit), time_horizon: judge.timeHorizon ?? null,
+                  persona: persona ?? 'balanced', timeframe: tf,
+                  outcome_1w: 'pending', outcome_1m: 'pending',
+                })
+              }
+            }
+          }
+        } catch { /* non-critical */ }
 
         // Head-to-head AI comparison
         send('status', { message: 'Running head-to-head comparison...' })

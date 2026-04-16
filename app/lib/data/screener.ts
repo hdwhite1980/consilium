@@ -73,7 +73,7 @@ async function getAvgVolumes(tickers: string[]): Promise<Map<string, number>> {
     const start = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0]
     const symbols = tickers.join(',')
     const res = await fetch(
-      `https://data.alpaca.markets/v2/stocks/bars?symbols=${symbols}&timeframe=1Day&start=${start}&end=${end}&limit=500&feed=iex`,
+      `https://data.alpaca.markets/v2/stocks/bars?symbols=${symbols}&timeframe=1Day&start=${start}&end=${end}&limit=10000&feed=sip`,
       { headers: ALPACA_HEADERS(), next: { revalidate: 3600 } }
     )
     if (!res.ok) return map
@@ -124,8 +124,9 @@ export async function getVolumeMoversEnhanced(
           const q = await qRes.json()
           if (!q.c || q.c < minPrice || q.c > maxPrice) return null
           const change = q.pc > 0 ? ((q.c - q.pc) / q.pc) * 100 : 0
-          // Estimate avg volume from open/previous data — rough proxy
-          const avgVol = volume * 0.3 // screener top movers are typically 2-5x avg
+          // avgVol is filled in the second pass after getAvgVolumes runs
+          // Here use a proxy; it gets replaced below if bars are available
+          const avgVol = volume * 0.3
           const ratio = avgVol > 0 ? volume / avgVol : 2
           return {
             ticker: symbol,
