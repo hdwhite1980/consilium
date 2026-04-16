@@ -280,6 +280,11 @@ export async function POST() {
   // Persist alerts and update state
   if (newAlerts.length > 0) {
     await admin().from('portfolio_alerts').insert(newAlerts)
+    // Fire notifications asynchronously — don't block response
+    fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/notifications`, {
+      method: 'PUT',
+      headers: { 'Cookie': '' }, // server-to-server, auth checked separately
+    }).catch(() => null)
   }
 
   await admin().from('portfolio_monitor_state').upsert({

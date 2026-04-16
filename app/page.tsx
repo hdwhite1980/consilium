@@ -802,21 +802,35 @@ function HomeInner() {
           {/* Options */}
           {md?.options && (
             <Card title="Options Flow" icon={<Activity size={11}/>} color="#f87171" surf={surf} brd={brd} txt3={txt3}>
-              {md!.options?.putCallRatio !== null && (
+              {md!.options?.putCallRatio !== null && md!.options?.putCallRatio !== undefined ? (
                 <div className="flex justify-between text-xs">
                   <span style={{ color: txt3 }}>P/C ratio</span>
                   <span className="font-mono text-[10px]" style={{ color: md!.options?.putCallSignal === 'bullish' ? '#34d399' : md!.options?.putCallSignal === 'bearish' ? '#f87171' : txt }}>
                     {md!.options?.putCallRatio.toFixed(2)} — {md!.options?.putCallSignal}
                   </span>
                 </div>
+              ) : (
+                <div className="text-[10px]" style={{ color: txt3 }}>P/C ratio unavailable</div>
               )}
-              {md!.options?.shortInterestPct !== null && (
+              {md!.options?.maxPainStrike != null && md!.options?.maxPainStrike > 0 && (
+                <div className="flex justify-between text-xs">
+                  <span style={{ color: txt3 }}>Max pain</span>
+                  <span className="font-mono text-[10px]" style={{ color: txt }}>${md!.options?.maxPainStrike}</span>
+                </div>
+              )}
+              {md!.options?.shortInterestPct != null && (
                 <div className="flex justify-between text-xs">
                   <span style={{ color: txt3 }}>Short int.</span>
                   <span className="font-mono text-[10px]" style={{ color: txt }}>{md!.options?.shortInterestPct.toFixed(1)}% float</span>
                 </div>
               )}
-              {md!.options?.unusualCount > 0 && (
+              {md!.options?.ivSignal && md!.options?.ivSignal !== 'normal' && (
+                <div className="flex justify-between text-xs">
+                  <span style={{ color: txt3 }}>IV skew</span>
+                  <span className="font-mono text-[10px]" style={{ color: md!.options?.ivSignal === 'bearish_skew' ? '#f87171' : '#34d399' }}>{md!.options?.ivSignal?.replace('_', ' ')}</span>
+                </div>
+              )}
+              {(md!.options?.unusualCount ?? 0) > 0 && (
                 <div className="flex justify-between text-xs">
                   <span style={{ color: txt3 }}>Sweeps</span>
                   <span className="font-mono text-[10px]" style={{ color: '#fbbf24' }}>{md!.options?.unusualCount} unusual</span>
@@ -890,7 +904,7 @@ function HomeInner() {
               </div>
             )}
 
-            {/* Gemini */}
+            {/* News Scout */}
             {stage === 'gemini' && !gem && <Think label="News Scout" color="#60a5fa" />}
             {gem && (
               <Collapsible
@@ -919,7 +933,7 @@ function HomeInner() {
               </Collapsible>
             )}
 
-            {/* Claude */}
+            {/* Lead Analyst */}
             {stage === 'claude' && !cla && <Think label="Lead Analyst" color="#a78bfa" />}
             {cla && (
               <Collapsible

@@ -87,7 +87,7 @@ export async function hasActiveAccess(userId: string): Promise<{
   const admin = getAdmin()
   const { data } = await admin
     .from('subscriptions')
-    .select('status, tier, trial_ends_at, current_period_end')
+    .select('status, tier, is_exempt, trial_ends_at, current_period_end')
     .eq('user_id', userId)
     .single()
 
@@ -105,6 +105,11 @@ export async function hasActiveAccess(userId: string): Promise<{
 
   const now = new Date()
   const tier = (data.tier ?? 'standard') as 'standard' | 'pro'
+
+  // Exempt users get full Pro access indefinitely
+  if (data.is_exempt) {
+    return { hasAccess: true, status: 'active', tier: 'pro', trialEndsAt: null, daysLeft: null }
+  }
 
   if (data.status === 'trialing') {
     const trialEnd = data.trial_ends_at ? new Date(data.trial_ends_at) : null

@@ -49,6 +49,9 @@ export default function SettingsPage() {
 
   // Billing state
   const [billingLoading, setBillingLoading] = useState(false)
+  const [notifPrefs, setNotifPrefs] = useState({ email_enabled: false, sms_enabled: false, phone: '', min_severity: 'alert' })
+  const [notifSaving, setNotifSaving] = useState(false)
+  const [notifSaved, setNotifSaved] = useState(false)
 
   const isDark = useDarkMode()
   const txt  = isDark ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.9)'
@@ -75,6 +78,18 @@ export default function SettingsPage() {
         const res = await fetch('/api/auth/session')
         const data = await res.json()
         setSub(data)
+      } catch { /* ignore */ }
+
+      // Load notification preferences
+      try {
+        const nr = await fetch('/api/notifications')
+        const nd = await nr.json()
+        if (nd.prefs) setNotifPrefs({
+          email_enabled: nd.prefs.email_enabled ?? false,
+          sms_enabled: nd.prefs.sms_enabled ?? false,
+          phone: nd.prefs.phone ?? '',
+          min_severity: nd.prefs.min_severity ?? 'alert',
+        })
       } catch { /* ignore */ }
 
       setLoading(false)
@@ -123,6 +138,18 @@ export default function SettingsPage() {
     if (error) { setPwError(error.message); return }
     setPwSuccess('Password updated successfully.')
     setNewPw('')
+  }
+
+  const saveNotifs = async () => {
+    setNotifSaving(true)
+    await fetch('/api/notifications', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(notifPrefs),
+    })
+    setNotifSaving(false)
+    setNotifSaved(true)
+    setTimeout(() => setNotifSaved(false), 2500)
   }
 
   const signOut = async () => {
@@ -382,6 +409,75 @@ export default function SettingsPage() {
             style={{ background: surf2, color: txt, border: `1px solid ${brd}` }}>
             Update password
           </button>
+        </Section>
+
+        {/* Notifications */}
+        <Section title="Notifications">
+          {notifSaved && (
+            <div className="px-3 py-2 rounded-lg text-xs" style={{ background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.2)', color: '#34d399' }}>
+              Preferences saved.
+            </div>
+          )}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-semibold" style={{ color: txt }}>Email alerts</div>
+                <div className="text-xs" style={{ color: txt3 }}>Sent to {user?.email}</div>
+              </div>
+              <button onClick={() => setNotifPrefs(p => ({ ...p, email_enabled: !p.email_enabled }))}
+                className="w-10 h-5 rounded-full transition-all relative"
+                style={{ background: notifPrefs.email_enabled ? '#a78bfa' : surf2, border: `1px solid ${notifPrefs.email_enabled ? '#a78bfa' : brd}` }}>
+                <div className="w-3.5 h-3.5 rounded-full bg-white absolute top-0.5 transition-all"
+                  style={{ left: notifPrefs.email_enabled ? '1.25rem' : '0.125rem' }} />
+              </button>
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-semibold" style={{ color: txt }}>SMS alerts</div>
+                <div className="text-xs" style={{ color: txt3 }}>Text message to your phone</div>
+              </div>
+              <button onClick={() => setNotifPrefs(p => ({ ...p, sms_enabled: !p.sms_enabled }))}
+                className="w-10 h-5 rounded-full transition-all relative"
+                style={{ background: notifPrefs.sms_enabled ? '#a78bfa' : surf2, border: `1px solid ${notifPrefs.sms_enabled ? '#a78bfa' : brd}` }}>
+                <div className="w-3.5 h-3.5 rounded-full bg-white absolute top-0.5 transition-all"
+                  style={{ left: notifPrefs.sms_enabled ? '1.25rem' : '0.125rem' }} />
+              </button>
+            </div>
+            {notifPrefs.sms_enabled && (
+              <div>
+                <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: txt3 }}>Phone number</div>
+                <input value={notifPrefs.phone} onChange={e => setNotifPrefs(p => ({ ...p, phone: e.target.value }))}
+                  placeholder="+15551234567"
+                  className="w-full px-3 py-2 rounded-lg text-sm font-mono outline-none border"
+                  style={{ background: inputBg, borderColor: brd, color: txt }} />
+                <div className="text-[10px] mt-1" style={{ color: txt3 }}>Include country code e.g. +1 for US</div>
+              </div>
+            )}
+            <div>
+              <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: txt3 }}>Minimum severity to notify</div>
+              <div className="flex gap-2">
+                {(['watch', 'alert', 'urgent'] as const).map(s => (
+                  <button key={s} onClick={() => setNotifPrefs(p => ({ ...p, min_severity: s }))}
+                    className="flex-1 py-1.5 rounded-lg text-xs font-semibold capitalize transition-all"
+                    style={{
+                      background: notifPrefs.min_severity === s ? 'rgba(167,139,250,0.12)' : surf2,
+                      color: notifPrefs.min_severity === s ? '#a78bfa' : txt3,
+                      border: `1px solid ${notifPrefs.min_severity === s ? 'rgba(167,139,250,0.3)' : brd}`,
+                    }}>
+                    {s}
+                  </button>
+                ))}
+              </div>
+              <div className="text-[10px] mt-1" style={{ color: txt3 }}>
+                Watch = approaching S/R · Alert = breach/−8% · Urgent = −15%+
+              </div>
+            </div>
+            <button onClick={saveNotifs} disabled={notifSaving}
+              className="w-full py-2.5 rounded-lg text-xs font-semibold disabled:opacity-40 hover:opacity-80"
+              style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)' }}>
+              {notifSaving ? 'Saving...' : 'Save notification settings'}
+            </button>
+          </div>
         </Section>
 
         {/* Danger zone */}
