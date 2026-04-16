@@ -167,13 +167,28 @@ async function fetchAlpacaOptions(ticker: string, currentPrice: number): Promise
 
 // Yahoo Finance fallback — no API key, always available
 async function fetchYahooOptions(ticker: string, currentPrice: number): Promise<OptionsContract[]> {
+  // Try multiple Yahoo endpoints with realistic browser headers
+  const endpoints = [
+    `https://query1.finance.yahoo.com/v7/finance/options/${ticker}`,
+    `https://query2.finance.yahoo.com/v7/finance/options/${ticker}`,
+  ]
+  const yahooHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Referer': 'https://finance.yahoo.com/',
+    'Origin': 'https://finance.yahoo.com',
+  }
   try {
-    // Yahoo returns the nearest expiry by default
-    const res = await fetch(
-      `https://query2.finance.yahoo.com/v7/finance/options/${ticker}`,
-      { headers: { 'User-Agent': 'Mozilla/5.0' }, cache: 'no-store' }
-    )
-    if (!res.ok) return []
+    let res: Response | null = null
+    for (const url of endpoints) {
+      try {
+        res = await fetch(url, { headers: yahooHeaders, cache: 'no-store' })
+        if (res.ok) break
+        console.log(`Yahoo ${url} returned ${res.status}`)
+      } catch { continue }
+    }
+    if (!res?.ok) return []
     const data = await res.json()
     const result = data?.optionChain?.result?.[0]
     if (!result) return []
@@ -432,11 +447,11 @@ export async function POST(req: NextRequest) {
     let expiriesUsed: string[] = []
     let dataSource = 'none'
 
-    // Primary: Gemini with Google Search — pulls live Yahoo Finance data, no API restrictions
-    contracts = await fetchOptionsViaGemini(ticker, currentPrice, signal, target || '', timeHorizon || '')
+    // Primary: Yahoo Finance direct fetch (no key required)
+    contracts = await fetchYahooOptions(ticker, currentPrice)
     if (contracts.length > 0) {
-      dataSource = 'Gemini'
-      console.log(`Gemini options: ${contracts.length} contracts for ${ticker}`)
+      dataSource = 'Yahoo'
+      console.log(`Yahoo options: ${contracts.length} contracts for ${ticker}`)
     }
 
     // Fallback 1: Tradier production API
