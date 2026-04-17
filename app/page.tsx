@@ -545,6 +545,7 @@ function HomeInner() {
     { label: 'Reinvest', icon: '💰', path: '/reinvestment', color: '#34d399' },
     { label: 'Macro',    icon: '🌍', path: '/macro',       color: '#60a5fa' },
     { label: 'Journal',  icon: '📒', path: '/journal',     color: '#34d399' },
+    { label: 'Screener', icon: '🔍', path: '/screener',    color: '#a78bfa' },
     { label: 'Compare', icon: '⚡', path: '/compare',   color: '#f87171' },
     { label: 'Track Record', icon: '🏆', path: '/track-record', color: '#fbbf24' },
     { label: 'Guide', icon: '📖', path: '/guide',       color: txt3 },
