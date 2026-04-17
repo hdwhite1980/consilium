@@ -387,14 +387,21 @@ export async function fetchCongressionalTrades(ticker?: string): Promise<void> {
 
 async function fetchHouseDisclosuresXML(ticker: string | undefined, admin: any): Promise<void> {
   try {
-    // Primary: Senate stock watcher community dataset (mirrors both House + Senate disclosures)
-    // Reliable S3-backed JSON updated regularly
-    const swUrl = 'https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com/aggregate/all_transactions.json'
-    console.log(`[congressional-trades] Trying Senate stock watcher: ${swUrl}`)
-    const swRes = await fetch(swUrl, { headers: { 'User-Agent': 'Wali-OS/1.0 support@wali-os.com' } })
-    console.log(`[congressional-trades] Senate stock watcher response: ${swRes.status}`)
+    // Try multiple public congressional trade data sources
+    const swSources = [
+      'https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json',
+      'https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com/aggregate/all_transactions.json',
+    ]
+    let swRes: Response | null = null
+    let swUrl = ''
+    for (const url of swSources) {
+      console.log(`[congressional-trades] Trying: ${url}`)
+      const attempt = await fetch(url, { headers: { 'User-Agent': 'Wali-OS/1.0 support@wali-os.com' } })
+      console.log(`[congressional-trades] Response: ${attempt.status}`)
+      if (attempt.ok) { swRes = attempt; swUrl = url; break }
+    }
 
-    if (swRes.ok) {
+    if (swRes) {
       const trades: any[] = await swRes.json()
       console.log(`[congressional-trades] Got ${trades.length} total trades from stock watcher`)
       let written = 0

@@ -420,36 +420,41 @@ export async function fetch13FForTicker(ticker: string): Promise<void> {
             const tickerRegex = new RegExp(`<nameOfIssuer>[^<]*${ticker}[^<]*<\\/nameOfIssuer>[\\s\\S]*?(?=<infoTable>|$)`, 'gi')
             const infoBlocks = xml.match(/<infoTable>[\s\S]*?<\/infoTable>/g) || []
 
+            // Build name variants for flexible matching
+            const nameVariants: Record<string, string[]> = {
+              'NVDA': ['NVIDIA'], 'AAPL': ['APPLE INC'], 'MSFT': ['MICROSOFT'],
+              'GOOGL': ['ALPHABET'], 'GOOG': ['ALPHABET'], 'META': ['META PLATFORM'],
+              'AMZN': ['AMAZON'], 'TSLA': ['TESLA'], 'NFLX': ['NETFLIX'],
+              'JPM': ['JPMORGAN','JP MORGAN'], 'BRK': ['BERKSHIRE'],
+            }
+            const tickerUpper = ticker.toUpperCase()
+            const variants = nameVariants[tickerUpper] || []
+
+            // Find ONLY the first (largest/most recent) match — avoid duplicate quarters
+            let bestBlock: string | null = null
+            let bestShares = 0
             for (const block of infoBlocks) {
               const nameMatch = block.match(/<nameOfIssuer>(.*?)<\/nameOfIssuer>/i)
               if (!nameMatch) continue
-              // Match ticker name flexibly — "NVIDIA" matches "NVDA", etc.
               const issuerUpper = nameMatch[1].toUpperCase()
-              const tickerUpper = ticker.toUpperCase()
-              // Direct name match OR check CUSIP/ticker column
-              const cusipMatch = block.match(/<cusip>(.*?)<\/cusip>/i)?.[1] || ''
-              const titleBlock = block.match(/<nameOfIssuer>(.*?)<\/nameOfIssuer>/i)?.[1] || ''
-              // Build common name variants
-              const nameVariants: Record<string, string[]> = {
-                'NVDA': ['NVIDIA','NVD'],
-                'AAPL': ['APPLE'],
-                'MSFT': ['MICROSOFT'],
-                'GOOGL': ['ALPHABET','GOOGLE'],
-                'GOOG': ['ALPHABET','GOOGLE'],
-                'META': ['META PLATFORM','FACEBOOK'],
-                'AMZN': ['AMAZON'],
-                'TSLA': ['TESLA'],
-                'NFLX': ['NETFLIX'],
-                'JPM': ['JPMORGAN','JP MORGAN'],
-              }
-              const variants = nameVariants[tickerUpper] || []
               const matches = issuerUpper.includes(tickerUpper) ||
                 variants.some(v => issuerUpper.includes(v))
               if (!matches) continue
-
               const shares = parseInt(block.match(/<sshPrnamt>(.*?)<\/sshPrnamt>/)?.[1] || '0')
-              const value = parseInt(block.match(/<value>(.*?)<\/value>/)?.[1] || '0') * 1000 // 13-F values in thousands
-              console.log(`[13-F] ${instName}: MATCH found — ${nameMatch[1]}, ${shares} shares, $${(value/1e9).toFixed(2)}B`)
+              // Take the block with the most shares (primary position, not derivatives)
+              if (shares > bestShares) { bestShares = shares; bestBlock = block }
+            }
+
+            if (!bestBlock || bestShares === 0) continue
+
+            {
+              const block = bestBlock
+              const nameMatch = block.match(/<nameOfIssuer>(.*?)<\/nameOfIssuer>/i)
+              const shares = bestShares
+              // 13-F value is in thousands of dollars
+              const valueThousands = parseInt(block.match(/<value>(.*?)<\/value>/)?.[1] || '0')
+              const value = valueThousands * 1000 // convert to dollars
+              console.log(`[13-F] ${instName}: MATCH — ${nameMatch?.[1]}, ${shares.toLocaleString()} shares, $${(value/1e9).toFixed(2)}B`)
 
               if (shares === 0) continue
 
