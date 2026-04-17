@@ -41,6 +41,11 @@ interface JournalEntry {
   stop_loss: number | null; take_profit: number | null; timeframe: string | null
   confidence: number | null; exit_price: number | null; outcome: string
   pnl_percent: number | null
+  position_type: 'stock' | 'option'
+  option_type: 'call' | 'put' | null
+  strike: number | null; expiry: string | null
+  contracts: number | null; entry_premium: number | null; exit_premium: number | null
+  underlying: string | null
   postmortem: { what_worked: string; what_missed: string; key_lesson: string; signal_quality: string; council_grade: string; improve_next_time: string } | null
   notes: string | null; tags: string[] | null; created_at: string
 }
@@ -122,7 +127,16 @@ function PortfolioInner() {
   const [loadingJournal, setLoadingJournal] = useState(false)
   const [expandedEntry, setExpandedEntry] = useState<string | null>(null)
   const [resolving, setResolving] = useState<string | null>(null)
-  const [resolveData, setResolveData] = useState({ exit_price: '', outcome: 'win', notes: '' })
+  const [showAddJournal, setShowAddJournal] = useState(false)
+  const [jTicker, setJTicker] = useState(''); const [jType, setJType] = useState<'stock'|'option'>('stock')
+  const [jSignal, setJSignal] = useState<'BULLISH'|'BEARISH'|'NEUTRAL'>('BULLISH')
+  const [jOptionType, setJOptionType] = useState<'call'|'put'>('call')
+  const [jStrike, setJStrike] = useState(''); const [jExpiry, setJExpiry] = useState('')
+  const [jContracts, setJContracts] = useState('1'); const [jPremium, setJPremium] = useState('')
+  const [jEntryPrice, setJEntryPrice] = useState(''); const [jStop, setJStop] = useState('')
+  const [jTarget, setJTarget] = useState(''); const [jTimeframe, setJTimeframe] = useState('1D')
+  const [jNotes, setJNotes] = useState('')
+  const [resolveData, setResolveData] = useState({ exit_price: '', exit_premium: '', outcome: 'win', notes: '' })
 
   // ── Dividend state
   const [dividends, setDividends] = useState<Dividend[]>([])
@@ -243,10 +257,44 @@ function PortfolioInner() {
     await loadJournal()
   }
 
+  const addJournalEntry = async () => {
+    if (!jTicker) return
+    const isOption = jType === 'option'
+    const body: Record<string, unknown> = {
+      action: 'add', ticker: jTicker.toUpperCase(), signal: jSignal,
+      position_type: jType, timeframe: jTimeframe, notes: jNotes || null,
+    }
+    if (isOption) {
+      body.option_type = jOptionType; body.strike = jStrike ? parseFloat(jStrike) : null
+      body.expiry = jExpiry || null; body.contracts = jContracts ? parseInt(jContracts) : 1
+      body.entry_premium = jPremium ? parseFloat(jPremium) : null
+      body.underlying = jTicker.toUpperCase()
+    } else {
+      body.entry_price = jEntryPrice ? parseFloat(jEntryPrice) : null
+      body.stop_loss = jStop ? parseFloat(jStop) : null
+      body.take_profit = jTarget ? parseFloat(jTarget) : null
+    }
+    await fetch('/api/trade-journal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    setShowAddJournal(false)
+    setJTicker(''); setJStrike(''); setJExpiry(''); setJPremium(''); setJEntryPrice(''); setJStop(''); setJTarget(''); setJNotes('')
+    await loadJournal()
+  }
+
   const handleResolve = async (id: string) => {
-    if (!resolveData.exit_price) return
+    const entry = journalEntries.find(e => e.id === id)
+    const isOption = entry?.position_type === 'option'
+    if (!isOption && !resolveData.exit_price) return
+    if (isOption && !resolveData.exit_premium) return
     setResolving(id)
-    await fetch('/api/trade-journal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'resolve', id, exit_price: parseFloat(resolveData.exit_price), outcome: resolveData.outcome, notes: resolveData.notes }) })
+    await fetch('/api/trade-journal', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'resolve', id,
+        exit_price: resolveData.exit_price ? parseFloat(resolveData.exit_price) : null,
+        exit_premium: resolveData.exit_premium ? parseFloat(resolveData.exit_premium) : null,
+        outcome: resolveData.outcome, notes: resolveData.notes
+      })
+    })
     setResolving(null); setExpandedEntry(null)
     await loadJournal()
   }
@@ -1012,6 +1060,96 @@ function PortfolioInner() {
                 </div>
               )}
 
+              {/* Manual add journal entry */}
+              <button onClick={() => setShowAddJournal(!showAddJournal)}
+                className="w-full py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5"
+                style={{ background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)', color: '#a78bfa' }}>
+                <Plus size={13} /> Log Trade Manually
+              </button>
+
+              {showAddJournal && (
+                <div className="rounded-2xl p-4 space-y-3" style={{ background: '#111620', border: '1px solid rgba(255,255,255,0.08)' }}>
+                  <div className="text-xs font-semibold text-white/50">Log a trade manually</div>
+                  {/* Stock vs Option */}
+                  <div className="grid grid-cols-2 gap-2">
+                    {(['stock','option'] as const).map(t => (
+                      <button key={t} onClick={() => setJType(t)}
+                        className="py-1.5 rounded-lg text-xs font-semibold"
+                        style={{ background: jType === t ? 'rgba(167,139,250,0.15)' : 'rgba(255,255,255,0.04)', color: jType === t ? '#a78bfa' : 'rgba(255,255,255,0.4)', border: `1px solid ${jType === t ? 'rgba(167,139,250,0.3)' : 'rgba(255,255,255,0.08)'}` }}>
+                        {t === 'stock' ? '📈 Stock' : '⚡ Option'}
+                      </button>
+                    ))}
+                  </div>
+                  {/* Ticker + Signal */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <input value={jTicker} onChange={e => setJTicker(e.target.value.toUpperCase())} placeholder="Ticker"
+                      className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                    <select value={jSignal} onChange={e => setJSignal(e.target.value as any)}
+                      className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }}>
+                      <option value="BULLISH">BULLISH</option>
+                      <option value="BEARISH">BEARISH</option>
+                      <option value="NEUTRAL">NEUTRAL</option>
+                    </select>
+                  </div>
+                  {/* Options-specific fields */}
+                  {jType === 'option' && (
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        {(['call','put'] as const).map(ot => (
+                          <button key={ot} onClick={() => setJOptionType(ot)}
+                            className="py-1.5 rounded-lg text-xs font-bold"
+                            style={{ background: jOptionType === ot ? (ot === 'call' ? 'rgba(52,211,153,0.15)' : 'rgba(248,113,113,0.15)') : 'rgba(255,255,255,0.04)', color: jOptionType === ot ? (ot === 'call' ? '#34d399' : '#f87171') : 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            {ot.toUpperCase()}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <input value={jStrike} onChange={e => setJStrike(e.target.value)} placeholder="Strike $" type="number"
+                          className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                        <input value={jExpiry} onChange={e => setJExpiry(e.target.value)} placeholder="Expiry" type="date"
+                          className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                        <input value={jContracts} onChange={e => setJContracts(e.target.value)} placeholder="Contracts" type="number"
+                          className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                      </div>
+                      <input value={jPremium} onChange={e => setJPremium(e.target.value)} placeholder="Entry premium per share ($)" type="number"
+                        className="w-full rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                      {jPremium && jContracts && (
+                        <div className="text-[10px] text-white/40 text-center">
+                          Total cost: <span style={{ color: '#a78bfa' }}>${(parseFloat(jPremium) * parseInt(jContracts) * 100).toFixed(2)}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {/* Stock-specific fields */}
+                  {jType === 'stock' && (
+                    <div className="grid grid-cols-3 gap-2">
+                      <input value={jEntryPrice} onChange={e => setJEntryPrice(e.target.value)} placeholder="Entry $" type="number"
+                        className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                      <input value={jStop} onChange={e => setJStop(e.target.value)} placeholder="Stop $" type="number"
+                        className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                      <input value={jTarget} onChange={e => setJTarget(e.target.value)} placeholder="Target $" type="number"
+                        className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                    </div>
+                  )}
+                  {/* Timeframe + notes */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <select value={jTimeframe} onChange={e => setJTimeframe(e.target.value)}
+                      className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }}>
+                      <option value="1D">1D</option><option value="1W">1W</option>
+                      <option value="1M">1M</option><option value="3M">3M</option>
+                    </select>
+                    <input value={jNotes} onChange={e => setJNotes(e.target.value)} placeholder="Notes (optional)"
+                      className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={addJournalEntry}
+                      className="flex-1 py-2 rounded-xl text-xs font-bold"
+                      style={{ background: 'rgba(167,139,250,0.2)', color: '#a78bfa' }}>Log Trade</button>
+                    <button onClick={() => setShowAddJournal(false)} className="px-4 py-2 rounded-xl text-xs text-white/40">Cancel</button>
+                  </div>
+                </div>
+              )}
+
               {/* Portfolio sync chips — shows which holdings have journal entries */}
               {!loadingJournal && positions.length > 0 && (
                 <div className="rounded-xl p-3 border" style={{ background: 'rgba(167,139,250,0.04)', borderColor: 'rgba(167,139,250,0.15)' }}>
@@ -1059,6 +1197,12 @@ function PortfolioInner() {
                       <div className="flex items-center gap-1.5">
                         {outcomeIcon(entry.outcome)}
                         <span className="font-bold font-mono text-sm">{entry.ticker}</span>
+                        {entry.position_type === 'option' && entry.option_type && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
+                            style={{ background: entry.option_type === 'call' ? 'rgba(52,211,153,0.12)' : 'rgba(248,113,113,0.12)', color: entry.option_type === 'call' ? '#34d399' : '#f87171' }}>
+                            {entry.option_type.toUpperCase()} ${entry.strike} {entry.expiry?.slice(0,10)}
+                          </span>
+                        )}
                       </div>
                       <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: `${signalColor}15`, color: signalColor }}>{entry.signal}</span>
                       {entry.pnl_percent != null && (
@@ -1084,11 +1228,15 @@ function PortfolioInner() {
                     {isExpanded && (
                       <div className="px-4 pb-4 space-y-3 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
                         <div className="grid grid-cols-3 gap-2 pt-3">
-                          {[
+                          {(entry.position_type === 'option' ? [
+                            { label: 'Premium', val: entry.entry_premium ? `$${entry.entry_premium.toFixed(2)}/sh` : '—' },
+                            { label: 'Contracts', val: entry.contracts ? `${entry.contracts}x` : '1x' },
+                            { label: 'Total Cost', val: entry.entry_premium && entry.contracts ? `$${(entry.entry_premium * entry.contracts * 100).toFixed(0)}` : '—' },
+                          ] : [
                             { label: 'Entry', val: entry.entry_price ? `$${entry.entry_price.toFixed(2)}` : '—' },
                             { label: 'Stop', val: entry.stop_loss ? `$${entry.stop_loss.toFixed(2)}` : '—' },
                             { label: 'Target', val: entry.take_profit ? `$${entry.take_profit.toFixed(2)}` : '—' },
-                          ].map(f => (
+                          ]).map(f => (
                             <div key={f.label} className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.03)' }}>
                               <div className="text-[10px] text-white/30 mb-0.5">{f.label}</div>
                               <div className="text-sm font-mono font-bold">{f.val}</div>
@@ -1124,11 +1272,25 @@ function PortfolioInner() {
                             <p className="text-xs font-semibold" style={{ color: '#34d399' }}>Resolve trade</p>
                             <div className="grid grid-cols-2 gap-3">
                               <div>
-                                <label className="text-[10px] text-white/30 block mb-1">Exit price</label>
-                                <input value={resolveData.exit_price} onChange={e => setResolveData(d => ({ ...d, exit_price: e.target.value }))}
-                                  placeholder="$0.00" type="number"
-                                  className="w-full rounded-lg px-3 py-2 text-sm outline-none border"
-                                  style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                                <label className="text-[10px] text-white/30 block mb-1">
+                                  {entry.position_type === 'option' ? 'Exit premium/share ($)' : 'Exit price ($)'}
+                                </label>
+                                {entry.position_type === 'option' ? (
+                                  <input value={resolveData.exit_premium} onChange={e => setResolveData(d => ({ ...d, exit_premium: e.target.value }))}
+                                    placeholder="e.g. 4.50" type="number"
+                                    className="w-full rounded-lg px-3 py-2 text-sm outline-none border"
+                                    style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                                ) : (
+                                  <input value={resolveData.exit_price} onChange={e => setResolveData(d => ({ ...d, exit_price: e.target.value }))}
+                                    placeholder="$0.00" type="number"
+                                    className="w-full rounded-lg px-3 py-2 text-sm outline-none border"
+                                    style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                                )}
+                                {entry.position_type === 'option' && resolveData.exit_premium && entry.entry_premium && (
+                                  <div className="text-[9px] mt-1" style={{ color: parseFloat(resolveData.exit_premium) >= entry.entry_premium ? '#34d399' : '#f87171' }}>
+                                    {((parseFloat(resolveData.exit_premium) - entry.entry_premium) / entry.entry_premium * 100).toFixed(1)}% on premium
+                                  </div>
+                                )}
                               </div>
                               <div>
                                 <label className="text-[10px] text-white/30 block mb-1">Outcome</label>

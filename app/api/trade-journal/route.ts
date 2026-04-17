@@ -51,19 +51,31 @@ export async function POST(req: NextRequest) {
 
   // Add new entry from a verdict
   if (body.action === 'add') {
-    const { data, error } = await admin.from('trade_journal').insert({
+    const isOption = body.position_type === 'option'
+    const row: Record<string, unknown> = {
       user_id: user.id,
       verdict_log_id: body.verdict_log_id || null,
       ticker: body.ticker.toUpperCase(),
       signal: body.signal,
-      entry_price: body.entry_price,
-      stop_loss: body.stop_loss,
-      take_profit: body.take_profit,
-      timeframe: body.timeframe,
-      confidence: body.confidence,
+      entry_price: body.entry_price || null,
+      stop_loss: body.stop_loss || null,
+      take_profit: body.take_profit || null,
+      timeframe: body.timeframe || null,
+      confidence: body.confidence || null,
       outcome: 'pending',
-    }).select('id').single()
+      position_type: body.position_type || 'stock',
+      notes: body.notes || null,
+    }
+    if (isOption) {
+      row.option_type     = body.option_type || null
+      row.strike          = body.strike ? parseFloat(body.strike) : null
+      row.expiry          = body.expiry || null
+      row.contracts       = body.contracts ? parseInt(body.contracts) : 1
+      row.entry_premium   = body.entry_premium ? parseFloat(body.entry_premium) : null
+      row.underlying      = (body.underlying || body.ticker).toUpperCase()
+    }
 
+    const { data, error } = await admin.from('trade_journal').insert(row).select('id').single()
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     return NextResponse.json({ ok: true, id: data.id })
   }
@@ -82,14 +94,19 @@ export async function POST(req: NextRequest) {
 
     if (!entry) return NextResponse.json({ error: 'Entry not found' }, { status: 404 })
 
-    const pnlPercent = entry.entry_price && exit_price
-      ? parseFloat(((exit_price - entry.entry_price) / entry.entry_price * 100 * (entry.signal === 'BEARISH' ? -1 : 1)).toFixed(2))
-      : null
+    // For options: P&L is based on premium change, not underlying price
+    let pnlPercent: number | null = null
+    if (entry.position_type === 'option' && entry.entry_premium && body.exit_premium) {
+      const ep = parseFloat(body.exit_premium)
+      pnlPercent = parseFloat(((ep - entry.entry_premium) / entry.entry_premium * 100).toFixed(2))
+    } else if (entry.entry_price && exit_price) {
+      pnlPercent = parseFloat(((exit_price - entry.entry_price) / entry.entry_price * 100 * (entry.signal === 'BEARISH' ? -1 : 1)).toFixed(2))
+    }
 
     // Generate AI post-mortem
     const postmortem = await generatePostMortem(entry, exit_price, outcome, pnlPercent)
 
-    await admin.from('trade_journal').update({
+    const resolveUpdate: Record<string, unknown> = {
       exit_price,
       exit_date: new Date().toISOString(),
       outcome,
@@ -97,7 +114,10 @@ export async function POST(req: NextRequest) {
       notes: notes || entry.notes,
       postmortem,
       updated_at: new Date().toISOString(),
-    }).eq('id', id).eq('user_id', user.id)
+    }
+    if (body.exit_premium != null) resolveUpdate.exit_premium = parseFloat(body.exit_premium)
+
+    await admin.from('trade_journal').update(resolveUpdate).eq('id', id).eq('user_id', user.id)
 
     return NextResponse.json({ ok: true, postmortem })
   }
@@ -109,6 +129,12 @@ export async function POST(req: NextRequest) {
       tags: body.tags,
       updated_at: new Date().toISOString(),
     }).eq('id', body.id).eq('user_id', user.id)
+    return NextResponse.json({ ok: true })
+  }
+
+  // Delete entry
+  if (body.action === 'delete') {
+    await admin.from('trade_journal').delete().eq('id', body.id).eq('user_id', user.id)
     return NextResponse.json({ ok: true })
   }
 
