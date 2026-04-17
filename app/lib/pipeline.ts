@@ -683,7 +683,11 @@ JSON ONLY — include ALL fields below:
 }`
     }]
   })
-  const raw = parseJSON<JudgeResult>((msg.content[0] as { text: string }).text)
+  // Opus 4.7 may return thinking blocks before the text block — find the text block explicitly
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const textBlock = msg.content.find((b: any) => b.type === 'text') as { type: 'text'; text: string } | undefined
+  if (!textBlock) throw new Error('No text content in Judge response')
+  const raw = parseJSON<JudgeResult>(textBlock.text)
   return sanitizeJudgeResult(raw, bundle)
 }
 
