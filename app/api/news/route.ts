@@ -153,6 +153,82 @@ Rules: 4-6 bullish, 4-6 bearish, 3-4 watchlist. Include crypto if significant ne
 }
 
 // ── Route handler ──────────────────────────────────────────────
+// ── Sector top movers from Finnhub ─────────────────────────────
+// Maps sector ETFs to their top constituent tickers
+const SECTOR_TICKERS: Record<string, { name: string; emoji: string; tickers: string[] }> = {
+  XLK:  { name: 'Technology',       emoji: '💻', tickers: ['NVDA','MSFT','AAPL','META','GOOGL','AVGO','ORCL','AMD','ADBE','CRM'] },
+  XLV:  { name: 'Healthcare',       emoji: '🏥', tickers: ['LLY','UNH','JNJ','ABBV','MRK','TMO','ABT','DHR','PFE','AMGN'] },
+  XLF:  { name: 'Financials',       emoji: '🏦', tickers: ['BRK-B','JPM','V','MA','BAC','GS','MS','WFC','BX','SPGI'] },
+  XLE:  { name: 'Energy',           emoji: '⚡', tickers: ['XOM','CVX','COP','EOG','SLB','OXY','MPC','PSX','VLO','HES'] },
+  XLY:  { name: 'Consumer Disc.',   emoji: '🛍', tickers: ['AMZN','TSLA','HD','MCD','NKE','LOW','SBUX','TJX','BKNG','CMG'] },
+  XLP:  { name: 'Consumer Staples', emoji: '🛒', tickers: ['WMT','PG','KO','COST','PEP','PM','MDLZ','CL','GIS','KMB'] },
+  XLI:  { name: 'Industrials',      emoji: '🏭', tickers: ['GE','CAT','UPS','HON','UNP','BA','DE','LMT','RTX','ETN'] },
+  XLB:  { name: 'Materials',        emoji: '⛏',  tickers: ['LIN','SHW','APD','ECL','FCX','NEM','NUE','VMC','MLM','CTVA'] },
+  XLRE: { name: 'Real Estate',      emoji: '🏠', tickers: ['PLD','AMT','EQIX','WELL','SPG','DLR','O','PSA','EXR','AVB'] },
+  XLU:  { name: 'Utilities',        emoji: '💡', tickers: ['NEE','SO','DUK','SRE','AEP','D','PCG','EXC','XEL','WEC'] },
+  XLC:  { name: 'Comm. Services',   emoji: '📡', tickers: ['META','GOOGL','NFLX','DIS','CHTR','T','VZ','TMUS','EA','TTWO'] },
+}
+
+async function fetchSectorTopMovers(): Promise<Array<{
+  sector: string; etf: string; emoji: string; direction: string; etfChange: number;
+  topMovers: Array<{ ticker: string; change: number; signal: 'up' | 'down' }>
+}>> {
+  const finnhubKey = process.env.FINNHUB_API_KEY
+  if (!finnhubKey) return []
+
+  const results = []
+
+  for (const [etf, info] of Object.entries(SECTOR_TICKERS)) {
+    try {
+      // Get sector ETF change
+      const etfRes = await fetch(
+        `https://finnhub.io/api/v1/quote?symbol=${etf}&token=${finnhubKey}`
+      )
+      const etfQ = etfRes.ok ? await etfRes.json() : null
+      const etfChange = etfQ?.dp ?? 0
+
+      // Get top 10 constituent changes
+      const tickerQuotes: Array<{ ticker: string; change: number; signal: 'up' | 'down' }> = []
+
+      for (const ticker of info.tickers) {
+        try {
+          const res = await fetch(
+            `https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${finnhubKey}`
+          )
+          if (!res.ok) continue
+          const q = await res.json()
+          if (q.dp == null) continue
+          tickerQuotes.push({
+            ticker,
+            change: parseFloat(q.dp.toFixed(2)),
+            signal: q.dp >= 0 ? 'up' : 'down',
+          })
+        } catch { /* skip */ }
+        await new Promise(r => setTimeout(r, 80)) // respect rate limit
+      }
+
+      // Sort by absolute change, take top 10
+      const topMovers = tickerQuotes
+        .sort((a, b) => Math.abs(b.change) - Math.abs(a.change))
+        .slice(0, 10)
+
+      const direction = etfChange > 0.3 ? 'up' : etfChange < -0.3 ? 'down' : 'mixed'
+
+      results.push({
+        sector: info.name,
+        etf,
+        emoji: info.emoji,
+        direction,
+        etfChange: parseFloat(etfChange.toFixed(2)),
+        topMovers,
+      })
+    } catch { /* skip sector */ }
+  }
+
+  // Sort sectors by absolute ETF change (most active first)
+  return results.sort((a, b) => Math.abs(b.etfChange) - Math.abs(a.etfChange))
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const forceRefresh = searchParams.get('refresh') === 'true'
@@ -175,15 +251,19 @@ export async function GET(req: NextRequest) {
             .from('news_cache')
             .select('*')
             .eq('cache_key', today)
-            .single()
+            .maybeSingle()
 
           if (cached?.data) {
             const age = minutesAgo(cached.generated_at)
             send('status', { message: `Loaded cached analysis from ${age} minute${age === 1 ? '' : 's'} ago` })
 
+            // Fetch live sector movers even for cached analysis (always fresh)
+            const sectorTopMovers = await fetchSectorTopMovers().catch(() => [])
+
             // Add cache metadata to the response
             const result = {
               ...cached.data,
+              sectorTopMovers,
               cached: true,
               cachedAt: cached.generated_at,
               ageMinutes: age,
@@ -194,13 +274,14 @@ export async function GET(req: NextRequest) {
         }
 
         // ── Fresh analysis ───────────────────────────────────
-        send('status', { message: 'Fetching today\'s financial headlines...' })
-        const [marketNews, cryptoNews] = await Promise.all([
+        send('status', { message: 'Fetching today\'s financial headlines & sector data...' })
+        const [marketNews, cryptoNews, sectorTopMovers] = await Promise.all([
           fetchTopNews(),
           fetchCryptoNews(),
+          fetchSectorTopMovers(),
         ])
 
-        send('status', { message: 'Gemini is analyzing today\'s market movers...' })
+        send('status', { message: 'The council is analyzing today\'s market movers...' })
         const result = await runGeminiAnalysis(marketNews, cryptoNews)
 
         // ── Save to Supabase (upsert — one row per day) ──────
@@ -211,7 +292,7 @@ export async function GET(req: NextRequest) {
             { onConflict: 'cache_key' }
           )
 
-        send('complete', { ...(result as Record<string, unknown>), cached: false, ageMinutes: 0 })
+        send('complete', { ...(result as Record<string, unknown>), sectorTopMovers, cached: false, ageMinutes: 0 })
 
       } catch (err) {
         console.error('News error:', err)

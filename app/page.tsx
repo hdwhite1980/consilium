@@ -635,7 +635,7 @@ function HomeInner() {
           </div>
 
           {/* Why is this moving? — shows when price has moved >2% */}
-          {md?.currentPrice && md?.technicals?.priceChange1D && Math.abs(md.technicals.priceChange1D) >= 0 && (
+          {md?.currentPrice && md?.technicals?.priceChange1D && Math.abs(md.technicals.priceChange1D) >= 2 && (
             <button
               onClick={async () => {
                 const pct = md.technicals?.priceChange1D || 0

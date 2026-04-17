@@ -45,6 +45,11 @@ interface SectorSetup {
   topPlay: string
 }
 
+interface SectorTopMover {
+  sector: string; etf: string; emoji: string; direction: string; etfChange: number
+  topMovers: Array<{ ticker: string; change: number; signal: 'up' | 'down' }>
+}
+
 interface TomorrowData {
   nextTradingDay: string
   generatedAt: string
@@ -54,6 +59,7 @@ interface TomorrowData {
   earningsCalendar: EarningsItem[]
   economicEvents: EconomicEvent[]
   sectorSetups: SectorSetup[]
+  sectorTopMovers?: SectorTopMover[]
   cryptoSetup: string
   openingBellPlaybook: string
   riskFactors: string[]
@@ -387,31 +393,73 @@ export default function TomorrowPage() {
               </div>
             )}
 
-            {/* Sector setups */}
-            {data.sectorSetups?.length > 0 && (
-              <div>
-                <div className="flex items-center gap-2 mb-3">
+            {/* Sector Setups + Live Top Movers */}
+            {((data.sectorSetups?.length ?? 0) > 0 || (data.sectorTopMovers?.length ?? 0) > 0) && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
                   <span className="text-sm">🏭</span>
                   <span className="text-sm font-semibold text-white">Sector Setups</span>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                  {data.sectorSetups.map((s, i) => {
-                    const col = s.direction === 'bullish' ? '#34d399' : s.direction === 'bearish' ? '#f87171' : '#fbbf24'
-                    return (
-                      <div key={i} className="rounded-xl p-3 border"
-                        style={{ background: `${col}05`, borderColor: `${col}18` }}>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs font-semibold" style={{ color: col }}>{s.sector}</span>
-                          <span className="text-[10px] font-mono text-white/30">{s.etf}</span>
+
+                {/* AI sector analysis */}
+                {data.sectorSetups?.length > 0 && (
+                  <div className="grid grid-cols-2 gap-2">
+                    {data.sectorSetups.map((s, i) => {
+                      const col = s.direction === 'bullish' ? '#34d399' : s.direction === 'bearish' ? '#f87171' : '#fbbf24'
+                      return (
+                        <div key={i} className="rounded-xl p-3 border"
+                          style={{ background: `${col}05`, borderColor: `${col}18` }}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-semibold" style={{ color: col }}>{s.sector}</span>
+                            <span className="text-[10px] font-mono text-white/30">{s.etf}</span>
+                          </div>
+                          <p className="text-[11px] text-white/50 leading-relaxed mb-1.5">{s.reason}</p>
+                          <div className="text-[10px] font-mono" style={{ color: col }}>
+                            Top play: {s.topPlay}
+                          </div>
                         </div>
-                        <p className="text-[11px] text-white/50 leading-relaxed mb-1.5">{s.reason}</p>
-                        <div className="text-[10px] font-mono" style={{ color: col }}>
-                          Top play: {s.topPlay}
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* Live top 10 per sector */}
+                {data.sectorTopMovers && (data.sectorTopMovers?.length ?? 0) > 0 && (
+                  <div className="space-y-2">
+                    <span className="text-[10px] font-mono uppercase tracking-widest text-white/25">Live top movers by sector</span>
+                    {data.sectorTopMovers.map((s) => {
+                      const col = s.direction === 'up' ? '#34d399' : s.direction === 'down' ? '#f87171' : '#fbbf24'
+                      return (
+                        <div key={s.etf} className="rounded-xl border overflow-hidden"
+                          style={{ background: `${col}05`, borderColor: `${col}18` }}>
+                          <div className="flex items-center gap-2 px-3 py-2 border-b" style={{ borderColor: `${col}12` }}>
+                            <span className="text-sm">{s.emoji}</span>
+                            <span className="text-xs font-bold" style={{ color: col }}>{s.sector}</span>
+                            <span className="text-[10px] font-mono" style={{ color: col }}>
+                              {s.etfChange > 0 ? '+' : ''}{s.etfChange}%
+                            </span>
+                            <span className="text-[10px] text-white/25 ml-auto font-mono">{s.etf}</span>
+                          </div>
+                          <div className="grid grid-cols-5 gap-0">
+                            {s.topMovers.map((m, i) => {
+                              const tc = m.signal === 'up' ? '#34d399' : '#f87171'
+                              return (
+                                <div key={m.ticker} className="flex flex-col items-center py-2 px-1 text-center"
+                                  style={{ borderRight: i < 9 ? '1px solid rgba(255,255,255,0.04)' : 'none',
+                                           borderBottom: i < 5 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                                  <span className="text-[10px] font-bold font-mono" style={{ color: 'rgba(255,255,255,0.7)' }}>{m.ticker}</span>
+                                  <span className="text-[10px] font-mono" style={{ color: tc }}>
+                                    {m.change > 0 ? '+' : ''}{m.change}%
+                                  </span>
+                                </div>
+                              )
+                            })}
+                          </div>
                         </div>
-                      </div>
-                    )
-                  })}
-                </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             )}
 
@@ -446,7 +494,7 @@ export default function TomorrowPage() {
 
             <p className="text-[10px] font-mono text-white/15 text-center pb-4 leading-relaxed">
               AI-generated forward-looking analysis. Not financial advice. Always do your own research.
-              Catalysts and events may change. Data from Alpaca Markets · Analysis by Gemini.
+              Catalysts and events may change. Data from Alpaca Markets · Powered by Wali-OS.
             </p>
           </div>
         </div>
