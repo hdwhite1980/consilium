@@ -5,7 +5,7 @@ import { runPipeline } from '@/app/lib/pipeline'
 import { createServerClient } from '@/app/lib/supabase'
 import { createClient as createAuthClient } from '@/app/lib/auth/server'
 
-export const maxDuration = 120
+export const maxDuration = 300
 
 // Cache durations in minutes per timeframe
 const CACHE_MINUTES: Record<string, number> = {
@@ -39,8 +39,19 @@ export async function POST(req: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
-      const send = (event: string, data: unknown) =>
-        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+      let controllerClosed = false
+      const send = (event: string, data: unknown) => {
+        if (controllerClosed) return
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+        } catch { controllerClosed = true }
+      }
+
+      // Heartbeat — sends a SSE comment every 15s to prevent Railway/proxy from
+      // closing an idle connection while AI stages are running
+      const heartbeat = setInterval(() => {
+        try { controller.enqueue(encoder.encode(`: heartbeat\n\n`)) } catch { /* stream closed */ }
+      }, 15000)
 
       try {
         const supabase = createServerClient()
@@ -336,11 +347,16 @@ export async function POST(req: NextRequest) {
           ...result,
         })
 
+
       } catch (err) {
         console.error('Pipeline error:', err)
         send('error', { message: err instanceof Error ? err.message : 'Pipeline failed' })
       } finally {
-        controller.close()
+        clearInterval(heartbeat)
+        if (!controllerClosed) {
+          try { controller.close() } catch { /* already closed */ }
+        }
+        controllerClosed = true
       }
     }
   })

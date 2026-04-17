@@ -11,8 +11,8 @@ import { calculateTechnicals } from './signals/technicals'
 import { buildMarketContext } from './signals/market-context'
 import { fetchFundamentals } from './signals/fundamentals'
 import { fetchEdgarFundamentals, formatEdgarForAI } from './data/edgar'
-import { buildSecFilingsContext } from './data/sec-filings'
-import { buildLegislativeContext } from './data/legislative'
+import { buildSecFilingsContext, fetchAllFilingsForTicker } from './data/sec-filings'
+import { buildLegislativeContext, fetchFederalRegisterActions, fetchCongressionalTrades } from './data/legislative'
 import { fetchSmartMoney } from './signals/smart-money'
 import { fetchOptionsFlow } from './signals/options-flow'
 import { buildConvictionOutput } from './signals/conviction'
@@ -349,17 +349,47 @@ Focus on central bank policy signals, economic data releases, and technical stru
 
   // Phases 1-4 in parallel
   onProgress?.('Fetching market context, fundamentals, smart money, options...')
-  const [marketContext, fundamentals, smartMoney, optionsFlow, edgarData, secFilingsContext, legislativeContext] = await Promise.all([
+  const [marketContext, fundamentals, smartMoney, optionsFlow, edgarData] = await Promise.all([
     buildMarketContext(sym, timeframe),
     fetchFundamentals(sym, currentPrice),
     fetchSmartMoney(sym),
     fetchOptionsFlow(sym, currentPrice),
-    Promise.race([fetchEdgarFundamentals(sym), new Promise<null>(r => setTimeout(() => r(null), 4000))]).catch(() => null),
-    Promise.race([buildSecFilingsContext(sym), new Promise<string>(r => setTimeout(() => r(''), 4000))]).catch(() => ''),
-    Promise.race([buildLegislativeContext(sym, []), new Promise<string>(r => setTimeout(() => r(''), 4000))]).catch(() => ''),
+    Promise.race([fetchEdgarFundamentals(sym), new Promise<null>(r => setTimeout(() => r(null), 8000))]).catch(() => null),
   ])
 
-  // Background refresh triggered separately via /api/sec-filings and /api/legislative cron endpoints
+  // Check DB for existing intelligence data — if none, seed it with tight timeouts
+  // SEC filings: 5s max (reads EDGAR submissions — fast, no Finnhub calls)
+  // Federal Register EOs: 4s max (single API call, no per-ticker work needed)
+  // Congressional trades: 4s max (House XML or QuiverQuant)
+  // fetchAllFilingsForTicker (13-F, Form 4 XML) is intentionally excluded from hot path
+  // — it makes 15+ HTTP calls and is seeded via /api/sec-filings cron instead
+  const [secFilingsContext, legislativeContext] = await Promise.all([
+    Promise.race([
+      (async () => {
+        // Check cache first — only fetch if no data exists for this ticker
+        const existing = await buildSecFilingsContext(sym).catch(() => '')
+        if (existing) return existing
+        await Promise.race([fetchAllFilingsForTicker(sym), new Promise<void>(r => setTimeout(r, 5000))]).catch(() => {})
+        return buildSecFilingsContext(sym).catch(() => '')
+      })(),
+      new Promise<string>(r => setTimeout(() => r(''), 8000))
+    ]).catch(() => ''),
+    Promise.race([
+      (async () => {
+        const existing = await buildLegislativeContext(sym, []).catch(() => '')
+        if (existing) return existing
+        await Promise.race([
+          Promise.all([
+            fetchFederalRegisterActions(3).catch(() => {}),
+            fetchCongressionalTrades(sym).catch(() => {}),
+          ]),
+          new Promise<void>(r => setTimeout(r, 4000))
+        ]).catch(() => {})
+        return buildLegislativeContext(sym, []).catch(() => '')
+      })(),
+      new Promise<string>(r => setTimeout(() => r(''), 8000))
+    ]).catch(() => ''),
+  ])
 
   // Compute relative strength vs sector now that we have both
   const sectorChange = marketContext.sector.changePeriod
