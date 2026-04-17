@@ -192,15 +192,39 @@ export async function fetchInsiderTransactions(ticker: string): Promise<void> {
         .maybeSingle()
       if (existing) continue
 
-      // Fetch the actual Form 4 XML
+      // Fetch the actual Form 4 XML via the filing index
       try {
         const accNoClean = accNo.replace(/-/g, '')
-        // Form 4 is XML — fetch the primary document
-        const xmlUrl = `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accNoClean}/${accNo}.xml`
-        const xmlRes = await fetch(xmlUrl, { headers: { 'User-Agent': EDGAR_HEADERS['User-Agent'] } })
-        if (!xmlRes.ok) continue
-
-        const xml = await xmlRes.text()
+        // Get filing index to find the actual XML document name
+        const indexUrl = `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${cikNum}&type=4&dateb=&owner=include&count=40&search_text=&output=atom`
+        // Try primary XML path first, then fall back to index lookup
+        let xml = ''
+        // Attempt 1: standard path
+        const attempt1 = await fetch(
+          `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accNoClean}/${accNo}.xml`,
+          { headers: { 'User-Agent': EDGAR_HEADERS['User-Agent'] } }
+        )
+        if (attempt1.ok) {
+          xml = await attempt1.text()
+        } else {
+          // Attempt 2: fetch the filing index and find the .xml file
+          const idxRes = await fetch(
+            `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accNoClean}/`,
+            { headers: { 'User-Agent': EDGAR_HEADERS['User-Agent'] } }
+          )
+          if (idxRes.ok) {
+            const idxHtml = await idxRes.text()
+            const xmlMatch = idxHtml.match(/href="([^"]*\.xml)"/i)
+            if (xmlMatch) {
+              const xmlRes2 = await fetch(
+                `https://www.sec.gov${xmlMatch[1]}`,
+                { headers: { 'User-Agent': EDGAR_HEADERS['User-Agent'] } }
+              )
+              if (xmlRes2.ok) xml = await xmlRes2.text()
+            }
+          }
+        }
+        if (!xml) continue
 
         // Parse key fields from XML
         const insiderName = xml.match(/<rptOwnerName>(.*?)<\/rptOwnerName>/)?.[1] || 'Unknown'
@@ -354,7 +378,30 @@ export async function fetch13FForTicker(ticker: string): Promise<void> {
 
             for (const block of infoBlocks) {
               const nameMatch = block.match(/<nameOfIssuer>(.*?)<\/nameOfIssuer>/i)
-              if (!nameMatch || !nameMatch[1].toUpperCase().includes(ticker.toUpperCase())) continue
+              if (!nameMatch) continue
+              // Match ticker name flexibly — "NVIDIA" matches "NVDA", etc.
+              const issuerUpper = nameMatch[1].toUpperCase()
+              const tickerUpper = ticker.toUpperCase()
+              // Direct name match OR check CUSIP/ticker column
+              const cusipMatch = block.match(/<cusip>(.*?)<\/cusip>/i)?.[1] || ''
+              const titleBlock = block.match(/<nameOfIssuer>(.*?)<\/nameOfIssuer>/i)?.[1] || ''
+              // Build common name variants
+              const nameVariants: Record<string, string[]> = {
+                'NVDA': ['NVIDIA','NVD'],
+                'AAPL': ['APPLE'],
+                'MSFT': ['MICROSOFT'],
+                'GOOGL': ['ALPHABET','GOOGLE'],
+                'GOOG': ['ALPHABET','GOOGLE'],
+                'META': ['META PLATFORM','FACEBOOK'],
+                'AMZN': ['AMAZON'],
+                'TSLA': ['TESLA'],
+                'NFLX': ['NETFLIX'],
+                'JPM': ['JPMORGAN','JP MORGAN'],
+              }
+              const variants = nameVariants[tickerUpper] || []
+              const matches = issuerUpper.includes(tickerUpper) ||
+                variants.some(v => issuerUpper.includes(v))
+              if (!matches) continue
 
               const shares = parseInt(block.match(/<sshPrnamt>(.*?)<\/sshPrnamt>/)?.[1] || '0')
               const value = parseInt(block.match(/<value>(.*?)<\/value>/)?.[1] || '0') * 1000 // 13-F values in thousands
