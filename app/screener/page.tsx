@@ -17,11 +17,15 @@ interface Suggestion {
   reason: string
   risk: 'low' | 'medium' | 'high'
   catalyst: string
+  rsi?: number | null
+  volumeRatio?: number | null
+  signal_strength?: 'strong' | 'moderate' | 'weak'
 }
 
 interface ScreenerResult {
   sector: string
   sectorEtf: string
+  sectorChange?: number
   budget: number
   type: string
   suggestions: Suggestion[]
@@ -189,7 +193,11 @@ export default function ScreenerPage() {
               <TrendingUp size={16} style={{ color: '#a78bfa' }} />
               <div>
                 <div className="text-xs font-bold" style={{ color: '#a78bfa' }}>
-                  {result.sector} — {result.type === 'stock' ? 'Stock' : 'Options'} picks under ${result.budget}{result.type === 'option' ? '/contract' : '/share'}
+                  {result.sector} {result.sectorChange != null && (
+                    <span style={{ color: result.sectorChange >= 0 ? '#34d399' : '#f87171' }}>
+                      ({result.sectorChange >= 0 ? '+' : ''}{result.sectorChange.toFixed(1)}%)
+                    </span>
+                  )} — {result.type === 'stock' ? 'Stock' : 'Options'} picks under ${result.budget}{result.type === 'option' ? '/contract' : '/share'}
                 </div>
                 {result.summary && (
                   <div className="text-[11px] text-white/50 mt-0.5">{result.summary}</div>
@@ -235,11 +243,30 @@ export default function ScreenerPage() {
                         ~<span className="font-bold text-white/70">${s.est_total_cost}</span>/contract
                       </div>
                     )}
-                    {/* Risk badge */}
-                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full font-mono uppercase"
-                      style={{ background: `${RISK_COLOR[s.risk]}15`, color: RISK_COLOR[s.risk] }}>
-                      {s.risk} risk
-                    </span>
+                    {/* Technical badges */}
+                    <div className="flex flex-col items-end gap-1">
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full font-mono uppercase"
+                        style={{ background: `${RISK_COLOR[s.risk]}15`, color: RISK_COLOR[s.risk] }}>
+                        {s.risk} risk
+                      </span>
+                      <div className="flex gap-1">
+                        {s.rsi != null && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded font-mono"
+                            style={{
+                              background: s.rsi > 70 ? 'rgba(248,113,113,0.15)' : s.rsi < 30 ? 'rgba(52,211,153,0.15)' : 'rgba(96,165,250,0.1)',
+                              color: s.rsi > 70 ? '#f87171' : s.rsi < 30 ? '#34d399' : '#60a5fa'
+                            }}>
+                            RSI {s.rsi}
+                          </span>
+                        )}
+                        {s.volumeRatio != null && s.volumeRatio > 1.2 && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded font-mono"
+                            style={{ background: 'rgba(251,191,36,0.12)', color: '#fbbf24' }}>
+                            {s.volumeRatio}x vol
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
 
