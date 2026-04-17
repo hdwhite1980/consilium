@@ -34,11 +34,32 @@ export async function middleware(request: NextRequest) {
   }
 
   // ── Get session ──────────────────────────────────────────────
-  const { data: { user, session } } = await supabase.auth.getUser()
-    .then(async u => {
-      const s = await supabase.auth.getSession()
-      return { data: { user: u.data.user, session: s.data.session } }
-    })
+  // Wrapped in try-catch — invalid/expired refresh tokens throw AuthApiError
+  // instead of returning null, which would crash the middleware
+  let user: any = null
+  let session: any = null
+  try {
+    const [userResult, sessionResult] = await Promise.all([
+      supabase.auth.getUser(),
+      supabase.auth.getSession(),
+    ])
+    user = userResult.data.user
+    session = sessionResult.data.session
+  } catch (err: any) {
+    // Stale or invalid refresh token — clear cookies and redirect to login
+    const code = err?.code || err?.message || ''
+    if (code.includes('refresh_token') || code.includes('Auth') || err?.__isAuthError) {
+      const loginUrl = new URL('/login', request.url)
+      const response = NextResponse.redirect(loginUrl)
+      // Clear all supabase auth cookies so the client starts fresh
+      request.cookies.getAll()
+        .filter(c => c.name.startsWith('sb-'))
+        .forEach(c => response.cookies.delete(c.name))
+      return response
+    }
+    // Unknown error — fail open for non-auth errors
+    console.error('[middleware] auth error:', err?.message)
+  }
 
   // API routes handle their own auth
   if (pathname.startsWith('/api/')) return supabaseResponse
