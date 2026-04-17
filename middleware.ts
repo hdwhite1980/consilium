@@ -128,7 +128,14 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL('/subscribe', request.url))
   }
 
-  // Any other status (canceled, incomplete, etc) — no access
+  // incomplete = started Stripe checkout but didn't finish — treat as trialing
+  if (sub.status === 'incomplete') {
+    if (!sub.trial_ends_at) return supabaseResponse
+    if (new Date(sub.trial_ends_at) > now) return supabaseResponse
+    return NextResponse.redirect(new URL('/subscribe', request.url))
+  }
+
+  // Any other status (canceled, etc) — no access
   console.log(`[middleware] no access, status=${sub.status} for ${user.email}`)
   return NextResponse.redirect(new URL('/subscribe', request.url))
 }
