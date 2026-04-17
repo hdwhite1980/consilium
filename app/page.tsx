@@ -542,9 +542,7 @@ function HomeInner() {
     { label: 'Tomorrow', icon: '📅', path: '/tomorrow', color: '#a78bfa' },
     { label: 'Invest', icon: '🔥', path: '/invest',     color: '#f97316' },
     { label: 'Portfolio', icon: '💼', path: '/portfolio', color: '#34d399' },
-    { label: 'Reinvest', icon: '💰', path: '/reinvestment', color: '#34d399' },
     { label: 'Macro',    icon: '🌍', path: '/macro',       color: '#60a5fa' },
-    { label: 'Journal',  icon: '📒', path: '/journal',     color: '#34d399' },
     { label: 'Screener', icon: '🔍', path: '/screener',    color: '#a78bfa' },
     { label: 'Compare', icon: '⚡', path: '/compare',   color: '#f87171' },
     { label: 'Track Record', icon: '🏆', path: '/track-record', color: '#fbbf24' },
@@ -1530,7 +1528,7 @@ function HomeInner() {
                           confidence: jud?.confidence,
                         }),
                       })
-                      router.push('/journal')
+                      router.push('/portfolio?tab=journal')
                     }}
                     className="w-full py-2 rounded-xl text-xs font-semibold transition-all hover:opacity-80 flex items-center justify-center gap-1.5 mb-3"
                     style={{ background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.2)', color: '#34d399' }}>
@@ -1581,7 +1579,7 @@ function HomeInner() {
                         take_profit: tp && !isNaN(tp) ? tp : null,
                         timeframe: tf, confidence: jud.confidence }),
                     })
-                    router.push('/journal')
+                    router.push('/portfolio?tab=journal')
                   }
                   const destinations = [
                     { icon: '📒', label: 'Trade Journal', desc: 'Track outcome + AI post-mortem', color: '#34d399', onClick: logToJournal },
