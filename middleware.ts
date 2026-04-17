@@ -24,14 +24,17 @@ export async function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl
 
-  // Always public — no auth check
+  // ── Short-circuit for public routes BEFORE touching the session ──
+  // This prevents the middleware from consuming PKCE tokens
+  const alwaysPublic = ['/login', '/auth/callback', '/subscribe', '/signup', '/confirm', '/privacy', '/terms']
+  if (alwaysPublic.some(p => pathname.startsWith(p))) {
+    return supabaseResponse
+  }
+
   // Removed features — redirect to home
   if (pathname.startsWith('/training')) {
     return NextResponse.redirect(new URL('/', request.url))
   }
-
-  const alwaysPublic = ['/login', '/auth/callback', '/subscribe', '/signup', '/confirm', '/privacy', '/terms']
-  if (alwaysPublic.some(p => pathname.startsWith(p))) return supabaseResponse
 
   const { data: { user, session } } = await supabase.auth.getUser()
     .then(async u => {
@@ -39,10 +42,12 @@ export async function middleware(request: NextRequest) {
       return { data: { user: u.data.user, session: s.data.session } }
     })
 
-  // API routes handle their own auth
-  if (pathname.startsWith('/api/')) return supabaseResponse
+  // ── API routes handle their own auth ──────────────────────────
+  if (pathname.startsWith('/api/')) {
+    return supabaseResponse
+  }
 
-  // Not logged in
+  // ── Not logged in → /login ────────────────────────────────────
   if (!user || !session) {
     const loginUrl = new URL('/login', request.url)
     loginUrl.searchParams.set('redirect', pathname)
@@ -54,7 +59,7 @@ export async function middleware(request: NextRequest) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 
-  // Single session check
+  // ── Single session check ──────────────────────────────────────
   const sessionToken = session.access_token?.slice(-32) ?? null
   if (sessionToken) {
     const { data: activeSession } = await admin
@@ -72,7 +77,7 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  // Disclaimer check
+  // ── Disclaimer ────────────────────────────────────────────────
   if (pathname !== '/disclaimer') {
     const { data: disclaimer } = await admin
       .from('disclaimer_accepted')
@@ -88,7 +93,7 @@ export async function middleware(request: NextRequest) {
 
   if (pathname === '/disclaimer') return supabaseResponse
 
-  // Subscription check
+  // ── Subscription / trial check ────────────────────────────────
   const { data: sub, error: subError } = await admin
     .from('subscriptions')
     .select('status, trial_ends_at, current_period_end, is_exempt')
