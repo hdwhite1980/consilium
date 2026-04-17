@@ -315,7 +315,8 @@ function PortfolioInner() {
           try {
             const q = await fetch(`/api/ticker?ticker=${t.ticker}`)
             const qd = q.ok ? await q.json() : null
-            const cp = qd?.quote?.c || null
+            const cpRaw = qd?.quote?.c || null
+            const cp = cpRaw !== null ? parseFloat(cpRaw) : null
             const pnl = cp && t.shares ? (cp - t.entry_price) * t.shares : null
             const pnlPct = t.entry_price > 0 && cp ? ((cp - t.entry_price) / t.entry_price * 100) : null
             return { ...t, currentPrice: cp, pnl, pnlPct }
@@ -875,6 +876,30 @@ function PortfolioInner() {
                 ))}
               </div>
 
+              {/* Portfolio sync chips — quick-add from holdings */}
+              {positions.length > 0 && (
+                <div className="rounded-xl p-3 border" style={{ background: 'rgba(251,191,36,0.04)', borderColor: 'rgba(251,191,36,0.15)' }}>
+                  <div className="text-[10px] font-mono text-white/25 uppercase tracking-wider mb-2">Your holdings — tap to prefill</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {positions.map(p => {
+                      const alreadyTracked = reinvestTrades.some(t => t.ticker === p.ticker && !t.exit_price)
+                      return (
+                        <button key={p.ticker}
+                          onClick={() => { setRTicker(p.ticker); setShowAddReinvest(true) }}
+                          className="px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold transition-all"
+                          style={{
+                            background: alreadyTracked ? 'rgba(52,211,153,0.1)' : 'rgba(255,255,255,0.06)',
+                            color: alreadyTracked ? '#34d399' : 'rgba(255,255,255,0.5)',
+                            border: `1px solid ${alreadyTracked ? 'rgba(52,211,153,0.2)' : 'rgba(255,255,255,0.08)'}`,
+                          }}>
+                          {alreadyTracked ? '✓ ' : ''}{p.ticker}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* Add reinvest trade form */}
               {showAddReinvest && (
                 <div className="rounded-2xl border p-5" style={{ background: '#111620', borderColor: 'rgba(251,191,36,0.25)' }}>
@@ -984,6 +1009,33 @@ function PortfolioInner() {
                       <div className="text-sm font-bold font-mono" style={{ color: s.color }}>{s.val}</div>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {/* Portfolio sync chips — shows which holdings have journal entries */}
+              {!loadingJournal && positions.length > 0 && (
+                <div className="rounded-xl p-3 border" style={{ background: 'rgba(167,139,250,0.04)', borderColor: 'rgba(167,139,250,0.15)' }}>
+                  <div className="text-[10px] font-mono text-white/25 uppercase tracking-wider mb-2">Holdings — journal coverage</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {positions.map(p => {
+                      const hasEntry = journalEntries.some(e => e.ticker === p.ticker)
+                      const openEntry = journalEntries.find(e => e.ticker === p.ticker && e.outcome === 'pending')
+                      return (
+                        <button key={p.ticker}
+                          onClick={() => router.push(`/?ticker=${p.ticker}`)}
+                          className="px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold transition-all"
+                          style={{
+                            background: openEntry ? 'rgba(251,191,36,0.1)' : hasEntry ? 'rgba(52,211,153,0.1)' : 'rgba(255,255,255,0.06)',
+                            color: openEntry ? '#fbbf24' : hasEntry ? '#34d399' : 'rgba(255,255,255,0.4)',
+                            border: `1px solid ${openEntry ? 'rgba(251,191,36,0.2)' : hasEntry ? 'rgba(52,211,153,0.2)' : 'rgba(255,255,255,0.08)'}`,
+                          }}
+                          title={openEntry ? 'Open trade' : hasEntry ? 'Has journal entries' : 'No journal entry — analyze to add'}>
+                          {openEntry ? '⏳ ' : hasEntry ? '✓ ' : ''}{p.ticker}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <div className="text-[9px] text-white/20 mt-1.5">✓ journaled • ⏳ open trade • gray = not yet tracked</div>
                 </div>
               )}
 
