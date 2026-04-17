@@ -15,6 +15,43 @@ import {
 } from 'lucide-react'
 
 type Signal = 'BULLISH' | 'BEARISH' | 'NEUTRAL'
+
+// ── Log Trade Menu ────────────────────────────────────────────────────────────
+function LogTradeMenu({ destinations }: {
+  destinations: Array<{ icon: string; label: string; desc: string; color: string; onClick: () => void }>
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all hover:opacity-90"
+        style={{ background: 'rgba(52,211,153,0.08)', color: '#34d399', border: '1px solid rgba(52,211,153,0.2)' }}>
+        <span className="flex items-center gap-1.5">
+          <span>📋</span>
+          <span>Acted on this analysis? Log your trade</span>
+        </span>
+        <span style={{ color: 'rgba(52,211,153,0.5)' }}>{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="mt-1 rounded-xl overflow-hidden z-10 relative"
+          style={{ background: '#0d1117', border: '1px solid rgba(255,255,255,0.08)' }}>
+          {destinations.map((d, i) => (
+            <button key={d.label} onClick={() => { setOpen(false); d.onClick() }}
+              className="w-full flex items-center gap-3 px-3 py-2.5 text-left transition-all hover:opacity-80"
+              style={{ borderBottom: i < destinations.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+              <span className="text-base w-5 text-center">{d.icon}</span>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-semibold" style={{ color: d.color }}>{d.label}</div>
+                <div className="text-[10px]" style={{ color: 'rgba(255,255,255,0.3)' }}>{d.desc}</div>
+              </div>
+              <span className="text-white/20 text-xs">→</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 type Stage  = 'idle' | 'building' | 'gemini' | 'claude' | 'gpt' | 'judge' | 'done' | 'error'
 type TF     = '1D' | '1W' | '1M' | '3M'
 type Persona = 'balanced' | 'technical' | 'fundamental'
@@ -1524,29 +1561,35 @@ function HomeInner() {
                   )
                 })()}
 
-                {/* Log Trade CTA */}
-                {jud.signal && (jud.signal === 'BULLISH' || jud.signal === 'NEUTRAL') && (
-                  <div className="flex items-center justify-between gap-3 px-1">
-                    <p className="text-xs" style={{ color: 'var(--text3)' }}>
-                      Acted on this analysis? Track your trade and get reinvestment ideas.
-                    </p>
-                    <button
-                      onClick={() => {
-                        const entryPrice = md?.currentPrice ?? 0
-                        const params = new URLSearchParams({
-                          ticker,
-                          price: entryPrice.toFixed(2),
-                          signal: jud.signal,
-                          confidence: String(jud.confidence),
-                        })
-                        router.push(`/reinvestment?${params}`)
-                      }}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold shrink-0 transition-all hover:opacity-80"
-                      style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399', border: '1px solid rgba(52,211,153,0.2)' }}>
-                      💰 Log trade
-                    </button>
-                  </div>
-                )}
+                {/* Log Trade CTA — multi-destination */}
+                {jud.signal && jud.signal !== 'NEUTRAL' && (() => {
+                  const entryPrice = md?.currentPrice ?? 0
+                  const params = new URLSearchParams({
+                    ticker, price: entryPrice.toFixed(2),
+                    signal: jud.signal, confidence: String(jud.confidence),
+                  })
+                  const logToJournal = async () => {
+                    const ep = jud.entryPrice ? parseFloat(jud.entryPrice.replace(/[^0-9.]/g,'')) : entryPrice
+                    const sl = jud.stopLoss ? parseFloat(jud.stopLoss.replace(/[^0-9.]/g,'')) : null
+                    const tp = jud.takeProfit ? parseFloat(jud.takeProfit.replace(/[^0-9.]/g,'')) : null
+                    await fetch('/api/trade-journal', {
+                      method: 'POST', headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ action: 'add', ticker, signal: jud.signal,
+                        entry_price: isNaN(ep) ? entryPrice : ep,
+                        stop_loss: sl && !isNaN(sl) ? sl : null,
+                        take_profit: tp && !isNaN(tp) ? tp : null,
+                        timeframe: tf, confidence: jud.confidence }),
+                    })
+                    router.push('/journal')
+                  }
+                  const destinations = [
+                    { icon: '📒', label: 'Trade Journal', desc: 'Track outcome + AI post-mortem', color: '#34d399', onClick: logToJournal },
+                    { icon: '💰', label: 'Reinvestment Tracker', desc: 'Deploy gains with AI strategies', color: '#a78bfa', onClick: () => router.push(`/reinvestment?${params}`) },
+                    { icon: '💼', label: 'Portfolio', desc: 'Add position to your portfolio', color: '#60a5fa', onClick: () => router.push(`/portfolio?add=${ticker}&price=${entryPrice.toFixed(2)}`) },
+                    { icon: '🔥', label: 'Invest Journey', desc: 'Track as part of your journey', color: '#fbbf24', onClick: () => router.push(`/invest?ticker=${ticker}&signal=${jud.signal}`) },
+                  ]
+                  return <LogTradeMenu destinations={destinations} />
+                })()}
 
                 {/* Collapsible deep-dive sections — inside the verdict card */}
                 {(jud.technicalsExplained || jud.fundamentalsExplained || jud.smartMoneyExplained) && (
