@@ -506,7 +506,8 @@ function HomeInner() {
     { label: 'Invest', icon: '🔥', path: '/invest',     color: '#f97316' },
     { label: 'Portfolio', icon: '💼', path: '/portfolio', color: '#34d399' },
     { label: 'Reinvest', icon: '💰', path: '/reinvestment', color: '#34d399' },
-    { label: 'Macro', icon: '🌍', path: '/macro',       color: '#60a5fa' },
+    { label: 'Macro',    icon: '🌍', path: '/macro',       color: '#60a5fa' },
+    { label: 'Journal',  icon: '📒', path: '/journal',     color: '#34d399' },
     { label: 'Compare', icon: '⚡', path: '/compare',   color: '#f87171' },
     { label: 'Track Record', icon: '🏆', path: '/track-record', color: '#fbbf24' },
     { label: 'Guide', icon: '📖', path: '/guide',       color: txt3 },
@@ -597,7 +598,7 @@ function HomeInner() {
           </div>
 
           {/* Why is this moving? — shows when price has moved >2% */}
-          {md?.currentPrice && md?.technicals?.priceChange1D && Math.abs(md.technicals.priceChange1D) >= 2 && (
+          {md?.currentPrice && md?.technicals?.priceChange1D && Math.abs(md.technicals.priceChange1D) >= 0 && (
             <button
               onClick={async () => {
                 const pct = md.technicals?.priceChange1D || 0
@@ -1468,6 +1469,35 @@ function HomeInner() {
                     <div className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: 'var(--text3)' }}>Plain English</div>
                     <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{jud.plainEnglish}</p>
                   </div>
+                )}
+
+                {/* Log to Journal */}
+                {jud?.signal && jud.signal !== 'NEUTRAL' && (
+                  <button
+                    onClick={async () => {
+                      const ep = jud?.entryPrice ? parseFloat(jud.entryPrice.replace(/[^0-9.]/g,'')) : (md?.currentPrice || 0)
+                      const sl = jud?.stopLoss ? parseFloat(jud.stopLoss.replace(/[^0-9.]/g,'')) : null
+                      const tp = jud?.takeProfit ? parseFloat(jud.takeProfit.replace(/[^0-9.]/g,'')) : null
+                      await fetch('/api/trade-journal', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          action: 'add',
+                          ticker,
+                          signal: jud?.signal,
+                          entry_price: isNaN(ep) ? md?.currentPrice : ep,
+                          stop_loss: sl && !isNaN(sl) ? sl : null,
+                          take_profit: tp && !isNaN(tp) ? tp : null,
+                          timeframe: tf,
+                          confidence: jud?.confidence,
+                        }),
+                      })
+                      router.push('/journal')
+                    }}
+                    className="w-full py-2 rounded-xl text-xs font-semibold transition-all hover:opacity-80 flex items-center justify-center gap-1.5 mb-3"
+                    style={{ background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.2)', color: '#34d399' }}>
+                    📒 Log this trade to Journal
+                  </button>
                 )}
 
                 {/* Action plan — always visible */}
