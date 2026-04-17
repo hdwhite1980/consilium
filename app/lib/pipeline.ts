@@ -379,7 +379,7 @@ Respond JSON ONLY (no fences):
 export async function runClaude(bundle: SignalBundle, gemini: GeminiResult): Promise<ClaudeResult> {
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
-    max_tokens: 1000,
+    max_tokens: 1500,
     system: (() => {
       const pi: Record<string, string> = {
         balanced:    'Weight technical and fundamental signals equally. When they conflict, note it explicitly and let data quality determine conviction.',
@@ -498,7 +498,7 @@ What ONE question should the News Scout research right now to help you respond? 
   // ── Step 3: Lead Analyst rebuts with fresh research in hand ──
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
-    max_tokens: 900,
+    max_tokens: 1200,
     system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research to help you respond. Use it. Defend your position where data supports you, concede where the Devil's Advocate is correct. Intellectual honesty wins with the Judge.`,
     messages: [{
       role: 'user',
@@ -622,7 +622,7 @@ export async function runJudge(
   const judgePersonaKey = (( bundle as any).persona ?? 'balanced') as string
   const msg = await getAnthropic().messages.create({
     model: 'claude-opus-4-7',  // Opus 4.7 for final verdict — highest reasoning quality
-    max_tokens: 2000,
+    max_tokens: 4000,
     system: `You are the Judge of an elite AI stock council for ${bundle.ticker}. The council has three roles: News Scout, Lead Analyst, and Devil's Advocate. You hold NO prior position. ${judgePersona[judgePersonaKey] ?? judgePersona.balanced} Weigh argument QUALITY not vote count. Be decisive. Refer to council members by their role names only. IMPORTANT: Never cite missing or unavailable data as a reason for lower conviction — only cite the data you have. If a metric is unavailable, ignore it entirely rather than mentioning its absence.
 
 ${timeframeContext(bundle.timeframe)}`,
