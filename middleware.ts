@@ -106,20 +106,22 @@ export async function middleware(request: NextRequest) {
   let hasAccess = false
 
   if (!sub) {
-    // New user — create trial
+    // New user — create trial. Use upsert to handle race conditions
+    // where middleware fires twice simultaneously on first load.
     const trialEndsAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-    const { error: ie } = await admin.from('subscriptions').insert({
+    const { error: ie } = await admin.from('subscriptions').upsert({
       user_id: user.id,
       status: 'trialing',
       trial_ends_at: trialEndsAt.toISOString(),
       is_exempt: false,
-    })
-    if (ie) console.error('[middleware] trial insert error:', ie.message)
-    hasAccess = true
+    }, { onConflict: 'user_id', ignoreDuplicates: true })
+    if (ie) console.error('[middleware] trial upsert error:', ie.message)
+    hasAccess = true // always grant access when creating/confirming trial
   } else if (sub.is_exempt) {
     hasAccess = true
   } else if (sub.status === 'trialing') {
-    hasAccess = sub.trial_ends_at ? new Date(sub.trial_ends_at) > now : false
+    // If trial_ends_at is missing (bad data), grant access — don't punish the user
+    hasAccess = sub.trial_ends_at ? new Date(sub.trial_ends_at) > now : true
     if (!hasAccess) console.log(`[middleware] trial expired: ${sub.trial_ends_at} for ${user.email}`)
   } else if (sub.status === 'active') {
     hasAccess = true
