@@ -24,30 +24,26 @@ export async function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl
 
-  // ── Short-circuit for public routes BEFORE touching the session ──
-  // This prevents the middleware from consuming PKCE tokens
+  // ── Always public — no auth needed ──────────────────────────
   const alwaysPublic = ['/login', '/auth/callback', '/subscribe', '/signup', '/confirm', '/privacy', '/terms']
-  if (alwaysPublic.some(p => pathname.startsWith(p))) {
-    return supabaseResponse
-  }
+  if (alwaysPublic.some(p => pathname.startsWith(p))) return supabaseResponse
 
-  // Removed features — redirect to home
+  // Removed feature
   if (pathname.startsWith('/training')) {
     return NextResponse.redirect(new URL('/', request.url))
   }
 
+  // ── Get session ──────────────────────────────────────────────
   const { data: { user, session } } = await supabase.auth.getUser()
     .then(async u => {
       const s = await supabase.auth.getSession()
       return { data: { user: u.data.user, session: s.data.session } }
     })
 
-  // ── API routes handle their own auth ──────────────────────────
-  if (pathname.startsWith('/api/')) {
-    return supabaseResponse
-  }
+  // API routes handle their own auth
+  if (pathname.startsWith('/api/')) return supabaseResponse
 
-  // ── Not logged in → /login ────────────────────────────────────
+  // Not logged in → login
   if (!user || !session) {
     const loginUrl = new URL('/login', request.url)
     loginUrl.searchParams.set('redirect', pathname)
@@ -59,7 +55,7 @@ export async function middleware(request: NextRequest) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 
-  // ── Single session check ──────────────────────────────────────
+  // ── Single session enforcement ───────────────────────────────
   const sessionToken = session.access_token?.slice(-32) ?? null
   if (sessionToken) {
     const { data: activeSession } = await admin
@@ -77,7 +73,7 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  // ── Disclaimer ────────────────────────────────────────────────
+  // ── Disclaimer ───────────────────────────────────────────────
   if (pathname !== '/disclaimer') {
     const { data: disclaimer } = await admin
       .from('disclaimer_accepted')
@@ -86,56 +82,55 @@ export async function middleware(request: NextRequest) {
       .maybeSingle()
 
     if (!disclaimer) {
-      console.log(`[middleware] disclaimer missing for ${user.email}`)
       return NextResponse.redirect(new URL('/disclaimer', request.url))
     }
   }
 
   if (pathname === '/disclaimer') return supabaseResponse
 
-  // ── Subscription / trial check ────────────────────────────────
-  const { data: sub, error: subError } = await admin
+  // ── Subscription check ───────────────────────────────────────
+  const { data: sub } = await admin
     .from('subscriptions')
     .select('status, trial_ends_at, current_period_end, is_exempt')
     .eq('user_id', user.id)
     .maybeSingle()
 
-  if (subError) console.error('[middleware] sub error:', subError.message)
-
-  const now = new Date()
-  let hasAccess = false
-
+  // No subscription row at all — create trial and grant access
   if (!sub) {
-    // New user — create trial. Use upsert to handle race conditions
-    // where middleware fires twice simultaneously on first load.
     const trialEndsAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-    const { error: ie } = await admin.from('subscriptions').upsert({
+    await admin.from('subscriptions').insert({
       user_id: user.id,
       status: 'trialing',
       trial_ends_at: trialEndsAt.toISOString(),
-      is_exempt: false,
-    }, { onConflict: 'user_id', ignoreDuplicates: true })
-    if (ie) console.error('[middleware] trial upsert error:', ie.message)
-    hasAccess = true // always grant access when creating/confirming trial
-  } else if (sub.is_exempt) {
-    hasAccess = true
-  } else if (sub.status === 'trialing') {
-    // If trial_ends_at is missing (bad data), grant access — don't punish the user
-    hasAccess = sub.trial_ends_at ? new Date(sub.trial_ends_at) > now : true
-    if (!hasAccess) console.log(`[middleware] trial expired: ${sub.trial_ends_at} for ${user.email}`)
-  } else if (sub.status === 'active') {
-    hasAccess = true
-  } else if (sub.status === 'past_due') {
-    hasAccess = true
-  } else {
-    console.log(`[middleware] no access — status: ${sub?.status} for ${user.email}`)
+    }).then(({ error }) => {
+      if (error) console.error('[middleware] trial insert error:', error.message)
+    })
+    return supabaseResponse // grant access regardless of insert result
   }
 
-  if (!hasAccess) {
+  // Has a subscription row — check access
+  const now = new Date()
+
+  // Exempt — always in
+  if (sub.is_exempt) return supabaseResponse
+
+  // Active paid subscription
+  if (sub.status === 'active' || sub.status === 'past_due') return supabaseResponse
+
+  // Trialing — check expiry
+  if (sub.status === 'trialing') {
+    // No expiry date = grant access (bad data safety net)
+    if (!sub.trial_ends_at) return supabaseResponse
+    // Valid trial
+    if (new Date(sub.trial_ends_at) > now) return supabaseResponse
+    // Expired — send to subscribe
+    console.log(`[middleware] trial expired for ${user.email}`)
     return NextResponse.redirect(new URL('/subscribe', request.url))
   }
 
-  return supabaseResponse
+  // Any other status (canceled, incomplete, etc) — no access
+  console.log(`[middleware] no access, status=${sub.status} for ${user.email}`)
+  return NextResponse.redirect(new URL('/subscribe', request.url))
 }
 
 export const config = {
