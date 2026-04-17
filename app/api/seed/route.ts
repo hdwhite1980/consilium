@@ -6,7 +6,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/app/lib/auth/server'
-import { fetchAllFilingsForTicker } from '@/app/lib/data/sec-filings'
+import { fetchAllFilingsForTicker, fetch13FForTicker } from '@/app/lib/data/sec-filings'
 import { fetchFederalRegisterActions, fetchCongressionalTrades, fetchRecentBills } from '@/app/lib/data/legislative'
 import { fetchEdgarFundamentals } from '@/app/lib/data/edgar'
 
@@ -45,12 +45,23 @@ export async function POST(req: NextRequest) {
       results.edgar = `error: ${(e as Error).message?.slice(0, 80)}`
     }
 
-    // SEC filings (8-K, Form 4, 13-F, dilution)
+    // SEC filings (8-K, Form 4, dilution) — fast
     try {
       await fetchAllFilingsForTicker(ticker)
       results.sec_filings = 'ok'
     } catch (e) {
       results.sec_filings = `error: ${(e as Error).message?.slice(0, 80)}`
+    }
+
+    // 13-F institutional holdings — separate, slower (hits 10 institutions)
+    const do13F = searchParams.get('include13f') !== 'false'
+    if (do13F) {
+      try {
+        await fetch13FForTicker(ticker)
+        results.institutional_holdings_13f = 'ok'
+      } catch (e) {
+        results.institutional_holdings_13f = `error: ${(e as Error).message?.slice(0, 80)}`
+      }
     }
 
     // Congressional trades for this ticker

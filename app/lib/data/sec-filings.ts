@@ -310,16 +310,20 @@ export async function fetch13FForTicker(ticker: string): Promise<void> {
 
     if (existing) return // already have this quarter's data
 
-    // Fetch 13-F from major institutions
-    for (const [instCik, instName] of Object.entries(MAJOR_INSTITUTIONS)) {
+    // Fetch 13-F from major institutions — run in parallel batches of 3
+    const instEntries = Object.entries(MAJOR_INSTITUTIONS)
+    const batchSize = 3
+    for (let b = 0; b < instEntries.length; b += batchSize) {
+      const batch = instEntries.slice(b, b + batchSize)
+      await Promise.all(batch.map(async ([instCik, instName]) => {
       try {
         const cikPadded = `CIK${instCik.replace('0x', '').padStart(10, '0')}`
         const res = await fetch(`${EDGAR_BASE}/submissions/${cikPadded}.json`, { headers: EDGAR_HEADERS })
-        if (!res.ok) continue
+        if (!res.ok) return
 
         const data = await res.json()
         const filings = data.filings?.recent
-        if (!filings) continue
+        if (!filings) return
 
         // Find most recent 13-F
         const forms: string[] = filings.form || []
@@ -410,8 +414,9 @@ export async function fetch13FForTicker(ticker: string): Promise<void> {
           break // only process most recent 13-F per institution
         }
 
-        await new Promise(r => setTimeout(r, 300)) // respect rate limits
       } catch { /* skip this institution */ }
+      })) // end Promise.all batch
+      await new Promise(r => setTimeout(r, 200)) // brief pause between batches
     }
   } catch (e) {
     console.error('[sec-filings] 13-F error:', e)

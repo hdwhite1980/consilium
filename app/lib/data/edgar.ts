@@ -169,12 +169,19 @@ function extractQuarterlyFacts(facts: any, concept: string, n = 8): XBRLFact[] {
   const conceptData = usgaap[concept]
   if (!conceptData) return []
 
-  // Prefer USD units
-  const units = conceptData.units?.USD || conceptData.units?.shares || []
+  // Try all unit types — EPS uses 'USD/shares', revenue uses 'USD', share counts use 'shares'
+  const unitKeys = Object.keys(conceptData.units || {})
+  let units: any[] = []
+  for (const key of ['USD', 'USD/shares', 'shares', ...unitKeys]) {
+    if (conceptData.units?.[key]?.length > 0) {
+      units = conceptData.units[key]
+      break
+    }
+  }
 
   return (units as XBRLFact[])
     .filter(f => f.form === '10-Q' || f.form === '10-K')
-    .filter(f => f.end) // must have period end
+    .filter(f => f.end && f.val != null)
     .sort((a, b) => new Date(b.end).getTime() - new Date(a.end).getTime())
     .slice(0, n)
 }
@@ -203,13 +210,21 @@ function getMostRecent(facts: XBRLFact[]): number | null {
 // Calculate YoY growth between TTM and prior year TTM
 function calcYoY(facts: XBRLFact[]): number | null {
   const quarterly = facts.filter(f => f.form === '10-Q')
-  if (quarterly.length < 8) return null
 
-  const ttmCurrent = quarterly.slice(0, 4).reduce((s, f) => s + f.val, 0)
-  const ttmPrior = quarterly.slice(4, 8).reduce((s, f) => s + f.val, 0)
+  // Best case: 8 quarters available — compare last 4 vs prior 4
+  if (quarterly.length >= 8) {
+    const ttmCurrent = quarterly.slice(0, 4).reduce((s, f) => s + f.val, 0)
+    const ttmPrior   = quarterly.slice(4, 8).reduce((s, f) => s + f.val, 0)
+    if (ttmPrior !== 0) return parseFloat(((ttmCurrent - ttmPrior) / Math.abs(ttmPrior) * 100).toFixed(1))
+  }
 
-  if (ttmPrior === 0) return null
-  return parseFloat(((ttmCurrent - ttmPrior) / Math.abs(ttmPrior) * 100).toFixed(1))
+  // Fallback: compare two annual 10-K filings
+  const annuals = facts.filter(f => f.form === '10-K').sort((a, b) => new Date(b.end).getTime() - new Date(a.end).getTime())
+  if (annuals.length >= 2 && annuals[1].val !== 0) {
+    return parseFloat(((annuals[0].val - annuals[1].val) / Math.abs(annuals[1].val) * 100).toFixed(1))
+  }
+
+  return null
 }
 
 // Determine trend from sequential values
@@ -267,6 +282,7 @@ export async function fetchEdgarFundamentals(
 
   const netIncomeFacts  = extractQuarterlyFacts(facts, 'NetIncomeLoss')
   const epsFacts        = extractQuarterlyFacts(facts, 'EarningsPerShareDiluted')
+  const altEpsFacts     = epsFacts.length > 0 ? epsFacts : extractQuarterlyFacts(facts, 'EarningsPerShareBasic')
   const opIncomeFacts   = extractQuarterlyFacts(facts, 'OperatingIncomeLoss')
   const grossFacts      = extractQuarterlyFacts(facts, 'GrossProfit')
   const rdFacts         = extractQuarterlyFacts(facts, 'ResearchAndDevelopmentExpense')
@@ -278,7 +294,9 @@ export async function fetchEdgarFundamentals(
   // 5. Compute values
   const revenueTTM      = calcTTM(revFacts)
   const netIncomeTTM    = calcTTM(netIncomeFacts)
-  const epsTTM          = calcTTM(epsFacts)
+  // EPS is already per-share — sum the quarterly EPS values to get TTM EPS
+  const epsFactsToUse   = altEpsFacts
+  const epsTTM          = calcTTM(epsFactsToUse)  // sum of 4 quarterly EPS = TTM EPS
   const opIncomeTTM     = calcTTM(opIncomeFacts)
   const grossProfitTTM  = calcTTM(grossFacts)
   const rdTTM           = calcTTM(rdFacts)
@@ -291,10 +309,10 @@ export async function fetchEdgarFundamentals(
 
   const revenueYoY      = calcYoY(revFacts)
   const netIncomeYoY    = calcYoY(netIncomeFacts)
-  const epsYoY          = calcYoY(epsFacts)
+  const epsYoY          = calcYoY(epsFactsToUse)
 
   // Trends
-  const epsValues       = epsFacts.slice(0, 4).map(f => f.val)
+  const epsValues       = epsFactsToUse.slice(0, 4).map(f => f.val)
   const earningsTrend   = calcTrend(epsValues)
   const debtValues      = debtFacts.slice(0, 3).map(f => f.val)
   const debtTrend       = debtValues.length >= 2
