@@ -363,12 +363,14 @@ ${bundle.aiContext.marketSection}
 
 Respond JSON ONLY (no fences):
 {"summary":"3 sentence overview","headlines":["top 4-5 headlines"],"sentiment":"positive|negative|neutral|mixed","confidence":<0-100>,"keyEvents":["2-4 near-term catalysts relevant to the ${bundle.timeframe} timeframe"],"macroFactors":["2-3 macro conditions"],"regimeAssessment":"1 sentence on regime impact"}`)
-      return parseJSON<GeminiResult>(result.response.text())
+      const rawText = result.response.text()
+      return parseJSON<GeminiResult>(rawText)
     } catch (e) {
       lastError = e as Error
       const msg = (e as Error).message ?? ''
-      if (!msg.includes('503') && !msg.includes('overload') && !msg.includes('high demand')) throw e
-      console.warn(`News Scout model ${modelName} unavailable, trying next...`)
+      // Re-throw parse errors only if it's the last model — otherwise try next
+      if (!msg.includes('503') && !msg.includes('overload') && !msg.includes('high demand') && !msg.includes('No JSON')) throw e
+      console.warn(`News Scout model ${modelName} failed (${msg.slice(0,60)}), trying next...`)
     }
   }
   throw lastError ?? new Error('News Scout unavailable — all models failed')
@@ -376,7 +378,7 @@ Respond JSON ONLY (no fences):
 
 export async function runClaude(bundle: SignalBundle, gemini: GeminiResult): Promise<ClaudeResult> {
   const msg = await getAnthropic().messages.create({
-    model: 'claude-sonnet-4-6',
+    model: 'claude-sonnet-4-20250514',
     max_tokens: 1000,
     system: (() => {
       const pi: Record<string, string> = {
@@ -473,7 +475,7 @@ export async function runRebuttal(
   // ── Step 1: Lead Analyst identifies the single most important data gap ──
   // Ask Claude what it needs Gemini to verify before rebutting
   const researchAsk = await getAnthropic().messages.create({
-    model: 'claude-sonnet-4-6',
+    model: 'claude-sonnet-4-20250514',
     max_tokens: 150,
     system: `You are the Lead Analyst in a stock debate about ${bundle.ticker}. You can send ONE research question to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before you respond to the Devil's Advocate. Ask about the single most important data point that would resolve the most significant challenge.`,
     messages: [{
@@ -495,7 +497,7 @@ What ONE question should the News Scout research right now to help you respond? 
 
   // ── Step 3: Lead Analyst rebuts with fresh research in hand ──
   const msg = await getAnthropic().messages.create({
-    model: 'claude-sonnet-4-6',
+    model: 'claude-sonnet-4-20250514',
     max_tokens: 900,
     system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research to help you respond. Use it. Defend your position where data supports you, concede where the Devil's Advocate is correct. Intellectual honesty wins with the Judge.`,
     messages: [{
