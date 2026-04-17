@@ -11,8 +11,8 @@ import { calculateTechnicals } from './signals/technicals'
 import { buildMarketContext } from './signals/market-context'
 import { fetchFundamentals } from './signals/fundamentals'
 import { fetchEdgarFundamentals, formatEdgarForAI } from './data/edgar'
-import { fetchAllFilingsForTicker, buildSecFilingsContext } from './data/sec-filings'
-import { buildLegislativeContext, refreshLegislativeIntelligence } from './data/legislative'
+import { buildSecFilingsContext } from './data/sec-filings'
+import { buildLegislativeContext } from './data/legislative'
 import { fetchSmartMoney } from './signals/smart-money'
 import { fetchOptionsFlow } from './signals/options-flow'
 import { buildConvictionOutput } from './signals/conviction'
@@ -354,14 +354,12 @@ Focus on central bank policy signals, economic data releases, and technical stru
     fetchFundamentals(sym, currentPrice),
     fetchSmartMoney(sym),
     fetchOptionsFlow(sym, currentPrice),
-    fetchEdgarFundamentals(sym).catch(() => null),
-    buildSecFilingsContext(sym).catch(() => ''),
-    buildLegislativeContext(sym, []).catch(() => ''),
+    Promise.race([fetchEdgarFundamentals(sym), new Promise<null>(r => setTimeout(() => r(null), 4000))]).catch(() => null),
+    Promise.race([buildSecFilingsContext(sym), new Promise<string>(r => setTimeout(() => r(''), 4000))]).catch(() => ''),
+    Promise.race([buildLegislativeContext(sym, []), new Promise<string>(r => setTimeout(() => r(''), 4000))]).catch(() => ''),
   ])
 
-  // Trigger background refresh (non-blocking)
-  fetchAllFilingsForTicker(sym).catch(e => console.error('[sec-filings-bg]', e))
-  refreshLegislativeIntelligence().catch(e => console.error('[legislative-bg]', e))
+  // Background refresh triggered separately via /api/sec-filings and /api/legislative cron endpoints
 
   // Compute relative strength vs sector now that we have both
   const sectorChange = marketContext.sector.changePeriod

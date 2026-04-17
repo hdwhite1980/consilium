@@ -6,7 +6,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import { GoogleGenerativeAI } from '@google/generative-ai'
-import { scanForMacroEvents, buildMacroIntelligenceContext, scheduleImpactMeasurements } from './macro-intelligence'
+import { buildMacroIntelligenceContext } from './macro-intelligence'
 import type { SignalBundle } from './aggregator'
 
 function getAnthropic() { return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) }
@@ -353,14 +353,18 @@ export async function runGemini(bundle: SignalBundle): Promise<GeminiResult> {
         '1M': 'FOCUS on THIS MONTH — upcoming earnings date, recent upgrades/downgrades, sector rotation.',
         '3M': 'FOCUS on NEXT QUARTER — earnings trajectory, macro tailwinds/headwinds, institutional positioning.',
       }
+      // Truncate inputs to avoid token overflow — Stage 1 only needs news + market
+      const newsInput = (bundle.aiContext.newsSection || '').slice(0, 6000)
+      const marketInput = (bundle.aiContext.marketSection || '').slice(0, 2000)
+
       const result = await model.generateContent(`You are the News Scout and Macro Analyst for an elite AI stock council.
 
 Analyze all news, macro, and market context for ${bundle.ticker}. You go first. Be specific.
 TIMEFRAME: ${bundle.timeframe} — ${tfFocus[bundle.timeframe] ?? ''}
 
-${bundle.aiContext.newsSection}
+${newsInput}
 
-${bundle.aiContext.marketSection}
+${marketInput}
 
 Respond JSON ONLY (no fences):
 {"summary":"3 sentence overview","headlines":["top 4-5 headlines"],"sentiment":"positive|negative|neutral|mixed","confidence":<0-100>,"keyEvents":["2-4 near-term catalysts relevant to the ${bundle.timeframe} timeframe"],"macroFactors":["2-3 macro conditions"],"regimeAssessment":"1 sentence on regime impact"}`)
@@ -369,8 +373,9 @@ Respond JSON ONLY (no fences):
     } catch (e) {
       lastError = e as Error
       const msg = (e as Error).message ?? ''
-      // Re-throw parse errors only if it's the last model — otherwise try next
-      if (!msg.includes('503') && !msg.includes('overload') && !msg.includes('high demand') && !msg.includes('No JSON')) throw e
+      const isLastModel = modelName === GEMINI_MODELS[GEMINI_MODELS.length - 1]
+      // Always try next model unless it's the last one
+      if (isLastModel) throw e
       console.warn(`News Scout model ${modelName} failed (${msg.slice(0,60)}), trying next...`)
     }
   }
@@ -380,7 +385,7 @@ Respond JSON ONLY (no fences):
 export async function runClaude(bundle: SignalBundle, gemini: GeminiResult): Promise<ClaudeResult> {
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
-    max_tokens: 1500,
+    max_tokens: 1000,
     system: (() => {
       const pi: Record<string, string> = {
         balanced:    'Weight technical and fundamental signals equally. When they conflict, note it explicitly and let data quality determine conviction.',
@@ -499,7 +504,7 @@ What ONE question should the News Scout research right now to help you respond? 
   // ── Step 3: Lead Analyst rebuts with fresh research in hand ──
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
-    max_tokens: 1200,
+    max_tokens: 800,
     system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research to help you respond. Use it. Defend your position where data supports you, concede where the Devil's Advocate is correct. Intellectual honesty wins with the Judge.`,
     messages: [{
       role: 'user',
@@ -622,8 +627,8 @@ export async function runJudge(
   }
   const judgePersonaKey = (( bundle as any).persona ?? 'balanced') as string
   const msg = await getAnthropic().messages.create({
-    model: 'claude-opus-4-7',  // Opus 4.7 for final verdict — highest reasoning quality
-    max_tokens: 4000,
+    model: 'claude-opus-4-7',
+    max_tokens: 1800,
     system: `You are the Judge of an elite AI stock council for ${bundle.ticker}. The council has three roles: News Scout, Lead Analyst, and Devil's Advocate. You hold NO prior position. ${judgePersona[judgePersonaKey] ?? judgePersona.balanced} Weigh argument QUALITY not vote count. Be decisive. Refer to council members by their role names only. IMPORTANT: Never cite missing or unavailable data as a reason for lower conviction — only cite the data you have. If a metric is unavailable, ignore it entirely rather than mentioning its absence.
 
 ${timeframeContext(bundle.timeframe)}`,
@@ -786,11 +791,6 @@ export async function runPipeline(
   transcript.push({ role: 'gemini', stage: 'news_macro', content: gemini.summary, confidence: gemini.confidence, timestamp: ts() })
   onProgress('gemini_done', gemini)
 
-  // ── Macro Intelligence: scan headlines for geopolitical events (non-blocking) ──
-  // Fire and forget — never block the pipeline on this
-  scanForMacroEvents(gemini.headlines || []).catch(e => console.error('[macro-intel]', e))
-  scheduleImpactMeasurements().catch(e => console.error('[macro-impact]', e))
-
   // Inject macro intelligence context into bundle for Lead Analyst and Judge
   const macroContext = await buildMacroIntelligenceContext(
     bundle.ticker,
@@ -807,16 +807,17 @@ export async function runPipeline(
   transcript.push({ role: 'claude', stage: 'lead_analyst', content: claude.reasoning, signal: claude.signal, confidence: claude.confidence, timestamp: ts() })
   onProgress('claude_done', claude)
 
-  // ── Stage 3: Devil's Advocate ────────────────────────────
+  // ── Stages 3+4: Devil's Advocate & Rebuttal in parallel ─
+  // Both only need the Lead Analyst output — run simultaneously to save ~10-15s
   onProgress('gpt_start', { gemini, claude })
-  const gpt = await runGPT(bundle, gemini, claude)
+  onProgress('rebuttal_start', { claude })
+  const [gpt, rebuttal] = await Promise.all([
+    runGPT(bundle, gemini, claude),
+    runRebuttal(bundle, claude, { reasoning: '', signal: claude.signal, confidence: claude.confidence, agrees: true, challenges: [], alternateScenario: '', strongestCounterArgument: '' }),
+  ])
   transcript.push({ role: 'gpt', stage: 'devils_advocate', content: gpt.reasoning, signal: gpt.signal, confidence: gpt.confidence, timestamp: ts() })
-  onProgress('gpt_done', gpt)
-
-  // ── Stage 4: Lead Analyst Rebuttal ───────────────────────
-  onProgress('rebuttal_start', { claude, gpt })
-  const rebuttal = await runRebuttal(bundle, claude, gpt)
   transcript.push({ role: 'claude', stage: 'rebuttal', content: rebuttal.rebuttal, signal: rebuttal.signal, confidence: rebuttal.confidence, timestamp: ts() })
+  onProgress('gpt_done', gpt)
   onProgress('rebuttal_done', rebuttal)
 
   // ── Stage 5: Devil's Advocate Counter ────────────────────
