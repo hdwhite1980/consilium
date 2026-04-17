@@ -10,6 +10,7 @@ import { fetchForexBars, fetchForexRate, fetchForexMetadata, isForexTicker, getF
 import { calculateTechnicals } from './signals/technicals'
 import { buildMarketContext } from './signals/market-context'
 import { fetchFundamentals } from './signals/fundamentals'
+import { fetchEdgarFundamentals, formatEdgarForAI } from './data/edgar'
 import { fetchSmartMoney } from './signals/smart-money'
 import { fetchOptionsFlow } from './signals/options-flow'
 import { buildConvictionOutput } from './signals/conviction'
@@ -44,6 +45,7 @@ export type SignalBundle = {
   // Combined AI-ready context strings (what gets passed to each AI)
   aiContext: {
     newsSection: string
+    macroIntelligenceSection?: string
     priceSection: string
     technicalsSection: string
     marketSection: string
@@ -345,11 +347,12 @@ Focus on central bank policy signals, economic data releases, and technical stru
 
   // Phases 1-4 in parallel
   onProgress?.('Fetching market context, fundamentals, smart money, options...')
-  const [marketContext, fundamentals, smartMoney, optionsFlow] = await Promise.all([
+  const [marketContext, fundamentals, smartMoney, optionsFlow, edgarData] = await Promise.all([
     buildMarketContext(sym, timeframe),
     fetchFundamentals(sym, currentPrice),
     fetchSmartMoney(sym),
     fetchOptionsFlow(sym, currentPrice),
+    fetchEdgarFundamentals(sym).catch(() => null),  // best-effort, never blocks analysis
   ])
 
   // Compute relative strength vs sector now that we have both
@@ -380,7 +383,11 @@ Focus on central bank policy signals, economic data releases, and technical stru
   const priceSection = `=== PRICE ACTION ===\n${formatBarsForAI(bars, timeframe)}`
   const technicalsSection = technicals.summary
   const marketSection = marketContext.summary
-  const fundamentalsSection = fundamentals.summary
+  // Blend EDGAR verified data into fundamentals section if available
+  const edgarSection = edgarData ? formatEdgarForAI(edgarData, currentPrice) : null
+  const fundamentalsSection = edgarSection
+    ? `${edgarSection}\n\n${fundamentals.summary}`
+    : fundamentals.summary
   const smartMoneySection = smartMoney.summary
   const optionsSection = optionsFlow.summary
   const convictionSection = conviction.summary
