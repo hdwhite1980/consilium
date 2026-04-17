@@ -362,14 +362,35 @@ export async function fetch13FForTicker(ticker: string): Promise<void> {
           const filingDate = dates[i]
           if (!accNo) break
 
-          // Fetch the 13-F filing to find our ticker
+          // Fetch the 13-F filing — look up actual XML filename from index
           const cikNum = instCik.replace(/^0+/, '')
           const accNoClean = accNo.replace(/-/g, '')
-          const xmlUrl = `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accNoClean}/informationtable.xml`
-          console.log(`[13-F] ${instName}: fetching ${xmlUrl}`)
 
           try {
-            const xmlRes = await fetch(xmlUrl, { headers: { 'User-Agent': EDGAR_HEADERS['User-Agent'] } })
+            // Get the filing index to find actual XML filename
+            const idxUrl = `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accNoClean}/${accNo}-index.json`
+            console.log(`[13-F] ${instName}: looking up index ${idxUrl}`)
+            const idxRes = await fetch(idxUrl, { headers: EDGAR_HEADERS })
+
+            let xmlFilename = 'informationtable.xml' // default fallback
+            if (idxRes.ok) {
+              const idx = await idxRes.json()
+              const docs: Array<{name: string; type: string}> = idx.documents || []
+              // Find the information table XML — various naming conventions
+              const xmlDoc = docs.find(d =>
+                d.name?.toLowerCase().includes('informationtable') ||
+                d.type?.includes('13F-HR') ||
+                d.name?.toLowerCase().endsWith('.xml')
+              )
+              if (xmlDoc) xmlFilename = xmlDoc.name
+              console.log(`[13-F] ${instName}: index has ${docs.length} docs, using ${xmlFilename}`)
+            } else {
+              console.log(`[13-F] ${instName}: index fetch ${idxRes.status}, trying default filename`)
+            }
+
+            const xmlUrl = `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accNoClean}/${xmlFilename}`
+            console.log(`[13-F] ${instName}: fetching ${xmlUrl}`)
+            const xmlRes = await fetch(xmlUrl, { headers: EDGAR_HEADERS })
             if (!xmlRes.ok) { console.log(`[13-F] ${instName}: XML fetch failed ${xmlRes.status}`); break }
 
             const xml = await xmlRes.text()

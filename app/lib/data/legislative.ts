@@ -387,13 +387,27 @@ export async function fetchCongressionalTrades(ticker?: string): Promise<void> {
 
 async function fetchHouseDisclosuresXML(ticker: string | undefined, admin: any): Promise<void> {
   try {
+    // Try multiple House PTR XML URL formats — naming varies by year
     const year = new Date().getFullYear()
-    const xmlUrl = `https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/${year}/ptr.xml`
-    console.log(`[congressional-trades] Fetching House XML: ${xmlUrl}`)
+    const urlsToTry = [
+      `https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/${year}/ptr.xml`,
+      `https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/${year}/PTR.xml`,
+      `https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/${year - 1}/ptr.xml`,
+    ]
 
-    const res = await fetch(xmlUrl, { headers: FR_HEADERS })
-    console.log(`[congressional-trades] House XML response: ${res.status}`)
-    if (!res.ok) { console.log(`[congressional-trades] House XML failed: ${res.status} ${res.statusText}`); return }
+    let res: Response | null = null
+    let usedUrl = ''
+    for (const url of urlsToTry) {
+      console.log(`[congressional-trades] Trying House XML: ${url}`)
+      const attempt = await fetch(url, { headers: FR_HEADERS })
+      console.log(`[congressional-trades] Response: ${attempt.status}`)
+      if (attempt.ok) { res = attempt; usedUrl = url; break }
+    }
+    if (!res) {
+      console.log('[congressional-trades] All House XML URLs failed — no congressional trade data available')
+      return
+    }
+    console.log(`[congressional-trades] Using: ${usedUrl}`)
 
     const xml = await res.text()
     const memberBlocks = xml.match(/<Member>[\s\S]*?<\/Member>/g) || []
