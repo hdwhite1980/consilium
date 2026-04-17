@@ -335,6 +335,7 @@ export async function fetch13FForTicker(ticker: string): Promise<void> {
     if (existing) return // already have this quarter's data
 
     // Fetch 13-F from major institutions — run in parallel batches of 3
+    console.log(`[13-F] Starting fetch for ${ticker}, checking ${Object.keys(MAJOR_INSTITUTIONS).length} institutions`)
     const instEntries = Object.entries(MAJOR_INSTITUTIONS)
     const batchSize = 3
     for (let b = 0; b < instEntries.length; b += batchSize) {
@@ -343,7 +344,7 @@ export async function fetch13FForTicker(ticker: string): Promise<void> {
       try {
         const cikPadded = `CIK${instCik.replace('0x', '').padStart(10, '0')}`
         const res = await fetch(`${EDGAR_BASE}/submissions/${cikPadded}.json`, { headers: EDGAR_HEADERS })
-        if (!res.ok) return
+        if (!res.ok) { console.log(`[13-F] ${instName} submissions fetch failed: ${res.status}`); return }
 
         const data = await res.json()
         const filings = data.filings?.recent
@@ -365,10 +366,11 @@ export async function fetch13FForTicker(ticker: string): Promise<void> {
           const cikNum = instCik.replace(/^0+/, '')
           const accNoClean = accNo.replace(/-/g, '')
           const xmlUrl = `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accNoClean}/informationtable.xml`
+          console.log(`[13-F] ${instName}: fetching ${xmlUrl}`)
 
           try {
             const xmlRes = await fetch(xmlUrl, { headers: { 'User-Agent': EDGAR_HEADERS['User-Agent'] } })
-            if (!xmlRes.ok) break
+            if (!xmlRes.ok) { console.log(`[13-F] ${instName}: XML fetch failed ${xmlRes.status}`); break }
 
             const xml = await xmlRes.text()
 
@@ -405,6 +407,7 @@ export async function fetch13FForTicker(ticker: string): Promise<void> {
 
               const shares = parseInt(block.match(/<sshPrnamt>(.*?)<\/sshPrnamt>/)?.[1] || '0')
               const value = parseInt(block.match(/<value>(.*?)<\/value>/)?.[1] || '0') * 1000 // 13-F values in thousands
+              console.log(`[13-F] ${instName}: MATCH found — ${nameMatch[1]}, ${shares} shares, $${(value/1e9).toFixed(2)}B`)
 
               if (shares === 0) continue
 

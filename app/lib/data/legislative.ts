@@ -349,11 +349,11 @@ export async function fetchCongressionalTrades(ticker?: string): Promise<void> {
   const admin = getAdmin()
 
   try {
-    // Use House disclosure search (publicly accessible JSON)
-    // QuiverQuant aggregates this for free
     const url = ticker
       ? `${QUIVERQUANT_BASE}/historical/congresstrading/${ticker.toUpperCase()}`
       : `${QUIVERQUANT_BASE}/live/congresstrading`
+
+    console.log(`[congressional-trades] Fetching ${url}, QQ key: ${process.env.QUIVERQUANT_API_KEY ? 'set' : 'NOT SET — will use House XML'}`)
 
     const res = await fetch(url, {
       headers: {
@@ -362,8 +362,10 @@ export async function fetchCongressionalTrades(ticker?: string): Promise<void> {
       }
     })
 
+    console.log(`[congressional-trades] QuiverQuant response: ${res.status}`)
+
     if (!res.ok) {
-      // Fall back to House disclosure XML if QuiverQuant unavailable
+      console.log(`[congressional-trades] QQ failed, falling back to House XML`)
       await fetchHouseDisclosuresXML(ticker, admin)
       return
     }
@@ -384,16 +386,18 @@ export async function fetchCongressionalTrades(ticker?: string): Promise<void> {
 }
 
 async function fetchHouseDisclosuresXML(ticker: string | undefined, admin: any): Promise<void> {
-  // House periodically publishes XML of recent PTR (Periodic Transaction Reports)
   try {
     const year = new Date().getFullYear()
     const xmlUrl = `https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/${year}/ptr.xml`
+    console.log(`[congressional-trades] Fetching House XML: ${xmlUrl}`)
 
     const res = await fetch(xmlUrl, { headers: FR_HEADERS })
-    if (!res.ok) return
+    console.log(`[congressional-trades] House XML response: ${res.status}`)
+    if (!res.ok) { console.log(`[congressional-trades] House XML failed: ${res.status} ${res.statusText}`); return }
 
     const xml = await res.text()
     const memberBlocks = xml.match(/<Member>[\s\S]*?<\/Member>/g) || []
+    console.log(`[congressional-trades] House XML parsed: ${memberBlocks.length} member blocks, looking for ticker: ${ticker || 'ALL'}`)
 
     for (const block of memberBlocks.slice(0, 200)) {
       const name = block.match(/<Name>(.*?)<\/Name>/)?.[1] || ''

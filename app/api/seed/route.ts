@@ -11,9 +11,16 @@ import { fetchFederalRegisterActions, fetchCongressionalTrades, fetchRecentBills
 import { fetchEdgarFundamentals } from '@/app/lib/data/edgar'
 
 export async function POST(req: NextRequest) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  // Allow cron secret bypass for scheduled jobs
+  const cronSecret = process.env.CRON_SECRET
+  const authHeader = req.headers.get('authorization')
+  const isCron = cronSecret && authHeader === `Bearer ${cronSecret}`
+
+  if (!isCron) {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
 
   const { searchParams } = new URL(req.url)
   const ticker = searchParams.get('ticker')?.toUpperCase()
@@ -58,7 +65,11 @@ export async function POST(req: NextRequest) {
     if (do13F) {
       try {
         await fetch13FForTicker(ticker)
-        results.institutional_holdings_13f = 'ok'
+        // Check how many rows were written
+        const { createClient: mkAdmin } = await import('@supabase/supabase-js')
+        const adm = mkAdmin(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+        const { count } = await adm.from('institutional_holdings').select('*', { count: 'exact', head: true }).eq('ticker', ticker)
+        results.institutional_holdings_13f = count !== null && count > 0 ? `ok — ${count} institutions` : 'ran but 0 rows written — check name matching'
       } catch (e) {
         results.institutional_holdings_13f = `error: ${(e as Error).message?.slice(0, 80)}`
       }
@@ -67,7 +78,10 @@ export async function POST(req: NextRequest) {
     // Congressional trades for this ticker
     try {
       await fetchCongressionalTrades(ticker)
-      results.congressional_trades = 'ok'
+      const { createClient: mkAdmin2 } = await import('@supabase/supabase-js')
+      const adm2 = mkAdmin2(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+      const { count: ctCount } = await adm2.from('congressional_trades').select('*', { count: 'exact', head: true }).eq('ticker', ticker)
+      results.congressional_trades = ctCount !== null && ctCount > 0 ? `ok — ${ctCount} trades` : 'ran but 0 rows — no trades found for this ticker or XML unavailable'
     } catch (e) {
       results.congressional_trades = `error: ${(e as Error).message?.slice(0, 80)}`
     }
