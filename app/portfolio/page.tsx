@@ -50,6 +50,18 @@ interface JournalEntry {
   notes: string | null; tags: string[] | null; created_at: string
 }
 interface JournalStats { winRate: number | null; avgPnl: number | null; totalTrades: number }
+
+interface PositionCheck {
+  ticker: string; position_type: 'stock' | 'option'
+  currentPrice: number; change1D: number; volumeRatio: number | null; rsi: number | null
+  entryPrice: number | null; pnlPct: number | null; pnlDollar: number | null
+  stopLoss: number | null; takeProfit: number | null
+  pctFromStop: number | null; pctFromTarget: number | null
+  optionType?: string; strike?: number; expiry?: string
+  daysToExpiry?: number | null; timeDecayUrgent?: boolean
+  verdict: 'HOLD' | 'EXIT' | 'ADD' | 'WATCH'
+  conviction: 'high' | 'medium' | 'low'; reason: string; action: string; flags: string[]
+}
 interface Dividend {
   id: string; ticker: string; ex_date: string; pay_date: string | null
   amount_per_share: number; shares_held: number; total_received: number
@@ -118,6 +130,10 @@ function PortfolioInner() {
   const [addStrike, setAddStrike] = useState('')
   const [addExpiry, setAddExpiry] = useState('')
   const [addContracts, setAddContracts] = useState('1')
+  const [checks, setChecks] = useState<PositionCheck[]>([])
+  const [checking, setChecking] = useState(false)
+  const [checkedAt, setCheckedAt] = useState<string | null>(null)
+  const [checkTicker, setCheckTicker] = useState<string | null>(null)
   const [addPremium, setAddPremium] = useState('')
   const [addLoading, setAddLoading] = useState(false)
 
@@ -231,6 +247,28 @@ function PortfolioInner() {
     await fetch('/api/portfolio/positions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker: addTicker.toUpperCase(), shares: parseFloat(addShares), avg_cost: addCost ? parseFloat(addCost) : null }) })
     setAddTicker(''); setAddShares(''); setAddCost(''); setShowAdd(false); setAddLoading(false)
     await loadPositions()
+  }
+
+  const runHealthCheck = async (ticker?: string) => {
+    setChecking(true)
+    try {
+      if (ticker) {
+        setCheckTicker(ticker)
+        const res = await fetch(`/api/portfolio/check?ticker=${ticker}`)
+        const data = await res.json()
+        if (data.check) {
+          setChecks(prev => {
+            const filtered = prev.filter(c => c.ticker !== ticker)
+            return [data.check, ...filtered]
+          })
+        }
+      } else {
+        const res = await fetch('/api/portfolio/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
+        const data = await res.json()
+        setChecks(data.checks || [])
+        setCheckedAt(data.checkedAt || null)
+      }
+    } finally { setChecking(false); setCheckTicker(null) }
   }
 
   const removePosition = async (ticker: string) => {
@@ -419,6 +457,9 @@ function PortfolioInner() {
     { id: 'journal', label: 'Journal', icon: '📒' },
   ]
 
+  const VERDICT_COLOR: Record<string, string> = { EXIT: '#f87171', WATCH: '#fbbf24', HOLD: '#34d399', ADD: '#60a5fa' }
+  const VERDICT_BG: Record<string, string> = { EXIT: 'rgba(248,113,113,0.1)', WATCH: 'rgba(251,191,36,0.08)', HOLD: 'rgba(52,211,153,0.06)', ADD: 'rgba(96,165,250,0.08)' }
+
   return (
     <div className="flex flex-col min-h-screen" style={{ background: '#0a0d12', color: 'white' }}>
 
@@ -455,6 +496,12 @@ function PortfolioInner() {
                     {cachedAge === 0 ? 'just analyzed' : `${cachedAge < 60 ? `${cachedAge}m` : `${Math.round(cachedAge/60)}h`} old`}
                   </span>
                 )}
+                <button onClick={() => runHealthCheck()} disabled={checking || positions.length === 0}
+                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40"
+                  style={{ background: 'rgba(248,113,113,0.12)', color: '#f87171', border: '1px solid rgba(248,113,113,0.25)' }}>
+                  {checking && !checkTicker ? <div className="w-3 h-3 rounded-full border border-t-red-400 border-red-200/30 animate-spin" /> : '🩺'}
+                  {checking && !checkTicker ? 'Checking...' : 'Check'}
+                </button>
                 <button onClick={() => runAnalysis(true)} disabled={analyzing}
                   className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40"
                   style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', color: 'white' }}>
@@ -546,6 +593,70 @@ function PortfolioInner() {
                     <button onClick={() => setShowAdd(false)} className="px-4 py-2 rounded-xl text-sm transition-all hover:opacity-80"
                       style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)' }}>Cancel</button>
                   </div>
+                </div>
+              )}
+
+              {/* Health Check Results */}
+              {checks.length > 0 && (
+                <div className="space-y-2 mt-1">
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-[10px] font-mono uppercase tracking-widest text-white/25">🩺 Position Health</span>
+                    {checkedAt && <span className="text-[9px] text-white/20">{new Date(checkedAt).toLocaleTimeString()}</span>}
+                  </div>
+                  {checks.map(c => (
+                    <div key={c.ticker} className="rounded-xl overflow-hidden" style={{ background: VERDICT_BG[c.verdict], border: `1px solid ${VERDICT_COLOR[c.verdict]}22` }}>
+                      <div className="flex items-center gap-2.5 px-3 py-2.5">
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg min-w-[40px] text-center font-mono"
+                          style={{ background: `${VERDICT_COLOR[c.verdict]}18`, color: VERDICT_COLOR[c.verdict] }}>
+                          {c.verdict}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-bold font-mono text-sm">{c.ticker}</span>
+                            {c.optionType && (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
+                                style={{ background: c.optionType === 'call' ? 'rgba(52,211,153,0.12)' : 'rgba(248,113,113,0.12)', color: c.optionType === 'call' ? '#34d399' : '#f87171' }}>
+                                {c.optionType.toUpperCase()} ${c.strike}
+                              </span>
+                            )}
+                            <span className="text-[10px] font-mono" style={{ color: c.change1D >= 0 ? '#34d399' : '#f87171' }}>
+                              {c.change1D >= 0 ? '+' : ''}{c.change1D}% today
+                            </span>
+                            {c.pnlPct !== null && (
+                              <span className="text-[10px] font-mono font-bold" style={{ color: c.pnlPct >= 0 ? '#34d399' : '#f87171' }}>
+                                {c.pnlPct >= 0 ? '+' : ''}{c.pnlPct}% P&L
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-white/45 mt-0.5 leading-relaxed">{c.reason}</p>
+                        </div>
+                        <button onClick={() => runHealthCheck(c.ticker)} disabled={checkTicker === c.ticker}
+                          className="shrink-0 p-1.5 rounded-lg hover:opacity-80 disabled:opacity-30 transition-opacity"
+                          style={{ color: 'rgba(255,255,255,0.2)' }}>
+                          {checkTicker === c.ticker
+                            ? <div className="w-3 h-3 rounded-full border border-t-white/60 border-white/20 animate-spin" />
+                            : <RefreshCw size={12} />}
+                        </button>
+                      </div>
+                      {/* Action */}
+                      <div className="px-3 pb-2">
+                        <p className="text-[10px] font-semibold" style={{ color: VERDICT_COLOR[c.verdict] }}>
+                          → {c.action}
+                        </p>
+                      </div>
+                      {/* Flags */}
+                      {c.flags.length > 0 && (
+                        <div className="px-3 pb-2.5 flex flex-wrap gap-1">
+                          {c.flags.map(f => (
+                            <span key={f} className="text-[9px] px-1.5 py-0.5 rounded-full font-mono"
+                              style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.35)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                              {f}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
               )}
 
