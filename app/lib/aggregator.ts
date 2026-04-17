@@ -11,6 +11,8 @@ import { calculateTechnicals } from './signals/technicals'
 import { buildMarketContext } from './signals/market-context'
 import { fetchFundamentals } from './signals/fundamentals'
 import { fetchEdgarFundamentals, formatEdgarForAI } from './data/edgar'
+import { fetchAllFilingsForTicker, buildSecFilingsContext } from './data/sec-filings'
+import { buildLegislativeContext, refreshLegislativeIntelligence } from './data/legislative'
 import { fetchSmartMoney } from './signals/smart-money'
 import { fetchOptionsFlow } from './signals/options-flow'
 import { buildConvictionOutput } from './signals/conviction'
@@ -347,13 +349,19 @@ Focus on central bank policy signals, economic data releases, and technical stru
 
   // Phases 1-4 in parallel
   onProgress?.('Fetching market context, fundamentals, smart money, options...')
-  const [marketContext, fundamentals, smartMoney, optionsFlow, edgarData] = await Promise.all([
+  const [marketContext, fundamentals, smartMoney, optionsFlow, edgarData, secFilingsContext, legislativeContext] = await Promise.all([
     buildMarketContext(sym, timeframe),
     fetchFundamentals(sym, currentPrice),
     fetchSmartMoney(sym),
     fetchOptionsFlow(sym, currentPrice),
-    fetchEdgarFundamentals(sym).catch(() => null),  // best-effort, never blocks analysis
+    fetchEdgarFundamentals(sym).catch(() => null),
+    buildSecFilingsContext(sym).catch(() => ''),
+    buildLegislativeContext(sym, []).catch(() => ''),
   ])
+
+  // Trigger background refresh (non-blocking)
+  fetchAllFilingsForTicker(sym).catch(e => console.error('[sec-filings-bg]', e))
+  refreshLegislativeIntelligence().catch(e => console.error('[legislative-bg]', e))
 
   // Compute relative strength vs sector now that we have both
   const sectorChange = marketContext.sector.changePeriod
@@ -385,9 +393,12 @@ Focus on central bank policy signals, economic data releases, and technical stru
   const marketSection = marketContext.summary
   // Blend EDGAR verified data into fundamentals section if available
   const edgarSection = edgarData ? formatEdgarForAI(edgarData, currentPrice) : null
-  const fundamentalsSection = edgarSection
-    ? `${edgarSection}\n\n${fundamentals.summary}`
-    : fundamentals.summary
+  const fundamentalsSection = [
+    edgarSection,
+    secFilingsContext || null,
+    legislativeContext || null,
+    fundamentals.summary,
+  ].filter(Boolean).join('\n\n')
   const smartMoneySection = smartMoney.summary
   const optionsSection = optionsFlow.summary
   const convictionSection = conviction.summary
