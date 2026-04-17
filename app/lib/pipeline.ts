@@ -797,7 +797,8 @@ export async function runPipeline(
     bundle.aiContext?.technicalsSection ? ['technology','energy','financials'] : []
   ).catch(() => '')
   if (macroContext) {
-    bundle = { ...bundle, aiContext: { ...bundle.aiContext, macroIntelligenceSection: macroContext } }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    bundle = { ...bundle, aiContext: { ...bundle.aiContext, macroIntelligenceSection: macroContext } as any }
   }
 
   // ── Stage 2: Lead Analyst ────────────────────────────────
