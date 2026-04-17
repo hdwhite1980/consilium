@@ -419,7 +419,7 @@ ${bundle.aiContext.optionsSection}
 
 ${bundle.aiContext.convictionSection}
 
-${(bundle.aiContext as any).macroIntelligenceSection ? bundle.aiContext.macroIntelligenceSection + '\n\n' : ''}REQUIRED: Your technicalBasis MUST reference at least 2 of these if present in the data above: Ichimoku cloud position, ATR-derived stop/target levels, Williams %R, CCI, ROC momentum direction, relative strength vs sector. These are high-signal indicators — ignoring them weakens your case.
+${(bundle.aiContext as any).macroIntelligenceSection ? (bundle.aiContext as any).macroIntelligenceSection + '\n\n' : ''}REQUIRED: Your technicalBasis MUST reference at least 2 of these if present in the data above: Ichimoku cloud position, ATR-derived stop/target levels, Williams %R, CCI, ROC momentum direction, relative strength vs sector. These are high-signal indicators — ignoring them weakens your case.
 PATTERNS: If the data includes a candle pattern, chart pattern, gap, or trend structure (higher highs/lower lows), you MUST cite it by name. Patterns provide the most actionable signals — a Double Bottom with neckline break is more predictive than any single indicator. Include the pattern name, what it means, and how it affects your price target.
 
 JSON ONLY:
@@ -666,7 +666,7 @@ Yields on: ${counter?.yieldsOn.join('; ') ?? ''}
 Still pressing: ${counter?.pressesOn.join('; ') ?? ''}
 Closing argument: ${counter?.closingArgument ?? ''}` : ''}
 
-${(bundle.aiContext as any).macroIntelligenceSection ? bundle.aiContext.macroIntelligenceSection + '\n\n' : ''}OPTIONS FLOW & VOLATILITY:
+${(bundle.aiContext as any).macroIntelligenceSection ? (bundle.aiContext as any).macroIntelligenceSection + '\n\n' : ''}OPTIONS FLOW & VOLATILITY:
 ${bundle.aiContext.optionsSection}
 
 KEY TECHNICAL CONTEXT (for stop/target calibration):
