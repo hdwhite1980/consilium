@@ -148,11 +148,29 @@ NOTE: Minor technical noise is acceptable in a strong fundamental thesis. What m
 }
 
 function parseJSON<T>(text: string): T {
+  if (!text || typeof text !== 'string') throw new Error('No JSON in response — empty or non-string input')
   const clean = text.replace(/```json|```/g, '').trim()
   const start = clean.indexOf('{')
   const end = clean.lastIndexOf('}')
-  if (start === -1 || end === -1) throw new Error('No JSON in response')
-  return JSON.parse(clean.slice(start, end + 1)) as T
+  if (start === -1 || end === -1) {
+    console.error('[parseJSON] No JSON found in:', clean.slice(0, 200))
+    throw new Error('No JSON in response')
+  }
+  try {
+    return JSON.parse(clean.slice(start, end + 1)) as T
+  } catch (e) {
+    console.error('[parseJSON] Parse failed on:', clean.slice(start, start + 200))
+    throw new Error('JSON parse failed: ' + (e instanceof Error ? e.message : String(e)))
+  }
+}
+
+// ── Safe text extraction from Anthropic response (handles thinking blocks) ──
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractText(content: any[]): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const block = content.find((b: any) => b.type === 'text') as { text: string } | undefined
+  if (!block) throw new Error('No text block in Anthropic response')
+  return block.text
 }
 
 // Targeted Gemini research during debate — fetches fresh live data and answers
@@ -405,7 +423,7 @@ JSON ONLY:
 {"signal":"BULLISH|BEARISH|NEUTRAL","reasoning":"4-5 sentences integrating all signals including new indicators","target":"price target e.g. $195","confidence":<0-100>,"technicalBasis":"2-3 sentences — must cite Ichimoku, ATR, or relative strength if available","fundamentalBasis":"2 sentences","catalysts":["2-3 catalysts"],"keyRisks":["2-3 risks"]}`
     }]
   })
-  return parseJSON<ClaudeResult>((msg.content[0] as { text: string }).text)
+  return parseJSON<ClaudeResult>(extractText(msg.content as any[]))
 }
 
 export async function runGPT(bundle: SignalBundle, gemini: GeminiResult, claude: ClaudeResult): Promise<GptResult> {
@@ -469,7 +487,7 @@ STRONGEST COUNTER: ${gpt.strongestCounterArgument}
 What ONE question should the News Scout research right now to help you respond? Reply with just the question, nothing else.`
     }]
   })
-  const researchQuestion = (researchAsk.content[0] as { text: string }).text.trim()
+  const researchQuestion = extractText(researchAsk.content as any[]).trim()
 
   // ── Step 2: Gemini runs the targeted research ──
   const researchContext = `${bundle.aiContext.technicalsSection}\n${bundle.aiContext.fundamentalsSection}\n${bundle.aiContext.smartMoneySection}\n${bundle.aiContext.optionsSection}\n${bundle.aiContext.marketSection}`
@@ -510,7 +528,7 @@ JSON ONLY:
 }`
     }]
   })
-  const raw = parseJSON<RebuttalResult>((msg.content[0] as { text: string }).text)
+  const raw = parseJSON<RebuttalResult>(extractText(msg.content as any[]))
   // Ensure research fields are always populated
   return {
     ...raw,
