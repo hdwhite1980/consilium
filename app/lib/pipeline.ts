@@ -148,20 +148,51 @@ NOTE: Minor technical noise is acceptable in a strong fundamental thesis. What m
   }
 }
 
+function repairJSON(raw: string): string {
+  // Remove control characters that break JSON parsing
+  let s = raw.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
+  // Escape literal newlines/tabs that appear inside JSON string values
+  // Walk char by char to find string boundaries safely
+  let result = ''
+  let inString = false
+  let escaped = false
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    if (escaped) { result += ch; escaped = false; continue }
+    if (ch === '\\') { result += ch; escaped = true; continue }
+    if (ch === '"') { inString = !inString; result += ch; continue }
+    if (inString) {
+      if (ch === '\n') { result += '\\n'; continue }
+      if (ch === '\r') { result += '\\r'; continue }
+      if (ch === '\t') { result += '\\t'; continue }
+    }
+    result += ch
+  }
+  return result
+}
+
 function parseJSON<T>(text: string): T {
   if (!text || typeof text !== 'string') throw new Error('No JSON in response — empty or non-string input')
-  const clean = text.replace(/```json|```/g, '').trim()
+  const clean = text.replace(/\`\`\`json|\`\`\`/g, '').trim()
   const start = clean.indexOf('{')
   const end = clean.lastIndexOf('}')
   if (start === -1 || end === -1) {
     console.error('[parseJSON] No JSON found in:', clean.slice(0, 200))
     throw new Error('No JSON in response')
   }
+  const slice = clean.slice(start, end + 1)
+  // First try: direct parse
   try {
-    return JSON.parse(clean.slice(start, end + 1)) as T
-  } catch (e) {
-    console.error('[parseJSON] Parse failed on:', clean.slice(start, start + 200))
-    throw new Error('JSON parse failed: ' + (e instanceof Error ? e.message : String(e)))
+    return JSON.parse(slice) as T
+  } catch {
+    // Second try: repair and retry
+    try {
+      const repaired = repairJSON(slice)
+      return JSON.parse(repaired) as T
+    } catch (e2) {
+      console.error('[parseJSON] Parse failed even after repair. First 300 chars:', slice.slice(0, 300))
+      throw new Error('JSON parse failed: ' + (e2 instanceof Error ? e2.message : String(e2)))
+    }
   }
 }
 
@@ -628,7 +659,7 @@ export async function runJudge(
   const judgePersonaKey = (( bundle as any).persona ?? 'balanced') as string
   const msg = await getAnthropic().messages.create({
     model: 'claude-opus-4-7',
-    max_tokens: 1800,
+    max_tokens: 4000,
     system: `You are the Judge of an elite AI stock council for ${bundle.ticker}. The council has three roles: News Scout, Lead Analyst, and Devil's Advocate. You hold NO prior position. ${judgePersona[judgePersonaKey] ?? judgePersona.balanced} Weigh argument QUALITY not vote count. Be decisive. Refer to council members by their role names only. IMPORTANT: Never cite missing or unavailable data as a reason for lower conviction — only cite the data you have. If a metric is unavailable, ignore it entirely rather than mentioning its absence.
 
 ${timeframeContext(bundle.timeframe)}`,
@@ -672,13 +703,13 @@ Still pressing: ${counter?.pressesOn.join('; ') ?? ''}
 Closing argument: ${counter?.closingArgument ?? ''}` : ''}
 
 ${(bundle.aiContext as any).macroIntelligenceSection ? (bundle.aiContext as any).macroIntelligenceSection + '\n\n' : ''}OPTIONS FLOW & VOLATILITY:
-${bundle.aiContext.optionsSection}
+${(bundle.aiContext.optionsSection || '').slice(0, 1500)}
 
 KEY TECHNICAL CONTEXT (for stop/target calibration):
-${bundle.aiContext.technicalsSection}
+${(bundle.aiContext.technicalsSection || '').slice(0, 1500)}
 
 CONVICTION ENGINE:
-${bundle.aiContext.convictionSection}
+${(bundle.aiContext.convictionSection || '').slice(0, 1000)}
 
 JSON ONLY — include ALL fields below:
 {
