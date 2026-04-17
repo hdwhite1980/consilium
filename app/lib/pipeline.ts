@@ -6,6 +6,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import { GoogleGenerativeAI } from '@google/generative-ai'
+import { scanForMacroEvents, buildMacroIntelligenceContext, scheduleImpactMeasurements } from './macro-intelligence'
 import type { SignalBundle } from './aggregator'
 
 function getAnthropic() { return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) }
@@ -418,7 +419,7 @@ ${bundle.aiContext.optionsSection}
 
 ${bundle.aiContext.convictionSection}
 
-REQUIRED: Your technicalBasis MUST reference at least 2 of these if present in the data above: Ichimoku cloud position, ATR-derived stop/target levels, Williams %R, CCI, ROC momentum direction, relative strength vs sector. These are high-signal indicators — ignoring them weakens your case.
+${(bundle.aiContext as any).macroIntelligenceSection ? bundle.aiContext.macroIntelligenceSection + '\n\n' : ''}REQUIRED: Your technicalBasis MUST reference at least 2 of these if present in the data above: Ichimoku cloud position, ATR-derived stop/target levels, Williams %R, CCI, ROC momentum direction, relative strength vs sector. These are high-signal indicators — ignoring them weakens your case.
 PATTERNS: If the data includes a candle pattern, chart pattern, gap, or trend structure (higher highs/lower lows), you MUST cite it by name. Patterns provide the most actionable signals — a Double Bottom with neckline break is more predictive than any single indicator. Include the pattern name, what it means, and how it affects your price target.
 
 JSON ONLY:
@@ -665,7 +666,7 @@ Yields on: ${counter?.yieldsOn.join('; ') ?? ''}
 Still pressing: ${counter?.pressesOn.join('; ') ?? ''}
 Closing argument: ${counter?.closingArgument ?? ''}` : ''}
 
-OPTIONS FLOW & VOLATILITY:
+${(bundle.aiContext as any).macroIntelligenceSection ? bundle.aiContext.macroIntelligenceSection + '\n\n' : ''}OPTIONS FLOW & VOLATILITY:
 ${bundle.aiContext.optionsSection}
 
 KEY TECHNICAL CONTEXT (for stop/target calibration):
@@ -784,6 +785,20 @@ export async function runPipeline(
   const gemini = await runGemini(bundle)
   transcript.push({ role: 'gemini', stage: 'news_macro', content: gemini.summary, confidence: gemini.confidence, timestamp: ts() })
   onProgress('gemini_done', gemini)
+
+  // ── Macro Intelligence: scan headlines for geopolitical events (non-blocking) ──
+  // Fire and forget — never block the pipeline on this
+  scanForMacroEvents(gemini.headlines || []).catch(e => console.error('[macro-intel]', e))
+  scheduleImpactMeasurements().catch(e => console.error('[macro-impact]', e))
+
+  // Inject macro intelligence context into bundle for Lead Analyst and Judge
+  const macroContext = await buildMacroIntelligenceContext(
+    bundle.ticker,
+    bundle.aiContext?.technicalsSection ? ['technology','energy','financials'] : []
+  ).catch(() => '')
+  if (macroContext) {
+    bundle = { ...bundle, aiContext: { ...bundle.aiContext, macroIntelligenceSection: macroContext } }
+  }
 
   // ── Stage 2: Lead Analyst ────────────────────────────────
   onProgress('claude_start', { gemini })

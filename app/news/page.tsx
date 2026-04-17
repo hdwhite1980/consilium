@@ -157,6 +157,7 @@ export default function NewsPage() {
   const router = useRouter()
   const [data, setData] = useState<NewsPageData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [macroThemes, setMacroThemes] = useState<Array<{id:string;theme_name:string;theme_summary:string;playbook:string;sectors_to_watch:string[];tickers_to_watch:string[];urgency:string}>>([])
   const [statusMsg, setStatusMsg] = useState('Loading today\'s market intelligence...')
   const [error, setError] = useState<string | null>(null)
   const [generatedAt, setGeneratedAt] = useState<string | null>(null)
@@ -205,6 +206,13 @@ export default function NewsPage() {
       setError((e as Error).message)
       setLoading(false)
     }
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/macro-intelligence')
+      .then(r => r.json())
+      .then(d => setMacroThemes(d.themes || []))
+      .catch(() => {})
   }, [])
 
   useEffect(() => { load() }, [load])

@@ -63,6 +63,7 @@ export default function MacroDashboard() {
   const [data, setData] = useState<MacroDashboard | null>(null)
   const [loading, setLoading] = useState(true)
   const [lastFetch, setLastFetch] = useState<Date | null>(null)
+  const [macroThemes, setMacroThemes] = useState<Array<{id:string;theme_name:string;theme_summary:string;playbook:string;sectors_to_watch:string[];tickers_to_watch:string[];urgency:string}>>([])
 
   const load = useCallback(async (force = false) => {
     setLoading(true)
@@ -73,7 +74,13 @@ export default function MacroDashboard() {
     setLoading(false)
   }, [])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    load()
+    fetch('/api/macro-intelligence')
+      .then(r => r.json())
+      .then(d => setMacroThemes(d.themes || []))
+      .catch(() => {})
+  }, [load])
 
   const ageMinutes = lastFetch ? Math.round((Date.now() - lastFetch.getTime()) / 60000) : 0
 
@@ -116,6 +123,54 @@ export default function MacroDashboard() {
 
       {data && (
         <div className="max-w-6xl mx-auto w-full px-4 py-6 space-y-5">
+
+          {/* Active Macro Intelligence Themes */}
+          {macroThemes.length > 0 && (
+            <div className="rounded-2xl border overflow-hidden" style={{ background: 'rgba(251,191,36,0.04)', borderColor: 'rgba(251,191,36,0.2)' }}>
+              <div className="px-4 py-3 border-b flex items-center gap-2" style={{ borderColor: 'rgba(251,191,36,0.15)' }}>
+                <span style={{ color: '#fbbf24' }}>🌍</span>
+                <span className="text-xs font-bold" style={{ color: '#fbbf24' }}>Active Macro Intelligence Themes</span>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full ml-auto" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>
+                  {macroThemes.length} active
+                </span>
+              </div>
+              <div className="divide-y divide-white/5">
+                {macroThemes.map(theme => (
+                  <div key={theme.id} className="px-4 py-3 space-y-1.5">
+                    <div className="flex items-start gap-2">
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 mt-0.5"
+                        style={{
+                          background: theme.urgency === 'high' ? 'rgba(248,113,113,0.15)' : theme.urgency === 'medium' ? 'rgba(251,191,36,0.12)' : 'rgba(255,255,255,0.06)',
+                          color: theme.urgency === 'high' ? '#f87171' : theme.urgency === 'medium' ? '#fbbf24' : 'rgba(255,255,255,0.4)'
+                        }}>
+                        {theme.urgency.toUpperCase()}
+                      </span>
+                      <span className="text-xs font-semibold text-white/90">{theme.theme_name}</span>
+                    </div>
+                    <p className="text-xs text-white/55 leading-relaxed pl-10">{theme.theme_summary}</p>
+                    {theme.playbook && (
+                      <div className="pl-10 flex items-start gap-1.5">
+                        <span className="text-[10px] font-mono text-white/25 shrink-0">Historical playbook →</span>
+                        <span className="text-[11px] text-white/50">{theme.playbook}</span>
+                      </div>
+                    )}
+                    {(theme.sectors_to_watch.length > 0 || theme.tickers_to_watch.length > 0) && (
+                      <div className="pl-10 flex flex-wrap gap-1.5 mt-1">
+                        {theme.sectors_to_watch.map(s => (
+                          <span key={s} className="text-[10px] px-2 py-0.5 rounded-full font-mono"
+                            style={{ background: 'rgba(96,165,250,0.1)', color: '#60a5fa' }}>{s}</span>
+                        ))}
+                        {theme.tickers_to_watch.map(t => (
+                          <span key={t} className="text-[10px] px-2 py-0.5 rounded-full font-mono"
+                            style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399' }}>{t}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Regime + Breadth row */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">

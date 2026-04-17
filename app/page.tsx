@@ -260,6 +260,9 @@ function HomeInner() {
   const { theme, toggle: toggleTheme } = useTheme()
   const [navOpen, setNavOpen] = useState(false)
   const [showTutorial, setShowTutorial] = useState(false)
+  const [preMarketBrief, setPreMarketBrief] = useState<{headline?:string;one_line?:string;risk_of_day?:string;watchlist?:string[];portfolio_alerts?:string[]} | null>(null)
+  const [showBrief, setShowBrief] = useState(false)
+  const [whyMoving, setWhyMoving] = useState<{catalyst?:string;verdict?:{verdict:string;confidence:number;reason:string;action:string;risk:string};loading:boolean;open:boolean}>({ loading: false, open: false })
   const [tutorialChecked, setTutorialChecked] = useState(false)
 
   useEffect(() => {
@@ -514,6 +517,34 @@ function HomeInner() {
     <div className="flex flex-col min-h-screen md:h-screen md:overflow-hidden" style={{ background: bg, color: txt }}>
 
       {/* ── Top nav bar ─────────────────────────────── */}
+      {/* Pre-market Brief Banner */}
+      {preMarketBrief?.headline && (
+        <div className="px-3 py-2 cursor-pointer shrink-0 transition-all hover:opacity-90"
+          style={{ background: 'rgba(251,191,36,0.07)', borderBottom: '1px solid rgba(251,191,36,0.15)' }}
+          onClick={() => setShowBrief(b => !b)}>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded font-mono shrink-0"
+              style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>PRE-MARKET</span>
+            <span className="text-xs flex-1 truncate" style={{ color: 'rgba(255,255,255,0.7)' }}>{preMarketBrief.headline}</span>
+            <span className="text-[10px] text-white/25">{showBrief ? '▲' : '▼'}</span>
+          </div>
+          {showBrief && (
+            <div className="mt-2 space-y-1.5 text-xs">
+              {preMarketBrief.one_line && <p style={{ color: 'rgba(255,255,255,0.6)' }} className="leading-relaxed">{preMarketBrief.one_line}</p>}
+              {preMarketBrief.risk_of_day && (
+                <div className="flex items-start gap-1.5">
+                  <span style={{ color: '#f87171' }}>⚠</span>
+                  <span style={{ color: 'rgba(255,255,255,0.5)' }}>Risk: {preMarketBrief.risk_of_day}</span>
+                </div>
+              )}
+              {preMarketBrief.watchlist && preMarketBrief.watchlist.length > 0 && (
+                <div><span style={{ color: 'rgba(255,255,255,0.3)' }}>Watch: </span><span style={{ color: 'rgba(255,255,255,0.6)' }}>{preMarketBrief.watchlist.join(' · ')}</span></div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       <nav className="flex items-center gap-2 px-3 py-2 border-b shrink-0"
         style={{ background: surf, borderColor: brd }}>
 
@@ -564,6 +595,41 @@ function HomeInner() {
               </button>
             ))}
           </div>
+
+          {/* Why is this moving? — shows when price has moved >2% */}
+          {md?.currentPrice && md?.technicals?.priceChange1D && Math.abs(md.technicals.priceChange1D) >= 2 && (
+            <button
+              onClick={async () => {
+                const pct = md.technicals?.priceChange1D || 0
+                setWhyMoving({ loading: true, open: true })
+                const res = await fetch('/api/why-moving', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ ticker, currentPrice: md?.currentPrice, changePercent: pct }),
+                })
+                if (!res.body) return
+                const reader = res.body.getReader()
+                const decoder = new TextDecoder()
+                while (true) {
+                  const { done, value } = await reader.read()
+                  if (done) break
+                  const text = decoder.decode(value)
+                  for (const line of text.split('\n')) {
+                    if (!line.startsWith('data: ')) continue
+                    try {
+                      const evt = JSON.parse(line.slice(6))
+                      if (evt.catalyst) setWhyMoving(p => ({ ...p, catalyst: evt.catalyst }))
+                      if (evt.verdict) setWhyMoving(p => ({ ...p, verdict: evt.verdict, loading: false }))
+                    } catch { /* skip */ }
+                  }
+                }
+              }}
+              disabled={whyMoving.loading}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40"
+              style={{ background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24' }}>
+              {whyMoving.loading ? '⏳ Analyzing...' : `⚡ Why is ${ticker} moving?`}
+            </button>
+          )}
 
           <button onClick={run} disabled={running} data-tutorial="analyze-btn"
             className="px-3 sm:px-4 py-1.5 rounded-lg text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95 disabled:opacity-40 shrink-0"
@@ -1566,6 +1632,58 @@ function HomeInner() {
         </main>
       </div>
     </div>
+    {/* Why Is This Moving modal */}
+    {whyMoving.open && (
+      <div className="fixed inset-0 z-[9990] flex items-end sm:items-center justify-center p-4"
+        style={{ background: 'rgba(0,0,0,0.7)' }}
+        onClick={() => setWhyMoving(p => ({ ...p, open: false }))}>
+        <div className="w-full max-w-md rounded-2xl overflow-hidden shadow-2xl"
+          style={{ background: '#111620', border: '1px solid rgba(251,191,36,0.3)' }}
+          onClick={e => e.stopPropagation()}>
+          <div className="flex items-center gap-2 px-4 py-3 border-b" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+            <span style={{ color: '#fbbf24' }}>⚡</span>
+            <span className="text-sm font-bold">Why is {ticker} moving?</span>
+            <button onClick={() => setWhyMoving(p => ({ ...p, open: false }))}
+              className="ml-auto text-white/30 hover:text-white/70 text-lg leading-none">×</button>
+          </div>
+          <div className="px-4 py-4 space-y-4">
+            {whyMoving.loading && !whyMoving.catalyst && (
+              <div className="text-sm text-white/40 animate-pulse">Scanning headlines and analyzing catalyst...</div>
+            )}
+            {whyMoving.catalyst && (
+              <div>
+                <div className="text-[10px] font-mono text-white/35 uppercase tracking-wider mb-1.5">Catalyst</div>
+                <p className="text-sm text-white/80 leading-relaxed">{whyMoving.catalyst}</p>
+              </div>
+            )}
+            {whyMoving.verdict && (() => {
+              const v = whyMoving.verdict
+              const vColor = v.verdict === 'CHASE' ? '#34d399' : v.verdict === 'AVOID' ? '#f87171' : '#fbbf24'
+              return (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3 rounded-xl p-3" style={{ background: `${vColor}12`, border: `1px solid ${vColor}30` }}>
+                    <span className="text-2xl font-black" style={{ color: vColor }}>{v.verdict}</span>
+                    <div>
+                      <div className="text-xs font-semibold" style={{ color: vColor }}>{v.confidence}% confidence</div>
+                      <div className="text-xs text-white/60">{v.reason}</div>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-mono text-white/35 uppercase mb-1">What to do</div>
+                    <p className="text-xs text-white/70 leading-relaxed">{v.action}</p>
+                  </div>
+                  <div className="rounded-lg px-3 py-2" style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.15)' }}>
+                    <span className="text-[10px] font-mono text-red-400/60">⚠ Risk: </span>
+                    <span className="text-xs text-white/50">{v.risk}</span>
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+        </div>
+      </div>
+    )}
+
     {/* Tutorial overlay */}
     {showTutorial && (
       <Tutorial
