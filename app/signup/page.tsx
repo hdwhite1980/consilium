@@ -30,7 +30,7 @@ function SignupInner() {
     setError(null)
 
     const supabase = createClient()
-    const redirectUrl = 'https://wali-os.com/auth/callback'
+    const redirectUrl = `${window.location.origin}/auth/callback`
     const { error } = await supabase.auth.signUp({
       email,
       password,
@@ -225,11 +225,11 @@ function SignupInner() {
             </p>
             <p className="text-[10px] text-white/20 leading-relaxed">
               By creating an account you agree to our{' '}
-              <button onClick={() => router.push('/disclaimer')}
+              <a href="/terms"
                 className="underline hover:text-white/40 transition-colors">
                 disclaimer and terms
-              </button>
-              . Wali-OS does not provide financial advice.
+              </a>
+              . Wali-OS does not provide financial advice. By signing up you agree to our <a href="/privacy" style={{ color: 'rgba(255,255,255,0.4)', textDecoration: 'underline' }}>Privacy Policy</a> and <a href="/terms" style={{ color: 'rgba(255,255,255,0.4)', textDecoration: 'underline' }}>Terms of Service</a>. We never sell your data.
             </p>
           </div>
         </div>
