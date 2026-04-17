@@ -53,12 +53,18 @@ interface JournalStats { winRate: number | null; avgPnl: number | null; totalTra
 
 interface PositionCheck {
   ticker: string; position_type: 'stock' | 'option'
-  currentPrice: number; change1D: number; volumeRatio: number | null; rsi: number | null
+  underlyingPrice: number; underlyingChange1D: number
+  underlyingRsi: number | null; underlyingVolumeRatio: number | null
   entryPrice: number | null; pnlPct: number | null; pnlDollar: number | null
   stopLoss: number | null; takeProfit: number | null
   pctFromStop: number | null; pctFromTarget: number | null
-  optionType?: string; strike?: number; expiry?: string
-  daysToExpiry?: number | null; timeDecayUrgent?: boolean
+  optionType?: string; strike?: number; expiry?: string; contracts?: number
+  entryPremium: number | null; currentPremium: number | null
+  optionPnlPct: number | null; optionPnlDollar: number | null
+  daysToExpiry: number | null; timeDecayUrgent: boolean
+  delta: number | null; theta: number | null; gamma: number | null; vega: number | null
+  impliedVolatility: number | null; intrinsicValue: number | null; timeValue: number | null
+  moneyness: string; breakeven: number | null
   verdict: 'HOLD' | 'EXIT' | 'ADD' | 'WATCH'
   conviction: 'high' | 'medium' | 'low'; reason: string; action: string; flags: string[]
 }
@@ -616,19 +622,59 @@ function PortfolioInner() {
                             {c.optionType && (
                               <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
                                 style={{ background: c.optionType === 'call' ? 'rgba(52,211,153,0.12)' : 'rgba(248,113,113,0.12)', color: c.optionType === 'call' ? '#34d399' : '#f87171' }}>
-                                {c.optionType.toUpperCase()} ${c.strike}
+                                {c.optionType.toUpperCase()} ${c.strike} {c.expiry?.slice(5)}
                               </span>
                             )}
-                            <span className="text-[10px] font-mono" style={{ color: c.change1D >= 0 ? '#34d399' : '#f87171' }}>
-                              {c.change1D >= 0 ? '+' : ''}{c.change1D}% today
+                            <span className="text-[10px] font-mono" style={{ color: c.underlyingChange1D >= 0 ? '#34d399' : '#f87171' }}>
+                              ${c.underlyingPrice} ({c.underlyingChange1D >= 0 ? '+' : ''}{c.underlyingChange1D}%)
                             </span>
-                            {c.pnlPct !== null && (
+                            {c.position_type === 'option' && c.optionPnlPct !== null && (
+                              <span className="text-[10px] font-mono font-bold" style={{ color: c.optionPnlPct >= 0 ? '#34d399' : '#f87171' }}>
+                                {c.optionPnlPct >= 0 ? '+' : ''}{c.optionPnlPct}% premium
+                              </span>
+                            )}
+                            {c.position_type === 'stock' && c.pnlPct !== null && (
                               <span className="text-[10px] font-mono font-bold" style={{ color: c.pnlPct >= 0 ? '#34d399' : '#f87171' }}>
                                 {c.pnlPct >= 0 ? '+' : ''}{c.pnlPct}% P&L
                               </span>
                             )}
                           </div>
                           <p className="text-[10px] text-white/45 mt-0.5 leading-relaxed">{c.reason}</p>
+                          {/* Options Greeks row */}
+                          {c.position_type === 'option' && (c.delta !== null || c.theta !== null || c.impliedVolatility !== null) && (
+                            <div className="flex gap-2 mt-1 flex-wrap">
+                              {c.currentPremium !== null && (
+                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa' }}>
+                                  ${c.currentPremium}
+                                </span>
+                              )}
+                              {c.delta !== null && (
+                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'rgba(96,165,250,0.08)', color: '#60a5fa' }}>
+                                  Δ {c.delta}
+                                </span>
+                              )}
+                              {c.theta !== null && (
+                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'rgba(248,113,113,0.08)', color: '#f87171' }}>
+                                  θ {c.theta}/d
+                                </span>
+                              )}
+                              {c.impliedVolatility !== null && (
+                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.08)', color: '#fbbf24' }}>
+                                  IV {(c.impliedVolatility*100).toFixed(0)}%
+                                </span>
+                              )}
+                              {c.daysToExpiry !== null && (
+                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded"
+                                  style={{ background: c.timeDecayUrgent ? 'rgba(248,113,113,0.12)' : 'rgba(255,255,255,0.05)', color: c.timeDecayUrgent ? '#f87171' : 'rgba(255,255,255,0.35)' }}>
+                                  {c.daysToExpiry}d left
+                                </span>
+                              )}
+                              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded capitalize"
+                                style={{ background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.3)' }}>
+                                {c.moneyness?.replace('_', ' ')}
+                              </span>
+                            </div>
+                          )}
                         </div>
                         <button onClick={() => runHealthCheck(c.ticker)} disabled={checkTicker === c.ticker}
                           className="shrink-0 p-1.5 rounded-lg hover:opacity-80 disabled:opacity-30 transition-opacity"
