@@ -156,7 +156,9 @@ export function Tutorial({ config, onComplete, onSkip, autoStart = false }: Tuto
     if (isLast) {
       saveProgress(step, true, false)
       setActive(false)
-      onComplete?.()
+      // Small delay ensures React removes the overlay DOM before onComplete fires
+      // preventing the dark spotlight shadow from persisting on screen
+      setTimeout(() => onComplete?.(), 50)
     } else {
       const next = step + 1
       setStep(next)
@@ -171,7 +173,7 @@ export function Tutorial({ config, onComplete, onSkip, autoStart = false }: Tuto
   const skip = () => {
     saveProgress(step, false, true)
     setActive(false)
-    onSkip?.()
+    setTimeout(() => onSkip?.(), 50)
   }
 
   const restart = () => {
@@ -421,7 +423,7 @@ export const MAIN_TUTORIAL: TutorialConfig = {
     {
       id: 'nav',
       title: 'The full platform',
-      content: '🔥 Invest tracks your journey from any starting balance — $5 to $1M — with fire milestones and stage-matched stock picks. 🌍 Macro ranks all 11 sectors daily. 💼 Portfolio gives a holistic view of your holdings. 💰 Reinvest tracks trades and deploys gains. ⚡ Compare runs the full debate on two stocks. 🎓 Academy teaches you to read the debate like an analyst.',
+      content: '🔥 Invest tracks your journey from any starting balance — $5 to $1M — with fire milestones and stage-matched stock picks. 🌍 Macro ranks all 11 sectors daily. 💼 Portfolio gives a holistic view of your holdings. 💰 Reinvest tracks trades and deploys gains. ⚡ Compare runs the full debate on two stocks.',
       position: 'center',
       tip: 'Start your day on Macro, identify the strongest sector, use Compare on the top two names, then log your trade in Reinvest.',
     },
