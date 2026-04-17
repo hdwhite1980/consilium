@@ -387,7 +387,65 @@ export async function fetchCongressionalTrades(ticker?: string): Promise<void> {
 
 async function fetchHouseDisclosuresXML(ticker: string | undefined, admin: any): Promise<void> {
   try {
-    // Try multiple House PTR XML URL formats — naming varies by year
+    // Primary: Senate stock watcher community dataset (mirrors both House + Senate disclosures)
+    // Reliable S3-backed JSON updated regularly
+    const swUrl = 'https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com/aggregate/all_transactions.json'
+    console.log(`[congressional-trades] Trying Senate stock watcher: ${swUrl}`)
+    const swRes = await fetch(swUrl, { headers: { 'User-Agent': 'Wali-OS/1.0 support@wali-os.com' } })
+    console.log(`[congressional-trades] Senate stock watcher response: ${swRes.status}`)
+
+    if (swRes.ok) {
+      const trades: any[] = await swRes.json()
+      console.log(`[congressional-trades] Got ${trades.length} total trades from stock watcher`)
+      let written = 0
+      for (const t of trades) {
+        const tradeTicker = (t.ticker || '').toUpperCase().trim()
+        if (ticker && tradeTicker !== ticker.toUpperCase()) continue
+        if (!tradeTicker || tradeTicker === '--') continue
+
+        const tradeDate = t.transaction_date || t.disclosure_date || ''
+        const disclosureDate = t.disclosure_date || tradeDate
+        const lagDays = tradeDate && disclosureDate
+          ? Math.floor((new Date(disclosureDate).getTime() - new Date(tradeDate).getTime()) / 86400000)
+          : null
+
+        const amountMap: Record<string, [number, number]> = {
+          '$1,001 - $15,000': [1001, 15000],
+          '$15,001 - $50,000': [15001, 50000],
+          '$50,001 - $100,000': [50001, 100000],
+          '$100,001 - $250,000': [100001, 250000],
+          '$250,001 - $500,000': [250001, 500000],
+          '$500,001 - $1,000,000': [500001, 1000000],
+          '$1,000,001 - $5,000,000': [1000001, 5000000],
+          '$5,000,001 - $25,000,000': [5000001, 25000000],
+        }
+        const amountRange = amountMap[t.amount] || [null, null]
+
+        try {
+          await admin.from('congressional_trades').upsert({
+            member_name: t.senator || t.representative || 'Unknown',
+            party: t.party || null,
+            chamber: t.senator ? 'senate' : 'house',
+            ticker: tradeTicker,
+            asset_description: t.asset_description || t.asset_name || null,
+            trade_type: (t.type || '').toLowerCase().includes('purchase') ? 'buy' : 'sell',
+            trade_date: tradeDate || null,
+            disclosure_date: disclosureDate || null,
+            disclosure_lag_days: lagDays,
+            amount_low: amountRange[0],
+            amount_high: amountRange[1],
+            amount_range: t.amount || null,
+            comment: t.comment || null,
+            source: 'senate_stock_watcher',
+          }, { onConflict: 'member_name,ticker,trade_date,trade_type' })
+          written++
+        } catch { /* skip dupes */ }
+      }
+      console.log(`[congressional-trades] Wrote ${written} trades from stock watcher`)
+      return
+    }
+
+    // Fallback: Try House PTR XML with multiple year/format attempts
     const year = new Date().getFullYear()
     const urlsToTry = [
       `https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/${year}/ptr.xml`,
@@ -404,10 +462,10 @@ async function fetchHouseDisclosuresXML(ticker: string | undefined, admin: any):
       if (attempt.ok) { res = attempt; usedUrl = url; break }
     }
     if (!res) {
-      console.log('[congressional-trades] All House XML URLs failed — no congressional trade data available')
+      console.log('[congressional-trades] All sources failed — no congressional trade data available')
       return
     }
-    console.log(`[congressional-trades] Using: ${usedUrl}`)
+    console.log(`[congressional-trades] Using House XML: ${usedUrl}`)
 
     const xml = await res.text()
     const memberBlocks = xml.match(/<Member>[\s\S]*?<\/Member>/g) || []

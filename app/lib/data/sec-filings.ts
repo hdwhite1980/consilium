@@ -362,38 +362,59 @@ export async function fetch13FForTicker(ticker: string): Promise<void> {
           const filingDate = dates[i]
           if (!accNo) break
 
-          // Fetch the 13-F filing — look up actual XML filename from index
+          // Fetch the 13-F filing — try multiple known filename conventions
           const cikNum = instCik.replace(/^0+/, '')
           const accNoClean = accNo.replace(/-/g, '')
+          const baseUrl = `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accNoClean}`
 
           try {
-            // Get the filing index to find actual XML filename
-            const idxUrl = `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accNoClean}/${accNo}-index.json`
-            console.log(`[13-F] ${instName}: looking up index ${idxUrl}`)
-            const idxRes = await fetch(idxUrl, { headers: EDGAR_HEADERS })
+            // EDGAR 13-F XML files have inconsistent naming across filers
+            // Try the most common patterns in order
+            const xmlFilenames = [
+              'informationtable.xml',
+              'form13fInfoTable.xml',
+              'form13f.xml',
+              `${accNo}.xml`,
+              `${accNoClean}.xml`,
+            ]
 
-            let xmlFilename = 'informationtable.xml' // default fallback
-            if (idxRes.ok) {
-              const idx = await idxRes.json()
-              const docs: Array<{name: string; type: string}> = idx.documents || []
-              // Find the information table XML — various naming conventions
-              const xmlDoc = docs.find(d =>
-                d.name?.toLowerCase().includes('informationtable') ||
-                d.type?.includes('13F-HR') ||
-                d.name?.toLowerCase().endsWith('.xml')
-              )
-              if (xmlDoc) xmlFilename = xmlDoc.name
-              console.log(`[13-F] ${instName}: index has ${docs.length} docs, using ${xmlFilename}`)
-            } else {
-              console.log(`[13-F] ${instName}: index fetch ${idxRes.status}, trying default filename`)
+            let xml = ''
+            let usedFilename = ''
+            for (const fname of xmlFilenames) {
+              const xmlUrl = `${baseUrl}/${fname}`
+              const xmlRes = await fetch(xmlUrl, { headers: EDGAR_HEADERS })
+              if (xmlRes.ok) {
+                const text = await xmlRes.text()
+                // Verify it actually looks like an information table
+                if (text.includes('<informationTable>') || text.includes('<InfoTable>') || text.includes('<infoTable>')) {
+                  xml = text
+                  usedFilename = fname
+                  break
+                }
+              }
             }
 
-            const xmlUrl = `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accNoClean}/${xmlFilename}`
-            console.log(`[13-F] ${instName}: fetching ${xmlUrl}`)
-            const xmlRes = await fetch(xmlUrl, { headers: EDGAR_HEADERS })
-            if (!xmlRes.ok) { console.log(`[13-F] ${instName}: XML fetch failed ${xmlRes.status}`); break }
+            if (!xml) {
+              // Last resort: fetch the filing index HTML and scrape XML links
+              const idxRes = await fetch(`${baseUrl}/`, { headers: EDGAR_HEADERS })
+              if (idxRes.ok) {
+                const html = await idxRes.text()
+                const xmlLinks = [...html.matchAll(/href="([^"]*\.xml)"/gi)].map(m => m[1])
+                for (const link of xmlLinks) {
+                  const fullUrl = link.startsWith('http') ? link : `https://www.sec.gov${link}`
+                  const xmlRes = await fetch(fullUrl, { headers: EDGAR_HEADERS })
+                  if (xmlRes.ok) {
+                    const text = await xmlRes.text()
+                    if (text.includes('infoTable') || text.includes('informationTable')) {
+                      xml = text; usedFilename = link; break
+                    }
+                  }
+                }
+              }
+            }
 
-            const xml = await xmlRes.text()
+            if (!xml) { console.log(`[13-F] ${instName}: could not find information table XML`); break }
+            console.log(`[13-F] ${instName}: found XML using ${usedFilename} (${xml.length} bytes)`)
 
             // Find ticker in the XML
             const tickerRegex = new RegExp(`<nameOfIssuer>[^<]*${ticker}[^<]*<\\/nameOfIssuer>[\\s\\S]*?(?=<infoTable>|$)`, 'gi')
