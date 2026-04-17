@@ -358,7 +358,7 @@ Respond JSON ONLY (no fences):
 
 export async function runClaude(bundle: SignalBundle, gemini: GeminiResult): Promise<ClaudeResult> {
   const msg = await getAnthropic().messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 1000,
     system: (() => {
       const pi: Record<string, string> = {
@@ -455,7 +455,7 @@ export async function runRebuttal(
   // ── Step 1: Lead Analyst identifies the single most important data gap ──
   // Ask Claude what it needs Gemini to verify before rebutting
   const researchAsk = await getAnthropic().messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 150,
     system: `You are the Lead Analyst in a stock debate about ${bundle.ticker}. You can send ONE research question to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before you respond to the Devil's Advocate. Ask about the single most important data point that would resolve the most significant challenge.`,
     messages: [{
@@ -477,7 +477,7 @@ What ONE question should the News Scout research right now to help you respond? 
 
   // ── Step 3: Lead Analyst rebuts with fresh research in hand ──
   const msg = await getAnthropic().messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 900,
     system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research to help you respond. Use it. Defend your position where data supports you, concede where the Devil's Advocate is correct. Intellectual honesty wins with the Judge.`,
     messages: [{
@@ -601,7 +601,7 @@ export async function runJudge(
   }
   const judgePersonaKey = (( bundle as any).persona ?? 'balanced') as string
   const msg = await getAnthropic().messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-opus-4-7',  // Opus 4.7 for final verdict — highest reasoning quality
     max_tokens: 2000,
     system: `You are the Judge of an elite AI stock council for ${bundle.ticker}. The council has three roles: News Scout, Lead Analyst, and Devil's Advocate. You hold NO prior position. ${judgePersona[judgePersonaKey] ?? judgePersona.balanced} Weigh argument QUALITY not vote count. Be decisive. Refer to council members by their role names only. IMPORTANT: Never cite missing or unavailable data as a reason for lower conviction — only cite the data you have. If a metric is unavailable, ignore it entirely rather than mentioning its absence.
 
