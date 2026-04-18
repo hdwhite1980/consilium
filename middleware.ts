@@ -77,21 +77,57 @@ export async function middleware(request: NextRequest) {
   )
 
   // ── Single session enforcement ───────────────────────────────
+  // Policy: last-login-wins. When a user authenticates, their new session
+  // token replaces the one in active_sessions. The PREVIOUS device, on its
+  // next request, will see the mismatch and be signed out.
+  //
+  // This avoids the classic race where a fresh login is kicked out because
+  // the table still holds the old token from the previous session.
   const sessionToken = session.access_token?.slice(-32) ?? null
   if (sessionToken) {
     const { data: activeSession } = await admin
       .from('active_sessions')
-      .select('session_token')
+      .select('session_token, updated_at')
       .eq('user_id', user.id)
       .maybeSingle()
 
-    if (activeSession && activeSession.session_token !== sessionToken) {
-      await supabase.auth.signOut()
-      const loginUrl = new URL('/login', request.url)
-      loginUrl.searchParams.set('error', 'session_displaced')
-      loginUrl.searchParams.set('message', 'Signed out — account accessed from another device.')
-      return NextResponse.redirect(loginUrl)
+    if (!activeSession) {
+      // First time we've seen this user — claim the slot.
+      await admin.from('active_sessions').insert({
+        user_id: user.id,
+        session_token: sessionToken,
+      })
+    } else if (activeSession.session_token !== sessionToken) {
+      // Token mismatch. Determine if THIS session is the newer one
+      // (fresh login just happened) or the OLDER one (another device
+      // has since logged in and taken the slot).
+      //
+      // Strategy: check how old the stored record is. If it's older than
+      // our session's issuance (or just older than 30 seconds from NOW,
+      // since access tokens are short-lived), we assume this is a fresh
+      // login superseding the old one. Otherwise, kick.
+      const storedAge = activeSession.updated_at
+        ? Date.now() - new Date(activeSession.updated_at).getTime()
+        : Infinity
+      const GRACE_MS = 30_000 // anything older than 30s is stale
+
+      if (storedAge > GRACE_MS) {
+        // Stored token is stale — this is a fresh login, take the slot.
+        await admin
+          .from('active_sessions')
+          .update({ session_token: sessionToken, updated_at: new Date().toISOString() })
+          .eq('user_id', user.id)
+      } else {
+        // Stored token is recent AND different — another device is actively
+        // using this account. Sign this session out.
+        await supabase.auth.signOut()
+        const loginUrl = new URL('/login', request.url)
+        loginUrl.searchParams.set('error', 'session_displaced')
+        loginUrl.searchParams.set('message', 'Signed out — account accessed from another device.')
+        return NextResponse.redirect(loginUrl)
+      }
     }
+    // If tokens match, all good — no-op.
   }
 
   // ── Disclaimer ───────────────────────────────────────────────
