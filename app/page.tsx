@@ -551,12 +551,12 @@ function HomeInner() {
   const bg    = isDark ? '#0a0d12' : '#f0f2f7'
   const surf  = isDark ? '#111620' : '#ffffff'
   const surf2 = isDark ? '#181e2a' : '#f5f7fb'
-  const brd   = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.1)'
-  const brd2  = isDark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.18)'
-  const txt   = isDark ? 'white' : '#0f172a'
-  const txt2  = isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.72)'
-  const txt3  = isDark ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.5)'
-  const inputBg = isDark ? '#181e2a' : '#f0f2f7'
+  const brd   = isDark ? 'rgba(255,255,255,0.08)' : '#d1d5db'
+  const brd2  = isDark ? 'rgba(255,255,255,0.16)' : '#9ca3af'
+  const txt   = isDark ? '#f1f5f9' : '#0a0e17'
+  const txt2  = isDark ? 'rgba(255,255,255,0.82)' : '#1f2937'
+  const txt3  = isDark ? 'rgba(255,255,255,0.6)'  : '#4b5563'
+  const inputBg = isDark ? '#181e2a' : '#ffffff'
 
   const NAV_ITEMS: Array<{ label: string; icon: React.ReactNode; path: string; color: string }> = [
     { label: 'Today',        icon: <Zap size={12} />,           path: '/news',         color: '#fbbf24' },

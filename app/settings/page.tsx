@@ -56,9 +56,9 @@ export default function SettingsPage() {
 
   const isDark = useDarkMode()
   const { fontSize, setFontSize } = useTheme()
-  const txt  = isDark ? 'rgba(255,255,255,0.95)' : 'rgba(0,0,0,0.95)'
-  const txt2 = isDark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.85)'
-  const txt3 = isDark ? 'rgba(255,255,255,0.5)'  : 'rgba(0,0,0,0.65)'
+  const txt  = isDark ? '#f1f5f9' : '#0a0e17'
+  const txt2 = isDark ? 'rgba(255,255,255,0.82)' : '#1f2937'
+  const txt3 = isDark ? 'rgba(255,255,255,0.6)'  : '#4b5563'
   const surf = isDark ? '#111620' : '#ffffff'
   const surf2 = isDark ? '#181e2a' : '#f5f7fb'
   const brd  = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.08)'

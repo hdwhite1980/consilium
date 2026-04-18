@@ -8,11 +8,11 @@
   --surface:     #111620;
   --surface2:    #181e2a;
   --surface3:    #1e2535;
-  --border:      rgba(255,255,255,0.07);
-  --border2:     rgba(255,255,255,0.13);
+  --border:      rgba(255,255,255,0.08);
+  --border2:     rgba(255,255,255,0.16);
   --text:        #f1f5f9;
-  --text2:       rgba(255,255,255,0.62);
-  --text3:       rgba(255,255,255,0.38);
+  --text2:       rgba(255,255,255,0.82);
+  --text3:       rgba(255,255,255,0.6);
   --accent:      #7c3aed;
   --accent2:     #4f46e5;
   --scrollbar:   rgba(255,255,255,0.1);
@@ -20,26 +20,39 @@
   --shadow:      0 4px 24px rgba(0,0,0,0.4);
   --nav-bg:      #0d1117;
   --card-bg:     #111620;
+
+  /* Font-size scale driven by data-font-size attribute on <html> */
+  --font-size-base: 16px;
 }
 
-/* ── Light theme ──────────────────────────────────── */
+/* ── Light theme — fully opaque text for max contrast ─── */
 :root[data-theme="light"] {
   --bg:          #f0f2f7;
   --surface:     #ffffff;
   --surface2:    #f5f7fb;
   --surface3:    #e8ebf2;
-  --border:      rgba(0,0,0,0.12);
-  --border2:     rgba(0,0,0,0.22);
-  --text:        #0f172a;
-  --text2:       rgba(0,0,0,0.72);
-  --text3:       rgba(0,0,0,0.5);
+  --border:      #d1d5db;
+  --border2:     #9ca3af;
+  --text:        #0a0e17;
+  --text2:       #1f2937;   /* near-black — primary body text */
+  --text3:       #4b5563;   /* slate-600 — secondary labels */
   --accent:      #7c3aed;
   --accent2:     #4f46e5;
-  --scrollbar:   rgba(0,0,0,0.12);
-  --scrollbar-h: rgba(0,0,0,0.25);
+  --scrollbar:   rgba(0,0,0,0.18);
+  --scrollbar-h: rgba(0,0,0,0.32);
   --shadow:      0 4px 24px rgba(0,0,0,0.08);
   --nav-bg:      #ffffff;
   --card-bg:     #ffffff;
+}
+
+/* ── User-controlled font size ────────────────────── */
+:root[data-font-size="sm"] { --font-size-base: 14px; }
+:root[data-font-size="md"] { --font-size-base: 16px; }
+:root[data-font-size="lg"] { --font-size-base: 18px; }
+:root[data-font-size="xl"] { --font-size-base: 20px; }
+
+html {
+  font-size: var(--font-size-base);
 }
 
 * { box-sizing: border-box; }
@@ -94,7 +107,7 @@ body {
 .t-text3    { color: var(--text3); }
 .t-card     { background: var(--card-bg); border: 1px solid var(--border); }
 
-/* ── Accessibility: honor OS-level reduced-motion preference ── */
+/* Accessibility: honor OS-level reduced-motion preference */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
