@@ -1,0 +1,63 @@
+name: Market Monitor
+
+on:
+  schedule:
+    # Every 3 minutes during market hours (Mon-Fri 9am-5pm ET = 14:00-22:00 UTC)
+    - cron: '*/3 14-22 * * 1-5'
+  workflow_dispatch: # allow manual trigger from GitHub Actions UI
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run market monitor
+        run: |
+          curl -s -X GET \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            "https://wali-os.com/api/cron/monitor" \
+            | cat
+
+  digest:
+    runs-on: ubuntu-latest
+    # EOD digest at 4:30pm ET (21:30 UTC) weekdays only
+    if: github.event_name == 'schedule'
+    steps:
+      - name: Check if EOD time (21:30 UTC)
+        id: check_time
+        run: |
+          HOUR=$(date -u +%H)
+          MIN=$(date -u +%M)
+          if [ "$HOUR" = "21" ] && [ "$MIN" -ge "28" ] && [ "$MIN" -le "34" ]; then
+            echo "run_digest=true" >> $GITHUB_OUTPUT
+          else
+            echo "run_digest=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Run EOD digest
+        if: steps.check_time.outputs.run_digest == 'true'
+        run: |
+          curl -s -X GET \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            "https://wali-os.com/api/cron/market-digest" \
+            | cat
+
+  premarket:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - name: Check if pre-market time (13:00 UTC = 8am ET)
+        id: check_premarket
+        run: |
+          HOUR=$(date -u +%H)
+          MIN=$(date -u +%M)
+          if [ "$HOUR" = "13" ] && [ "$MIN" -ge "0" ] && [ "$MIN" -le "6" ]; then
+            echo "run_premarket=true" >> $GITHUB_OUTPUT
+          else
+            echo "run_premarket=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Run pre-market brief
+        if: steps.check_premarket.outputs.run_premarket == 'true'
+        run: |
+          curl -s -X GET \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            "https://wali-os.com/api/cron/market-digest?type=premarket" \
+            | cat

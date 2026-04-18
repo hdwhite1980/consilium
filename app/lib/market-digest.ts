@@ -23,6 +23,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk'
+import { scanSocialSignals, getLatestSocialContext } from './social-signals'
 import { createClient } from '@supabase/supabase-js'
 
 const getAdmin = () => createClient(
@@ -270,11 +271,16 @@ export async function runMarketDigest(digestDate?: string): Promise<{ id: string
 
   // Fetch all data in parallel
   console.log('[digest] Fetching market data, news, DB context...')
-  const [marketData, topMovers, newsHeadlines, dbContext] = await Promise.all([
+  // Scan social signals first (writes to DB), then read context
+  console.log('[digest] Scanning social signals...')
+  await scanSocialSignals().catch(e => console.error('[digest] Social scan error:', e))
+
+  const [marketData, topMovers, newsHeadlines, dbContext, socialContext] = await Promise.all([
     fetchMarketData(),
     fetchTopMovers(),
     fetchDayNews(),
     fetchDBContext(),
+    getLatestSocialContext().catch(() => ''),
   ])
 
   // Build the full context for Claude
@@ -283,6 +289,7 @@ export async function runMarketDigest(digestDate?: string): Promise<{ id: string
     marketData,
     topMovers,
     newsHeadlines,
+    socialContext ? `SOCIAL & POLITICAL SIGNALS:\n${socialContext}` : null,
     dbContext,
   ].filter(Boolean).join('\n\n---\n\n')
 

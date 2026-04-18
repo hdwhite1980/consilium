@@ -1,0 +1,18 @@
+name: Social Signal Scan
+
+on:
+  schedule:
+    # Every 15 minutes during extended hours (Mon-Fri 8am-6pm ET = 13:00-23:00 UTC)
+    - cron: '*/15 13-23 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Scan social signals
+        run: |
+          curl -s -X POST \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            "https://wali-os.com/api/social-signals" \
+            | cat
