@@ -65,7 +65,7 @@ function ContractCard({ c }: { c: OptionsContract }) {
             style={{ background: `${color}15`, color }}>
             {c.type.toUpperCase()} ${c.strike}
           </span>
-          <span className="text-[10px] font-mono text-white/40">{c.expiry}</span>
+          <span className="text-[10px] font-mono t-text3">{c.expiry}</span>
           {isLeap && (
             <span className="text-[9px] font-bold font-mono px-1.5 py-0.5 rounded"
               style={{ background: 'rgba(167,139,250,0.15)', color: '#a78bfa' }}>
@@ -74,37 +74,37 @@ function ContractCard({ c }: { c: OptionsContract }) {
           )}
         </div>
         <span className="text-[10px] font-mono px-2 py-0.5 rounded"
-          style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)' }}>
+          style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>
           {c.moneyness} · {c.daysToExpiry}d
         </span>
       </div>
 
       <div className="grid grid-cols-3 gap-1.5 text-[10px] font-mono">
-        <div className="rounded-md p-1.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
-          <div className="text-white/25 mb-0.5">Bid / Ask</div>
-          <div className="text-white/70">${sf(c.bid)} / ${sf(c.ask)}</div>
+        <div className="rounded-md p-1.5" style={{ background: 'var(--surface2)' }}>
+          <div className="t-text3 mb-0.5">Bid / Ask</div>
+          <div className="t-text2">${sf(c.bid)} / ${sf(c.ask)}</div>
         </div>
-        <div className="rounded-md p-1.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
-          <div className="text-white/25 mb-0.5">Cost / contract</div>
+        <div className="rounded-md p-1.5" style={{ background: 'var(--surface2)' }}>
+          <div className="t-text3 mb-0.5">Cost / contract</div>
           <div style={{ color }}>${cost}</div>
         </div>
-        <div className="rounded-md p-1.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
-          <div className="text-white/25 mb-0.5">Volume / OI</div>
-          <div className="text-white/70">{c.volume} / {c.openInterest}</div>
+        <div className="rounded-md p-1.5" style={{ background: 'var(--surface2)' }}>
+          <div className="t-text3 mb-0.5">Volume / OI</div>
+          <div className="t-text2">{c.volume} / {c.openInterest}</div>
         </div>
-        <div className="rounded-md p-1.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
-          <div className="text-white/25 mb-0.5">Delta</div>
-          <div className="text-white/70">{c.delta !== null ? sf(c.delta, 3) : 'N/A'}</div>
+        <div className="rounded-md p-1.5" style={{ background: 'var(--surface2)' }}>
+          <div className="t-text3 mb-0.5">Delta</div>
+          <div className="t-text2">{c.delta !== null ? sf(c.delta, 3) : 'N/A'}</div>
         </div>
-        <div className="rounded-md p-1.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
-          <div className="text-white/25 mb-0.5">Theta / day</div>
+        <div className="rounded-md p-1.5" style={{ background: 'var(--surface2)' }}>
+          <div className="t-text3 mb-0.5">Theta / day</div>
           <div style={{ color: c.theta !== null ? '#f87171' : 'rgba(255,255,255,0.3)' }}>
             {c.theta !== null ? sf(c.theta, 3) : 'N/A'}
           </div>
         </div>
-        <div className="rounded-md p-1.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
-          <div className="text-white/25 mb-0.5">IV</div>
-          <div className="text-white/70">{c.iv !== null ? `${sf(c.iv, 0)}%` : '—'}</div>
+        <div className="rounded-md p-1.5" style={{ background: 'var(--surface2)' }}>
+          <div className="t-text3 mb-0.5">IV</div>
+          <div className="t-text2">{c.iv !== null ? `${sf(c.iv, 0)}%` : '—'}</div>
         </div>
       </div>
       {isLeap && (
@@ -148,13 +148,13 @@ export default function OptionsRecommendations({
 
   return (
     <div className="mt-4 rounded-xl border overflow-hidden"
-      style={{ borderColor: 'rgba(255,255,255,0.08)', background: '#111620' }}>
+      style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
 
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b"
         style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
         <div className="flex items-center gap-2">
-          <span className="text-sm font-bold text-white">Options Strategy</span>
+          <span className="text-sm font-bold t-text">Options Strategy</span>
           <span className="text-[10px] font-mono px-2 py-0.5 rounded-full"
             style={{ background: `${signalColor}15`, color: signalColor, border: `1px solid ${signalColor}25` }}>
             {signal} on {ticker}
@@ -169,7 +169,7 @@ export default function OptionsRecommendations({
         )}
         {data && (
           <button onClick={() => setExpanded(!expanded)}
-            className="text-[11px] font-mono text-white/30 hover:text-white/60 transition-colors">
+            className="text-[11px] font-mono t-text3 hover:t-text2 transition-colors">
             {expanded ? '▲ Collapse' : '▼ Expand'}
           </button>
         )}
@@ -184,7 +184,7 @@ export default function OptionsRecommendations({
                 style={{ background: '#a78bfa', animationDelay: `${i * 0.15}s` }} />
             ))}
           </div>
-          <span className="text-xs text-white/40 font-mono">Fetching live options chain and generating strategy…</span>
+          <span className="text-xs t-text3 font-mono">Fetching live options chain and generating strategy…</span>
         </div>
       )}
 
@@ -216,7 +216,7 @@ export default function OptionsRecommendations({
           {/* Strategy header */}
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-base font-bold text-white">{data.recommendation.strategy}</div>
+              <div className="text-base font-bold t-text">{data.recommendation.strategy}</div>
               <div className="flex items-center gap-2 mt-1">
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full"
                   style={{
@@ -226,7 +226,7 @@ export default function OptionsRecommendations({
                   }}>
                   {data.recommendation.riskLevel} risk
                 </span>
-                <span className="text-[10px] text-white/30 font-mono">{data.recommendation.timeHorizon}</span>
+                <span className="text-[10px] t-text3 font-mono">{data.recommendation.timeHorizon}</span>
               </div>
             </div>
           </div>
@@ -234,39 +234,39 @@ export default function OptionsRecommendations({
           {/* Rationale */}
           <div className="rounded-xl p-3.5" style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)' }}>
             <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#a78bfa' }}>Why this strategy</div>
-            <p className="text-sm text-white/75 leading-relaxed">{data.recommendation.rationale}</p>
+            <p className="text-sm t-text leading-relaxed">{data.recommendation.rationale}</p>
           </div>
 
           {/* Max loss / gain */}
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-xl p-3.5" style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.15)' }}>
               <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#f87171' }}>Worst case (max loss)</div>
-              <p className="text-xs text-white/65 leading-relaxed">{data.recommendation.maxLoss}</p>
+              <p className="text-xs t-text2 leading-relaxed">{data.recommendation.maxLoss}</p>
             </div>
             <div className="rounded-xl p-3.5" style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.15)' }}>
               <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#34d399' }}>Best case (max gain)</div>
-              <p className="text-xs text-white/65 leading-relaxed">{data.recommendation.maxGain}</p>
+              <p className="text-xs t-text2 leading-relaxed">{data.recommendation.maxGain}</p>
             </div>
           </div>
 
           {/* Ideal for */}
           <div className="rounded-xl p-3.5" style={{ background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.15)' }}>
             <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#60a5fa' }}>Who this is suitable for</div>
-            <p className="text-xs text-white/65 leading-relaxed">{data.recommendation.idealFor}</p>
+            <p className="text-xs t-text2 leading-relaxed">{data.recommendation.idealFor}</p>
           </div>
 
           {/* Greeks explained */}
           {data.recommendation.greeksExplained && (
             <div className="rounded-xl p-3.5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
-              <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5 text-white/25">Understanding the numbers (Greeks)</div>
-              <p className="text-xs text-white/60 leading-relaxed">{data.recommendation.greeksExplained}</p>
+              <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5 t-text3">Understanding the numbers (Greeks)</div>
+              <p className="text-xs t-text2 leading-relaxed">{data.recommendation.greeksExplained}</p>
             </div>
           )}
 
           {/* Live contracts — single unified block */}
           {data.hasLiveData && data.contracts.length > 0 && (
             <div>
-              <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2 flex items-center gap-2">
+              <div className="text-[10px] font-mono uppercase tracking-widest t-text3 mb-2 flex items-center gap-2">
                 <span>{signal === 'NEUTRAL' ? 'Market reference — no directional position recommended' : 'Live contracts matching this strategy'}</span>
                 <span className="px-1.5 py-0.5 rounded text-[9px]"
                   style={{
@@ -281,14 +281,14 @@ export default function OptionsRecommendations({
               <div className="space-y-2">
                 {data.contracts.map((c, i) => <ContractCard key={i} c={c} />)}
               </div>
-              <p className="text-[10px] text-white/20 mt-2 leading-relaxed">
+              <p className="text-[10px] t-text3 mt-2 leading-relaxed">
                 One contract = 100 shares. Cost = ask price × 100.{data.dataSource === 'Alpaca' ? ' Prices may be 15 minutes delayed.' : ''} Always verify current pricing with your broker before trading.
               </p>
             </div>
           )}
 
           {!data.hasLiveData && (
-            <div className="text-[10px] text-white/25 px-1 leading-relaxed">
+            <div className="text-[10px] t-text3 px-1 leading-relaxed">
               Live options chain data is currently unavailable for this ticker. The strategy guidance above is still valid.
             </div>
           )}
@@ -296,7 +296,7 @@ export default function OptionsRecommendations({
                     {/* Alternative strategy */}
           <div className="rounded-xl p-3.5" style={{ background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.15)' }}>
             <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#fbbf24' }}>Conservative alternative</div>
-            <p className="text-xs text-white/65 leading-relaxed">{data.recommendation.alternativeStrategy}</p>
+            <p className="text-xs t-text2 leading-relaxed">{data.recommendation.alternativeStrategy}</p>
           </div>
 
           {/* Beginner warning */}
@@ -305,7 +305,7 @@ export default function OptionsRecommendations({
             <p className="text-xs leading-relaxed" style={{ color: 'rgba(248,113,113,0.8)' }}>{data.recommendation.beginnerWarning}</p>
           </div>
 
-          <p className="text-[9px] text-white/15 leading-relaxed">
+          <p className="text-[9px] t-text3 leading-relaxed">
             Options recommendations are for informational purposes only and do not constitute financial advice.
             Options trading involves substantial risk and is not suitable for all investors. You can lose your entire investment.
           </p>

@@ -233,7 +233,7 @@ export function Tutorial({ config, onComplete, onSkip, autoStart = false }: Tuto
           <div className="flex items-center justify-between px-4 py-3 border-b"
             style={{ background: 'linear-gradient(135deg,rgba(124,58,237,0.15),rgba(79,70,229,0.15))', borderColor: 'rgba(167,139,250,0.2)' }}>
             <div className="flex items-center gap-2">
-              <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white"
+              <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold t-text"
                 style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
                 {step + 1}
               </div>
@@ -293,7 +293,7 @@ export function Tutorial({ config, onComplete, onSkip, autoStart = false }: Tuto
             </button>
 
             <button onClick={goNext}
-              className="flex items-center gap-1.5 text-xs font-semibold px-4 py-1.5 rounded-lg text-white transition-all hover:opacity-90 active:scale-95 disabled:opacity-50"
+              className="flex items-center gap-1.5 text-xs font-semibold px-4 py-1.5 rounded-lg t-text transition-all hover:opacity-90 active:scale-95 disabled:opacity-50"
               style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
               {isLast ? (
                 <><CheckCircle size={13} /> Done</>

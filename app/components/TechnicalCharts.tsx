@@ -68,7 +68,7 @@ function RSIGauge({ rsi }: { rsi: number }) {
       </svg>
       <div className="text-center -mt-1">
         <div className="text-lg font-bold font-mono" style={{ color }}>{sf(rsi, 1)}</div>
-        <div className="text-[10px] font-mono text-white/35">{label}</div>
+        <div className="text-[10px] font-mono t-text/35">{label}</div>
       </div>
     </div>
   )
@@ -94,7 +94,7 @@ function StochasticGauge({ k, d, signal, crossover }: { k: number; d: number; si
       </svg>
       <div className="text-center">
         <div className="text-sm font-bold font-mono" style={{ color }}>%K {sf(k, 1)} / %D {sf(d, 1)}</div>
-        <div className="text-[10px] text-white/35">
+        <div className="text-[10px] t-text/35">
           {signal} {crossover !== 'none' ? `· ${crossover} crossover` : ''}
         </div>
       </div>
@@ -112,24 +112,24 @@ function MACrossVisual({ goldenCross, sma50, sma200, ema9, ema20, ema9Cross }: {
     <div className="space-y-2 w-full px-1">
       {/* SMA cross */}
       <div className="flex items-center justify-between">
-        <span className="text-[10px] text-white/30">SMA cross</span>
+        <span className="text-[10px] t-text3">SMA cross</span>
         <span className="text-[10px] font-bold font-mono" style={{ color }}>
           {goldenCross ? '✓ Golden cross' : '✗ Death cross'}
         </span>
       </div>
-      <div className="flex gap-2 text-[10px] font-mono text-white/40">
+      <div className="flex gap-2 text-[10px] font-mono t-text3">
         <span>SMA50 ${sf(sma50)}</span>
         <span>SMA200 ${sf(sma200)}</span>
       </div>
       {/* EMA cross */}
       <div className="flex items-center justify-between mt-1">
-        <span className="text-[10px] text-white/30">EMA cross</span>
+        <span className="text-[10px] t-text3">EMA cross</span>
         <span className="text-[10px] font-bold font-mono" style={{ color: emaColor }}>
           {ema9 > ema20 ? '▲ EMA9 > EMA20' : '▼ EMA9 < EMA20'}
           {ema9Cross !== 'none' && <span className="ml-1 text-[9px]">⚡ just crossed</span>}
         </span>
       </div>
-      <div className="flex gap-2 text-[10px] font-mono text-white/40">
+      <div className="flex gap-2 text-[10px] font-mono t-text3">
         <span>EMA9 ${sf(ema9)}</span>
         <span>EMA20 ${sf(ema20)}</span>
       </div>
@@ -171,7 +171,7 @@ function MACDVisual({ histogram, macdLine, signalLine, crossover }: {
           {histogram >= 0 ? 'Bullish momentum' : 'Bearish momentum'}
           {crossover !== 'none' && <span className="ml-1 text-[10px]">⚡ {crossover} cross</span>}
         </div>
-        <div className="text-[10px] font-mono text-white/30">
+        <div className="text-[10px] font-mono t-text3">
           MACD {sf(macdLine, 3)} / Signal {sf(signalLine, 3)}
         </div>
       </div>
@@ -205,7 +205,7 @@ function BollingerVisual({ position, signal, upper, middle, lower, current }: {
         <div className="text-xs font-bold" style={{ color }}>
           {position > 0.8 ? 'Near upper band' : position < 0.2 ? 'Near lower band' : 'Mid-band'}
         </div>
-        <div className="text-[10px] font-mono text-white/30">
+        <div className="text-[10px] font-mono t-text3">
           {signal} · {sf(position * 100, 0)}% · ${sf(current)}
         </div>
       </div>
@@ -223,18 +223,18 @@ function VWAPVisual({ vwap, current, priceVsVwap, signal }: {
   return (
     <div className="space-y-2 w-full px-1">
       <div className="flex items-center justify-between">
-        <span className="text-[10px] text-white/30">VWAP</span>
+        <span className="text-[10px] t-text3">VWAP</span>
         <span className="text-sm font-bold font-mono" style={{ color }}>${sf(vwap)}</span>
       </div>
       <div className="flex items-center gap-2">
-        <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
+        <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: 'var(--surface2)' }}>
           <div className="h-full rounded-full" style={{ width: `${barPct}%`, background: color }} />
         </div>
         <span className="text-[10px] font-mono shrink-0" style={{ color }}>
           {sf(priceVsVwap, 2, '0.00').startsWith('-') ? '' : '+'}{sf(priceVsVwap, 2)}%
         </span>
       </div>
-      <div className="text-[10px] text-white/35">
+      <div className="text-[10px] t-text/35">
         Price is <span style={{ color }}>{signal}</span> VWAP — {signal === 'above'
           ? 'bullish intraday bias, buyers in control'
           : 'bearish intraday bias, sellers in control'}
@@ -271,7 +271,7 @@ function OBVVisual({ trend, divergence }: { trend: string; divergence: string })
             ⚡ {divergence} divergence detected
           </div>
         )}
-        <div className="text-[10px] text-white/30 mt-0.5">
+        <div className="text-[10px] t-text3 mt-0.5">
           {trend === 'rising' ? 'Buying pressure accumulating' :
            trend === 'falling' ? 'Selling pressure increasing' : 'Volume balanced'}
         </div>
@@ -293,9 +293,9 @@ function FibTable({ levels, current, nearest }: { levels: FibLevel[]; current: n
           <div key={f.level}
             className="flex items-center gap-2 px-2 py-1 rounded-md"
             style={{ background: isNearest ? 'rgba(251,191,36,0.08)' : 'transparent', border: isNearest ? '1px solid rgba(251,191,36,0.2)' : '1px solid transparent' }}>
-            <span className="text-[10px] font-mono text-white/30 w-10 shrink-0">{sf(f.level * 100, 1)}%</span>
+            <span className="text-[10px] font-mono t-text3 w-10 shrink-0">{sf(f.level * 100, 1)}%</span>
             <span className="text-[10px] font-mono font-bold flex-1" style={{ color }}>${sf(f.price)}</span>
-            <span className="text-[10px] font-mono text-white/25">
+            <span className="text-[10px] font-mono t-text3">
               {spct(pctFromCurrent)}
             </span>
             <span className="text-[9px] font-mono" style={{ color }}>{f.type}</span>
@@ -346,12 +346,12 @@ function VolumeBar({ ratio }: { ratio: number }) {
   return (
     <div className="w-full space-y-1 px-1">
       <div className="flex items-center gap-2">
-        <div className="flex-1 h-2.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
+        <div className="flex-1 h-2.5 rounded-full overflow-hidden" style={{ background: 'var(--surface2)' }}>
           <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(ratio / 3 * 100, 100)}%`, background: color }} />
         </div>
         <span className="text-[10px] font-mono shrink-0" style={{ color }}>{sf(ratio, 1)}x avg</span>
       </div>
-      <div className="text-[10px] text-white/30">
+      <div className="text-[10px] t-text3">
         {ratio > 1.5 ? 'High volume — strong conviction behind move' :
          ratio < 0.5 ? 'Low volume — move lacks conviction' : 'Average volume — no unusual activity'}
       </div>
@@ -365,8 +365,8 @@ function FinvizChart({ ticker }: { ticker: string }) {
   const [error, setError] = useState(false)
   const url = `https://finviz.com/chart.ashx?t=${ticker}&ty=c&ta=1&p=d&s=l`
   if (error) return (
-    <div className="flex items-center justify-center h-28 rounded-lg text-xs text-white/25"
-      style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+    <div className="flex items-center justify-center h-28 rounded-lg text-xs t-text3"
+      style={{ background: 'var(--surface2)', border: '1px solid rgba(255,255,255,0.06)' }}>
       Chart unavailable for {ticker}
     </div>
   )
@@ -382,7 +382,7 @@ function FinvizChart({ ticker }: { ticker: string }) {
       <img src={url} alt={`${ticker} chart`} className="w-full rounded-lg"
         style={{ opacity: loaded ? 1 : 0, transition: 'opacity 0.3s', minHeight: '110px' }}
         onLoad={() => setLoaded(true)} onError={() => setError(true)} referrerPolicy="no-referrer" />
-      <div className="absolute bottom-1 right-2 text-[9px] font-mono text-white/15">Finviz</div>
+      <div className="absolute bottom-1 right-2 text-[9px] font-mono t-text3">Finviz</div>
     </div>
   )
 }
@@ -394,15 +394,15 @@ function ScoreBadge({ score, bias }: { score: number; bias: string }) {
   return (
     <div className="flex items-center gap-3 p-3 rounded-xl" style={{ background: `${color}08`, border: `1px solid ${color}20` }}>
       <div>
-        <div className="text-[10px] font-mono text-white/25 uppercase tracking-widest">Technical score</div>
+        <div className="text-[10px] font-mono t-text3 uppercase tracking-widest">Technical score</div>
         <div className="text-2xl font-bold font-mono" style={{ color }}>{sf(score, 0)}</div>
         <div className="text-xs font-bold" style={{ color }}>{bias}</div>
       </div>
       <div className="flex-1">
-        <div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
+        <div className="h-2 rounded-full overflow-hidden" style={{ background: 'var(--surface2)' }}>
           <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: color }} />
         </div>
-        <div className="flex justify-between text-[9px] font-mono text-white/20 mt-0.5">
+        <div className="flex justify-between text-[9px] font-mono t-text3 mt-0.5">
           <span>-100 Bear</span><span>0</span><span>+100 Bull</span>
         </div>
       </div>
@@ -413,8 +413,8 @@ function ScoreBadge({ score, bias }: { score: number; bias: string }) {
 // ── Indicator Card wrapper ────────────────────────────────────
 function ICard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl p-2.5 sm:p-3 border" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.07)' }}>
-      <div className="text-[10px] font-mono uppercase tracking-widest text-white/20 mb-2">{title}</div>
+    <div className="rounded-xl p-2.5 sm:p-3 border" style={{ background: 'var(--surface2)', borderColor: 'rgba(255,255,255,0.07)' }}>
+      <div className="text-[10px] font-mono uppercase tracking-widest t-text3 mb-2">{title}</div>
       {children}
     </div>
   )
@@ -429,7 +429,7 @@ function Explain({ color, what, means }: { color: string; what: string; means: s
         <div className="text-[9px] font-mono uppercase tracking-widest mb-1" style={{ color: `${color}90` }}>
           What is this?
         </div>
-        <p className="leading-relaxed" style={{ color: 'rgba(255,255,255,0.5)' }}>{what}</p>
+        <p className="leading-relaxed" style={{ color: 'var(--text3)' }}>{what}</p>
       </div>
       <div className="px-3 py-2" style={{ background: `${color}10`, borderTop: `1px solid ${color}15` }}>
         <div className="text-[9px] font-mono uppercase tracking-widest mb-1" style={{ color }}>
@@ -568,8 +568,8 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
   return (
     <div className="space-y-4 mt-4">
       <div className="flex items-center gap-2">
-        <div className="text-[10px] font-mono uppercase tracking-widest text-white/20">Technical analysis</div>
-        <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.06)' }} />
+        <div className="text-[10px] font-mono uppercase tracking-widest t-text3">Technical analysis</div>
+        <div className="flex-1 h-px" style={{ background: 'var(--surface2)' }} />
       </div>
 
       {/* Overall score */}
@@ -578,7 +578,7 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
       {/* Pattern Detection Section */}
       {(t.candlePattern || t.chartPattern || t.gapPattern || (t.trendLines && t.trendLines.trend !== 'sideways')) && (
         <div className="space-y-2">
-          <div className="text-[10px] font-mono uppercase tracking-widest" style={{ color: 'rgba(255,255,255,0.2)' }}>
+          <div className="text-[10px] font-mono uppercase tracking-widest" style={{ color: 'var(--text3)' }}>
             Detected Patterns
           </div>
 
@@ -596,7 +596,7 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
                   {t.trendLines.higherHighs && t.trendLines.higherLows ? 'HH + HL' : t.trendLines.lowerHighs && t.trendLines.lowerLows ? 'LH + LL' : 'structure'}
                 </span>
               </div>
-              <p className="text-[11px] leading-relaxed" style={{ color: 'rgba(255,255,255,0.55)' }}>
+              <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text2)' }}>
                 {t.trendLines.trend === 'uptrend'
                   ? `The stock is making higher highs and higher lows — the textbook definition of an uptrend. Each rally exceeds the last peak, and each pullback holds above the prior trough. This is price structure buyers want to see.`
                   : `The stock is making lower highs and lower lows — a confirmed downtrend. Each rally fails below the last peak, and each selloff breaks below the prior low. Price structure is bearish until a higher low forms.`}
@@ -641,30 +641,30 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
                     <span className="text-sm font-bold" style={{ color: col }}>{t.chartPattern!.name}</span>
                     <span className="text-[10px] px-2 py-0.5 rounded-full font-mono capitalize" style={{ background: `${col}18`, color: col }}>{t.chartPattern!.type}</span>
                   </div>
-                  <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.3)' }}>{confLabel}</span>
+                  <span className="text-[10px]" style={{ color: 'var(--text3)' }}>{confLabel}</span>
                 </div>
                 <div className="px-3 py-3 space-y-2.5">
                   <div>
-                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'rgba(255,255,255,0.25)' }}>What the chart is showing</div>
-                    <p className="text-[11px] leading-relaxed" style={{ color: 'rgba(255,255,255,0.7)' }}>{t.chartPattern!.description}</p>
+                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>What the chart is showing</div>
+                    <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text2)' }}>{t.chartPattern!.description}</p>
                   </div>
                   <div>
-                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'rgba(255,255,255,0.25)' }}>What it means for {ticker}</div>
-                    <p className="text-[11px] leading-relaxed" style={{ color: 'rgba(255,255,255,0.55)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>What it means for {ticker}</div>
+                    <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text2)' }}>
                       {whatItMeans[t.chartPattern!.name] ?? `This pattern suggests ${isBull ? 'bullish' : 'bearish'} continuation is the higher-probability outcome.`}
                     </p>
                   </div>
                   {(t.chartPattern.target || t.chartPattern.invalidation) && (
-                    <div className="flex gap-4 pt-1 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+                    <div className="flex gap-4 pt-1 border-t" style={{ borderColor: 'var(--surface2)' }}>
                       {t.chartPattern.target && (
                         <div>
-                          <div className="text-[9px] font-mono uppercase text-white/25 mb-0.5">Measured target</div>
+                          <div className="text-[9px] font-mono uppercase t-text3 mb-0.5">Measured target</div>
                           <div className="text-sm font-bold font-mono" style={{ color: col }}>${t.chartPattern.target.toFixed(2)}</div>
                         </div>
                       )}
                       {t.chartPattern.invalidation && (
                         <div>
-                          <div className="text-[9px] font-mono uppercase text-white/25 mb-0.5">Pattern breaks if</div>
+                          <div className="text-[9px] font-mono uppercase t-text3 mb-0.5">Pattern breaks if</div>
                           <div className="text-sm font-bold font-mono" style={{ color: '#f87171' }}>closes {isBull ? 'below' : 'above'} ${t.chartPattern.invalidation.toFixed(2)}</div>
                         </div>
                       )}
@@ -705,20 +705,20 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
                     <span className="text-sm font-bold" style={{ color: col }}>{t.candlePattern!.name}</span>
                     <span className="text-[10px] px-2 py-0.5 rounded-full font-mono capitalize" style={{ background: `${col}18`, color: col }}>{t.candlePattern!.type}</span>
                   </div>
-                  <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.3)' }}>{strengthLabel}</span>
+                  <span className="text-[10px]" style={{ color: 'var(--text3)' }}>{strengthLabel}</span>
                 </div>
                 <div className="px-3 py-3 space-y-2.5">
                   <div>
-                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'rgba(255,255,255,0.25)' }}>What the candle is showing</div>
-                    <p className="text-[11px] leading-relaxed" style={{ color: 'rgba(255,255,255,0.7)' }}>{t.candlePattern!.description}</p>
+                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>What the candle is showing</div>
+                    <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text2)' }}>{t.candlePattern!.description}</p>
                   </div>
                   <div>
-                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'rgba(255,255,255,0.25)' }}>What it means for {ticker}</div>
-                    <p className="text-[11px] leading-relaxed" style={{ color: 'rgba(255,255,255,0.55)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>What it means for {ticker}</div>
+                    <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text2)' }}>
                       {candleMeaning[t.candlePattern!.name] ?? `This ${t.candlePattern!.type} pattern on ${ticker} suggests ${isBull ? 'buying pressure is present — watch for follow-through.' : 'selling pressure is present — watch for confirmation.'}`}
                     </p>
                   </div>
-                  <div className="text-[10px] pt-1 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.3)' }}>
+                  <div className="text-[10px] pt-1 border-t" style={{ borderColor: 'var(--surface2)', color: 'var(--text3)' }}>
                     ⚠ Candle patterns are most reliable when they occur at key support/resistance levels or after extended moves. Always confirm with volume and the next session's price action.
                   </div>
                 </div>
@@ -736,17 +736,17 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
                   <span className="text-sm font-bold" style={{ color: col }}>
                     {t.gapPattern!.type === 'gap_up' ? 'Gap Up' : 'Gap Down'} — {t.gapPattern!.size.toFixed(1)}%
                   </span>
-                  {t.gapPattern.filled && <span className="text-[10px] px-2 py-0.5 rounded-full font-mono" style={{ background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.4)' }}>filled</span>}
+                  {t.gapPattern.filled && <span className="text-[10px] px-2 py-0.5 rounded-full font-mono" style={{ background: 'var(--border)', color: 'var(--text3)' }}>filled</span>}
                   {!t.gapPattern.filled && <span className="text-[10px] px-2 py-0.5 rounded-full font-mono" style={{ background: `${col}18`, color: col }}>unfilled</span>}
                 </div>
                 <div className="px-3 py-3 space-y-2.5">
                   <div>
-                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'rgba(255,255,255,0.25)' }}>What happened</div>
-                    <p className="text-[11px] leading-relaxed" style={{ color: 'rgba(255,255,255,0.7)' }}>{t.gapPattern!.description}</p>
+                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>What happened</div>
+                    <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text2)' }}>{t.gapPattern!.description}</p>
                   </div>
                   <div>
-                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'rgba(255,255,255,0.25)' }}>What it means for {ticker}</div>
-                    <p className="text-[11px] leading-relaxed" style={{ color: 'rgba(255,255,255,0.55)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>What it means for {ticker}</div>
+                    <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text2)' }}>
                       {t.gapPattern!.filled
                         ? `The gap has been filled — price returned to the pre-gap level, which often acts as a magnet. With the gap filled, price is now free to move in the direction of the original gap with less overhead supply.`
                         : t.gapPattern!.bullish
@@ -755,9 +755,9 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
                       }
                     </p>
                   </div>
-                  <div className="flex gap-4 pt-1 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+                  <div className="flex gap-4 pt-1 border-t" style={{ borderColor: 'var(--surface2)' }}>
                     <div>
-                      <div className="text-[9px] font-mono uppercase text-white/25 mb-0.5">Gap zone</div>
+                      <div className="text-[9px] font-mono uppercase t-text3 mb-0.5">Gap zone</div>
                       <div className="text-xs font-mono" style={{ color: col }}>${t.gapPattern.gapLow.toFixed(2)} – ${t.gapPattern.gapHigh.toFixed(2)}</div>
                     </div>
                   </div>
@@ -770,7 +770,7 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
 
       {/* Finviz chart — with pattern annotation overlay */}
       <div>
-        <div className="text-[10px] font-mono text-white/20 mb-1.5">
+        <div className="text-[10px] font-mono t-text3 mb-1.5">
           Daily candlestick chart — SMA50 (blue) and SMA200 (red) overlaid.
           {t.chartPattern && ` ${t.chartPattern.name} pattern detected.`}
           {t.candlePattern && ` ${t.candlePattern.name} candle on most recent bar.`}
@@ -778,8 +778,8 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
         </div>
         {/^(BTC|ETH|SOL|BNB|XRP|ADA|AVAX|DOGE|DOT|LINK|LTC|BCH|XLM|UNI|MATIC|ATOM|ALGO|VET|FIL|THETA)$/.test(ticker.toUpperCase()) ||
          /^[A-Z]{6}$/.test(ticker.toUpperCase()) && ['USD','EUR','GBP','JPY','AUD','CAD','NZD','CHF'].some(c => ticker.toUpperCase().startsWith(c) || ticker.toUpperCase().endsWith(c))
-          ? <div className="flex items-center justify-center h-16 rounded-lg text-xs text-white/25"
-              style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+          ? <div className="flex items-center justify-center h-16 rounded-lg text-xs t-text3"
+              style={{ background: 'var(--surface2)', border: '1px solid rgba(255,255,255,0.06)' }}>
               Chart not available for {ticker} — use TradingView for forex/crypto charting
             </div>
           : (
@@ -885,7 +885,7 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
         <div className="flex justify-center mb-2">
           <KeyLevels s1={t.support} s2={t.support2} r1={t.resistance} r2={t.resistance2} current={t.currentPrice} />
         </div>
-        <div className="text-[10px] text-white/25 text-center mb-2">
+        <div className="text-[10px] t-text3 text-center mb-2">
           S2 ${sf(t.support2)} · S1 ${sf(t.support)} · NOW ${sf(p)} · R1 ${sf(t.resistance)} · R2 ${sf(t.resistance2)}
         </div>
         <Explain color="#fbbf24" what={levelsWhat} means={levelsMeans} />
@@ -949,7 +949,7 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
                       <span className="text-[10px] font-mono w-10 text-right" style={{ color: isPocket ? '#fbbf24' : isBoundary ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.35)' }}>
                         {(l.level * 100).toFixed(1)}%
                       </span>
-                      <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.3)' }}>
+                      <span className="text-[10px]" style={{ color: 'var(--text3)' }}>
                         {isPocket ? '← Golden Pocket' : isBoundary ? '← Zone boundary' : ''}
                       </span>
                     </div>
@@ -1099,7 +1099,7 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
             ].map(({ label, val, color }) => (
               <div key={label} className="text-center p-2 rounded-lg" style={{ background: 'rgba(255,255,255,0.03)' }}>
                 <div className="text-xl font-bold font-mono" style={{ color }}>{val >= 0 ? '+' : ''}{sf(val, 1)}%</div>
-                <div className="text-[9px] font-mono" style={{ color: 'rgba(255,255,255,0.3)' }}>{label}</div>
+                <div className="text-[9px] font-mono" style={{ color: 'var(--text3)' }}>{label}</div>
               </div>
             ))}
           </div>
@@ -1161,7 +1161,7 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
 
       {/* Data transparency note */}
       <p className="text-[10px] font-mono leading-relaxed px-1"
-        style={{ color: 'rgba(255,255,255,0.2)' }}>
+        style={{ color: 'var(--text3)' }}>
         Moving average values (SMA50, SMA200) may differ slightly from other platforms such as TradingView.
         This is due to differences in how historical prices are adjusted for splits and dividends — not a calculation error.
         RSI, MACD, and signal direction are unaffected and remain accurate.
