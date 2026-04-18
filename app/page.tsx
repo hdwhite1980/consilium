@@ -1,5 +1,6 @@
 'use client'
 
+import type { SocialSentiment } from '@/app/lib/social-scout'
 import { useState, useRef, useCallback, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/app/lib/auth/client'
@@ -67,7 +68,7 @@ function LogTradeMenu({ destinations }: {
     </div>
   )
 }
-type Stage  = 'idle' | 'building' | 'gemini' | 'claude' | 'gpt' | 'judge' | 'done' | 'error'
+type Stage  = 'idle' | 'building' | 'gemini' | 'grok' | 'claude' | 'gpt' | 'judge' | 'done' | 'error'
 type TF     = '1D' | '1W' | '1M' | '3M'
 type Persona = 'balanced' | 'technical' | 'fundamental'
 
@@ -307,6 +308,8 @@ function HomeInner() {
   const [reb, setReb]           = useState<RebuttalResult | null>(null)
   const [ctr, setCtr]           = useState<CounterResult | null>(null)
   const [jud, setJud]           = useState<JudgeResult | null>(null)
+  const [soc, setSoc]           = useState<SocialSentiment | null>(null)
+  const [socOpen, setSocOpen]   = useState(false)
   const [err, setErr]           = useState<string | null>(null)
   const [cached, setCached]     = useState<{ at: string; ageMinutes: number } | null>(null)
 
@@ -397,7 +400,7 @@ function HomeInner() {
     if (stage === 'done' && md && gem && jud) {
       try {
         sessionStorage.setItem('wali_os_last', JSON.stringify({
-          ticker, tf, stage, md, gem, cla, gpt, reb, ctr, jud, cached
+          ticker, tf, stage, md, gem, cla, gpt, reb, ctr, jud, soc, cached
         }))
       } catch { /* storage full or unavailable */ }
     }
@@ -421,6 +424,7 @@ function HomeInner() {
           setReb(s.reb ?? null)
           setCtr(s.ctr ?? null)
           setJud(s.jud ?? null)
+          setSoc(s.soc ?? null)
           setCached(s.cached ?? null)
         }
       } catch { /* ignore parse errors */ }
@@ -437,7 +441,7 @@ function HomeInner() {
   const run = useCallback(async () => {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
-    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setErr(null); setCached(null)
+    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setSoc(null); setErr(null); setCached(null)
 
     try {
       const res = await fetch('/api/analyze', {
@@ -464,6 +468,8 @@ function HomeInner() {
             case 'market_data':  setMd(data); break
             case 'gemini_start': setStage('gemini'); scroll(); break
             case 'gemini_done':  setGem(data); scroll(); break
+            case 'grok_start':   setStage('grok'); scroll(); break
+            case 'grok_done':    setSoc(data); scroll(); break
             case 'claude_start': setStage('claude'); scroll(); break
             case 'claude_done':  setCla(data); scroll(); break
             case 'gpt_start':    setStage('gpt'); scroll(); break
@@ -489,7 +495,7 @@ function HomeInner() {
   const forceRun = useCallback(async () => {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
-    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setErr(null); setCached(null)
+    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setSoc(null); setErr(null); setCached(null)
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
@@ -513,6 +519,8 @@ function HomeInner() {
             case 'market_data':  setMd(data); break
             case 'gemini_start': setStage('gemini'); scroll(); break
             case 'gemini_done':  setGem(data); scroll(); break
+            case 'grok_start':   setStage('grok'); scroll(); break
+            case 'grok_done':    setSoc(data); scroll(); break
             case 'claude_start': setStage('claude'); scroll(); break
             case 'claude_done':  setCla(data); scroll(); break
             case 'gpt_start':    setStage('gpt'); scroll(); break
@@ -538,6 +546,7 @@ function HomeInner() {
   const STEPS = [
     { key: 'building', label: 'Data' },
     { key: 'gemini',   label: 'News Scout' },
+    { key: 'grok',     label: 'Social Pulse' },
     { key: 'claude',   label: 'Lead Analyst' },
     { key: 'gpt',      label: 'Challenger' },
     { key: 'rebuttal', label: 'Rebuttal' },
@@ -1319,6 +1328,89 @@ function HomeInner() {
                   Regime: {gem.regimeAssessment}
                 </div>
                 <Bar2 val={gem.confidence} color="#60a5fa" label="confidence" />
+              </div>
+              </Collapsible>
+            )}
+
+            {/* Social Pulse — live X sentiment from Grok */}
+            {stage === 'grok' && !soc && <Think label="Social Pulse" color="#1d9bf0" />}
+            {soc && !soc.isFallback && (
+              <Collapsible
+                title="Social Pulse"
+                icon={<span className="text-xs font-bold">X</span>}
+                color="#1d9bf0"
+                badge={<><span className="text-[10px] font-mono px-2 py-0.5 rounded-full" style={{ background: 'rgba(29,155,240,0.12)', color: '#1d9bf0' }}>{soc.overallMood}</span><span className="text-[10px] font-mono ml-1" style={{ color: 'var(--text3)' }}>Live · X</span></>}
+                defaultOpen={false}>
+              <div className="pt-2">
+                <div className="flex items-center gap-2 mb-2 text-[10px] font-mono uppercase tracking-wider" style={{ color: 'var(--text3)' }}>
+                  <span>Intensity: <span style={{ color: '#1d9bf0' }}>{soc.intensity}</span></span>
+                  <span>·</span>
+                  <span>Confidence: <span style={{ color: '#1d9bf0' }}>{soc.confidence}</span></span>
+                </div>
+                <p className="text-sm leading-relaxed mb-3" style={{ color: 'var(--text2)' }}>{soc.keyNarrative}</p>
+
+                {soc.sentimentDivergence && (
+                  <div className="text-xs italic mb-3 px-3 py-2 rounded-lg" style={{ background: 'rgba(29,155,240,0.08)', border: '1px solid rgba(29,155,240,0.2)', color: 'var(--text2)' }}>
+                    Divergence: {soc.sentimentDivergence}
+                  </div>
+                )}
+
+                {soc.bullishTalkingPoints.length > 0 && (
+                  <div className="mb-3">
+                    <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#34d399' }}>Bulls</div>
+                    <div className="space-y-1">
+                      {soc.bullishTalkingPoints.map((p, i) => (
+                        <div key={i} className="text-xs flex gap-1.5" style={{ color: 'var(--text3)' }}>
+                          <span className="text-[8px] mt-0.5 shrink-0" style={{ color: '#34d39960' }}>●</span>{p}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {soc.bearishTalkingPoints.length > 0 && (
+                  <div className="mb-3">
+                    <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#f87171' }}>Bears</div>
+                    <div className="space-y-1">
+                      {soc.bearishTalkingPoints.map((p, i) => (
+                        <div key={i} className="text-xs flex gap-1.5" style={{ color: 'var(--text3)' }}>
+                          <span className="text-[8px] mt-0.5 shrink-0" style={{ color: '#f8717160' }}>●</span>{p}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {soc.notableVoices.length > 0 && (
+                  <div className="mb-3">
+                    <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: 'var(--text3)' }}>Notable voices</div>
+                    <div className="space-y-1.5">
+                      {soc.notableVoices.map((v, i) => {
+                        const voiceColor = v.stance === 'bullish' ? '#34d399' : v.stance === 'bearish' ? '#f87171' : 'var(--text3)'
+                        return (
+                          <div key={i} className="text-xs flex gap-2 items-start">
+                            <span className="font-mono font-bold shrink-0" style={{ color: voiceColor }}>{v.handle}</span>
+                            <span className="leading-relaxed" style={{ color: 'var(--text2)' }}>{v.claim}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {soc.fadeSignals.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {soc.fadeSignals.map((f, i) => <Chip key={i} label={`fade: ${f}`} color="#fbbf24" />)}
+                  </div>
+                )}
+
+                <div className="text-xs italic border-t pt-2" style={{ borderColor: 'var(--border)', color: 'var(--text3)' }}>
+                  Retail vs pro: {soc.retailVsPro}
+                </div>
+
+                <div className="text-[10px] font-mono mt-2" style={{ color: 'var(--text3)' }}>
+                  Live from X · Grok · {new Date(soc.collectedAt).toLocaleTimeString()}
+                </div>
               </div>
               </Collapsible>
             )}
