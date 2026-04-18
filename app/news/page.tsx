@@ -778,14 +778,14 @@ export default function NewsPage() {
             </div>
 
             {/* Sector Top Movers — live per-sector breakdown */}
-            {data.sectorTopMovers && (data.sectorTopMovers?.length ?? 0) > 0 && (
+            {Array.isArray(data.sectorTopMovers) && data.sectorTopMovers.length > 0 && (
               <div>
                 <div className="flex items-center gap-2 mb-3">
                   <span className="text-[10px] font-mono uppercase tracking-widest text-white/25">Top movers by sector</span>
                   <span className="text-[10px] font-mono text-white/15">— live</span>
                 </div>
                 <div className="space-y-2">
-                  {data.sectorTopMovers.filter(s => s.topMovers.length > 0).map((s) => {
+                  {data.sectorTopMovers.filter(s => Array.isArray(s.topMovers) && s.topMovers.length > 0).map((s) => {
                     const col = s.direction === 'up' ? '#34d399' : s.direction === 'down' ? '#f87171' : '#fbbf24'
                     return (
                       <div key={s.etf} className="rounded-xl border overflow-hidden"
@@ -802,7 +802,7 @@ export default function NewsPage() {
                         </div>
                         {/* Top 10 tickers */}
                         <div className="grid grid-cols-5 gap-0">
-                          {s.topMovers.map((m, i) => {
+                          {(Array.isArray(s.topMovers) ? s.topMovers : []).map((m, i) => {
                             const tc = m.signal === 'up' ? '#34d399' : '#f87171'
                             return (
                               <div key={m.ticker} className="flex flex-col items-center py-2 px-1 text-center"

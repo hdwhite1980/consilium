@@ -424,7 +424,7 @@ export default function TomorrowPage() {
                 )}
 
                 {/* Live top 10 per sector */}
-                {data.sectorTopMovers && (data.sectorTopMovers?.length ?? 0) > 0 && (
+                {Array.isArray(data.sectorTopMovers) && data.sectorTopMovers.length > 0 && (
                   <div className="space-y-2">
                     <span className="text-[10px] font-mono uppercase tracking-widest text-white/25">Live top movers by sector</span>
                     {data.sectorTopMovers.map((s) => {
@@ -441,7 +441,7 @@ export default function TomorrowPage() {
                             <span className="text-[10px] text-white/25 ml-auto font-mono">{s.etf}</span>
                           </div>
                           <div className="grid grid-cols-5 gap-0">
-                            {s.topMovers.map((m, i) => {
+                            {(Array.isArray(s.topMovers) ? s.topMovers : []).map((m, i) => {
                               const tc = m.signal === 'up' ? '#34d399' : '#f87171'
                               return (
                                 <div key={m.ticker} className="flex flex-col items-center py-2 px-1 text-center"
