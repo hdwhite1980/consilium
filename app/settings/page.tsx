@@ -251,7 +251,7 @@ export default function SettingsPage() {
                     className="rounded-lg py-3 px-2 transition-all hover:opacity-90 focus:outline focus:outline-2 focus:outline-offset-1"
                     style={{
                       background: active ? 'rgba(167,139,250,0.15)' : surf2,
-                      border: 1px solid ${active ? '#a78bfa' : brd},
+                      border: `1px solid ${active ? '#a78bfa' : brd}`,
                       color: active ? '#a78bfa' : txt,
                       outlineColor: '#a78bfa',
                     }}>
