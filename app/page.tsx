@@ -21,30 +21,42 @@ function LogTradeMenu({ destinations }: {
   destinations: Array<{ icon: string; label: string; desc: string; color: string; onClick: () => void }>
 }) {
   const [open, setOpen] = useState(false)
+  const idRef = useRef<string>(`logtrade-${Math.random().toString(36).slice(2, 9)}`)
+  const panelId = idRef.current
   return (
     <div className="relative">
-      <button onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all hover:opacity-90"
-        style={{ background: 'rgba(52,211,153,0.08)', color: '#34d399', border: '1px solid rgba(52,211,153,0.2)' }}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+        aria-controls={panelId}
+        aria-label="Log your trade — choose a destination"
+        className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all hover:opacity-90 focus:outline focus:outline-2 focus:outline-offset-1"
+        style={{ background: 'rgba(52,211,153,0.08)', color: '#34d399', border: '1px solid rgba(52,211,153,0.2)', outlineColor: '#34d399' }}>
         <span className="flex items-center gap-1.5">
-          <span>📋</span>
+          <span aria-hidden="true">📋</span>
           <span>Acted on this analysis? Log your trade</span>
         </span>
-        <span style={{ color: 'rgba(52,211,153,0.5)' }}>{open ? '▲' : '▼'}</span>
+        <span style={{ color: 'rgba(52,211,153,0.5)' }} aria-hidden="true">{open ? '▲' : '▼'}</span>
       </button>
       {open && (
-        <div className="mt-1 rounded-xl overflow-hidden z-10 relative"
-          style={{ background: '#0d1117', border: '1px solid rgba(255,255,255,0.08)' }}>
+        <div id={panelId} role="menu" className="mt-1 rounded-xl overflow-hidden z-10 relative"
+          style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
           {destinations.map((d, i) => (
-            <button key={d.label} onClick={() => { setOpen(false); d.onClick() }}
-              className="w-full flex items-center gap-3 px-3 py-2.5 text-left transition-all hover:opacity-80"
-              style={{ borderBottom: i < destinations.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
-              <span className="text-base w-5 text-center">{d.icon}</span>
+            <button
+              key={d.label}
+              type="button"
+              role="menuitem"
+              onClick={() => { setOpen(false); d.onClick() }}
+              aria-label={`${d.label} — ${d.desc}`}
+              className="w-full flex items-center gap-3 px-3 py-2.5 text-left transition-all hover:opacity-80 focus:outline focus:outline-2 focus:outline-offset-[-2px]"
+              style={{ borderBottom: i < destinations.length - 1 ? '1px solid var(--border)' : 'none', outlineColor: d.color }}>
+              <span className="text-base w-5 text-center" aria-hidden="true">{d.icon}</span>
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-semibold" style={{ color: d.color }}>{d.label}</div>
-                <div className="text-[10px]" style={{ color: 'rgba(255,255,255,0.3)' }}>{d.desc}</div>
+                <div className="text-[10px]" style={{ color: 'var(--text3)' }}>{d.desc}</div>
               </div>
-              <span className="text-white/20 text-xs">→</span>
+              <span className="text-xs" style={{ color: 'var(--text3)' }} aria-hidden="true">→</span>
             </button>
           ))}
         </div>
@@ -250,22 +262,28 @@ function Collapsible({
   defaultOpen?: boolean; children: React.ReactNode
 }) {
   const [open, setOpen] = useState(defaultOpen)
+  // Stable id per instance for aria-controls
+  const idRef = useRef<string>(`collapsible-${Math.random().toString(36).slice(2, 9)}`)
+  const panelId = idRef.current
   return (
     <div className="rounded-xl border overflow-hidden"
       style={{ borderColor: open ? `${color}30` : 'var(--border)', background: 'var(--surface)' }}>
       <button
+        type="button"
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-2.5 px-4 py-3 text-left transition-all"
-        style={{ ['--tw-bg-opacity' as string]: '1' }}
+        aria-expanded={open}
+        aria-controls={panelId}
+        className="w-full flex items-center gap-2.5 px-4 py-3 text-left transition-all focus:outline focus:outline-2 focus:outline-offset-[-2px]"
+        style={{ ['--tw-bg-opacity' as string]: '1', outlineColor: color }}
         onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface2)')}
         onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-        <span style={{ color }}>{icon}</span>
+        <span style={{ color }} aria-hidden="true">{icon}</span>
         <span className="text-sm font-semibold flex-1" style={{ color: 'var(--text)' }}>{title}</span>
         {badge}
-        <span className="text-xs ml-auto" style={{ color: 'var(--text3)' }}>{open ? '▲' : '▼'}</span>
+        <span className="text-xs ml-auto" style={{ color: 'var(--text3)' }} aria-hidden="true">{open ? '▲' : '▼'}</span>
       </button>
       {open && (
-        <div className="px-4 pb-4 pt-1 border-t" style={{ borderColor: 'var(--border)' }}>
+        <div id={panelId} className="px-4 pb-4 pt-1 border-t" style={{ borderColor: 'var(--border)' }}>
           {children}
         </div>
       )}
@@ -553,199 +571,321 @@ function HomeInner() {
     <>
     <div className="flex flex-col min-h-screen md:h-screen md:overflow-hidden" style={{ background: bg, color: txt }}>
 
+      {/* ── Skip-to-content link for keyboard users ── */}
+      <a href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:rounded-lg focus:outline focus:outline-2 focus:outline-offset-2"
+        style={{ background: '#7c3aed', color: 'white', outlineColor: '#a78bfa' }}>
+        Skip to main content
+      </a>
+
       {/* ── Top nav bar ─────────────────────────────── */}
       {/* Pre-market Brief Banner */}
       {preMarketBrief?.headline && (
-        <div className="px-3 py-2 cursor-pointer shrink-0 transition-all hover:opacity-90"
-          style={{ background: 'rgba(251,191,36,0.07)', borderBottom: '1px solid rgba(251,191,36,0.15)' }}
-          onClick={() => setShowBrief(b => !b)}>
-          <div className="flex items-center gap-2">
+        <div className="shrink-0" style={{ background: isDark ? 'rgba(251,191,36,0.07)' : 'rgba(251,191,36,0.12)', borderBottom: '1px solid rgba(251,191,36,0.15)' }}>
+          <button
+            type="button"
+            onClick={() => setShowBrief(b => !b)}
+            aria-expanded={showBrief}
+            aria-controls="premarket-details"
+            className="w-full px-3 py-2 flex items-center gap-2 transition-all hover:opacity-90 text-left focus:outline focus:outline-2 focus:outline-offset-[-2px]"
+            style={{ outlineColor: '#fbbf24' }}>
             <span className="text-[10px] font-bold px-1.5 py-0.5 rounded font-mono shrink-0"
               style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>PRE-MARKET</span>
-            <span className="text-xs flex-1 truncate" style={{ color: 'rgba(255,255,255,0.7)' }}>{preMarketBrief.headline}</span>
-            <span className="text-[10px] text-white/25">{showBrief ? '▲' : '▼'}</span>
-          </div>
+            <span className="text-xs flex-1 truncate" style={{ color: txt2 }}>{preMarketBrief.headline}</span>
+            <span className="text-[10px] shrink-0" style={{ color: txt3 }} aria-hidden="true">{showBrief ? '▲' : '▼'}</span>
+          </button>
           {showBrief && (
-            <div className="mt-2 space-y-1.5 text-xs">
-              {preMarketBrief.one_line && <p style={{ color: 'rgba(255,255,255,0.6)' }} className="leading-relaxed">{preMarketBrief.one_line}</p>}
+            <div id="premarket-details" className="px-3 pb-2 space-y-1.5 text-xs">
+              {preMarketBrief.one_line && <p style={{ color: txt2 }} className="leading-relaxed">{preMarketBrief.one_line}</p>}
               {preMarketBrief.risk_of_day && (
                 <div className="flex items-start gap-1.5">
-                  <span style={{ color: '#f87171' }}>⚠</span>
-                  <span style={{ color: 'rgba(255,255,255,0.5)' }}>Risk: {preMarketBrief.risk_of_day}</span>
+                  <span style={{ color: '#f87171' }} aria-hidden="true">⚠</span>
+                  <span style={{ color: txt2 }}><strong className="font-semibold">Risk:</strong> {preMarketBrief.risk_of_day}</span>
                 </div>
               )}
               {preMarketBrief.watchlist && preMarketBrief.watchlist.length > 0 && (
-                <div><span style={{ color: 'rgba(255,255,255,0.3)' }}>Watch: </span><span style={{ color: 'rgba(255,255,255,0.6)' }}>{preMarketBrief.watchlist.join(' · ')}</span></div>
+                <div><span style={{ color: txt3 }}>Watch: </span><span style={{ color: txt2 }}>{preMarketBrief.watchlist.join(' · ')}</span></div>
               )}
             </div>
           )}
         </div>
       )}
 
-      <nav className="flex items-center gap-2 px-3 py-2 border-b shrink-0"
-        style={{ background: surf, borderColor: brd }}>
+      {/* ───────────────────────────────────────────────────────────
+           TOP NAV — two rows on mobile/tablet, single row on xl+
 
-        {/* Logo */}
-        <div className="flex items-center gap-2 shrink-0 mr-1">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold text-white shrink-0"
-            style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>Σ</div>
-          <span className="text-sm font-bold tracking-tight hidden sm:block" style={{ color: txt }}>WALI-OS</span>
-        </div>
+           Row 1 (always visible):  Logo · analysis controls · Analyze button · user cluster
+           Row 2 (xl+ inline, smaller breakpoints separate):  nav links
 
-        {/* ── Analysis controls ── */}
-        <div className="flex items-center gap-1.5 flex-1">
-          <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase().replace(/[^A-Z/]/g, ''))}
-            onKeyDown={e => { if (e.key === 'Enter' && !running) { setTicker(t => t.replace(/\//g, '')); setTimeout(run, 0) } }}
-            placeholder="AAPL · EUR/USD · BTC" maxLength={7} data-tutorial="ticker-input"
-            className="w-16 sm:w-20 rounded-lg px-2.5 py-1.5 text-sm font-mono font-bold tracking-widest outline-none border transition-colors"
-            style={{ background: inputBg, borderColor: brd2, color: txt }} />
+           The user cluster (theme · status · email · LOGOUT · mobile menu)
+           is locked to the right edge and can never be pushed off-screen.
+         ─────────────────────────────────────────────────────────── */}
+      <nav className="border-b shrink-0" style={{ background: surf, borderColor: brd }} aria-label="Primary navigation">
 
-          <div className="flex gap-0.5" data-tutorial="timeframe-selector">
-            {([
-              { tf: '1D', label: '1D', title: 'Intraday — 15-min bars, same-day to next session targets' },
-              { tf: '1W', label: '1W', title: 'Swing trade — hourly bars, 3-10 day targets' },
-              { tf: '1M', label: '1M', title: 'Position trade — daily bars, 3-6 week targets' },
-              { tf: '3M', label: '3M', title: 'Investment — daily bars, 6-13 week targets, fundamentals weighted heavily' },
-            ] as { tf: TF; label: string; title: string }[]).map(({ tf: t, label, title }) => (
-              <button key={t} onClick={() => setTf(t)} title={title}
-                className="px-2 py-1.5 rounded-md text-xs font-mono border transition-all"
-                style={{
-                  background: tf === t ? 'rgba(167,139,250,0.15)' : inputBg,
-                  borderColor: tf === t ? '#a78bfa' : brd,
-                  color: tf === t ? '#a78bfa' : txt3,
-                }}>{label}</button>
-            ))}
-          </div>
+        {/* ── Row 1: brand + analysis + user cluster ── */}
+        <div className="flex items-center gap-2 px-3 py-2 flex-wrap">
 
-          {/* Persona selector */}
-          <div className="flex items-center gap-0.5 rounded-lg p-0.5" data-tutorial="persona-selector" style={{ background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)', border: `1px solid ${brd}` }}>
-            {(Object.entries(PERSONAS) as [Persona, typeof PERSONAS[Persona]][]).map(([key, p]) => (
-              <button key={key} onClick={() => setPersona(key)} title={p.desc}
-                className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-mono transition-all"
-                style={{
-                  background: persona === key ? `${p.color}18` : 'transparent',
-                  color: persona === key ? p.color : txt3,
-                  border: persona === key ? `1px solid ${p.color}35` : '1px solid transparent',
-                }}>
-                <span>{p.icon}</span>
-                <span className="hidden lg:inline">{p.label}</span>
-              </button>
-            ))}
-          </div>
-
-          {/* Why is this moving? — shows when price has moved >2% */}
-          {md?.currentPrice && md?.technicals?.priceChange1D && Math.abs(md.technicals.priceChange1D) >= 2 && (
-            <button
-              onClick={async () => {
-                const pct = md.technicals?.priceChange1D || 0
-                setWhyMoving({ loading: true, open: true })
-                const res = await fetch('/api/why-moving', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ ticker, currentPrice: md?.currentPrice, changePercent: pct }),
-                })
-                if (!res.body) return
-                const reader = res.body.getReader()
-                const decoder = new TextDecoder()
-                while (true) {
-                  const { done, value } = await reader.read()
-                  if (done) break
-                  const text = decoder.decode(value)
-                  for (const line of text.split('\n')) {
-                    if (!line.startsWith('data: ')) continue
-                    try {
-                      const evt = JSON.parse(line.slice(6))
-                      if (evt.catalyst) setWhyMoving(p => ({ ...p, catalyst: evt.catalyst }))
-                      if (evt.verdict) setWhyMoving(p => ({ ...p, verdict: evt.verdict, loading: false }))
-                    } catch { /* skip */ }
-                  }
-                }
-              }}
-              disabled={whyMoving.loading}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40"
-              style={{ background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24' }}>
-              {whyMoving.loading ? '⏳ Analyzing...' : `⚡ Why is ${ticker} moving?`}
-            </button>
-          )}
-
-          <button onClick={run} disabled={running} data-tutorial="analyze-btn"
-            className="px-3 sm:px-4 py-1.5 rounded-lg text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95 disabled:opacity-40 shrink-0"
-            style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
-            {running ? '…' : 'Analyze'}
-          </button>
-        </div>
-
-        {/* ── Right side: nav links + user ── */}
-        <div className="flex items-center gap-1.5 shrink-0">
-
-          {/* Desktop nav links */}
-          <div className="hidden md:flex items-center gap-0.5">
-            {NAV_ITEMS.map(n => (
-              <button key={n.path} onClick={() => router.push(n.path)}
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all hover:opacity-80"
-                style={{ color: n.color, background: `${n.color}10`, border: `1px solid ${n.color}20` }}>
-                <span className="text-[11px]">{n.icon}</span>
-                <span className="hidden lg:inline">{n.label}</span>
-              </button>
-            ))}
-            <TutorialLauncher tutorialId="main" />
-          </div>
-
-          {/* Portfolio Alerts — mounted globally so polling runs everywhere */}
-          <PortfolioAlerts isDark={isDark} />
-
-          {/* Theme toggle */}
-          <button onClick={toggleTheme}
-            className="p-1.5 rounded-lg transition-all hover:opacity-80"
-            style={{ background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)', color: txt2, border: `1px solid ${brd}` }}
-            title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}>
-            {isDark ? <Sun size={13} /> : <Moon size={13} />}
+          {/* Logo — home link */}
+          <button
+            type="button"
+            onClick={() => router.push('/')}
+            className="flex items-center gap-2 shrink-0 mr-1 rounded-lg focus:outline focus:outline-2 focus:outline-offset-2"
+            style={{ outlineColor: '#a78bfa' }}
+            aria-label="Wali-OS home">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold text-white shrink-0"
+              style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }} aria-hidden="true">Σ</div>
+            <span className="text-sm font-bold tracking-tight hidden sm:block" style={{ color: txt }}>WALI-OS</span>
           </button>
 
-          {/* Status dot */}
-          <span className="w-1.5 h-1.5 rounded-full animate-pulse-dot shrink-0"
-            style={{ background: stage === 'done' ? '#34d399' : stage === 'error' ? '#f87171' : running ? '#fbbf24' : brd2 }} />
+          {/* ── Analysis controls ── */}
+          <div className="flex items-center gap-1.5 flex-1 min-w-0 flex-wrap" role="group" aria-label="Analysis controls">
 
-          {/* User area */}
-          {userEmail && (
-            <div className="flex items-center gap-1.5 pl-1.5 border-l" style={{ borderColor: brd }}>
-              {subStatus?.status !== 'exempt' && subStatus?.status === 'trialing' && subStatus.daysLeft !== null && (
-                <button onClick={async () => { const r = await fetch('/api/stripe/checkout',{method:'POST'}); const d=await r.json(); if(d.url) window.location.href=d.url }}
-                  className="text-[10px] font-mono px-2 py-1 rounded-full"
-                  style={{ background: subStatus.daysLeft <= 2 ? 'rgba(248,113,113,0.12)' : 'rgba(251,191,36,0.12)', color: subStatus.daysLeft <= 2 ? '#f87171' : '#fbbf24', border: `1px solid ${subStatus.daysLeft <= 2 ? 'rgba(248,113,113,0.3)' : 'rgba(251,191,36,0.25)'}` }}>
-                  ⏳ {subStatus.daysLeft}d
-                </button>
-              )}
-              <button onClick={() => router.push('/settings')}
-                className="text-[10px] font-mono hidden sm:block max-w-[100px] truncate hover:opacity-70 transition-opacity"
-                style={{ color: txt3 }} title="Account settings">{userEmail}</button>
-              <button onClick={handleSignOut}
-                className="flex items-center gap-1 text-[10px] font-mono px-2 py-1 rounded-md transition-all hover:opacity-80"
-                style={{ background: 'rgba(248,113,113,0.1)', color: '#f87171', border: '1px solid rgba(248,113,113,0.2)' }}>
-                <LogOut size={10} />
-              </button>
+            {/* Ticker with proper label */}
+            <div className="flex flex-col">
+              <label htmlFor="ticker-input" className="sr-only">Stock or crypto ticker symbol</label>
+              <input
+                id="ticker-input"
+                type="text"
+                inputMode="text"
+                autoCapitalize="characters"
+                autoComplete="off"
+                spellCheck={false}
+                value={ticker}
+                onChange={e => setTicker(e.target.value.toUpperCase().replace(/[^A-Z/]/g, ''))}
+                onKeyDown={e => { if (e.key === 'Enter' && !running) { setTicker(t => t.replace(/\//g, '')); setTimeout(run, 0) } }}
+                placeholder="AAPL · BTC · EUR/USD"
+                maxLength={7}
+                data-tutorial="ticker-input"
+                aria-label="Ticker symbol (e.g. AAPL, BTC, or EUR/USD)"
+                className="w-24 sm:w-32 rounded-lg px-2.5 py-1.5 text-sm font-mono font-bold tracking-widest border transition-colors focus:outline focus:outline-2 focus:outline-offset-1"
+                style={{ background: inputBg, borderColor: brd2, color: txt, outlineColor: '#a78bfa' }} />
             </div>
-          )}
 
-          {/* Mobile menu toggle */}
-          <button onClick={() => setNavOpen(!navOpen)}
-            className="flex md:hidden p-1.5 rounded-lg transition-all"
-            style={{ background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)', color: txt2, border: `1px solid ${brd}` }}>
-            {navOpen ? <X size={14} /> : <Menu size={14} />}
-          </button>
+            {/* Timeframe */}
+            <div className="flex gap-0.5" role="radiogroup" aria-label="Timeframe" data-tutorial="timeframe-selector">
+              {([
+                { tf: '1D', label: '1D', title: 'Intraday — 15-min bars, same-day to next session targets' },
+                { tf: '1W', label: '1W', title: 'Swing trade — hourly bars, 3-10 day targets' },
+                { tf: '1M', label: '1M', title: 'Position trade — daily bars, 3-6 week targets' },
+                { tf: '3M', label: '3M', title: 'Investment — daily bars, 6-13 week targets' },
+              ] as { tf: TF; label: string; title: string }[]).map(({ tf: t, label, title }) => (
+                <button
+                  key={t}
+                  type="button"
+                  role="radio"
+                  aria-checked={tf === t}
+                  aria-label={`${label} timeframe — ${title}`}
+                  onClick={() => setTf(t)}
+                  title={title}
+                  className="px-2 py-1.5 rounded-md text-xs font-mono border transition-all focus:outline focus:outline-2 focus:outline-offset-1"
+                  style={{
+                    background: tf === t ? 'rgba(167,139,250,0.15)' : inputBg,
+                    borderColor: tf === t ? '#a78bfa' : brd,
+                    color: tf === t ? '#a78bfa' : txt2,
+                    outlineColor: '#a78bfa',
+                  }}>{label}</button>
+              ))}
+            </div>
+
+            {/* Persona */}
+            <div className="flex items-center gap-0.5 rounded-lg p-0.5" role="radiogroup" aria-label="Analyst persona" data-tutorial="persona-selector" style={{ background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)', border: `1px solid ${brd}` }}>
+              {(Object.entries(PERSONAS) as [Persona, typeof PERSONAS[Persona]][]).map(([key, p]) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="radio"
+                  aria-checked={persona === key}
+                  aria-label={`${p.label} analyst — ${p.desc}`}
+                  onClick={() => setPersona(key)}
+                  title={p.desc}
+                  className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-mono transition-all focus:outline focus:outline-2 focus:outline-offset-1"
+                  style={{
+                    background: persona === key ? `${p.color}18` : 'transparent',
+                    color: persona === key ? p.color : txt2,
+                    border: persona === key ? `1px solid ${p.color}35` : '1px solid transparent',
+                    outlineColor: p.color,
+                  }}>
+                  <span aria-hidden="true">{p.icon}</span>
+                  <span className="hidden lg:inline">{p.label}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* Why is this moving? — shows when price has moved >2% */}
+            {md?.currentPrice && md?.technicals?.priceChange1D && Math.abs(md.technicals.priceChange1D) >= 2 && (
+              <button
+                type="button"
+                onClick={async () => {
+                  const pct = md.technicals?.priceChange1D || 0
+                  setWhyMoving({ loading: true, open: true })
+                  const res = await fetch('/api/why-moving', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ticker, currentPrice: md?.currentPrice, changePercent: pct }),
+                  })
+                  if (!res.body) return
+                  const reader = res.body.getReader()
+                  const decoder = new TextDecoder()
+                  while (true) {
+                    const { done, value } = await reader.read()
+                    if (done) break
+                    const text = decoder.decode(value)
+                    for (const line of text.split('\n')) {
+                      if (!line.startsWith('data: ')) continue
+                      try {
+                        const evt = JSON.parse(line.slice(6))
+                        if (evt.catalyst) setWhyMoving(p => ({ ...p, catalyst: evt.catalyst }))
+                        if (evt.verdict) setWhyMoving(p => ({ ...p, verdict: evt.verdict, loading: false }))
+                      } catch { /* skip */ }
+                    }
+                  }
+                }}
+                disabled={whyMoving.loading}
+                aria-label={whyMoving.loading ? 'Analyzing price movement' : `Explain why ${ticker} is moving`}
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40 focus:outline focus:outline-2 focus:outline-offset-1"
+                style={{ background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24', outlineColor: '#fbbf24' }}>
+                <span aria-hidden="true">{whyMoving.loading ? '⏳' : '⚡'}</span>
+                <span>{whyMoving.loading ? 'Analyzing…' : `Why is ${ticker} moving?`}</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={run}
+              disabled={running}
+              data-tutorial="analyze-btn"
+              aria-label={running ? 'Analyzing — please wait' : `Analyze ${ticker}`}
+              className="px-3 sm:px-4 py-1.5 rounded-lg text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95 disabled:opacity-40 shrink-0 focus:outline focus:outline-2 focus:outline-offset-2"
+              style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', outlineColor: '#a78bfa' }}>
+              {running ? <span aria-hidden="true">…</span> : 'Analyze'}
+            </button>
+          </div>
+
+          {/* ── User cluster — locked to right, always visible ── */}
+          <div className="flex items-center gap-1.5 ml-auto shrink-0" role="group" aria-label="Account and settings">
+
+            {/* Portfolio Alerts — mounted globally so polling runs everywhere */}
+            <PortfolioAlerts isDark={isDark} />
+
+            {/* Theme toggle */}
+            <button
+              type="button"
+              onClick={toggleTheme}
+              aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+              title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+              className="p-1.5 rounded-lg transition-all hover:opacity-80 focus:outline focus:outline-2 focus:outline-offset-1"
+              style={{ background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)', color: txt2, border: `1px solid ${brd}`, outlineColor: '#a78bfa' }}>
+              {isDark ? <Sun size={13} aria-hidden="true" /> : <Moon size={13} aria-hidden="true" />}
+            </button>
+
+            {/* Status dot */}
+            <span
+              role="status"
+              aria-live="polite"
+              aria-label={
+                stage === 'done' ? 'Analysis complete' :
+                stage === 'error' ? 'Analysis failed' :
+                running ? 'Analysis in progress' : 'Idle'
+              }
+              className="w-1.5 h-1.5 rounded-full animate-pulse-dot shrink-0"
+              style={{ background: stage === 'done' ? '#34d399' : stage === 'error' ? '#f87171' : running ? '#fbbf24' : brd2 }} />
+
+            {/* User area — trial badge + email + LOGOUT */}
+            {userEmail && (
+              <div className="flex items-center gap-1.5 pl-1.5 border-l" style={{ borderColor: brd }}>
+                {subStatus?.status !== 'exempt' && subStatus?.status === 'trialing' && subStatus.daysLeft !== null && (
+                  <button
+                    type="button"
+                    onClick={async () => { const r = await fetch('/api/stripe/checkout',{method:'POST'}); const d=await r.json(); if(d.url) window.location.href=d.url }}
+                    aria-label={`Free trial ends in ${subStatus.daysLeft} days. Click to subscribe now.`}
+                    className="text-[10px] font-mono px-2 py-1 rounded-full focus:outline focus:outline-2 focus:outline-offset-1"
+                    style={{
+                      background: subStatus.daysLeft <= 2 ? 'rgba(248,113,113,0.15)' : 'rgba(251,191,36,0.15)',
+                      color: subStatus.daysLeft <= 2 ? '#fca5a5' : '#fcd34d',
+                      border: `1px solid ${subStatus.daysLeft <= 2 ? 'rgba(248,113,113,0.4)' : 'rgba(251,191,36,0.35)'}`,
+                      outlineColor: subStatus.daysLeft <= 2 ? '#f87171' : '#fbbf24',
+                    }}>
+                    <span aria-hidden="true">⏳ </span>{subStatus.daysLeft}d
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => router.push('/settings')}
+                  aria-label={`Account settings for ${userEmail}`}
+                  title="Account settings"
+                  className="text-[10px] font-mono hidden sm:block max-w-[100px] truncate hover:opacity-70 transition-opacity rounded focus:outline focus:outline-2 focus:outline-offset-1"
+                  style={{ color: txt2, outlineColor: '#a78bfa' }}>
+                  {userEmail}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSignOut}
+                  aria-label="Sign out"
+                  title="Sign out"
+                  className="flex items-center gap-1 text-[10px] font-mono px-2 py-1 rounded-md transition-all hover:opacity-80 focus:outline focus:outline-2 focus:outline-offset-1"
+                  style={{ background: 'rgba(248,113,113,0.1)', color: '#fca5a5', border: '1px solid rgba(248,113,113,0.3)', outlineColor: '#f87171' }}>
+                  <LogOut size={10} aria-hidden="true" />
+                  <span className="hidden sm:inline">Sign out</span>
+                </button>
+              </div>
+            )}
+
+            {/* Mobile menu toggle */}
+            <button
+              type="button"
+              onClick={() => setNavOpen(!navOpen)}
+              aria-label={navOpen ? 'Close navigation menu' : 'Open navigation menu'}
+              aria-expanded={navOpen}
+              aria-controls="mobile-nav-drawer"
+              className="flex xl:hidden p-1.5 rounded-lg transition-all focus:outline focus:outline-2 focus:outline-offset-1"
+              style={{ background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)', color: txt2, border: `1px solid ${brd}`, outlineColor: '#a78bfa' }}>
+              {navOpen ? <X size={14} aria-hidden="true" /> : <Menu size={14} aria-hidden="true" />}
+            </button>
+          </div>
+        </div>
+
+        {/* ── Row 2 (xl+): desktop nav links inline ── */}
+        <div className="hidden xl:flex items-center gap-1 px-3 pb-2 pt-0">
+          {NAV_ITEMS.map(n => (
+            <button
+              key={n.path}
+              type="button"
+              onClick={() => router.push(n.path)}
+              aria-label={`Go to ${n.label}`}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all hover:opacity-80 focus:outline focus:outline-2 focus:outline-offset-1"
+              style={{ color: n.color, background: `${n.color}10`, border: `1px solid ${n.color}20`, outlineColor: n.color }}>
+              <span className="text-[11px]" aria-hidden="true">{n.icon}</span>
+              <span>{n.label}</span>
+            </button>
+          ))}
+          <TutorialLauncher tutorialId="main" />
         </div>
       </nav>
 
-      {/* Mobile nav drawer */}
+      {/* ── Mobile / tablet nav drawer ── */}
       {navOpen && (
-        <div className="md:hidden border-b px-3 py-2 flex flex-wrap gap-2" style={{ background: surf, borderColor: brd }}>
+        <div
+          id="mobile-nav-drawer"
+          className="xl:hidden border-b px-3 py-2 flex flex-wrap gap-2"
+          style={{ background: surf, borderColor: brd }}
+          role="menu"
+          aria-label="Main navigation">
           {NAV_ITEMS.map(n => (
-            <button key={n.path} onClick={() => { router.push(n.path); setNavOpen(false) }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
-              style={{ color: n.color, background: `${n.color}12`, border: `1px solid ${n.color}25` }}>
-              {n.icon} {n.label}
+            <button
+              key={n.path}
+              type="button"
+              role="menuitem"
+              onClick={() => { router.push(n.path); setNavOpen(false) }}
+              aria-label={`Go to ${n.label}`}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all focus:outline focus:outline-2 focus:outline-offset-1"
+              style={{ color: n.color, background: `${n.color}12`, border: `1px solid ${n.color}25`, outlineColor: n.color }}>
+              <span aria-hidden="true">{n.icon}</span>
+              <span>{n.label}</span>
             </button>
           ))}
+          <div className="w-full" role="none">
+            <TutorialLauncher tutorialId="main" />
+          </div>
         </div>
       )}
 
@@ -797,7 +937,7 @@ function HomeInner() {
       )}
 
       {/* ── Main layout: sidebar + debate ───────────── */}
-      <div className="flex flex-col md:flex-row flex-1 md:overflow-hidden">
+      <main id="main-content" role="main" aria-label="Analysis dashboard" className="flex flex-col md:flex-row flex-1 md:overflow-hidden">
 
         {/* Left sidebar — only show when there's data */}
         {md && (
@@ -855,11 +995,11 @@ function HomeInner() {
                     const t = md!.technicals
                     // Only show cross if we have real SMA200 data (not fallback)
                     if (!t?.sma200 || !t?.sma50 || t.sma200 <= 0) {
-                      return <span style={{ color: 'rgba(255,255,255,0.3)' }}>N/A</span>
+                      return <span style={{ color: txt3 }}>N/A</span>
                     }
                     if (!t.goldenCross && !t.deathCross) {
                       // Not enough bars for a valid cross signal
-                      return <span style={{ color: 'rgba(255,255,255,0.3)' }}>N/A</span>
+                      return <span style={{ color: txt3 }}>N/A</span>
                     }
                     return <span style={{ color: t.goldenCross ? '#34d399' : '#f87171' }}>{t.goldenCross ? 'Golden ✓' : 'Death ✗'}</span>
                   })()],
@@ -867,7 +1007,7 @@ function HomeInner() {
                     const t = md!.technicals
                     const sma200 = t?.sma200
                     // Only show if we have a real SMA200 (goldenCross or deathCross means we have 200 bars)
-                    if (!sma200 || sma200 <= 0 || (!t?.goldenCross && !t?.deathCross)) return <span style={{ color: 'rgba(255,255,255,0.3)' }}>N/A</span>
+                    if (!sma200 || sma200 <= 0 || (!t?.goldenCross && !t?.deathCross)) return <span style={{ color: txt3 }}>N/A</span>
                     const pct = (md!.currentPrice / sma200 - 1) * 100
                     return <span style={{ color: pct >= 0 ? '#34d399' : '#f87171' }}>{(pct >= 0 ? '+' : '') + pct.toFixed(1) + '%'}</span>
                   })()],
@@ -1113,7 +1253,7 @@ function HomeInner() {
         )}
 
         {/* Main debate area */}
-        <main className="flex-1 flex flex-col md:overflow-hidden" style={{ background: 'var(--bg)' }}>
+        <section aria-label="Council debate" className="flex-1 flex flex-col md:overflow-hidden" style={{ background: 'var(--bg)' }}>
 
           <div ref={debateRef} className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-4">
 
@@ -1687,9 +1827,9 @@ function HomeInner() {
             )}
 
             {err && (
-              <div className="rounded-xl p-4 text-sm font-mono"
-                style={{ background: 'rgba(248,113,113,0.07)', border: '1px solid rgba(248,113,113,0.22)', color: '#f87171' }}>
-                ⚠ {err}
+              <div role="alert" aria-live="assertive" className="rounded-xl p-4 text-sm font-mono"
+                style={{ background: 'rgba(248,113,113,0.07)', border: '1px solid rgba(248,113,113,0.22)', color: '#fca5a5' }}>
+                <span aria-hidden="true">⚠ </span>{err}
               </div>
             )}
           </div>
@@ -1701,31 +1841,44 @@ function HomeInner() {
               For informational purposes only. Not financial advice. AI models can be wrong. Always do your own research.
             </span>
           </div>
-        </main>
-      </div>
+        </section>
+      </main>
     </div>
     {/* Why Is This Moving modal */}
     {whyMoving.open && (
-      <div className="fixed inset-0 z-[9990] flex items-end sm:items-center justify-center p-4"
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="why-moving-title"
+        onKeyDown={e => { if (e.key === 'Escape') setWhyMoving(p => ({ ...p, open: false })) }}
+        className="fixed inset-0 z-[9990] flex items-end sm:items-center justify-center p-4"
         style={{ background: 'rgba(0,0,0,0.7)' }}
         onClick={() => setWhyMoving(p => ({ ...p, open: false }))}>
         <div className="w-full max-w-md rounded-2xl overflow-hidden shadow-2xl"
-          style={{ background: '#111620', border: '1px solid rgba(251,191,36,0.3)' }}
+          style={{ background: surf, border: '1px solid rgba(251,191,36,0.3)' }}
           onClick={e => e.stopPropagation()}>
-          <div className="flex items-center gap-2 px-4 py-3 border-b" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
-            <span style={{ color: '#fbbf24' }}>⚡</span>
-            <span className="text-sm font-bold">Why is {ticker} moving?</span>
-            <button onClick={() => setWhyMoving(p => ({ ...p, open: false }))}
-              className="ml-auto text-white/30 hover:text-white/70 text-lg leading-none">×</button>
+          <div className="flex items-center gap-2 px-4 py-3 border-b" style={{ borderColor: brd }}>
+            <span style={{ color: '#fbbf24' }} aria-hidden="true">⚡</span>
+            <span id="why-moving-title" className="text-sm font-bold" style={{ color: txt }}>Why is {ticker} moving?</span>
+            <button
+              type="button"
+              onClick={() => setWhyMoving(p => ({ ...p, open: false }))}
+              aria-label="Close dialog"
+              className="ml-auto text-lg leading-none rounded hover:opacity-70 focus:outline focus:outline-2 focus:outline-offset-1"
+              style={{ color: txt3, outlineColor: '#fbbf24' }}>
+              <span aria-hidden="true">×</span>
+            </button>
           </div>
           <div className="px-4 py-4 space-y-4">
             {whyMoving.loading && !whyMoving.catalyst && (
-              <div className="text-sm text-white/40 animate-pulse">Scanning headlines and analyzing catalyst...</div>
+              <div className="text-sm animate-pulse" style={{ color: txt3 }} role="status" aria-live="polite">
+                Scanning headlines and analyzing catalyst…
+              </div>
             )}
             {whyMoving.catalyst && (
               <div>
-                <div className="text-[10px] font-mono text-white/35 uppercase tracking-wider mb-1.5">Catalyst</div>
-                <p className="text-sm text-white/80 leading-relaxed">{whyMoving.catalyst}</p>
+                <div className="text-[10px] font-mono uppercase tracking-wider mb-1.5" style={{ color: txt3 }}>Catalyst</div>
+                <p className="text-sm leading-relaxed" style={{ color: txt }}>{whyMoving.catalyst}</p>
               </div>
             )}
             {whyMoving.verdict && (() => {
@@ -1737,16 +1890,16 @@ function HomeInner() {
                     <span className="text-2xl font-black" style={{ color: vColor }}>{v.verdict}</span>
                     <div>
                       <div className="text-xs font-semibold" style={{ color: vColor }}>{v.confidence}% confidence</div>
-                      <div className="text-xs text-white/60">{v.reason}</div>
+                      <div className="text-xs" style={{ color: txt2 }}>{v.reason}</div>
                     </div>
                   </div>
                   <div>
-                    <div className="text-[10px] font-mono text-white/35 uppercase mb-1">What to do</div>
-                    <p className="text-xs text-white/70 leading-relaxed">{v.action}</p>
+                    <div className="text-[10px] font-mono uppercase mb-1" style={{ color: txt3 }}>What to do</div>
+                    <p className="text-xs leading-relaxed" style={{ color: txt2 }}>{v.action}</p>
                   </div>
                   <div className="rounded-lg px-3 py-2" style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.15)' }}>
-                    <span className="text-[10px] font-mono text-red-400/60">⚠ Risk: </span>
-                    <span className="text-xs text-white/50">{v.risk}</span>
+                    <span className="text-[10px] font-mono" style={{ color: '#fca5a5' }}><span aria-hidden="true">⚠ </span>Risk: </span>
+                    <span className="text-xs" style={{ color: txt2 }}>{v.risk}</span>
                   </div>
                 </div>
               )
