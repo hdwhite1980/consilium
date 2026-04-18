@@ -331,18 +331,23 @@ Then output a structured JSON summary at the end (after your full analysis) in t
 {
   "sentiment_score": <integer -100 to +100>,
   "sentiment_label": "<strongly_bullish|bullish|neutral|bearish|strongly_bearish>",
-  "key_themes": ["theme1", "theme2", "theme3"],
+  "key_themes": ["Full readable sentence describing theme 1", "Full readable sentence describing theme 2", "Full readable sentence describing theme 3"],
   "open_direction": "<gap_up|flat|gap_down>",
   "expected_spy_move": <decimal like 0.8 for 0.8%>,
-  "sectors_to_watch": ["sector1", "sector2", "sector3"],
-  "sectors_bullish": ["sector1", "sector2"],
-  "sectors_bearish": ["sector1", "sector2"],
-  "tickers_to_watch": ["TICK1", "TICK2", "TICK3", "TICK4", "TICK5"],
-  "overnight_risks": ["risk1", "risk2", "risk3"],
+  "sectors_to_watch": ["Technology", "Energy", "Financials"],
+  "sectors_bullish": ["Technology", "Consumer Discretionary"],
+  "sectors_bearish": ["Energy", "Utilities"],
+  "tickers_to_watch": ["NVDA", "AAPL", "TSLA", "JPM", "XOM"],
+  "overnight_risks": ["Readable sentence describing specific risk 1", "Readable sentence describing specific risk 2", "Readable sentence describing specific risk 3"],
   "market_regime": "<risk_on|risk_off|mixed|transitioning>"
 }
 </json>
 
+CRITICAL for JSON values:
+- key_themes must be full readable sentences like "Technology led gains as AI spending accelerates" NOT slugs like "tech_gains"
+- overnight_risks must be full readable sentences like "Fed speakers at 8pm could shift rate cut expectations" NOT slugs like "fed_risk"
+- sectors_to_watch/bullish/bearish must be proper sector names like "Technology" NOT ETF tickers like "XLK"
+- tickers_to_watch must be actual stock tickers
 Be specific with numbers. Reference actual tickers and percentages. This analysis will be read by AI models, not humans, so precision and completeness matter more than readability.`
 
   const msg = await anthropic.messages.create({
@@ -376,7 +381,11 @@ Be specific with numbers. Reference actual tickers and percentages. This analysi
       sentiment_score: structuredData.sentiment_score || 0,
       sentiment_label: structuredData.sentiment_label || 'neutral',
       key_themes: structuredData.key_themes || [],
-      sector_analysis: { sectors_bullish: structuredData.sectors_bullish, sectors_bearish: structuredData.sectors_bearish },
+      sector_analysis: {
+        sectors_bullish: structuredData.sectors_bullish || [],
+        sectors_bearish: structuredData.sectors_bearish || [],
+        sectors_to_watch: structuredData.sectors_to_watch || [],
+      },
       top_movers: { tickers: structuredData.tickers_to_watch },
       macro_events: { market_regime: structuredData.market_regime },
       legislative: {},
@@ -462,17 +471,19 @@ Generate a sharp, actionable pre-market brief covering:
 End with JSON:
 <json>
 {
-  "headline": "<single line market outlook>",
+  "headline": "<single complete sentence market outlook, e.g. 'Markets set for gap-up open as risk-on sentiment continues with tech leading'>",
   "sentiment_score": <-100 to +100>,
-  "sentiment_label": "<label>",
+  "sentiment_label": "<strongly_bullish|bullish|neutral|bearish|strongly_bearish>",
   "open_direction": "<gap_up|flat|gap_down>",
-  "expected_move": <decimal %>,
-  "top_catalysts": ["cat1", "cat2", "cat3"],
-  "sectors_bullish": ["s1", "s2"],
-  "sectors_bearish": ["s1", "s2"],
-  "tickers_to_watch": ["T1", "T2", "T3", "T4", "T5"]
+  "expected_move": <decimal % like 0.5>,
+  "top_catalysts": ["Full readable sentence catalyst 1", "Full readable sentence catalyst 2", "Full readable sentence catalyst 3"],
+  "sectors_bullish": ["Technology", "Consumer Discretionary"],
+  "sectors_bearish": ["Energy", "Utilities"],
+  "tickers_to_watch": ["NVDA", "AAPL", "TSLA", "JPM", "XOM"]
 }
-</json>`
+</json>
+
+CRITICAL: All string values must be human-readable sentences or proper names, never underscore_slugs.`
 
   const msg = await anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
