@@ -8,6 +8,7 @@ import OpenAI from 'openai'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { buildMacroIntelligenceContext } from './macro-intelligence'
 import type { SignalBundle } from './aggregator'
+import { runSocialScout, formatSocialSentimentForPrompt, type SocialSentiment } from './social-scout'
 
 function getAnthropic() { return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) }
 function getOpenAI()    { return new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) }
@@ -99,6 +100,7 @@ export interface PipelineResult {
   counter?: CounterResult
   judge: JudgeResult
   transcript: TranscriptMessage[]
+  social: SocialSentiment
 }
 
 export interface TranscriptMessage {
@@ -413,7 +415,7 @@ Respond JSON ONLY (no fences):
   throw lastError ?? new Error('News Scout unavailable — all models failed')
 }
 
-export async function runClaude(bundle: SignalBundle, gemini: GeminiResult): Promise<ClaudeResult> {
+export async function runClaude(bundle: SignalBundle, gemini: GeminiResult, social?: SocialSentiment): Promise<ClaudeResult> {
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 1000,
@@ -444,6 +446,8 @@ ${gemini.summary}
 Sentiment: ${gemini.sentiment} | Regime: ${gemini.regimeAssessment}
 Events: ${gemini.keyEvents.join('; ')}
 
+${social ? formatSocialSentimentForPrompt(social, 'lead') : ''}
+
 YOUR SIGNAL DATA:
 ${bundle.aiContext.technicalsSection}
 
@@ -465,7 +469,7 @@ JSON ONLY:
   return parseJSON<ClaudeResult>(extractText(msg.content as any[]))
 }
 
-export async function runGPT(bundle: SignalBundle, gemini: GeminiResult, claude: ClaudeResult): Promise<GptResult> {
+export async function runGPT(bundle: SignalBundle, gemini: GeminiResult, claude: ClaudeResult, social?: SocialSentiment): Promise<GptResult> {
   const completion = await getOpenAI().chat.completions.create({
     model: 'gpt-4o',
     max_tokens: 1000,
@@ -480,6 +484,8 @@ ${gemini.summary}
 
 LEAD ANALYST (${claude.signal}, ${claude.confidence}%): ${claude.reasoning}
 Target: ${claude.target} | Risks: ${claude.keyRisks.join('; ')}
+
+${social ? formatSocialSentimentForPrompt(social, 'devil') : ''}
 
 SIGNAL DATA:
 ${bundle.aiContext.technicalsSection}
@@ -649,7 +655,8 @@ export async function runJudge(
   gpt: GptResult,
   rebuttal?: RebuttalResult,
   counter?: CounterResult,
-  round = 1
+  round = 1,
+  social?: SocialSentiment
 ): Promise<JudgeResult> {
   const judgePersona: Record<string, string> = {
     balanced:    'Weigh technical and fundamental arguments equally. Higher quality evidence wins regardless of type.',
@@ -672,6 +679,8 @@ ${timeframeContext(bundle.timeframe)}
 NEWS SCOUT: ${gemini.sentiment} sentiment, ${gemini.confidence}% confidence
 ${gemini.summary}
 Regime: ${gemini.regimeAssessment}
+
+${social ? formatSocialSentimentForPrompt(social, 'judge') : ''}
 
 ━━━ ROUND 1 ━━━
 LEAD ANALYST (${claude.signal}, ${claude.confidence}%): ${claude.reasoning}
@@ -816,11 +825,16 @@ export async function runPipeline(
 ): Promise<PipelineResult> {
   const transcript: TranscriptMessage[] = []
 
-  // ── Stage 1: News Scout ──────────────────────────────────
+  // ── Stage 1: News Scout + Social Scout (parallel) ────────
   onProgress('gemini_start', {})
-  const gemini = await runGemini(bundle)
+  onProgress('grok_start', {})
+  const [gemini, social] = await Promise.all([
+    runGemini(bundle),
+    runSocialScout(bundle.ticker, bundle.currentPrice, bundle.timeframe),
+  ])
   transcript.push({ role: 'gemini', stage: 'news_macro', content: gemini.summary, confidence: gemini.confidence, timestamp: ts() })
   onProgress('gemini_done', gemini)
+  onProgress('grok_done', social)
 
   // Inject macro intelligence context into bundle for Lead Analyst and Judge
   const macroContext = await buildMacroIntelligenceContext(
@@ -834,7 +848,7 @@ export async function runPipeline(
 
   // ── Stage 2: Lead Analyst ────────────────────────────────
   onProgress('claude_start', { gemini })
-  const claude = await runClaude(bundle, gemini)
+  const claude = await runClaude(bundle, gemini, social)
   transcript.push({ role: 'claude', stage: 'lead_analyst', content: claude.reasoning, signal: claude.signal, confidence: claude.confidence, timestamp: ts() })
   onProgress('claude_done', claude)
 
@@ -843,7 +857,7 @@ export async function runPipeline(
   onProgress('gpt_start', { gemini, claude })
   onProgress('rebuttal_start', { claude })
   const [gpt, rebuttal] = await Promise.all([
-    runGPT(bundle, gemini, claude),
+    runGPT(bundle, gemini, claude, social),
     runRebuttal(bundle, claude, { reasoning: '', signal: claude.signal, confidence: claude.confidence, agrees: true, challenges: [], alternateScenario: '', strongestCounterArgument: '' }),
   ])
   transcript.push({ role: 'gpt', stage: 'devils_advocate', content: gpt.reasoning, signal: gpt.signal, confidence: gpt.confidence, timestamp: ts() })
@@ -859,9 +873,9 @@ export async function runPipeline(
 
   // ── Stage 6: Council Verdict ─────────────────────────────
   onProgress('judge_start', {})
-  const judge = await runJudge(bundle, gemini, claude, gpt, rebuttal, counter, 1)
+  const judge = await runJudge(bundle, gemini, claude, gpt, rebuttal, counter, 1, social)
   transcript.push({ role: 'judge', stage: 'arbitrator', content: judge.summary, signal: judge.signal, confidence: judge.confidence, timestamp: ts() })
   onProgress('judge_done', judge)
 
-  return { gemini, claude, gpt, rebuttal, counter, judge, transcript }
+  return { gemini, claude, gpt, rebuttal, counter, judge, transcript, social }
 }

@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { buildSignalBundle } from '@/app/lib/aggregator'
 import { technicalsToPayload } from '@/app/lib/signals/technicals'
 import { runPipeline } from '@/app/lib/pipeline'
+import { runSocialScout } from '@/app/lib/social-scout'
 import { createServerClient } from '@/app/lib/supabase'
 import { createClient as createAuthClient } from '@/app/lib/auth/server'
 
@@ -144,9 +145,18 @@ export async function POST(req: NextRequest) {
               marketContext: sb.marketContext ?? null,
             })
 
+            // Option 2: re-run Social Scout even on cache hit (sentiment decays fast).
+            // Runs in parallel with cached replay so UI stays snappy. Non-blocking.
+            const freshSocialPromise = runSocialScout(symbol, cached.price ?? 0, tf)
+              .then(fresh => send('grok_done', fresh))
+              .catch(() => { /* silent fallback - social is optional */ })
+
             // Stream each AI stage result with a small delay so the UI animates
             await new Promise(r => setTimeout(r, 300))
             send('gemini_done', cached.gemini_news)
+
+            // Ensure social promise doesn't leak if user disconnects
+            void freshSocialPromise
 
             await new Promise(r => setTimeout(r, 300))
             send('claude_done', cached.claude_analysis)
@@ -248,6 +258,7 @@ export async function POST(req: NextRequest) {
           gemini_news: result.gemini,
           claude_analysis: result.claude,
           gpt_validation: result.gpt,
+          social_sentiment: result.social,
           judge_verdict: result.judge,
           final_signal: result.judge.signal,
           final_confidence: result.judge.confidence,
