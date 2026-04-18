@@ -124,7 +124,12 @@ export async function middleware(request: NextRequest) {
         const loginUrl = new URL('/login', request.url)
         loginUrl.searchParams.set('error', 'session_displaced')
         loginUrl.searchParams.set('message', 'Signed out — account accessed from another device.')
-        return NextResponse.redirect(loginUrl)
+        const response = NextResponse.redirect(loginUrl)
+        // Clear auth cookies so the browser doesn't retry with dead tokens
+        request.cookies.getAll()
+          .filter(c => c.name.startsWith('sb-'))
+          .forEach(c => response.cookies.delete(c.name))
+        return response
       }
     }
     // If tokens match, all good — no-op.
