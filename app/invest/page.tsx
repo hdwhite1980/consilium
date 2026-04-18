@@ -2,11 +2,11 @@
 
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, Plus, X, RefreshCw, Sparkles, Flame } from 'lucide-react'
+import { ArrowLeft, Plus, X, RefreshCw, Activity } from 'lucide-react'
 import { Tutorial, TutorialLauncher, INVEST_TUTORIAL } from '@/app/components/Tutorial'
-import { FiresideLesson } from '@/app/components/fireside/FiresideLesson'
-import { ForgeEmbers } from '@/app/components/fireside/ForgeEmbers'
-import { useContextualLessons } from '@/app/components/fireside/useContextualLessons'
+import { DeskNote } from '@/app/components/desk/DeskNote'
+import { FloorEmbers } from '@/app/components/desk/FloorEmbers'
+import { useContextualLessons } from '@/app/components/desk/useContextualLessons'
 import { INVEST_LESSONS, findLessonByTrigger, type InvestLesson } from '@/app/lib/invest-lessons'
 
 // ══════════════════════════════════════════════════════════════
@@ -35,12 +35,11 @@ interface Journey {
   total_trades: number
   winning_trades: number
   first_win_at: string | null
-  forge_seen_at?: string | null
+  floor_seen_at?: string | null
 }
 
-interface Stage {
+interface Tier {
   name: string
-  emoji: string
   color: string
   min: number
   max: number | null
@@ -48,12 +47,11 @@ interface Stage {
   maxPositions: number
   progressPct: number
   toNext: number
-  nextStageName: string | null
+  nextTierName: string | null
 }
 
-interface StageMeta {
+interface TierMeta {
   name: string
-  emoji: string
   color: string
   min: number
   max: number | null
@@ -90,10 +88,10 @@ interface Idea {
   volumeNote?: string
 }
 
-interface ForgeData {
+interface FloorData {
   journey: Journey | null
-  stage: Stage
-  stages: StageMeta[]
+  tier: Tier
+  tiers: TierMeta[]
   value: { total: number; cashRemaining: number; unrealized: number; realized: number; openPnL: number }
   openTrades: Trade[]
   closedTrades: Trade[]
@@ -109,6 +107,9 @@ interface ForgeData {
   sectorWinds: SectorWind[]
 }
 
+// ══════════════════════════════════════════════════════════════
+// HELPERS
+// ══════════════════════════════════════════════════════════════
 const fmt$ = (n: number | null | undefined, decimals = 2) => {
   const v = n ?? 0
   if (Math.abs(v) < 100) return `${v < 0 ? '-' : ''}$${Math.abs(v).toFixed(decimals)}`
@@ -126,55 +127,72 @@ const isMarketOpen = () => {
   const mins = ny.getHours() * 60 + ny.getMinutes()
   return mins >= 9 * 60 + 30 && mins < 16 * 60
 }
+const nowETShort = () => {
+  const now = new Date()
+  return now.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true }) + ' ET'
+}
 
-function EmberField({ intensity = 1 }: { intensity?: number }) {
-  const count = 36
+// ══════════════════════════════════════════════════════════════
+// AMBIENT TAPE DRIFT (background)
+// ══════════════════════════════════════════════════════════════
+function TapeDrift() {
   return (
-    <div className="forge-particles" aria-hidden>
-      {Array.from({ length: count }).map((_, i) => {
-        const left = Math.random() * 100
-        const dur = 8 + Math.random() * 14 / Math.max(0.5, intensity)
-        const delay = Math.random() * 22
-        const drift = Math.random() * 60 - 30
-        const opacity = 0.3 + Math.random() * 0.5
-        return (
-          <span key={i} className="forge-particle"
-            style={{
-              left: `${left}%`,
-              animationDuration: `${dur}s`,
-              animationDelay: `${delay}s`,
-              ['--drift' as string]: `${drift}px`,
-              opacity,
-            }} />
-        )
-      })}
+    <div className="fl-tape-drift" aria-hidden>
+      <svg width="100%" height="100%" viewBox="0 0 1200 800" preserveAspectRatio="none">
+        {Array.from({ length: 5 }).map((_, i) => {
+          const y = 80 + i * 140
+          const offset = (i * 200) % 1200
+          return (
+            <path
+              key={i}
+              d={`M -100 ${y} Q 300 ${y - 30} 600 ${y} T 1300 ${y}`}
+              fill="none"
+              stroke="rgba(148, 163, 184, 0.06)"
+              strokeWidth="0.5"
+              style={{
+                animation: `tapeDrift${i} ${30 + i * 5}s linear infinite`,
+                transformOrigin: 'center',
+              }}
+            />
+          )
+        })}
+      </svg>
     </div>
   )
 }
 
-function FlameGraphic({ color }: { color: string }) {
+// ══════════════════════════════════════════════════════════════
+// PORTFOLIO ORB (center focal point)
+// ══════════════════════════════════════════════════════════════
+function PortfolioOrb({ color, gain }: { color: string; gain: boolean }) {
   return (
-    <svg className="flame-svg" viewBox="0 0 220 220" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+    <svg className="fl-orb-svg" viewBox="0 0 220 220" xmlns="http://www.w3.org/2000/svg" aria-hidden>
       <defs>
-        <radialGradient id="flameGrad" cx="50%" cy="80%" r="60%">
-          <stop offset="0%" stopColor="#fff4d6" stopOpacity="0.95" />
-          <stop offset="30%" stopColor="#fbbf24" stopOpacity="0.7" />
-          <stop offset="65%" stopColor={color} stopOpacity="0.5" />
+        <radialGradient id="orbGrad" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor={gain ? '#10b981' : '#dc2626'} stopOpacity="0.35" />
+          <stop offset="40%" stopColor={color} stopOpacity="0.25" />
           <stop offset="100%" stopColor={color} stopOpacity="0" />
         </radialGradient>
-        <radialGradient id="flameCore" cx="50%" cy="75%" r="40%">
-          <stop offset="0%" stopColor="#ffffff" stopOpacity="0.9" />
-          <stop offset="100%" stopColor="#fbbf24" stopOpacity="0" />
+        <radialGradient id="orbCore" cx="50%" cy="50%" r="35%">
+          <stop offset="0%" stopColor="#f5f5f5" stopOpacity="0.9" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
         </radialGradient>
       </defs>
-      <g className="flame-core">
-        <path d="M110 200 C 60 180, 50 130, 80 90 C 90 110, 100 105, 95 80 C 115 95, 130 110, 130 140 C 140 125, 150 130, 150 150 C 160 140, 165 155, 160 170 C 155 185, 140 200, 110 200 Z" fill="url(#flameGrad)" />
-        <path d="M110 180 C 85 170, 80 140, 100 115 C 105 130, 115 128, 112 108 C 125 120, 135 135, 135 155 C 140 150, 145 158, 142 170 C 138 180, 128 188, 110 188 Z" fill="url(#flameCore)" />
-      </g>
+      {/* Outer halo */}
+      <circle cx="110" cy="110" r="100" fill="url(#orbGrad)" className="fl-orb-halo" />
+      {/* Thin tick ring */}
+      <circle cx="110" cy="110" r="80" fill="none" stroke={color} strokeOpacity="0.3" strokeWidth="0.5" strokeDasharray="1 6" className="fl-orb-ring" />
+      {/* Inner breathing sphere */}
+      <circle cx="110" cy="110" r="54" fill="url(#orbCore)" className="fl-orb-core" />
+      {/* Center dot */}
+      <circle cx="110" cy="110" r="3" fill={color} className="fl-orb-dot" />
     </svg>
   )
 }
 
+// ══════════════════════════════════════════════════════════════
+// START SCREEN
+// ══════════════════════════════════════════════════════════════
 function StartScreen({ onStart }: { onStart: (balance: number) => Promise<void> }) {
   const [amount, setAmount] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -183,37 +201,50 @@ function StartScreen({ onStart }: { onStart: (balance: number) => Promise<void> 
   const presets = [5, 10, 25, 50, 100, 250]
 
   return (
-    <div className="forge-root forge-start">
-      <EmberField intensity={0.6} />
-      <div className="forge-start-inner">
-        <div className="forge-logo" style={{ marginBottom: 24 }}>wali · forge</div>
-        <h1 className="forge-start-title">Light the first ember.</h1>
-        <p className="forge-start-sub">Every journey starts with what you have. Enter your first balance — even $1 is enough to begin.</p>
-        <div className="forge-start-presets">
+    <div className="fl-root fl-start">
+      <TapeDrift />
+      <div className="fl-start-inner">
+        <div className="fl-logo" style={{ marginBottom: 24 }}>wali · floor</div>
+        <h1 className="fl-start-title">Open the book.</h1>
+        <p className="fl-start-sub">
+          The trading floor starts with whatever capital you have. Enter your opening balance to begin — even a dollar is enough to open the book.
+        </p>
+
+        <div className="fl-start-presets">
           {presets.map(p => (
-            <button key={p} className={`preset-chip ${num === p ? 'active' : ''}`} onClick={() => setAmount(String(p))}>${p}</button>
+            <button key={p} className={`fl-preset-chip ${num === p ? 'active' : ''}`} onClick={() => setAmount(String(p))}>
+              ${p}
+            </button>
           ))}
         </div>
-        <div className="forge-start-input-row">
-          <span className="forge-dollar">$</span>
+
+        <div className="fl-start-input-row">
+          <span className="fl-dollar">$</span>
           <input type="number" value={amount} onChange={e => setAmount(e.target.value)}
             placeholder="0.00" min="1" step="0.01" inputMode="decimal" autoFocus />
         </div>
-        <button className="forge-primary-btn forge-start-btn" disabled={!valid || submitting}
+
+        <button className="fl-primary-btn fl-start-btn" disabled={!valid || submitting}
           onClick={async () => {
             if (!valid) return
             setSubmitting(true)
             try { await onStart(num) } finally { setSubmitting(false) }
           }}>
-          {submitting ? 'Lighting…' : 'Begin the journey →'}
+          {submitting ? 'Opening…' : 'Open the book →'}
         </button>
-        <p className="forge-start-fineprint">You can change this later. The balance is your starting point.</p>
+
+        <p className="fl-start-fineprint">
+          You can change this later. The balance is your starting mark — from here, trades you log grow or shrink it.
+        </p>
       </div>
     </div>
   )
 }
 
-function LogTradeSheet({ prefill, cashRemaining, onClose, onSave }: {
+// ══════════════════════════════════════════════════════════════
+// ORDER TICKET (log-trade sheet)
+// ══════════════════════════════════════════════════════════════
+function OrderTicket({ prefill, cashRemaining, onClose, onSave }: {
   prefill?: Partial<Idea>
   cashRemaining: number
   onClose: () => void
@@ -245,64 +276,73 @@ function LogTradeSheet({ prefill, cashRemaining, onClose, onSave }: {
   }, [ticker])
 
   return (
-    <div className="forge-sheet-overlay" onClick={onClose}>
-      <div className="forge-sheet" onClick={e => e.stopPropagation()}>
-        <div className="forge-sheet-header">
-          <span className="eyebrow">log a trade</span>
-          <button className="forge-close-btn" onClick={onClose} aria-label="Close"><X size={16} /></button>
+    <div className="fl-ticket-overlay" onClick={onClose}>
+      <div className="fl-ticket" onClick={e => e.stopPropagation()}>
+        <div className="fl-ticket-header">
+          <div>
+            <span className="fl-eyebrow">order ticket</span>
+            <div className="fl-ticket-time mono">{nowETShort()}</div>
+          </div>
+          <button className="fl-close-btn" onClick={onClose} aria-label="Close"><X size={16} /></button>
         </div>
-        <div className="forge-sheet-body">
-          <h2 className="forge-sheet-title">
-            {prefill?.ticker ? <>Taking the <em>{prefill.ticker}</em> spark</> : <>What did you buy?</>}
+
+        <div className="fl-ticket-body">
+          <h2 className="fl-ticket-title">
+            {prefill?.ticker ? <>Take the {prefill.ticker} setup</> : <>New position</>}
           </h2>
-          {prefill?.rationale && <p className="forge-sheet-sub">{prefill.rationale}</p>}
-          <div className="forge-field">
+          {prefill?.rationale && <p className="fl-ticket-sub">{prefill.rationale}</p>}
+
+          <div className="fl-field">
             <label>Ticker</label>
-            <div className="forge-field-row">
+            <div className="fl-field-row">
               <input type="text" value={ticker}
                 onChange={e => setTicker(e.target.value.toUpperCase())}
                 onBlur={() => { if (!prefill && ticker) lookupPrice() }}
                 placeholder="e.g. PLTR" maxLength={6}
-                disabled={!!prefill?.ticker} className="ticker-input" />
+                disabled={!!prefill?.ticker} className="fl-ticker-input" />
               {!prefill?.ticker && (
-                <button className="inline-btn" onClick={lookupPrice} disabled={!ticker || fetchingPrice}>
-                  {fetchingPrice ? '…' : 'Fetch price'}
+                <button className="fl-inline-btn" onClick={lookupPrice} disabled={!ticker || fetchingPrice}>
+                  {fetchingPrice ? '…' : 'Fetch bid'}
                 </button>
               )}
             </div>
           </div>
-          <div className="forge-field-pair">
-            <div className="forge-field">
+
+          <div className="fl-field-pair">
+            <div className="fl-field">
               <label>Shares</label>
               <input type="number" value={shares} onChange={e => setShares(e.target.value)}
                 placeholder="0" min="0" step="1" inputMode="numeric" />
             </div>
-            <div className="forge-field">
+            <div className="fl-field">
               <label>Entry price</label>
               <input type="number" value={price} onChange={e => setPrice(e.target.value)}
                 placeholder="0.00" min="0" step="0.01" inputMode="decimal" />
             </div>
           </div>
-          <div className="forge-math-preview">
-            <div className="forge-math-row"><span>Position size</span><span className="mono">{fmt$(cost)}</span></div>
-            <div className="forge-math-row"><span>Cash remaining</span><span className="mono">{fmt$(cashRemaining)}</span></div>
-            <div className="forge-math-row strong">
-              <span>After this trade</span>
-              <span className="mono" style={{ color: overBudget ? '#f87171' : '#34d399' }}>{fmt$(cashAfter)}</span>
+
+          <div className="fl-math-preview">
+            <div className="fl-math-row"><span>Position size</span><span className="mono">{fmt$(cost)}</span></div>
+            <div className="fl-math-row"><span>Cash available</span><span className="mono">{fmt$(cashRemaining)}</span></div>
+            <div className="fl-math-row strong">
+              <span>Cash after</span>
+              <span className="mono" style={{ color: overBudget ? '#dc2626' : '#10b981' }}>{fmt$(cashAfter)}</span>
             </div>
             {overBudget && (
-              <div className="forge-math-warning">Over budget by {fmt$(Math.abs(cashAfter))}. Reduce shares or lower entry.</div>
+              <div className="fl-math-warning">Over budget by {fmt$(Math.abs(cashAfter))}. Reduce shares or entry.</div>
             )}
           </div>
-          <div className="forge-field">
+
+          <div className="fl-field">
             <label>Notes <span style={{ opacity: 0.5 }}>(optional)</span></label>
             <textarea value={notes} onChange={e => setNotes(e.target.value)}
-              placeholder="Why this trade? Catalyst, setup, plan…" rows={2} />
+              placeholder="Thesis, catalyst, setup…" rows={2} />
           </div>
         </div>
-        <div className="forge-sheet-footer">
-          <button className="forge-ghost-btn" onClick={onClose}>Cancel</button>
-          <button className="forge-primary-btn" disabled={!valid || overBudget || saving}
+
+        <div className="fl-ticket-footer">
+          <button className="fl-ghost-btn" onClick={onClose}>Cancel</button>
+          <button className="fl-primary-btn" disabled={!valid || overBudget || saving}
             onClick={async () => {
               if (!valid || overBudget) return
               setSaving(true)
@@ -317,7 +357,7 @@ function LogTradeSheet({ prefill, cashRemaining, onClose, onSave }: {
                 })
               } finally { setSaving(false) }
             }}>
-            {saving ? 'Logging…' : 'Log this trade →'}
+            {saving ? 'Submitting…' : 'Submit order →'}
           </button>
         </div>
       </div>
@@ -325,7 +365,10 @@ function LogTradeSheet({ prefill, cashRemaining, onClose, onSave }: {
   )
 }
 
-function CloseTradeSheet({ trade, onClose, onSave }: {
+// ══════════════════════════════════════════════════════════════
+// MARK TO MARKET (close-trade sheet)
+// ══════════════════════════════════════════════════════════════
+function MarkToMarket({ trade, onClose, onSave }: {
   trade: Trade
   onClose: () => void
   onSave: (exitPrice: number) => Promise<void>
@@ -339,37 +382,43 @@ function CloseTradeSheet({ trade, onClose, onSave }: {
   const isWin = pnl > 0
 
   return (
-    <div className="forge-sheet-overlay" onClick={onClose}>
-      <div className="forge-sheet" onClick={e => e.stopPropagation()}>
-        <div className="forge-sheet-header">
-          <span className="eyebrow">close · {trade.ticker}</span>
-          <button className="forge-close-btn" onClick={onClose} aria-label="Close"><X size={16} /></button>
+    <div className="fl-ticket-overlay" onClick={onClose}>
+      <div className="fl-ticket" onClick={e => e.stopPropagation()}>
+        <div className="fl-ticket-header">
+          <div>
+            <span className="fl-eyebrow">mark to market · {trade.ticker}</span>
+            <div className="fl-ticket-time mono">{nowETShort()}</div>
+          </div>
+          <button className="fl-close-btn" onClick={onClose} aria-label="Close"><X size={16} /></button>
         </div>
-        <div className="forge-sheet-body">
-          <h2 className="forge-sheet-title">Lock it in or learn from it.</h2>
-          <p className="forge-sheet-sub">You bought <span className="mono">{trade.shares}</span> shares at <span className="mono">{fmt$(trade.entry_price)}</span>. What was your exit?</p>
-          <div className="forge-field">
+        <div className="fl-ticket-body">
+          <h2 className="fl-ticket-title">Close position at market.</h2>
+          <p className="fl-ticket-sub">
+            Held: <span className="mono">{trade.shares}</span> shares @ <span className="mono">{fmt$(trade.entry_price)}</span>. What was your fill?
+          </p>
+          <div className="fl-field">
             <label>Exit price</label>
             <input type="number" value={exitPrice} onChange={e => setExitPrice(e.target.value)}
               placeholder="0.00" min="0" step="0.01" autoFocus inputMode="decimal" />
           </div>
           {valid && (
-            <div className={`forge-pnl-preview ${isWin ? 'win' : 'loss'}`}>
-              <div className="forge-pnl-big mono">{pnl >= 0 ? '+' : ''}{fmt$(pnl)}</div>
-              <div className="forge-pnl-sub mono">{fmtPct(pnlPct)} · {isWin ? 'locked-in win' : 'learning experience'}</div>
+            <div className={`fl-pnl-preview ${isWin ? 'win' : 'loss'}`}>
+              <div className="fl-pnl-label mono">Realized P&L</div>
+              <div className="fl-pnl-big mono">{pnl >= 0 ? '+' : ''}{fmt$(pnl)}</div>
+              <div className="fl-pnl-sub mono">{fmtPct(pnlPct)} · {isWin ? 'profit' : 'loss'}</div>
             </div>
           )}
         </div>
-        <div className="forge-sheet-footer">
-          <button className="forge-ghost-btn" onClick={onClose}>Cancel</button>
-          <button className="forge-primary-btn" disabled={!valid || saving}
+        <div className="fl-ticket-footer">
+          <button className="fl-ghost-btn" onClick={onClose}>Cancel</button>
+          <button className="fl-primary-btn" disabled={!valid || saving}
             onClick={async () => {
               if (!valid) return
               setSaving(true)
               try { await onSave(exitNum) } finally { setSaving(false) }
             }}
-            style={isWin ? { background: 'linear-gradient(135deg,#34d399,#059669)' } : undefined}>
-            {saving ? 'Closing…' : isWin ? 'Lock in the win 🔥' : 'Close trade'}
+            style={isWin ? { background: '#10b981', color: '#052e16' } : undefined}>
+            {saving ? 'Closing…' : 'Close position'}
           </button>
         </div>
       </div>
@@ -377,51 +426,149 @@ function CloseTradeSheet({ trade, onClose, onSave }: {
   )
 }
 
-function FirstWinMoment({ amount, onDismiss }: { amount: number; onDismiss: () => void }) {
+// ══════════════════════════════════════════════════════════════
+// FIRST WIN — TRADE CONFIRMATION RECEIPT
+// ══════════════════════════════════════════════════════════════
+function TradeConfirmation({ amount, onDismiss }: { amount: number; onDismiss: () => void }) {
   return (
-    <div className="first-win-overlay">
-      <div className="first-win-card">
-        <div className="eyebrow" style={{ color: '#fbbf24', marginBottom: 14 }}>moment · captured</div>
-        <h1>First win.</h1>
-        <div className="first-win-amount mono">+ {fmt$(amount)}</div>
-        <p>This is how it starts. Every journey begins with a single locked-in win.</p>
-        <button onClick={onDismiss}>Keep going →</button>
+    <div className="fl-confirm-overlay">
+      <div className="fl-confirm-card">
+        <div className="fl-confirm-header">
+          <span className="fl-confirm-eyebrow mono">trade confirmation</span>
+          <span className="fl-confirm-time mono">{nowETShort()}</span>
+        </div>
+        <div className="fl-confirm-body">
+          <h1>First profit of record.</h1>
+          <div className="fl-confirm-amount mono">+{fmt$(amount)}</div>
+          <p>Every book starts with one. The discipline that produced this trade is what compounds.</p>
+          <button onClick={onDismiss}>Return to the floor →</button>
+        </div>
       </div>
     </div>
   )
 }
 
-function ContextualBell({ lesson, onOpen, onDismiss }: { lesson: InvestLesson; onOpen: () => void; onDismiss: () => void }) {
+// ══════════════════════════════════════════════════════════════
+// DESK NOTE BELL (contextual nudge)
+// ══════════════════════════════════════════════════════════════
+function DeskNoteBell({ lesson, onOpen, onDismiss }: { lesson: InvestLesson; onOpen: () => void; onDismiss: () => void }) {
   return (
-    <div className="ctx-bell-wrap">
-      <button className="ctx-bell" onClick={onOpen}>
-        <div className="ctx-bell-glow" />
-        <div className="ctx-bell-body">
-          <div className="ctx-bell-eyebrow">the fire speaks · {lesson.duration}</div>
-          <div className="ctx-bell-title">{lesson.title}</div>
-          <div className="ctx-bell-sub">{lesson.subtitle}</div>
+    <div className="fl-bell-wrap">
+      <button className="fl-bell" onClick={onOpen}>
+        <div className="fl-bell-body">
+          <div className="fl-bell-eyebrow">desk note queued · {lesson.duration}</div>
+          <div className="fl-bell-title">{lesson.title}</div>
+          <div className="fl-bell-sub">{lesson.subtitle}</div>
         </div>
-        <span className="ctx-bell-arrow">→</span>
+        <span className="fl-bell-arrow">→</span>
       </button>
-      <button className="ctx-bell-dismiss" onClick={onDismiss} aria-label="Dismiss"><X size={12} /></button>
+      <button className="fl-bell-dismiss" onClick={onDismiss} aria-label="Dismiss">
+        <X size={12} />
+      </button>
     </div>
   )
 }
 
-function ForgeInner() {
+// ══════════════════════════════════════════════════════════════
+// TIER LADDER (left column — skyline silhouettes)
+// ══════════════════════════════════════════════════════════════
+function TierLadder({ tiers, tier, stats, value }: {
+  tiers: TierMeta[]
+  tier: Tier
+  stats: { winRate: number; winStreak: number; bestStreak: number }
+  value: { realized: number }
+}) {
+  const tierIdx = tiers.findIndex(t => t.name === tier.name)
+
+  // Relative building heights: Buyer small, Sovereign tallest
+  const heights = [20, 32, 48, 68, 92]
+
+  return (
+    <aside className="fl-ladder">
+      <div className="fl-ladder-head">
+        <div className="fl-eyebrow">capital hierarchy</div>
+        <h3>Five tiers, one book</h3>
+      </div>
+
+      <div className="fl-skyline">
+        {tiers.map((t, i) => {
+          const h = heights[i] ?? 20
+          const status = i < tierIdx ? 'past' : i === tierIdx ? 'current' : 'future'
+          return (
+            <div key={t.name} className={`fl-building fl-b-${status}`}
+                 style={{
+                   height: `${h}%`,
+                   background: status === 'future' ? 'rgba(148, 163, 184, 0.08)' : undefined,
+                   borderColor: status === 'future' ? 'rgba(148, 163, 184, 0.1)' : t.color,
+                 }}>
+              <div className="fl-building-top" style={{ background: status === 'future' ? 'transparent' : t.color }} />
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="fl-tiers">
+        {tiers.map((t, i) => {
+          const status = i < tierIdx ? 'past' : i === tierIdx ? 'current' : 'future'
+          const rangeText = t.max == null ? `$${t.min.toLocaleString()}+` : `$${t.min} — $${t.max.toLocaleString()}`
+          return (
+            <div key={t.name} className={`fl-tier-row fl-t-${status}`}>
+              <div className="fl-tier-mark" style={{ background: status === 'future' ? 'transparent' : t.color, borderColor: t.color }} />
+              <div className="fl-tier-info">
+                <div className="fl-tier-name">{t.name}</div>
+                <div className="fl-tier-range mono">{rangeText}</div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="fl-metric-block">
+        <div className="fl-metric-row">
+          <span className="k">to {tier.nextTierName ?? 'apex'}</span>
+          <span className="v mono">{tier.nextTierName ? fmt$(tier.toNext) : '—'}</span>
+        </div>
+        <div className="fl-bar">
+          <div className="fl-bar-fill" style={{ width: `${tier.progressPct}%` }} />
+        </div>
+      </div>
+
+      <div className="fl-metric-block">
+        <div className="fl-metric-row"><span className="k">win rate</span><span className="v mono">{stats.winRate}%</span></div>
+        <div className="fl-metric-row"><span className="k">current streak</span><span className="v mono">{stats.winStreak}</span></div>
+        <div className="fl-metric-row"><span className="k">best streak</span><span className="v mono">{stats.bestStreak}</span></div>
+        <div className="fl-metric-row" style={{ marginBottom: 0 }}>
+          <span className="k">realized</span>
+          <span className="v mono" style={{ color: value.realized >= 0 ? '#10b981' : '#dc2626' }}>
+            {value.realized >= 0 ? '+' : ''}{fmt$(value.realized)}
+          </span>
+        </div>
+      </div>
+    </aside>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════
+// MAIN PAGE
+// ══════════════════════════════════════════════════════════════
+function FloorInner() {
   const router = useRouter()
-  const [data, setData] = useState<ForgeData | null>(null)
+
+  const [data, setData] = useState<FloorData | null>(null)
   const [loading, setLoading] = useState(true)
   const [introAccepted, setIntroAccepted] = useState<boolean | null>(null)
+
   const [ideas, setIdeas] = useState<Idea[]>([])
   const [loadingIdeas, setLoadingIdeas] = useState(false)
-  const [stokedAt, setStokedAt] = useState<Date | null>(null)
-  const [logSheetOpen, setLogSheetOpen] = useState(false)
-  const [logPrefill, setLogPrefill] = useState<Partial<Idea> | undefined>(undefined)
+  const [pulledAt, setPulledAt] = useState<Date | null>(null)
+
+  const [ticketOpen, setTicketOpen] = useState(false)
+  const [ticketPrefill, setTicketPrefill] = useState<Partial<Idea> | undefined>(undefined)
   const [closeTarget, setCloseTarget] = useState<Trade | null>(null)
   const [firstWinAmount, setFirstWinAmount] = useState<number | null>(null)
   const [showTutorial, setShowTutorial] = useState(false)
-  const [mobileView, setMobileView] = useState<'flame' | 'sparks' | 'trades' | 'embers'>('flame')
+  const [mobileView, setMobileView] = useState<'portfolio' | 'signals' | 'positions' | 'notes'>('portfolio')
+
   const [openLessonId, setOpenLessonId] = useState<string | null>(null)
   const [ctxLesson, setCtxLesson] = useState<InvestLesson | null>(null)
   const [completedIds, setCompletedIds] = useState<Set<string>>(new Set())
@@ -446,9 +593,9 @@ function ForgeInner() {
 
   const loadData = useCallback(async () => {
     try {
-      const res = await fetch('/api/invest/forge')
+      const res = await fetch('/api/invest/floor')
       if (!res.ok) { setLoading(false); return }
-      const d: ForgeData = await res.json()
+      const d: FloorData = await res.json()
       setData(d)
     } catch { /* ignore */ }
     setLoading(false)
@@ -462,17 +609,17 @@ function ForgeInner() {
   }, [loadData])
 
   const { pendingTrigger, dismissTrigger } = useContextualLessons({
-    stage: data?.stage.name ?? 'Spark',
+    tier: data?.tier.name ?? 'Buyer',
     openTrades: data?.openTrades ?? [],
     closedTrades: data?.closedTrades ?? [],
-    forgeSeen: !!data?.journey?.forge_seen_at,
+    floorSeen: !!data?.journey?.floor_seen_at,
   })
 
   useEffect(() => {
     if (!pendingTrigger || !data) return
     const lesson = findLessonByTrigger(
       pendingTrigger,
-      data.stage.name,
+      data.tier.name,
       completedIds,
       data.stats.totalTrades,
       data.stats.closedCount > 0
@@ -482,11 +629,11 @@ function ForgeInner() {
   }, [pendingTrigger, data, completedIds, dismissTrigger])
 
   useEffect(() => {
-    if (data?.journey && ideas.length === 0 && !loadingIdeas && !stokedAt) stokeFlame()
+    if (data?.journey && ideas.length === 0 && !loadingIdeas && !pulledAt) pullSignals()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.journey])
 
-  const stokeFlame = async () => {
+  const pullSignals = async () => {
     if (!data) return
     setLoadingIdeas(true)
     try {
@@ -502,24 +649,24 @@ function ForgeInner() {
       })
       const body = await res.json()
       setIdeas(body.ideas ?? [])
-      setStokedAt(new Date())
+      setPulledAt(new Date())
     } catch { /* ignore */ }
     setLoadingIdeas(false)
   }
 
-  const openLogFromSpark = (idea: Idea) => { setLogPrefill(idea); setLogSheetOpen(true) }
-  const openLogBlank = () => { setLogPrefill(undefined); setLogSheetOpen(true) }
+  const openTicketFromSignal = (idea: Idea) => { setTicketPrefill(idea); setTicketOpen(true) }
+  const openTicketBlank = () => { setTicketPrefill(undefined); setTicketOpen(true) }
 
-  const saveLogTrade = async (payload: { ticker: string; shares: number; entry_price: number; council_signal?: string; confidence?: number; notes?: string }) => {
+  const submitOrder = async (payload: { ticker: string; shares: number; entry_price: number; council_signal?: string; confidence?: number; notes?: string }) => {
     await fetch('/api/invest', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'open_trade', ...payload }),
     })
-    setLogSheetOpen(false); setLogPrefill(undefined)
+    setTicketOpen(false); setTicketPrefill(undefined)
     await loadData()
   }
 
-  const saveCloseTrade = async (exitPrice: number) => {
+  const closePosition = async (exitPrice: number) => {
     if (!closeTarget) return
     const res = await fetch('/api/invest', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -563,170 +710,146 @@ function ForgeInner() {
 
   const openLesson = openLessonId ? INVEST_LESSONS.find(l => l.id === openLessonId) ?? null : null
 
+  // ── Render states ─────────────────────────────────────────
   if (loading || introAccepted === null) {
     return (
-      <div className="forge-loading">
-        <EmberField intensity={0.4} />
-        <div className="forge-loading-dots">
+      <div className="fl-loading">
+        <TapeDrift />
+        <div className="fl-loading-dots">
           {[0, 1, 2].map(i => <span key={i} style={{ animationDelay: `${i * 0.15}s` }} />)}
         </div>
-        <ForgeStyles />
+        <FloorStyles />
       </div>
     )
   }
 
-  if (introAccepted === false) { router.replace('/invest/intro'); return null }
-
-  if (!data?.journey) {
-    return (<><StartScreen onStart={setStartBalance} /><ForgeStyles /></>)
+  if (introAccepted === false) {
+    router.replace('/invest/intro')
+    return null
   }
 
-  const { stage, stages, value, openTrades, stats, sectorWinds } = data
-  const stageIdx = stages.findIndex(s => s.name === stage.name)
-  const volatility = Math.min(2, sectorWinds.reduce((s, w) => s + Math.abs(w.change1D ?? 0), 0) / 10 || 1)
+  if (!data?.journey) {
+    return (<><StartScreen onStart={setStartBalance} /><FloorStyles /></>)
+  }
+
+  const { tier, tiers, value, openTrades, stats, sectorWinds } = data
+  const openPnLPositive = value.openPnL >= 0
 
   return (
-    <div className="forge-root">
-      <div className="forge-sky" />
-      <EmberField intensity={volatility} />
+    <div className="fl-root">
+      <TapeDrift />
 
       {showTutorial && <Tutorial config={INVEST_TUTORIAL} autoStart onComplete={() => setShowTutorial(false)} onSkip={() => setShowTutorial(false)} />}
-      {firstWinAmount != null && <FirstWinMoment amount={firstWinAmount} onDismiss={() => setFirstWinAmount(null)} />}
-      {logSheetOpen && <LogTradeSheet prefill={logPrefill} cashRemaining={value.cashRemaining} onClose={() => { setLogSheetOpen(false); setLogPrefill(undefined) }} onSave={saveLogTrade} />}
-      {closeTarget && <CloseTradeSheet trade={closeTarget} onClose={() => setCloseTarget(null)} onSave={saveCloseTrade} />}
-      {openLesson && <FiresideLesson lesson={openLesson} balance={value.total} onClose={closeLesson} onComplete={handleLessonComplete} alreadyCompleted={completedIds.has(openLesson.id)} />}
+      {firstWinAmount != null && <TradeConfirmation amount={firstWinAmount} onDismiss={() => setFirstWinAmount(null)} />}
+      {ticketOpen && <OrderTicket prefill={ticketPrefill} cashRemaining={value.cashRemaining} onClose={() => { setTicketOpen(false); setTicketPrefill(undefined) }} onSave={submitOrder} />}
+      {closeTarget && <MarkToMarket trade={closeTarget} onClose={() => setCloseTarget(null)} onSave={closePosition} />}
+      {openLesson && <DeskNote lesson={openLesson} balance={value.total} onClose={closeLesson} onComplete={handleLessonComplete} alreadyCompleted={completedIds.has(openLesson.id)} />}
 
-      <header className="forge-topbar">
-        <button className="forge-backbtn" onClick={() => router.push('/')} aria-label="Back"><ArrowLeft size={14} /></button>
-        <span className="forge-logo">wali · forge</span>
-        <span className="eyebrow forge-eyebrow-inline">invest journey</span>
-        <div className="forge-topbar-spacer" />
-        <div className="forge-pulse" title={isMarketOpen() ? 'Market open' : 'Market closed'}>
-          <span className="dot" />
-          <span className="label">{isMarketOpen() ? 'live' : 'closed'}</span>
+      {/* Topbar */}
+      <header className="fl-topbar">
+        <button className="fl-backbtn" onClick={() => router.push('/')} aria-label="Back"><ArrowLeft size={14} /></button>
+        <span className="fl-logo">wali · floor</span>
+        <span className="fl-eyebrow fl-eyebrow-inline">invest · trading desk</span>
+        <div className="fl-topbar-spacer" />
+        <div className="fl-live-tag">
+          <span className="dot" style={{ background: isMarketOpen() ? '#10b981' : '#64748b' }} />
+          <span className="label">{isMarketOpen() ? 'market live' : 'market closed'}</span>
         </div>
         <TutorialLauncher tutorialId="invest" label="How it works" />
       </header>
 
-      <nav className="forge-mobile-nav">
-        {(['flame', 'sparks', 'trades', 'embers'] as const).map(v => (
+      {/* Ticker tape */}
+      {sectorWinds.length > 0 && (
+        <div className="fl-tape">
+          <div className="fl-tape-label mono">sectors ›</div>
+          <div className="fl-tape-scroll">
+            {[...sectorWinds, ...sectorWinds].map((w, i) => (
+              <span key={`${w.etf}-${i}`} className="fl-tape-tick">
+                <span className="mono etf">{w.etf}</span>
+                <span className={`mono pct ${w.change1D >= 0 ? 'up' : 'dn'}`}>{fmtPct(w.change1D)}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <nav className="fl-mobile-nav">
+        {(['portfolio', 'signals', 'positions', 'notes'] as const).map(v => (
           <button key={v} className={mobileView === v ? 'active' : ''} onClick={() => setMobileView(v)}>
-            {v === 'flame' ? 'flame' : v === 'sparks' ? `sparks${ideas.length ? ` · ${ideas.length}` : ''}` : v === 'trades' ? `open · ${openTrades.length}` : ctxLesson ? 'embers · !' : 'embers'}
+            {v === 'portfolio' ? 'portfolio' :
+             v === 'signals' ? `signals${ideas.length ? ` · ${ideas.length}` : ''}` :
+             v === 'positions' ? `open · ${openTrades.length}` :
+             ctxLesson ? 'notes · !' : 'notes'}
           </button>
         ))}
       </nav>
 
-      <div className="forge-stage">
+      <div className="fl-stage">
 
-        <aside className={`forge-ladder ${mobileView === 'flame' ? 'mv-show' : 'mv-hide'}`}>
-          <div className="forge-ladder-title">
-            <div className="eyebrow">the path</div>
-            <h3>Six stages from spark to free</h3>
-          </div>
-          <div className="stage-rail" />
-          {stages.map((s, i) => {
-            const status = i < stageIdx ? 'past' : i === stageIdx ? 'current' : 'future'
-            const rangeText = s.max == null ? `$${s.min.toLocaleString()}+` : `$${s.min} — $${s.max}`
-            return (
-              <div key={s.name} className={`stage-row ${status}`}>
-                <div className="node" style={status !== 'future' ? { boxShadow: `0 0 14px ${s.color}AA` } : undefined} />
-                <div className="info">
-                  <div className="name">{s.name}</div>
-                  <div className="range mono">{rangeText}</div>
-                </div>
-              </div>
-            )
-          })}
-          <div className="tether">
-            <div className="tether-row">
-              <span className="k">to {stage.nextStageName ?? 'apex'}</span>
-              <span className="v mono">{stage.nextStageName ? fmt$(stage.toNext) : '—'}</span>
-            </div>
-            <div className="bar"><div className="fill" style={{ width: `${stage.progressPct}%` }} /></div>
-            <div className="tether-row" style={{ marginTop: 10, marginBottom: 0 }}>
-              <span className="k">streak</span>
-              <span className="v mono">{stats.winStreak} · 🔥</span>
-            </div>
-          </div>
-          <div className="tether">
-            <div className="tether-row"><span className="k">win rate</span><span className="v mono">{stats.winRate}%</span></div>
-            <div className="tether-row"><span className="k">best streak</span><span className="v mono">{stats.bestStreak}</span></div>
-            <div className="tether-row" style={{ marginBottom: 0 }}>
-              <span className="k">locked in</span>
-              <span className="v mono" style={{ color: value.realized >= 0 ? '#34d399' : '#f87171' }}>
-                {value.realized >= 0 ? '+' : ''}{fmt$(value.realized)}
-              </span>
-            </div>
-          </div>
-        </aside>
+        {/* LEFT — tier ladder */}
+        <div className={mobileView === 'portfolio' ? 'fl-show' : 'fl-hide'}>
+          <TierLadder tiers={tiers} tier={tier} stats={stats} value={value} />
+        </div>
 
-        <main className={`forge-center ${mobileView === 'flame' || mobileView === 'sparks' ? 'mv-show' : 'mv-hide'}`}>
-          {(mobileView === 'flame' || mobileView === 'sparks') && (
-            <div className={`flame-hero ${mobileView === 'sparks' ? 'compact' : ''}`}>
-              <div className="flame-ring" />
-              <div className="flame-ring r2" />
-              <div className="flame-ring r3" />
-              <FlameGraphic color={stage.color} />
-              <div className="flame-value">
-                <div className="eyebrow">portfolio</div>
+        {/* CENTER — orb + signals */}
+        <main className={`fl-center ${mobileView === 'portfolio' || mobileView === 'signals' ? 'fl-show' : 'fl-hide'}`}>
+
+          {(mobileView === 'portfolio' || mobileView === 'signals') && (
+            <div className={`fl-orb-hero ${mobileView === 'signals' ? 'compact' : ''}`}>
+              <PortfolioOrb color={tier.color} gain={openPnLPositive} />
+              <div className="fl-orb-value">
+                <div className="fl-eyebrow">book value</div>
                 <div className="big mono">{fmt$(value.total)}</div>
-                <div className="delta mono" style={{ color: value.openPnL >= 0 ? '#34d399' : '#f87171' }}>
-                  {value.openPnL >= 0 ? '+' : ''}{fmt$(value.openPnL)} · open
+                <div className="delta mono" style={{ color: openPnLPositive ? '#10b981' : '#dc2626' }}>
+                  {openPnLPositive ? '+' : ''}{fmt$(value.openPnL)} · mtm
                 </div>
               </div>
             </div>
           )}
 
-          {mobileView === 'flame' && (
-            <div className="stage-caption">
-              <h1>You are at <em>{stage.name}</em></h1>
-              <p>{stage.tagline}</p>
+          {mobileView === 'portfolio' && (
+            <div className="fl-tier-caption">
+              <h1>You are at <em style={{ color: tier.color }}>{tier.name}</em></h1>
+              <p>{tier.tagline}</p>
             </div>
           )}
 
-          {sectorWinds.length > 0 && (
-            <div className="sector-winds">
-              <div className="winds-label eyebrow">sector winds · today</div>
-              <div className="sector-scroll">
-                {sectorWinds.map(w => (
-                  <div key={w.etf} className={`sector-chip ${w.change1D >= 0.5 ? 'bull' : w.change1D <= -0.5 ? 'bear' : 'neutral'}`}>
-                    <span className="bar" />
-                    <span className="nm mono">{w.etf}</span>
-                    <span className="pct mono">{fmtPct(w.change1D)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="constellation">
-            <div className="constellation-header">
-              <h2>Tonight's sparks</h2>
-              <button className="stoke-btn" onClick={stokeFlame} disabled={loadingIdeas}>
+          <div className="fl-signals">
+            <div className="fl-signals-header">
+              <h2>Today's setups</h2>
+              <button className="fl-pull-btn" onClick={pullSignals} disabled={loadingIdeas}>
                 <RefreshCw size={11} className={loadingIdeas ? 'spinning' : ''} />
-                {loadingIdeas ? 'stoking…' : 'stoke the flame'}
+                {loadingIdeas ? 'pulling…' : 'pull new signals'}
               </button>
             </div>
+
             {loadingIdeas && ideas.length === 0 ? (
-              <div className="sparks-loading"><Sparkles size={22} style={{ color: '#fbbf24' }} /><p>The council is reading the market…</p></div>
+              <div className="fl-signals-loading">
+                <Activity size={20} style={{ color: '#d4a857' }} />
+                <p>Council scanning the tape…</p>
+              </div>
             ) : ideas.length === 0 ? (
-              <div className="sparks-empty"><p>No sparks yet. Stoke the flame to see tonight's picks.</p></div>
+              <div className="fl-signals-empty">
+                <p>No setups queued. Pull new signals to see today's screen.</p>
+              </div>
             ) : (
-              <div className="picks-grid">
+              <div className="fl-signals-grid">
                 {ideas.map((idea, i) => {
                   const price = idea.livePrice ?? idea.price
                   return (
-                    <div key={`${idea.ticker}-${i}`} className="pick-spark"
-                      onClick={() => openLogFromSpark(idea)}
-                      style={{ animationDelay: `${i * 0.08}s` }}>
-                      <div className="tk">
-                        <span className="sym">{idea.ticker}</span>
-                        <span className="px mono">{fmt$(price)}</span>
+                    <div key={`${idea.ticker}-${i}`} className="fl-signal-tile"
+                      onClick={() => openTicketFromSignal(idea)}
+                      style={{ animationDelay: `${i * 0.06}s` }}>
+                      <div className="fl-signal-top">
+                        <span className="fl-signal-sym">{idea.ticker}</span>
+                        <span className="fl-signal-px mono">{fmt$(price)}</span>
                       </div>
-                      {idea.catalyst && <div className="why">{idea.catalyst}</div>}
-                      <div className="meta">
+                      {idea.catalyst && <div className="fl-signal-catalyst">{idea.catalyst}</div>}
+                      <div className="fl-signal-meta">
                         <span className="mono">{idea.suggestedShares} sh</span>
-                        <span className="sig mono">{idea.signal?.toLowerCase() ?? 'bull'} · {idea.confidence ?? 0}%</span>
+                        <span className="fl-signal-conf mono">
+                          {idea.signal?.toLowerCase() ?? 'bull'} · {idea.confidence ?? 0}%
+                        </span>
                       </div>
                     </div>
                   )
@@ -736,30 +859,35 @@ function ForgeInner() {
           </div>
         </main>
 
-        <aside className={`forge-right ${mobileView === 'trades' || mobileView === 'embers' ? 'mv-show' : 'mv-hide'}`}>
-          {ctxLesson && (mobileView === 'flame' || mobileView === 'embers') && (
-            <ContextualBell lesson={ctxLesson} onOpen={openCtxLesson} onDismiss={dismissCtxLesson} />
+        {/* RIGHT — positions + notes */}
+        <aside className={`fl-right ${mobileView === 'positions' || mobileView === 'notes' ? 'fl-show' : 'fl-hide'}`}>
+
+          {ctxLesson && (mobileView === 'portfolio' || mobileView === 'notes') && (
+            <DeskNoteBell lesson={ctxLesson} onOpen={openCtxLesson} onDismiss={dismissCtxLesson} />
           )}
 
-          {(mobileView === 'flame' || mobileView === 'trades') && (
-            <div className="right-section">
-              <div className="eyebrow">open · in play</div>
-              <h3>{openTrades.length === 0 ? 'No positions yet' : openTrades.length === 1 ? 'One position' : `${openTrades.length} positions`}</h3>
+          {(mobileView === 'portfolio' || mobileView === 'positions') && (
+            <div className="fl-right-section">
+              <div className="fl-eyebrow">open positions · mtm</div>
+              <h3>{openTrades.length === 0 ? 'No open positions' : openTrades.length === 1 ? 'One position open' : `${openTrades.length} positions open`}</h3>
+
               {openTrades.length === 0 ? (
-                <p className="right-empty">Tap a spark in the center to open your first trade.</p>
+                <p className="fl-right-empty">Tap a setup in the center to open your first position.</p>
               ) : (
                 openTrades.map(t => {
                   const isUp = (t.pnl ?? 0) >= 0
                   return (
-                    <button key={t.id} className="trade-card"
-                      style={{ ['--tc' as string]: isUp ? '#34d399' : '#f87171' }}
+                    <button key={t.id} className="fl-position-row"
+                      style={{ ['--pc' as string]: isUp ? '#10b981' : '#dc2626' }}
                       onClick={() => setCloseTarget(t)}>
-                      <div className="heartbeat" />
-                      <div className="row1">
-                        <span className="sym">{t.ticker}</span>
-                        <span className={`pnl mono ${isUp ? 'up' : 'dn'}`}>{t.pnlPct != null ? fmtPct(t.pnlPct) : '—'}</span>
+                      <div className="fl-position-pulse" />
+                      <div className="fl-position-row1">
+                        <span className="fl-position-sym">{t.ticker}</span>
+                        <span className={`fl-position-pnl mono ${isUp ? 'up' : 'dn'}`}>
+                          {t.pnlPct != null ? fmtPct(t.pnlPct) : '—'}
+                        </span>
                       </div>
-                      <div className="row2 mono">
+                      <div className="fl-position-row2 mono">
                         <span>{t.shares} sh @ {fmt$(t.entry_price)}</span>
                         <span>{t.currentPrice != null ? fmt$(t.currentPrice) : 'live…'}</span>
                       </div>
@@ -770,12 +898,12 @@ function ForgeInner() {
             </div>
           )}
 
-          {(mobileView === 'flame' || mobileView === 'embers') && (
-            <div className="right-section">
-              <div className="eyebrow">embers · wisdom</div>
-              <h3>Lessons at the fire</h3>
-              <ForgeEmbers
-                currentStage={stage.name}
+          {(mobileView === 'portfolio' || mobileView === 'notes') && (
+            <div className="fl-right-section">
+              <div className="fl-eyebrow">desk notes · field manual</div>
+              <h3>Notes at the desk</h3>
+              <FloorEmbers
+                currentStage={tier.name}
                 totalTrades={stats.totalTrades}
                 closedTrades={stats.closedCount}
                 balance={value.total}
@@ -787,747 +915,876 @@ function ForgeInner() {
         </aside>
       </div>
 
-      <div className="forge-actions">
-        <button className="forge-ghost-btn" onClick={openLogBlank}><Plus size={12} /> Log manually</button>
-        <div className="forge-actions-spacer" />
-        <button className="forge-primary-btn" onClick={stokeFlame} disabled={loadingIdeas}>
-          <Flame size={12} /> {loadingIdeas ? 'Stoking…' : 'New sparks'}
+      <div className="fl-actions">
+        <button className="fl-ghost-btn" onClick={openTicketBlank}><Plus size={12} /> Manual ticket</button>
+        <div className="fl-actions-spacer" />
+        <button className="fl-primary-btn" onClick={pullSignals} disabled={loadingIdeas}>
+          <RefreshCw size={12} className={loadingIdeas ? 'spinning' : ''} /> {loadingIdeas ? 'Pulling…' : 'New signals'}
         </button>
       </div>
 
-      <ForgeStyles />
+      <FloorStyles />
     </div>
   )
 }
 
-function ForgeStyles() {
+function FloorStyles() {
   return (
     <style jsx global>{`
-      @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500&family=JetBrains+Mono:wght@300;400;500&display=swap');
+      @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,500;8..60,600&family=Inter:wght@300;400;500;600&family=IBM+Plex+Mono:wght@300;400;500&display=swap');
 
-      .forge-root, .forge-loading, .forge-start {
-        font-family: 'Fraunces', Georgia, serif;
-        color: rgba(255, 240, 220, 0.92);
-        background: radial-gradient(ellipse at 50% 110%, #1a0b05 0%, #0a0503 45%, #050201 100%);
+      .fl-root, .fl-loading, .fl-start {
+        font-family: 'Inter', system-ui, sans-serif;
+        color: rgba(241, 245, 249, 0.92);
+        background:
+          radial-gradient(ellipse at 50% -10%, rgba(212, 168, 87, 0.05) 0%, transparent 45%),
+          linear-gradient(180deg, #0a0e17 0%, #0f1420 50%, #0a0e17 100%);
         min-height: 100vh;
         position: relative;
         overflow-x: hidden;
       }
-      .forge-root * { box-sizing: border-box; }
-      .forge-root .mono { font-family: 'JetBrains Mono', monospace; font-weight: 400; }
-      .forge-root .eyebrow {
-        font-family: 'JetBrains Mono', monospace;
+      .fl-root * { box-sizing: border-box; }
+      .fl-root .mono { font-family: 'IBM Plex Mono', monospace; font-weight: 400; }
+      .fl-root .fl-eyebrow, .fl-eyebrow {
+        font-family: 'IBM Plex Mono', monospace;
         font-size: 10px;
-        letter-spacing: 0.26em;
+        letter-spacing: 0.22em;
         text-transform: uppercase;
-        color: rgba(255, 180, 100, 0.55);
+        color: rgba(148, 163, 184, 0.6);
+        font-weight: 500;
       }
 
-      .forge-sky {
-        position: fixed; inset: 0; pointer-events: none; z-index: 0;
-        background:
-          radial-gradient(ellipse 800px 400px at 50% 100%, rgba(249,115,22,0.18) 0%, transparent 60%),
-          radial-gradient(ellipse 400px 200px at 50% 100%, rgba(251,191,36,0.15) 0%, transparent 70%);
+      /* ── Ambient tape drift (background) ────────── */
+      .fl-tape-drift {
+        position: fixed; inset: 0;
+        pointer-events: none;
+        z-index: 0;
       }
-      .forge-particles { position: fixed; inset: 0; pointer-events: none; z-index: 1; }
-      .forge-particle {
-        position: absolute; bottom: -10px;
-        width: 2px; height: 2px; border-radius: 50%;
-        background: rgba(255, 200, 130, 0.9);
-        box-shadow: 0 0 4px rgba(255, 180, 100, 0.8);
-        animation: forge-rise linear infinite;
-      }
-      @keyframes forge-rise {
-        0% { transform: translateY(0) translateX(0); opacity: 0; }
-        10% { opacity: 1; }
-        90% { opacity: 1; }
-        100% { transform: translateY(-90vh) translateX(var(--drift, 20px)); opacity: 0; }
-      }
+      @keyframes tapeDrift0 { to { transform: translateX(-1200px); } }
+      @keyframes tapeDrift1 { to { transform: translateX(1200px); } }
+      @keyframes tapeDrift2 { to { transform: translateX(-1200px); } }
+      @keyframes tapeDrift3 { to { transform: translateX(1200px); } }
+      @keyframes tapeDrift4 { to { transform: translateX(-1200px); } }
 
-      .forge-loading { display: flex; align-items: center; justify-content: center; }
-      .forge-loading-dots { display: flex; gap: 6px; z-index: 2; }
-      .forge-loading-dots span {
-        width: 8px; height: 8px; border-radius: 50%;
-        background: #f97316;
+      /* ── Loading ────────────────────────────────── */
+      .fl-loading { display: flex; align-items: center; justify-content: center; }
+      .fl-loading-dots { display: flex; gap: 6px; z-index: 2; }
+      .fl-loading-dots span {
+        width: 6px; height: 6px; border-radius: 50%;
+        background: #d4a857;
         animation: dotBounce 1s ease-in-out infinite;
       }
-      @keyframes dotBounce { 0%,100%{transform:translateY(0);opacity:0.4;} 50%{transform:translateY(-8px);opacity:1;} }
+      @keyframes dotBounce { 0%,100%{transform:translateY(0);opacity:0.4;} 50%{transform:translateY(-6px);opacity:1;} }
 
-      .forge-start { display: flex; align-items: center; justify-content: center; padding: 40px 20px; }
-      .forge-start-inner { max-width: 440px; width: 100%; text-align: center; position: relative; z-index: 2; }
-      .forge-start-title {
-        font-family: 'Fraunces', serif;
-        font-size: 36px; font-weight: 400; font-style: italic;
-        margin: 0 0 12px; line-height: 1.15;
-        background: linear-gradient(180deg, #fff4d6, #f97316);
-        -webkit-background-clip: text; background-clip: text; color: transparent;
+      /* ── Start screen ───────────────────────────── */
+      .fl-start { display: flex; align-items: center; justify-content: center; padding: 40px 20px; }
+      .fl-start-inner { max-width: 440px; width: 100%; text-align: center; position: relative; z-index: 2; }
+      .fl-logo {
+        font-family: 'Source Serif 4', serif; font-weight: 600; font-size: 18px;
+        letter-spacing: -0.01em; color: #f5f5f5;
       }
-      .forge-start-sub { font-size: 15px; line-height: 1.5; color: rgba(255, 220, 180, 0.6); margin: 0 0 32px; }
-      .forge-start-presets { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 20px; }
-      .preset-chip {
-        padding: 8px 14px; border-radius: 999px;
+      .fl-start-title {
+        font-family: 'Source Serif 4', serif;
+        font-size: 40px; font-weight: 500;
+        margin: 0 0 14px; line-height: 1.1;
+        letter-spacing: -0.02em;
+        color: #f5f5f5;
+      }
+      .fl-start-sub {
+        font-family: 'Source Serif 4', serif;
+        font-size: 15px; line-height: 1.6;
+        color: rgba(148, 163, 184, 0.75);
+        margin: 0 0 32px;
+      }
+      .fl-start-presets { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-bottom: 24px; }
+      .fl-preset-chip {
+        padding: 8px 14px; border-radius: 4px;
         background: rgba(255,255,255,0.02);
-        border: 1px solid rgba(249,115,22,0.2);
-        color: rgba(255,220,180,0.75);
-        font-family: 'JetBrains Mono', monospace; font-size: 12px;
+        border: 1px solid rgba(148, 163, 184, 0.15);
+        color: rgba(226, 232, 240, 0.75);
+        font-family: 'IBM Plex Mono', monospace; font-size: 12px;
         cursor: pointer; transition: all 0.2s ease;
       }
-      .preset-chip:hover { border-color: rgba(249,115,22,0.5); color: #fbbf24; }
-      .preset-chip.active { background: rgba(249,115,22,0.15); border-color: #f97316; color: #fbbf24; }
-      .forge-start-input-row {
+      .fl-preset-chip:hover { border-color: rgba(212, 168, 87, 0.4); color: #d4a857; }
+      .fl-preset-chip.active { background: rgba(212, 168, 87, 0.1); border-color: #d4a857; color: #d4a857; }
+      .fl-start-input-row {
         display: flex; align-items: center; gap: 8px;
-        margin: 0 auto 20px; max-width: 220px;
-        padding: 14px 16px; border-radius: 14px;
-        background: rgba(255,255,255,0.03);
-        border: 1px solid rgba(249,115,22,0.25);
+        margin: 0 auto 20px; max-width: 240px;
+        padding: 14px 16px; border-radius: 6px;
+        background: rgba(15, 23, 42, 0.6);
+        border: 1px solid rgba(212, 168, 87, 0.25);
       }
-      .forge-dollar { font-family: 'JetBrains Mono', monospace; color: rgba(255,220,180,0.5); font-size: 22px; }
-      .forge-start-input-row input {
+      .fl-dollar { font-family: 'IBM Plex Mono', monospace; color: rgba(148, 163, 184, 0.6); font-size: 22px; }
+      .fl-start-input-row input {
         flex: 1; width: 100%; min-width: 0;
         background: transparent; border: 0; outline: 0;
-        color: rgba(255,244,214,0.98);
-        font-family: 'JetBrains Mono', monospace;
+        color: #f5f5f5;
+        font-family: 'IBM Plex Mono', monospace;
         font-size: 22px; font-weight: 500;
       }
-      .forge-start-btn { width: 100%; max-width: 300px; margin: 0 auto 20px; display: block; }
-      .forge-start-fineprint { font-size: 12px; color: rgba(255,220,180,0.4); font-style: italic; line-height: 1.5; }
+      .fl-start-btn { width: 100%; max-width: 300px; margin: 0 auto 20px; display: flex; justify-content: center; }
+      .fl-start-fineprint {
+        font-family: 'Source Serif 4', serif;
+        font-size: 12px; color: rgba(148, 163, 184, 0.45);
+        font-style: italic; line-height: 1.5;
+      }
 
-      .forge-topbar {
+      /* ── Topbar ─────────────────────────────────── */
+      .fl-topbar {
         position: sticky; top: 0; z-index: 10;
         display: flex; align-items: center; gap: 14px;
         padding: 14px 24px;
-        background: rgba(10, 5, 3, 0.72);
+        background: rgba(10, 14, 23, 0.8);
         backdrop-filter: blur(12px);
-        border-bottom: 1px solid rgba(249,115,22,0.12);
+        border-bottom: 1px solid rgba(148, 163, 184, 0.08);
       }
-      .forge-backbtn {
-        width: 28px; height: 28px; border-radius: 8px;
-        background: transparent; border: 1px solid rgba(255,220,180,0.15);
+      .fl-backbtn {
+        width: 28px; height: 28px; border-radius: 6px;
+        background: transparent; border: 1px solid rgba(148, 163, 184, 0.2);
         display: flex; align-items: center; justify-content: center;
-        color: rgba(255,220,180,0.7); cursor: pointer;
+        color: rgba(148, 163, 184, 0.8); cursor: pointer;
       }
-      .forge-backbtn:hover { border-color: rgba(249,115,22,0.4); color: #fbbf24; }
-      .forge-logo {
-        font-family: 'Fraunces', serif; font-weight: 500; font-size: 18px;
-        letter-spacing: -0.01em; font-style: italic;
-        color: rgba(255, 230, 200, 0.95);
+      .fl-backbtn:hover { border-color: rgba(212, 168, 87, 0.4); color: #d4a857; }
+      .fl-logo {
+        font-family: 'Source Serif 4', serif; font-weight: 600; font-size: 16px;
+        letter-spacing: -0.01em; color: #f5f5f5;
       }
-      .forge-eyebrow-inline { display: none; }
-      @media (min-width: 720px) { .forge-eyebrow-inline { display: inline; } }
-      .forge-topbar-spacer { flex: 1; }
-      .forge-pulse {
+      .fl-eyebrow-inline { display: none; }
+      @media (min-width: 720px) { .fl-eyebrow-inline { display: inline; } }
+      .fl-topbar-spacer { flex: 1; }
+      .fl-live-tag {
         display: flex; align-items: center; gap: 6px;
-        padding: 5px 10px; border-radius: 999px;
-        background: rgba(52, 211, 153, 0.08);
-        border: 1px solid rgba(52, 211, 153, 0.2);
+        padding: 5px 10px; border-radius: 4px;
+        background: rgba(15, 23, 42, 0.6);
+        border: 1px solid rgba(148, 163, 184, 0.12);
       }
-      .forge-pulse .dot {
+      .fl-live-tag .dot {
         width: 6px; height: 6px; border-radius: 50%;
-        background: #34d399;
-        animation: breathe 2s ease-in-out infinite;
+        animation: marketPulse 2s ease-in-out infinite;
       }
-      @keyframes breathe {
-        0%,100% { opacity: 0.4; transform: scale(0.9); }
-        50% { opacity: 1; transform: scale(1.2); box-shadow: 0 0 8px rgba(52,211,153,0.8); }
+      @keyframes marketPulse {
+        0%,100% { opacity: 0.7; }
+        50% { opacity: 1; box-shadow: 0 0 8px currentColor; }
       }
-      .forge-pulse .label {
-        font-family: 'JetBrains Mono', monospace; font-size: 9px;
-        letter-spacing: 0.15em; color: rgba(52, 211, 153, 0.9); text-transform: uppercase;
+      .fl-live-tag .label {
+        font-family: 'IBM Plex Mono', monospace; font-size: 9px;
+        letter-spacing: 0.16em; color: rgba(226, 232, 240, 0.8); text-transform: uppercase;
       }
 
-      .forge-mobile-nav {
-        display: flex; gap: 2px;
-        padding: 8px 16px 0;
+      /* ── Ticker tape ────────────────────────────── */
+      .fl-tape {
+        display: flex; align-items: center;
+        background: rgba(15, 23, 42, 0.7);
+        border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+        padding: 6px 0;
+        overflow: hidden;
         position: relative; z-index: 3;
-        border-bottom: 1px solid rgba(249,115,22,0.08);
       }
-      .forge-mobile-nav button {
+      .fl-tape-label {
+        flex-shrink: 0;
+        padding: 0 14px;
+        font-size: 9px; letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: rgba(148, 163, 184, 0.5);
+        border-right: 1px solid rgba(148, 163, 184, 0.1);
+      }
+      .fl-tape-scroll {
+        flex: 1;
+        display: flex; gap: 24px;
+        white-space: nowrap;
+        animation: tapeScroll 60s linear infinite;
+      }
+      @keyframes tapeScroll {
+        from { transform: translateX(0); }
+        to { transform: translateX(-50%); }
+      }
+      .fl-tape-tick {
+        display: inline-flex; align-items: center; gap: 8px;
+        flex-shrink: 0;
+      }
+      .fl-tape-tick .etf {
+        font-size: 11px; color: rgba(226, 232, 240, 0.8);
+        letter-spacing: 0.02em;
+      }
+      .fl-tape-tick .pct { font-size: 11px; font-weight: 500; }
+      .fl-tape-tick .pct.up { color: #10b981; }
+      .fl-tape-tick .pct.dn { color: #dc2626; }
+
+      /* ── Mobile nav ─────────────────────────────── */
+      .fl-mobile-nav {
+        display: flex; gap: 2px;
+        padding: 6px 16px 0;
+        position: relative; z-index: 3;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+      }
+      .fl-mobile-nav button {
         flex: 1; padding: 10px 6px;
         background: transparent; border: 0; cursor: pointer;
-        font-family: 'JetBrains Mono', monospace; font-size: 10px;
+        font-family: 'IBM Plex Mono', monospace; font-size: 10px;
         letter-spacing: 0.12em; text-transform: uppercase;
-        color: rgba(255,180,100,0.5);
+        color: rgba(148, 163, 184, 0.5);
         border-bottom: 2px solid transparent;
         transition: all 0.2s ease;
+        font-weight: 500;
       }
-      .forge-mobile-nav button.active { color: #fbbf24; border-bottom-color: #f97316; }
-      @media (min-width: 960px) { .forge-mobile-nav { display: none; } }
+      .fl-mobile-nav button.active { color: #d4a857; border-bottom-color: #d4a857; }
+      @media (min-width: 960px) { .fl-mobile-nav { display: none; } }
 
-      .forge-stage {
-        display: grid; grid-template-columns: 1fr;
+      /* ── Stage grid ─────────────────────────────── */
+      .fl-stage {
+        display: grid;
+        grid-template-columns: 1fr;
         position: relative; z-index: 2;
-        min-height: calc(100vh - 120px);
+        min-height: calc(100vh - 140px);
       }
-      @media (min-width: 960px) { .forge-stage { grid-template-columns: 240px minmax(0, 1fr) 300px; } }
-      .mv-hide { display: none; }
-      .mv-show { display: block; }
-      @media (min-width: 960px) { .mv-hide, .mv-show { display: block; } }
+      @media (min-width: 960px) {
+        .fl-stage { grid-template-columns: 260px minmax(0, 1fr) 320px; }
+      }
+      .fl-hide { display: none; }
+      .fl-show { display: block; }
+      @media (min-width: 960px) {
+        .fl-hide, .fl-show { display: block; }
+      }
 
-      .forge-ladder { padding: 24px 20px; border-right: 1px solid rgba(249,115,22,0.1); position: relative; }
+      /* ── Tier ladder (left column) ──────────────── */
+      .fl-ladder {
+        padding: 24px 20px;
+        border-right: 1px solid rgba(148, 163, 184, 0.08);
+      }
       @media (max-width: 959px) {
-        .forge-ladder { border-right: 0; border-bottom: 1px solid rgba(249,115,22,0.1); }
+        .fl-ladder { border-right: 0; border-bottom: 1px solid rgba(148, 163, 184, 0.08); }
       }
-      .forge-ladder-title { margin-bottom: 20px; }
-      .forge-ladder-title h3 {
-        font-family: 'Fraunces', serif; font-weight: 400; font-style: italic;
-        font-size: 15px; color: rgba(255, 220, 180, 0.7); margin: 6px 0 0;
+      .fl-ladder-head { margin-bottom: 20px; }
+      .fl-ladder-head h3 {
+        font-family: 'Source Serif 4', serif; font-weight: 500;
+        font-size: 15px; color: rgba(226, 232, 240, 0.9);
+        margin: 6px 0 0; letter-spacing: -0.005em;
       }
-      .stage-rail {
-        position: absolute; left: 30px; top: 90px; bottom: 250px;
-        width: 1px;
-        background: linear-gradient(to bottom, rgba(249,115,22,0.3), rgba(249,115,22,0.05));
+
+      /* Skyline — building silhouettes */
+      .fl-skyline {
+        display: flex; align-items: flex-end; gap: 2px;
+        height: 70px;
+        margin-bottom: 20px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.1);
       }
-      .stage-row {
-        display: flex; align-items: center; gap: 12px;
-        padding: 8px 0; position: relative;
+      .fl-building {
+        flex: 1;
+        border: 1px solid;
+        border-radius: 1px 1px 0 0;
+        position: relative;
         transition: all 0.4s ease;
       }
-      .stage-row .node {
-        width: 16px; height: 16px; border-radius: 50%;
-        border: 1.5px solid rgba(249,115,22,0.25);
-        background: #0a0503; flex-shrink: 0; transition: all 0.4s ease;
+      .fl-building-top {
+        position: absolute; top: -2px; left: 50%;
+        transform: translateX(-50%);
+        width: 3px; height: 3px;
+        border-radius: 50%;
       }
-      .stage-row.past .node {
-        background: radial-gradient(circle, #fbbf24 0%, #f97316 70%);
-        border-color: #fbbf24;
-      }
-      .stage-row.current .node {
-        background: radial-gradient(circle, #fff4d6 0%, #fbbf24 40%, #f97316 100%);
-        border-color: #fff4d6;
-        animation: nodeBreathe 2.4s ease-in-out infinite;
-      }
-      @keyframes nodeBreathe {
-        0%,100% { box-shadow: 0 0 16px rgba(251,191,36,0.9), 0 0 32px rgba(249,115,22,0.4); }
-        50% { box-shadow: 0 0 22px rgba(251,191,36,1), 0 0 48px rgba(249,115,22,0.6); }
-      }
-      .stage-row .info .name {
-        font-family: 'Fraunces', serif; font-size: 15px; font-weight: 500;
-        color: rgba(255, 220, 180, 0.85);
-      }
-      .stage-row.future .info .name { color: rgba(255, 220, 180, 0.28); }
-      .stage-row.current .info .name { color: #fff4d6; font-style: italic; }
-      .stage-row .info .range { font-size: 10px; color: rgba(255, 180, 100, 0.5); margin-top: 2px; }
-      .stage-row.future .info .range { color: rgba(255, 180, 100, 0.18); }
+      .fl-b-past { opacity: 0.6; }
+      .fl-b-current { opacity: 1; box-shadow: 0 0 12px currentColor; }
+      .fl-b-future { opacity: 0.4; }
 
-      .tether {
-        margin-top: 20px; padding: 12px 14px; border-radius: 10px;
-        background: linear-gradient(180deg, rgba(249,115,22,0.08), rgba(249,115,22,0.02));
-        border: 1px solid rgba(249,115,22,0.15);
+      /* Tier rows */
+      .fl-tiers { display: flex; flex-direction: column; gap: 2px; margin-bottom: 20px; }
+      .fl-tier-row {
+        display: flex; align-items: center; gap: 12px;
+        padding: 8px 0;
+        transition: all 0.3s ease;
       }
-      .tether-row {
+      .fl-tier-mark {
+        width: 8px; height: 8px; border-radius: 1px;
+        border: 1px solid;
+        flex-shrink: 0;
+      }
+      .fl-tier-info { flex: 1; }
+      .fl-tier-name {
+        font-family: 'Source Serif 4', serif;
+        font-size: 14px; font-weight: 500;
+        color: rgba(226, 232, 240, 0.9);
+      }
+      .fl-t-future .fl-tier-name { color: rgba(148, 163, 184, 0.35); }
+      .fl-t-current .fl-tier-name {
+        color: #f5f5f5;
+        font-weight: 600;
+      }
+      .fl-tier-range {
+        font-size: 10px;
+        color: rgba(148, 163, 184, 0.55);
+        margin-top: 1px;
+        letter-spacing: 0.02em;
+      }
+      .fl-t-future .fl-tier-range { color: rgba(148, 163, 184, 0.25); }
+
+      /* Metrics */
+      .fl-metric-block {
+        margin-top: 20px;
+        padding: 12px 14px;
+        border-radius: 4px;
+        background: rgba(15, 23, 42, 0.5);
+        border: 1px solid rgba(148, 163, 184, 0.1);
+      }
+      .fl-metric-row {
         display: flex; justify-content: space-between; align-items: baseline;
         margin-bottom: 8px;
       }
-      .tether-row .k {
-        font-family: 'JetBrains Mono', monospace; font-size: 9px;
-        letter-spacing: 0.2em; text-transform: uppercase;
-        color: rgba(255, 180, 100, 0.6);
+      .fl-metric-row .k {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase;
+        color: rgba(148, 163, 184, 0.6);
       }
-      .tether-row .v { font-size: 13px; color: rgba(255, 230, 200, 0.95); font-weight: 500; }
-      .tether .bar {
-        height: 3px; background: rgba(249,115,22,0.1); border-radius: 2px;
-        overflow: hidden; position: relative;
+      .fl-metric-row .v {
+        font-size: 13px; color: #f5f5f5; font-weight: 500;
       }
-      .tether .bar .fill {
-        height: 100%;
-        background: linear-gradient(90deg, #fbbf24, #f97316, #ef4444);
-        border-radius: 2px;
-        transition: width 1.2s cubic-bezier(0.22, 1, 0.36, 1);
-        position: relative;
+      .fl-bar {
+        height: 2px;
+        background: rgba(148, 163, 184, 0.1);
+        border-radius: 1px;
+        overflow: hidden;
       }
-      .tether .bar .fill::after {
-        content: ''; position: absolute; top: 0; right: 0; width: 8px; height: 100%;
-        background: rgba(255, 255, 255, 0.6);
-        filter: blur(4px);
-        animation: barShimmer 2s ease-in-out infinite;
+      .fl-bar-fill {
+        height: 100%; background: #d4a857;
+        transition: width 1s cubic-bezier(0.22, 1, 0.36, 1);
       }
-      @keyframes barShimmer { 0%,100%{opacity:0.4;} 50%{opacity:1;} }
 
-      .forge-center { padding: 28px 20px 40px; display: flex; flex-direction: column; align-items: center; }
-      .flame-hero {
-        position: relative; width: 300px; height: 300px;
+      /* ── Center column ──────────────────────────── */
+      .fl-center {
+        padding: 28px 20px 40px;
+        display: flex; flex-direction: column; align-items: center;
+      }
+      .fl-orb-hero {
+        position: relative;
+        width: 300px; height: 300px;
         display: flex; align-items: center; justify-content: center;
-        margin-top: 8px;
       }
-      .flame-hero.compact { width: 180px; height: 180px; margin-top: 0; margin-bottom: 8px; }
-      .flame-hero.compact .flame-svg { width: 140px; height: 140px; }
-      .flame-hero.compact .flame-value .big { font-size: 26px; }
-      .flame-ring {
-        position: absolute; inset: 0; border-radius: 50%;
-        border: 1px dashed rgba(249,115,22,0.2);
-        animation: slowSpin 40s linear infinite;
+      .fl-orb-hero.compact { width: 180px; height: 180px; }
+      .fl-orb-hero.compact .fl-orb-svg { width: 140px; height: 140px; }
+      .fl-orb-hero.compact .fl-orb-value .big { font-size: 26px; }
+      .fl-orb-svg { width: 220px; height: 220px; position: relative; z-index: 1; }
+      .fl-orb-halo {
+        animation: orbBreathe 4s ease-in-out infinite;
+        transform-origin: center;
       }
-      .flame-ring.r2 { inset: 24px; animation-duration: 60s; animation-direction: reverse; border-color: rgba(251,191,36,0.15); }
-      .flame-ring.r3 { inset: 56px; animation-duration: 80s; border-color: rgba(239,68,68,0.1); }
-      @keyframes slowSpin { to { transform: rotate(360deg); } }
-      .flame-svg { position: relative; z-index: 2; width: 200px; height: 200px; }
-      .flame-core { animation: flameFlicker 3s ease-in-out infinite; transform-origin: 50% 100%; }
-      @keyframes flameFlicker {
-        0%,100% { transform: scale(1, 1); }
-        33% { transform: scale(1.02, 0.98); }
-        66% { transform: scale(0.98, 1.03); }
+      @keyframes orbBreathe {
+        0%,100% { opacity: 0.85; }
+        50% { opacity: 1; }
       }
-      .flame-value {
+      .fl-orb-ring {
+        animation: orbSpin 80s linear infinite;
+        transform-origin: center;
+      }
+      @keyframes orbSpin { to { transform: rotate(360deg); } }
+      .fl-orb-core {
+        animation: orbCore 3s ease-in-out infinite;
+        transform-origin: center;
+      }
+      @keyframes orbCore {
+        0%,100% { transform: scale(1); }
+        50% { transform: scale(1.04); }
+      }
+      .fl-orb-dot {
+        animation: orbDot 2s ease-in-out infinite;
+      }
+      @keyframes orbDot {
+        0%,100% { opacity: 0.7; }
+        50% { opacity: 1; }
+      }
+      .fl-orb-value {
         position: absolute; inset: 0;
         display: flex; flex-direction: column; align-items: center; justify-content: center;
         z-index: 3; pointer-events: none;
       }
-      .flame-value .big {
+      .fl-orb-value .big {
         font-size: 34px; font-weight: 500;
-        color: rgba(255, 244, 214, 0.98);
+        color: #f5f5f5;
         letter-spacing: -0.02em;
-        text-shadow: 0 0 20px rgba(251,191,36,0.4);
       }
-      .flame-value .delta { font-size: 12px; margin-top: 6px; }
+      .fl-orb-value .delta { font-size: 12px; margin-top: 6px; }
 
-      .stage-caption { text-align: center; margin-top: 20px; max-width: 520px; }
-      .stage-caption h1 {
-        font-family: 'Fraunces', serif; font-size: 30px; font-weight: 400;
-        margin: 0; letter-spacing: -0.01em; color: rgba(255, 230, 200, 0.92);
+      /* Tier caption */
+      .fl-tier-caption { text-align: center; margin-top: 24px; max-width: 520px; }
+      .fl-tier-caption h1 {
+        font-family: 'Source Serif 4', serif; font-size: 28px; font-weight: 500;
+        margin: 0; letter-spacing: -0.01em;
+        color: rgba(226, 232, 240, 0.92);
       }
-      .stage-caption h1 em {
+      .fl-tier-caption h1 em {
+        font-style: normal;
+        font-weight: 600;
+      }
+      .fl-tier-caption p {
+        font-family: 'Source Serif 4', serif; font-size: 14px;
+        color: rgba(148, 163, 184, 0.6);
+        margin: 6px 0 0;
         font-style: italic;
-        background: linear-gradient(180deg, #fff4d6 0%, #f97316 100%);
-        -webkit-background-clip: text; background-clip: text; color: transparent;
-        padding-right: 2px;
-      }
-      .stage-caption p {
-        font-family: 'Fraunces', serif; font-size: 14px;
-        color: rgba(255, 220, 180, 0.55);
-        margin: 4px 0 0; font-style: italic;
       }
 
-      .sector-winds { margin-top: 28px; width: 100%; max-width: 560px; }
-      .winds-label { text-align: center; margin-bottom: 10px; }
-      .sector-scroll {
-        display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px;
-        scrollbar-width: none;
-      }
-      .sector-scroll::-webkit-scrollbar { display: none; }
-      .sector-chip {
-        flex-shrink: 0; padding: 6px 12px; border-radius: 999px;
-        background: rgba(255, 255, 255, 0.02);
-        border: 1px solid rgba(249,115,22,0.15);
-        display: flex; align-items: center; gap: 6px;
-        transition: all 0.3s ease;
-      }
-      .sector-chip .bar { width: 3px; height: 12px; border-radius: 2px; background: rgba(255,255,255,0.2); }
-      .sector-chip.bull .bar { background: #34d399; box-shadow: 0 0 6px #34d399; }
-      .sector-chip.bear .bar { background: #f87171; box-shadow: 0 0 6px #f87171; }
-      .sector-chip .nm { font-size: 10px; color: rgba(255,220,180,0.85); }
-      .sector-chip .pct { font-size: 10px; }
-      .sector-chip.bull .pct { color: #34d399; }
-      .sector-chip.bear .pct { color: #f87171; }
-      .sector-chip.neutral .pct { color: rgba(255,220,180,0.5); }
-
-      .constellation { margin-top: 32px; width: 100%; max-width: 620px; }
-      .constellation-header {
+      /* ── Signals ────────────────────────────────── */
+      .fl-signals { margin-top: 40px; width: 100%; max-width: 700px; }
+      .fl-signals-header {
         display: flex; align-items: baseline; justify-content: space-between;
         margin-bottom: 14px; gap: 12px;
       }
-      .constellation-header h2 {
-        font-family: 'Fraunces', serif; font-size: 22px;
-        font-style: italic; font-weight: 400;
-        color: rgba(255, 230, 200, 0.92); margin: 0;
+      .fl-signals-header h2 {
+        font-family: 'Source Serif 4', serif; font-size: 20px;
+        font-weight: 600;
+        color: rgba(226, 232, 240, 0.92); margin: 0;
+        letter-spacing: -0.01em;
       }
-      .stoke-btn {
-        font-family: 'JetBrains Mono', monospace; font-size: 10px;
-        letter-spacing: 0.18em; text-transform: uppercase;
-        padding: 7px 14px; border-radius: 999px;
-        background: rgba(249,115,22,0.1);
-        border: 1px solid rgba(249,115,22,0.3);
-        color: #fbbf24; cursor: pointer;
+      .fl-pull-btn {
+        font-family: 'IBM Plex Mono', monospace; font-size: 10px;
+        letter-spacing: 0.16em; text-transform: uppercase;
+        padding: 7px 14px; border-radius: 4px;
+        background: rgba(212, 168, 87, 0.08);
+        border: 1px solid rgba(212, 168, 87, 0.3);
+        color: #d4a857; cursor: pointer;
         display: inline-flex; align-items: center; gap: 6px;
-        transition: all 0.3s ease;
+        transition: all 0.2s ease;
+        font-weight: 500;
       }
-      .stoke-btn:hover:not(:disabled) {
-        background: rgba(249,115,22,0.2);
-        box-shadow: 0 0 16px rgba(249,115,22,0.3);
+      .fl-pull-btn:hover:not(:disabled) {
+        background: rgba(212, 168, 87, 0.15);
       }
-      .stoke-btn:disabled { opacity: 0.6; cursor: wait; }
-      .stoke-btn .spinning { animation: spin 1s linear infinite; }
+      .fl-pull-btn:disabled { opacity: 0.6; cursor: wait; }
+      .spinning { animation: spin 1s linear infinite; }
       @keyframes spin { to { transform: rotate(360deg); } }
 
-      .sparks-loading, .sparks-empty {
+      .fl-signals-loading, .fl-signals-empty {
         text-align: center; padding: 32px 20px;
-        color: rgba(255,220,180,0.5);
-        font-family: 'Fraunces', serif; font-style: italic; font-size: 14px;
+        color: rgba(148, 163, 184, 0.55);
+        font-family: 'Source Serif 4', serif; font-style: italic; font-size: 14px;
       }
 
-      .picks-grid {
+      /* Signal tiles — Bloomberg DNA */
+      .fl-signals-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        gap: 10px;
+        gap: 8px;
       }
-      .pick-spark {
-        padding: 14px; border-radius: 10px;
-        background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.01));
-        border: 1px solid rgba(249,115,22,0.15);
-        cursor: pointer; position: relative; overflow: hidden;
-        animation: sparkArrive 0.8s cubic-bezier(0.22, 1, 0.36, 1) backwards;
-        transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+      .fl-signal-tile {
+        padding: 14px;
+        border-radius: 4px;
+        background: rgba(15, 23, 42, 0.6);
+        border: 1px solid rgba(148, 163, 184, 0.12);
+        cursor: pointer;
+        animation: signalArrive 0.5s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+        transition: all 0.2s ease;
         text-align: left;
       }
-      @keyframes sparkArrive {
-        0% { opacity: 0; transform: translateY(12px) scale(0.92); }
-        100% { opacity: 1; transform: translateY(0) scale(1); }
+      @keyframes signalArrive {
+        0% { opacity: 0; transform: translateY(6px); }
+        100% { opacity: 1; transform: translateY(0); }
       }
-      .pick-spark:hover {
-        border-color: rgba(249,115,22,0.5);
-        transform: translateY(-2px);
-        box-shadow: 0 8px 24px rgba(249,115,22,0.15);
+      .fl-signal-tile:hover {
+        border-color: rgba(212, 168, 87, 0.4);
+        background: rgba(15, 23, 42, 0.8);
       }
-      .pick-spark::before {
-        content: ''; position: absolute; top: -1px; left: 50%;
-        width: 40px; height: 2px;
-        background: linear-gradient(90deg, transparent, #fbbf24, transparent);
-        transform: translateX(-50%);
-        opacity: 0; transition: opacity 0.3s ease;
-      }
-      .pick-spark:hover::before { opacity: 1; }
-      .pick-spark .tk {
+      .fl-signal-top {
         display: flex; align-items: baseline; justify-content: space-between;
-        margin-bottom: 6px;
+        margin-bottom: 8px;
       }
-      .pick-spark .tk .sym {
-        font-family: 'Fraunces', serif; font-size: 17px; font-weight: 500;
-        color: rgba(255, 244, 214, 0.98); letter-spacing: -0.01em;
+      .fl-signal-sym {
+        font-family: 'Source Serif 4', serif; font-size: 16px; font-weight: 600;
+        color: #f5f5f5;
+        letter-spacing: -0.01em;
       }
-      .pick-spark .tk .px { font-size: 12px; color: rgba(255, 220, 180, 0.7); }
-      .pick-spark .why {
-        font-family: 'Fraunces', serif; font-size: 12px; font-style: italic;
-        color: rgba(255, 220, 180, 0.55); line-height: 1.4;
+      .fl-signal-px {
+        font-size: 12px; color: rgba(226, 232, 240, 0.7);
+      }
+      .fl-signal-catalyst {
+        font-family: 'Source Serif 4', serif; font-size: 12px;
+        color: rgba(148, 163, 184, 0.75);
+        line-height: 1.45;
         margin-bottom: 10px; min-height: 34px;
       }
-      .pick-spark .meta {
+      .fl-signal-meta {
         display: flex; justify-content: space-between;
-        padding-top: 8px; border-top: 1px solid rgba(249,115,22,0.1);
+        padding-top: 8px;
+        border-top: 1px solid rgba(148, 163, 184, 0.1);
       }
-      .pick-spark .meta span {
+      .fl-signal-meta span {
         font-size: 9px; letter-spacing: 0.1em;
-        color: rgba(255, 180, 100, 0.6); text-transform: uppercase;
+        color: rgba(148, 163, 184, 0.6);
+        text-transform: uppercase;
       }
-      .pick-spark .meta .sig { color: #34d399; }
+      .fl-signal-conf { color: #10b981 !important; }
 
-      .forge-right { padding: 24px 20px; border-left: 1px solid rgba(249,115,22,0.1); }
+      /* ── Right column ───────────────────────────── */
+      .fl-right {
+        padding: 24px 20px;
+        border-left: 1px solid rgba(148, 163, 184, 0.08);
+      }
       @media (max-width: 959px) {
-        .forge-right { border-left: 0; border-top: 1px solid rgba(249,115,22,0.1); }
+        .fl-right { border-left: 0; border-top: 1px solid rgba(148, 163, 184, 0.08); }
       }
-      .right-section { margin-bottom: 28px; }
-      .right-section h3 {
-        font-family: 'Fraunces', serif; font-weight: 400; font-size: 16px;
-        font-style: italic; color: rgba(255, 230, 200, 0.88);
+      .fl-right-section { margin-bottom: 28px; }
+      .fl-right-section h3 {
+        font-family: 'Source Serif 4', serif; font-weight: 500; font-size: 15px;
+        color: rgba(226, 232, 240, 0.88);
         margin: 6px 0 12px;
+        letter-spacing: -0.005em;
       }
-      .right-empty {
-        font-family: 'Fraunces', serif; font-style: italic;
-        font-size: 13px; color: rgba(255,220,180,0.4);
+      .fl-right-empty {
+        font-family: 'Source Serif 4', serif; font-style: italic;
+        font-size: 13px; color: rgba(148, 163, 184, 0.45);
         margin: 0; line-height: 1.5;
       }
 
-      .trade-card {
+      /* Position rows */
+      .fl-position-row {
         display: block; width: 100%; text-align: left;
-        padding: 12px 14px; border-radius: 10px;
-        background: rgba(255,255,255,0.02);
-        border: 1px solid rgba(255,255,255,0.05);
-        margin-bottom: 8px; position: relative; overflow: hidden;
-        cursor: pointer; transition: border-color 0.2s ease;
+        padding: 12px 14px;
+        border-radius: 4px;
+        background: rgba(15, 23, 42, 0.5);
+        border: 1px solid rgba(148, 163, 184, 0.08);
+        margin-bottom: 6px; position: relative; overflow: hidden;
+        cursor: pointer;
+        transition: border-color 0.2s ease;
       }
-      .trade-card:hover { border-color: rgba(249,115,22,0.25); }
-      .trade-card .heartbeat {
+      .fl-position-row:hover { border-color: rgba(212, 168, 87, 0.25); }
+      .fl-position-pulse {
         position: absolute; top: 0; left: 0; right: 0; height: 1px;
-        background: linear-gradient(90deg, transparent, var(--tc, #34d399), transparent);
-        animation: heartbeat 3s ease-in-out infinite;
+        background: var(--pc, #10b981);
+        opacity: 0.6;
+        animation: positionPulse 3s ease-in-out infinite;
       }
-      @keyframes heartbeat {
-        0%,100% { opacity: 0.2; transform: scaleX(0.5); }
-        50% { opacity: 1; transform: scaleX(1); }
+      @keyframes positionPulse {
+        0%,100% { opacity: 0.2; }
+        50% { opacity: 0.7; }
       }
-      .trade-card .row1 {
+      .fl-position-row1 {
         display: flex; justify-content: space-between; align-items: baseline;
         margin-bottom: 4px;
       }
-      .trade-card .sym {
-        font-family: 'Fraunces', serif; font-size: 15px; font-weight: 500;
-        color: rgba(255,244,214,0.95); letter-spacing: -0.01em;
+      .fl-position-sym {
+        font-family: 'Source Serif 4', serif; font-size: 14px; font-weight: 600;
+        color: #f5f5f5; letter-spacing: -0.01em;
       }
-      .trade-card .pnl { font-size: 13px; font-weight: 500; }
-      .trade-card .pnl.up { color: #34d399; }
-      .trade-card .pnl.dn { color: #f87171; }
-      .trade-card .row2 {
-        display: flex; justify-content: space-between; font-size: 10px;
-        color: rgba(255,220,180,0.45);
+      .fl-position-pnl { font-size: 13px; font-weight: 500; }
+      .fl-position-pnl.up { color: #10b981; }
+      .fl-position-pnl.dn { color: #dc2626; }
+      .fl-position-row2 {
+        display: flex; justify-content: space-between;
+        font-size: 10px;
+        color: rgba(148, 163, 184, 0.55);
       }
 
-      .ctx-bell-wrap {
-        position: relative; margin-bottom: 20px;
-        animation: ctxBellIn 0.6s cubic-bezier(0.22,1,0.36,1);
+      /* ── Desk note bell ─────────────────────────── */
+      .fl-bell-wrap {
+        position: relative;
+        margin-bottom: 20px;
+        animation: bellIn 0.5s cubic-bezier(0.22,1,0.36,1);
       }
-      @keyframes ctxBellIn {
-        from { opacity: 0; transform: translateY(-8px); }
+      @keyframes bellIn {
+        from { opacity: 0; transform: translateY(-6px); }
         to { opacity: 1; transform: translateY(0); }
       }
-      .ctx-bell {
+      .fl-bell {
         display: flex; align-items: center; gap: 14px;
         width: 100%; padding: 14px 16px;
-        border-radius: 12px;
-        background: linear-gradient(135deg, rgba(249,115,22,0.12), rgba(239,68,68,0.06));
-        border: 1px solid rgba(249,115,22,0.35);
-        cursor: pointer; text-align: left;
-        transition: all 0.3s ease;
-        box-shadow: 0 0 20px rgba(249,115,22,0.15);
-        position: relative; overflow: hidden;
+        border-radius: 6px;
+        background: rgba(212, 168, 87, 0.06);
+        border: 1px solid rgba(212, 168, 87, 0.3);
+        border-left: 3px solid #d4a857;
+        cursor: pointer;
+        text-align: left;
+        transition: all 0.2s ease;
       }
-      .ctx-bell:hover {
-        box-shadow: 0 0 28px rgba(249,115,22,0.35);
-        transform: translateY(-1px);
+      .fl-bell:hover {
+        background: rgba(212, 168, 87, 0.1);
       }
-      .ctx-bell-glow {
-        position: absolute; top: -50%; left: -20%;
-        width: 80px; height: 200%;
-        background: radial-gradient(ellipse, rgba(251,191,36,0.4), transparent 70%);
-        animation: ctxBellGlow 4s ease-in-out infinite;
-      }
-      @keyframes ctxBellGlow {
-        0%,100% { transform: translateX(0); opacity: 0.3; }
-        50% { transform: translateX(200px); opacity: 0.7; }
-      }
-      .ctx-bell-body { flex: 1; min-width: 0; position: relative; z-index: 1; }
-      .ctx-bell-eyebrow {
-        font-family: 'JetBrains Mono', monospace;
+      .fl-bell-body { flex: 1; min-width: 0; }
+      .fl-bell-eyebrow {
+        font-family: 'IBM Plex Mono', monospace;
         font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase;
-        color: #fbbf24; margin-bottom: 4px;
+        color: #d4a857;
+        margin-bottom: 4px;
+        font-weight: 500;
       }
-      .ctx-bell-title {
-        font-family: 'Fraunces', serif; font-style: italic;
+      .fl-bell-title {
+        font-family: 'Source Serif 4', serif;
         font-size: 14px; font-weight: 500;
-        color: rgba(255,244,214,0.98);
-        line-height: 1.25; margin-bottom: 2px;
+        color: #f5f5f5;
+        line-height: 1.3;
+        margin-bottom: 2px;
       }
-      .ctx-bell-sub {
-        font-family: 'Fraunces', serif;
+      .fl-bell-sub {
+        font-family: 'Source Serif 4', serif;
         font-size: 12px; font-style: italic;
-        color: rgba(255,220,180,0.55);
+        color: rgba(148, 163, 184, 0.65);
         line-height: 1.35;
         overflow: hidden; text-overflow: ellipsis;
         display: -webkit-box;
         -webkit-line-clamp: 2; -webkit-box-orient: vertical;
       }
-      .ctx-bell-arrow {
-        color: #fbbf24; font-size: 18px; font-weight: 300;
-        flex-shrink: 0; position: relative; z-index: 1;
+      .fl-bell-arrow {
+        color: #d4a857; font-size: 16px;
+        flex-shrink: 0;
       }
-      .ctx-bell-dismiss {
+      .fl-bell-dismiss {
         position: absolute; top: 6px; right: 6px;
-        width: 20px; height: 20px; border-radius: 50%;
-        background: rgba(0,0,0,0.3);
-        border: 1px solid rgba(255,220,180,0.1);
-        color: rgba(255,220,180,0.5);
+        width: 20px; height: 20px; border-radius: 4px;
+        background: rgba(10, 14, 23, 0.6);
+        border: 1px solid rgba(148, 163, 184, 0.1);
+        color: rgba(148, 163, 184, 0.5);
         display: flex; align-items: center; justify-content: center;
         cursor: pointer; z-index: 2;
       }
-      .ctx-bell-dismiss:hover { color: rgba(255,220,180,0.9); }
+      .fl-bell-dismiss:hover { color: rgba(226, 232, 240, 0.9); }
 
-      .forge-actions {
+      /* ── Footer actions ─────────────────────────── */
+      .fl-actions {
         position: sticky; bottom: 0; z-index: 5;
         padding: 14px 20px;
-        background: rgba(10, 5, 3, 0.82);
+        background: rgba(10, 14, 23, 0.85);
         backdrop-filter: blur(12px);
-        border-top: 1px solid rgba(249,115,22,0.12);
+        border-top: 1px solid rgba(148, 163, 184, 0.08);
         display: flex; align-items: center; gap: 10px;
       }
-      .forge-actions-spacer { flex: 1; }
-      .forge-ghost-btn {
+      .fl-actions-spacer { flex: 1; }
+      .fl-ghost-btn {
         display: inline-flex; align-items: center; gap: 6px;
-        padding: 9px 16px; border-radius: 999px;
+        padding: 9px 16px; border-radius: 4px;
         background: transparent;
-        border: 1px solid rgba(255,220,180,0.15);
-        color: rgba(255,220,180,0.75);
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
-        cursor: pointer; transition: all 0.3s ease;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        color: rgba(226, 232, 240, 0.8);
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+        cursor: pointer; transition: all 0.2s ease;
+        font-weight: 500;
       }
-      .forge-ghost-btn:hover { border-color: rgba(249,115,22,0.4); color: #fbbf24; }
-      .forge-primary-btn {
+      .fl-ghost-btn:hover { border-color: rgba(212, 168, 87, 0.4); color: #d4a857; }
+      .fl-primary-btn {
         display: inline-flex; align-items: center; gap: 6px;
-        padding: 10px 20px; border-radius: 999px;
-        background: linear-gradient(135deg, #f97316, #ef4444);
-        border: 0; color: #fff4d6;
-        font-family: 'JetBrains Mono', monospace; font-size: 10px;
-        letter-spacing: 0.15em; text-transform: uppercase; font-weight: 500;
-        cursor: pointer; transition: all 0.3s ease;
-        box-shadow: 0 0 16px rgba(249,115,22,0.25);
+        padding: 10px 20px; border-radius: 4px;
+        background: #d4a857;
+        border: 0; color: #0a0e17;
+        font-family: 'IBM Plex Mono', monospace; font-size: 10px;
+        letter-spacing: 0.18em; text-transform: uppercase; font-weight: 600;
+        cursor: pointer; transition: all 0.2s ease;
       }
-      .forge-primary-btn:hover:not(:disabled) {
-        box-shadow: 0 0 28px rgba(249,115,22,0.5);
-        transform: translateY(-1px);
+      .fl-primary-btn:hover:not(:disabled) {
+        filter: brightness(1.1);
       }
-      .forge-primary-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+      .fl-primary-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-      .forge-sheet-overlay {
+      /* ── Order ticket (sheet) ───────────────────── */
+      .fl-ticket-overlay {
         position: fixed; inset: 0; z-index: 40;
-        background: rgba(0, 0, 0, 0.72);
-        backdrop-filter: blur(6px);
+        background: rgba(5, 8, 14, 0.78);
+        backdrop-filter: blur(8px);
         display: flex; align-items: center; justify-content: center;
         padding: 20px;
-        animation: fadeIn 0.3s ease;
+        animation: fadeIn 0.25s ease;
       }
       @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-      .forge-sheet {
-        width: 100%; max-width: 440px;
-        background: #0f0704;
-        border: 1px solid rgba(249,115,22,0.22);
-        border-radius: 18px;
-        box-shadow: 0 30px 80px rgba(0,0,0,0.7), 0 0 40px rgba(249,115,22,0.1);
+      .fl-ticket {
+        width: 100%; max-width: 460px;
+        background: #0f1420;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 6px;
+        box-shadow: 0 30px 80px rgba(0,0,0,0.7);
         overflow: hidden;
-        animation: sheetRise 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+        animation: ticketRise 0.35s cubic-bezier(0.22, 1, 0.36, 1);
       }
-      @keyframes sheetRise { from { transform: translateY(30px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-      .forge-sheet-header {
+      @keyframes ticketRise { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+      .fl-ticket-header {
         display: flex; align-items: center; justify-content: space-between;
-        padding: 16px 20px;
-        border-bottom: 1px solid rgba(249,115,22,0.12);
+        padding: 14px 20px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+        background: rgba(15, 23, 42, 0.5);
       }
-      .forge-close-btn {
-        width: 26px; height: 26px; border-radius: 8px;
-        background: transparent; border: 1px solid rgba(255,220,180,0.1);
-        color: rgba(255,220,180,0.6);
+      .fl-ticket-time {
+        font-size: 10px; color: rgba(148, 163, 184, 0.5);
+        margin-top: 2px; letter-spacing: 0.05em;
+      }
+      .fl-close-btn {
+        width: 26px; height: 26px; border-radius: 4px;
+        background: transparent; border: 1px solid rgba(148, 163, 184, 0.15);
+        color: rgba(148, 163, 184, 0.7);
         display: flex; align-items: center; justify-content: center;
         cursor: pointer;
       }
-      .forge-close-btn:hover { color: #fbbf24; border-color: rgba(249,115,22,0.4); }
-      .forge-sheet-body { padding: 20px; }
-      .forge-sheet-title {
-        font-family: 'Fraunces', serif; font-size: 22px; font-weight: 400;
-        font-style: italic; margin: 0 0 8px;
-        color: rgba(255,244,214,0.96);
+      .fl-close-btn:hover { color: #d4a857; border-color: rgba(212, 168, 87, 0.4); }
+      .fl-ticket-body { padding: 20px; }
+      .fl-ticket-title {
+        font-family: 'Source Serif 4', serif; font-size: 22px;
+        font-weight: 500; margin: 0 0 8px;
+        color: #f5f5f5; letter-spacing: -0.01em;
       }
-      .forge-sheet-title em {
-        background: linear-gradient(180deg, #fff4d6, #f97316);
-        -webkit-background-clip: text; background-clip: text; color: transparent;
+      .fl-ticket-sub {
+        font-family: 'Source Serif 4', serif; font-size: 13px;
+        color: rgba(148, 163, 184, 0.7);
+        margin: 0 0 16px; line-height: 1.5;
+        font-style: italic;
       }
-      .forge-sheet-sub {
-        font-family: 'Fraunces', serif; font-size: 13px; font-style: italic;
-        color: rgba(255,220,180,0.55); margin: 0 0 16px; line-height: 1.5;
+      .fl-field { margin-bottom: 14px; }
+      .fl-field label {
+        display: block;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase;
+        color: rgba(148, 163, 184, 0.6);
+        margin-bottom: 6px;
+        font-weight: 500;
       }
-      .forge-field { margin-bottom: 14px; }
-      .forge-field label {
-        display: block; font-family: 'JetBrains Mono', monospace;
-        font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase;
-        color: rgba(255,180,100,0.5); margin-bottom: 6px;
-      }
-      .forge-field input, .forge-field textarea {
+      .fl-field input, .fl-field textarea {
         width: 100%; padding: 11px 13px;
-        background: rgba(255,255,255,0.025);
-        border: 1px solid rgba(249,115,22,0.15);
-        border-radius: 10px;
-        color: rgba(255,244,214,0.96);
-        font-family: 'JetBrains Mono', monospace; font-size: 14px;
-        outline: 0; transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        background: rgba(15, 23, 42, 0.6);
+        border: 1px solid rgba(148, 163, 184, 0.15);
+        border-radius: 4px;
+        color: #f5f5f5;
+        font-family: 'IBM Plex Mono', monospace; font-size: 14px;
+        outline: 0; transition: border-color 0.2s ease;
       }
-      .forge-field textarea {
-        font-family: 'Fraunces', serif; font-size: 13px; resize: vertical; min-height: 56px;
+      .fl-field textarea {
+        font-family: 'Source Serif 4', serif; font-size: 13px; resize: vertical; min-height: 56px;
       }
-      .forge-field input.ticker-input {
-        text-transform: uppercase; letter-spacing: 0.08em;
+      .fl-field input.fl-ticker-input {
+        text-transform: uppercase; letter-spacing: 0.06em;
       }
-      .forge-field input:focus, .forge-field textarea:focus {
-        border-color: rgba(249,115,22,0.5);
-        box-shadow: 0 0 0 2px rgba(249,115,22,0.12);
+      .fl-field input:focus, .fl-field textarea:focus {
+        border-color: rgba(212, 168, 87, 0.5);
       }
-      .forge-field input:disabled { opacity: 0.6; }
-      .forge-field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
-      .forge-field-row { display: flex; gap: 8px; }
-      .forge-field-row input { flex: 1; }
-      .inline-btn {
-        padding: 0 14px; border-radius: 10px;
-        background: rgba(249,115,22,0.1);
-        border: 1px solid rgba(249,115,22,0.3);
-        color: #fbbf24;
-        font-family: 'JetBrains Mono', monospace; font-size: 10px;
-        letter-spacing: 0.12em; text-transform: uppercase;
-        cursor: pointer; white-space: nowrap;
+      .fl-field input:disabled { opacity: 0.6; }
+      .fl-field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+      .fl-field-row { display: flex; gap: 8px; }
+      .fl-field-row input { flex: 1; }
+      .fl-inline-btn {
+        padding: 0 14px; border-radius: 4px;
+        background: rgba(212, 168, 87, 0.08);
+        border: 1px solid rgba(212, 168, 87, 0.3);
+        color: #d4a857;
+        font-family: 'IBM Plex Mono', monospace; font-size: 10px;
+        letter-spacing: 0.1em; text-transform: uppercase;
+        cursor: pointer; white-space: nowrap; font-weight: 500;
       }
-      .inline-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+      .fl-inline-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-      .forge-math-preview {
-        padding: 12px 14px; border-radius: 10px;
-        background: rgba(249,115,22,0.05);
-        border: 1px solid rgba(249,115,22,0.15);
+      .fl-math-preview {
+        padding: 12px 14px; border-radius: 4px;
+        background: rgba(15, 23, 42, 0.5);
+        border: 1px solid rgba(148, 163, 184, 0.1);
         margin-bottom: 14px;
       }
-      .forge-math-row {
+      .fl-math-row {
         display: flex; justify-content: space-between;
-        font-family: 'JetBrains Mono', monospace; font-size: 12px;
-        color: rgba(255,220,180,0.7);
+        font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+        color: rgba(226, 232, 240, 0.7);
         padding: 3px 0;
       }
-      .forge-math-row.strong {
+      .fl-math-row.strong {
         margin-top: 6px; padding-top: 8px;
-        border-top: 1px solid rgba(249,115,22,0.15);
-        font-weight: 500; color: rgba(255,244,214,0.95); font-size: 14px;
+        border-top: 1px solid rgba(148, 163, 184, 0.1);
+        font-weight: 500; color: #f5f5f5; font-size: 14px;
       }
-      .forge-math-warning {
-        margin-top: 8px; padding: 6px 10px; border-radius: 8px;
-        background: rgba(248,113,113,0.1);
-        border: 1px solid rgba(248,113,113,0.3);
-        color: #f87171;
-        font-family: 'Fraunces', serif; font-style: italic; font-size: 12px;
+      .fl-math-warning {
+        margin-top: 8px; padding: 6px 10px; border-radius: 4px;
+        background: rgba(220, 38, 38, 0.08);
+        border: 1px solid rgba(220, 38, 38, 0.25);
+        color: #dc2626;
+        font-family: 'Source Serif 4', serif; font-style: italic; font-size: 12px;
       }
 
-      .forge-pnl-preview {
-        padding: 16px; border-radius: 12px; text-align: center;
+      .fl-pnl-preview {
+        padding: 18px; border-radius: 4px; text-align: center;
         margin-bottom: 14px;
+        border-left: 3px solid;
       }
-      .forge-pnl-preview.win { background: rgba(52,211,153,0.1); border: 1px solid rgba(52,211,153,0.25); }
-      .forge-pnl-preview.loss { background: rgba(248,113,113,0.08); border: 1px solid rgba(248,113,113,0.2); }
-      .forge-pnl-big { font-size: 28px; font-weight: 500; letter-spacing: -0.01em; }
-      .forge-pnl-preview.win .forge-pnl-big { color: #34d399; }
-      .forge-pnl-preview.loss .forge-pnl-big { color: #f87171; }
-      .forge-pnl-sub { font-size: 11px; margin-top: 4px; opacity: 0.8; }
+      .fl-pnl-preview.win {
+        background: rgba(16, 185, 129, 0.06);
+        border: 1px solid rgba(16, 185, 129, 0.25);
+        border-left-color: #10b981;
+      }
+      .fl-pnl-preview.loss {
+        background: rgba(220, 38, 38, 0.06);
+        border: 1px solid rgba(220, 38, 38, 0.2);
+        border-left-color: #dc2626;
+      }
+      .fl-pnl-label {
+        font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase;
+        color: rgba(148, 163, 184, 0.7);
+        margin-bottom: 8px;
+      }
+      .fl-pnl-big { font-size: 28px; font-weight: 500; letter-spacing: -0.01em; }
+      .fl-pnl-preview.win .fl-pnl-big { color: #10b981; }
+      .fl-pnl-preview.loss .fl-pnl-big { color: #dc2626; }
+      .fl-pnl-sub { font-size: 11px; margin-top: 6px; opacity: 0.8; }
 
-      .forge-sheet-footer {
+      .fl-ticket-footer {
         display: flex; gap: 10px; justify-content: flex-end;
         padding: 14px 20px;
-        border-top: 1px solid rgba(249,115,22,0.1);
-        background: rgba(0,0,0,0.2);
+        border-top: 1px solid rgba(148, 163, 184, 0.1);
+        background: rgba(15, 23, 42, 0.3);
       }
 
-      .first-win-overlay {
+      /* ── Trade confirmation (first win) ─────────── */
+      .fl-confirm-overlay {
         position: fixed; inset: 0; z-index: 50;
-        background: radial-gradient(circle at 50% 50%, rgba(249,115,22,0.25) 0%, rgba(10,5,3,0.95) 60%);
-        backdrop-filter: blur(8px);
+        background: rgba(5, 8, 14, 0.85);
+        backdrop-filter: blur(10px);
         display: flex; align-items: center; justify-content: center;
-        animation: fadeIn 0.5s ease;
+        padding: 20px;
+        animation: fadeIn 0.4s ease;
       }
-      .first-win-card {
+      .fl-confirm-card {
+        width: 100%; max-width: 400px;
+        background: #0f1420;
+        border: 1px solid rgba(212, 168, 87, 0.3);
+        border-radius: 4px;
+        overflow: hidden;
+        animation: confirmRise 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+        position: relative;
+      }
+      .fl-confirm-card::before {
+        content: '';
+        position: absolute; top: 0; left: 0; right: 0;
+        height: 3px;
+        background: linear-gradient(90deg, transparent, #d4a857, transparent);
+      }
+      @keyframes confirmRise { from { opacity: 0; transform: translateY(20px) scale(0.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
+      .fl-confirm-header {
+        display: flex; justify-content: space-between;
+        padding: 14px 20px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+        background: rgba(15, 23, 42, 0.5);
+      }
+      .fl-confirm-eyebrow {
+        font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase;
+        color: #d4a857;
+        font-weight: 500;
+      }
+      .fl-confirm-time {
+        font-size: 10px; color: rgba(148, 163, 184, 0.6);
+      }
+      .fl-confirm-body {
+        padding: 32px 28px 28px;
         text-align: center;
-        padding: 48px 40px; max-width: 360px;
-        animation: riseIn 0.8s cubic-bezier(0.22, 1, 0.36, 1);
       }
-      @keyframes riseIn { from { opacity: 0; transform: translateY(20px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
-      .first-win-card h1 {
-        font-family: 'Fraunces', serif; font-size: 48px; font-weight: 400;
-        font-style: italic; margin: 0; line-height: 1.1;
-        background: linear-gradient(180deg, #fff4d6, #f97316);
-        -webkit-background-clip: text; background-clip: text; color: transparent;
+      .fl-confirm-body h1 {
+        font-family: 'Source Serif 4', serif; font-size: 28px;
+        font-weight: 500; margin: 0 0 14px;
+        color: #f5f5f5; letter-spacing: -0.01em;
       }
-      .first-win-amount {
-        font-family: 'JetBrains Mono', monospace; font-size: 24px;
-        color: #34d399; margin: 14px 0 20px; font-weight: 500;
+      .fl-confirm-amount {
+        font-family: 'IBM Plex Mono', monospace; font-size: 28px;
+        font-weight: 500; color: #10b981;
+        margin: 0 0 18px;
+        letter-spacing: -0.01em;
       }
-      .first-win-card p {
-        font-family: 'Fraunces', serif; font-style: italic;
-        font-size: 14px; color: rgba(255,220,180,0.6);
-        margin: 0 auto 24px; line-height: 1.5;
+      .fl-confirm-body p {
+        font-family: 'Source Serif 4', serif; font-size: 14px;
+        font-style: italic;
+        color: rgba(148, 163, 184, 0.75);
+        margin: 0 auto 24px; line-height: 1.55;
       }
-      .first-win-card button {
-        padding: 12px 28px; border-radius: 999px;
-        background: linear-gradient(135deg, #f97316, #ef4444);
-        border: 0; color: #fff4d6;
-        font-family: 'JetBrains Mono', monospace; font-size: 10px;
-        letter-spacing: 0.2em; text-transform: uppercase; cursor: pointer;
-        box-shadow: 0 0 24px rgba(249,115,22,0.5);
+      .fl-confirm-body button {
+        padding: 11px 24px; border-radius: 4px;
+        background: #d4a857;
+        border: 0; color: #0a0e17;
+        font-family: 'IBM Plex Mono', monospace; font-size: 10px;
+        letter-spacing: 0.2em; text-transform: uppercase;
+        cursor: pointer; font-weight: 600;
       }
     `}</style>
   )
@@ -1537,14 +1794,14 @@ function ForgeStyles() {
 export default function InvestPage() {
   return (
     <Suspense fallback={
-      <div className="forge-loading">
-        <div className="forge-loading-dots">
+      <div className="fl-loading">
+        <div className="fl-loading-dots">
           {[0, 1, 2].map(i => <span key={i} style={{ animationDelay: `${i * 0.15}s` }} />)}
         </div>
-        <ForgeStyles />
+        <FloorStyles />
       </div>
     }>
-      <ForgeInner />
+      <FloorInner />
     </Suspense>
   )
 }

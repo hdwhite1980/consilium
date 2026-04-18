@@ -5,12 +5,12 @@ import { useRouter } from 'next/navigation'
 import { ChevronRight } from 'lucide-react'
 
 // ══════════════════════════════════════════════════════════════
-// INVEST INTRO — The Calling
-// Cinematic cold-open: darkness → spark → flame → content emerges
-// from firelight. User reads, accepts, crosses into the forge.
+// INVEST INTRO — "The Opening Bell"
+// Floor cold-open: dark floor → price line draws → orb ignites
+// → content rises. Editorial, investor-serious tone.
 // ══════════════════════════════════════════════════════════════
 
-type Phase = 'dark' | 'spark' | 'ignite' | 'content'
+type Phase = 'dark' | 'line' | 'ignite' | 'content'
 
 export default function InvestIntroPage() {
   const router = useRouter()
@@ -20,7 +20,6 @@ export default function InvestIntroPage() {
   const [skipIntro, setSkipIntro] = useState(false)
   const skipRef = useRef(false)
 
-  // Check if already accepted (redirect if so)
   useEffect(() => {
     fetch('/api/invest/intro')
       .then(r => r.json())
@@ -28,16 +27,14 @@ export default function InvestIntroPage() {
       .catch(() => {})
   }, [router])
 
-  // The cold-open sequence — dark → spark → ignite → content
   useEffect(() => {
     const timers: Array<ReturnType<typeof setTimeout>> = []
-    timers.push(setTimeout(() => { if (!skipRef.current) setPhase('spark') }, 600))
-    timers.push(setTimeout(() => { if (!skipRef.current) setPhase('ignite') }, 1600))
-    timers.push(setTimeout(() => { if (!skipRef.current) setPhase('content') }, 3000))
+    timers.push(setTimeout(() => { if (!skipRef.current) setPhase('line') }, 400))
+    timers.push(setTimeout(() => { if (!skipRef.current) setPhase('ignite') }, 1400))
+    timers.push(setTimeout(() => { if (!skipRef.current) setPhase('content') }, 2600))
     return () => timers.forEach(clearTimeout)
   }, [])
 
-  // Allow user to skip the animation with a tap or key press
   useEffect(() => {
     const onSkip = () => {
       if (phase !== 'content') {
@@ -62,173 +59,193 @@ export default function InvestIntroPage() {
   }
 
   return (
-    <div className={`intro-root phase-${phase}`}>
-      {/* Atmospheric layers — all z-stacked, always rendered */}
-      <div className="intro-vignette" />
-      <div className="intro-firelight" />
-      <IntroParticles active={phase !== 'dark'} />
+    <div className={`fi-root fi-phase-${phase}`}>
+      <div className="fi-vignette" />
 
-      {/* The flame — grows in with the sequence */}
-      <div className="intro-flame-wrap">
-        <FlameGraphic />
+      {/* Horizontal price line drawing across the screen */}
+      <svg className="fi-tape-line" viewBox="0 0 1200 200" preserveAspectRatio="none">
+        <path
+          d="M 0 100 L 150 100 L 180 70 L 230 90 L 280 50 L 340 80 L 400 60 L 480 85 L 540 40 L 620 70 L 690 55 L 780 90 L 860 30 L 940 60 L 1020 45 L 1100 70 L 1200 55"
+          fill="none"
+          stroke="#d4a857"
+          strokeWidth="1"
+          className="fi-tape-path"
+        />
+      </svg>
+
+      {/* Portfolio orb — rises from darkness */}
+      <div className="fi-orb-wrap">
+        <svg className="fi-orb" viewBox="0 0 220 220" aria-hidden>
+          <defs>
+            <radialGradient id="fiOrbGrad" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#10b981" stopOpacity="0.35" />
+              <stop offset="40%" stopColor="#d4a857" stopOpacity="0.2" />
+              <stop offset="100%" stopColor="#d4a857" stopOpacity="0" />
+            </radialGradient>
+            <radialGradient id="fiOrbCore" cx="50%" cy="50%" r="35%">
+              <stop offset="0%" stopColor="#f5f5f5" stopOpacity="0.9" />
+              <stop offset="100%" stopColor="#d4a857" stopOpacity="0" />
+            </radialGradient>
+          </defs>
+          <circle cx="110" cy="110" r="100" fill="url(#fiOrbGrad)" />
+          <circle cx="110" cy="110" r="80" fill="none" stroke="#d4a857" strokeOpacity="0.3" strokeWidth="0.5" strokeDasharray="1 6" className="fi-orb-ring" />
+          <circle cx="110" cy="110" r="54" fill="url(#fiOrbCore)" />
+          <circle cx="110" cy="110" r="3" fill="#d4a857" />
+        </svg>
       </div>
 
-      {/* Title phase — the words that emerge with the flame */}
-      <div className="intro-callout">
-        <div className="intro-callout-eyebrow">wali · forge</div>
-        <h1 className="intro-callout-title">
-          <span className="w1">Come</span>{' '}
-          <span className="w2">close</span>{' '}
-          <span className="w3">to</span>{' '}
-          <span className="w4">the</span>{' '}
-          <span className="w5">fire.</span>
+      {/* Opening text */}
+      <div className="fi-callout">
+        <div className="fi-callout-eyebrow">wali · floor</div>
+        <h1 className="fi-callout-title">
+          <span className="w1">Welcome</span>{' '}
+          <span className="w2">to</span>{' '}
+          <span className="w3">the</span>{' '}
+          <span className="w4">floor.</span>
         </h1>
       </div>
 
-      {/* Skip hint (only during animation) */}
       {phase !== 'content' && !skipIntro && (
         <button
-          className="intro-skip"
+          className="fi-skip"
           onClick={() => { skipRef.current = true; setSkipIntro(true); setPhase('content') }}
         >
           tap to skip →
         </button>
       )}
 
-      {/* Content column — rises up from below after animation */}
-      <div className="intro-column">
-        <div className="intro-column-inner">
+      {/* Content column */}
+      <div className="fi-column">
+        <div className="fi-column-inner">
 
-          <header className="intro-header">
-            <div className="eyebrow">the invest journey</div>
-            <h2 className="intro-h2">
-              Before you start —<br />
+          <header className="fi-header">
+            <div className="fi-eyebrow">the invest desk</div>
+            <h2 className="fi-h2">
+              Before you submit a single order —<br />
               <em>here is what this really is.</em>
             </h2>
-            <p className="intro-lede">
-              The journey is built for real markets with real stakes.
-              Spend sixty seconds at the fire so you know what you are
-              walking into.
+            <p className="fi-lede">
+              The floor is built for real markets with real stakes. Sixty seconds
+              here so you know what you are stepping onto.
             </p>
           </header>
 
-          {/* Section 1 — The stocks */}
-          <section className="intro-section">
-            <div className="intro-section-label">the stocks</div>
-            <div className="intro-cards">
+          {/* The instruments */}
+          <section className="fi-section">
+            <div className="fi-section-label">the instruments</div>
+            <div className="fi-cards">
               <IntroCard
-                title="Small-cap and micro-cap stocks"
-                body="Smaller companies — often under $500M market cap. They move fast, react hard to news, and have lower liquidity than large-caps. That's why they can double. It's also why they can drop forty percent in a week."
-                accent="#f97316"
-                glyph="▲"
+                title="Small and micro-cap equities"
+                body="Smaller companies — often under $500M market cap. They move fast, react hard to news, and have lower liquidity than large-caps. That is why they can double. It is also why they can drop forty percent in a week."
+                accent="#14b8a6"
+                glyph="§"
               />
               <IntroCard
-                title="Momentum and volume plays"
-                body="The council looks for stocks with unusual volume today — something is moving them. Earnings, a catalyst, a short squeeze, sector rotation. The council identifies the setup. What happens after is the market's call."
-                accent="#fbbf24"
+                title="Volume and momentum setups"
+                body="The council screens for unusual volume — something is moving the tape. Earnings, a catalyst, a short squeeze, sector rotation. The council identifies the setup. The market executes it."
+                accent="#d4a857"
                 glyph="≈"
               />
               <IntroCard
-                title="Sized to what you actually have"
-                body="At $5 you buy 2–3 shares of a $1–2 stock. At $500 you buy 15 shares of a $25 stock. The stage system scales the price range so every position feels like a real holding — not a lottery ticket, not an afterthought."
-                accent="#34d399"
-                glyph="◈"
+                title="Sized to your actual capital"
+                body="At $5 you buy 2–3 shares of a $1–2 instrument. At $500 you buy 15 shares of a $25 instrument. The tier system scales price range so every position is a real holding — not a lottery ticket."
+                accent="#10b981"
+                glyph="◇"
               />
             </div>
           </section>
 
-          {/* Section 2 — What the council does / does not */}
-          <section className="intro-section">
-            <div className="intro-section-label">what the council does</div>
-            <div className="intro-ledger">
-              <div className="ledger-column ledger-does">
-                <div className="ledger-head">It does</div>
+          {/* What the council does / does not */}
+          <section className="fi-section">
+            <div className="fi-section-label">the council</div>
+            <div className="fi-ledger">
+              <div className="fi-ledger-col fi-ledger-does">
+                <div className="fi-ledger-head">It does</div>
                 <ul>
                   <li>Screens real volume movers from live market data</li>
-                  <li>Reads sector momentum from the macro dashboard</li>
-                  <li>Gives a specific entry zone, stop, and target</li>
-                  <li>Sizes each position to your actual capital</li>
+                  <li>Reads sector momentum from the macro feed</li>
+                  <li>Publishes specific entry, stop, and target</li>
+                  <li>Sizes each position to available capital</li>
                 </ul>
               </div>
-              <div className="ledger-divider" />
-              <div className="ledger-column ledger-doesnot">
-                <div className="ledger-head">It does not</div>
+              <div className="fi-ledger-divider" />
+              <div className="fi-ledger-col fi-ledger-doesnot">
+                <div className="fi-ledger-head">It does not</div>
                 <ul>
-                  <li>Predict what any stock will do tomorrow</li>
-                  <li>Guarantee any return at any stage</li>
-                  <li>Replace your own judgment on the trade</li>
+                  <li>Predict what any instrument will do tomorrow</li>
+                  <li>Guarantee any return at any tier</li>
+                  <li>Replace your judgment on the trade</li>
                   <li>Protect you from your own psychology</li>
                 </ul>
               </div>
             </div>
           </section>
 
-          {/* Section 3 — The honest bit */}
-          <section className="intro-section">
-            <div className="intro-honest">
-              <div className="intro-honest-mark">⚠</div>
+          {/* The honest bit */}
+          <section className="fi-section">
+            <div className="fi-honest">
+              <div className="fi-honest-mark">!</div>
               <p>
-                Every position here is real money in a real market. Keep each
-                trade small enough that a loss is a lesson, not a setback.
-                The goal of the journey is to build the habit of sizing,
-                entering, and exiting with discipline — that skill compounds
-                over time even when individual trades do not.
+                Every position here is real money on a real tape. Keep each
+                trade small enough that a loss is tuition, not ruin. The goal
+                of the floor is the discipline of sizing, entering, and exiting
+                with intent — that skill compounds over time, even when
+                individual trades do not.
               </p>
             </div>
           </section>
 
-          {/* The pullquote pivot */}
-          <blockquote className="intro-pullquote">
-            <span className="pq-mark" aria-hidden>"</span>
-            Small positions let you make mistakes cheaply.
-            And you will make mistakes — everyone does.
+          {/* Pullquote */}
+          <blockquote className="fi-pullquote">
+            Small positions let you make mistakes cheaply. And you will make
+            mistakes — everyone does.
           </blockquote>
 
           {/* The oath */}
-          <section className="intro-oath">
-            <div className="intro-section-label">the oath</div>
+          <section className="fi-oath">
+            <div className="fi-section-label">acceptance</div>
 
-            <label className="oath-check">
+            <label className="fi-oath-check">
               <button
                 type="button"
-                className={`oath-checkbox ${checked ? 'on' : ''}`}
+                className={`fi-oath-checkbox ${checked ? 'on' : ''}`}
                 onClick={() => setChecked(!checked)}
                 aria-checked={checked}
                 role="checkbox"
               >
                 {checked && (
                   <svg width="14" height="10" viewBox="0 0 14 10" fill="none" aria-hidden>
-                    <path d="M1 5L5 9L13 1" stroke="#0a0503" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M1 5L5 9L13 1" stroke="#0a0e17" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 )}
               </button>
-              <span className="oath-text">
-                I understand these are volatile, small-cap stocks with real
-                downside risk. I will only invest money I am comfortable
-                losing on any individual trade.
+              <span className="fi-oath-text">
+                I understand these are volatile, small-cap equities with real
+                downside risk. I will only commit capital I am prepared to
+                lose on any individual trade.
               </span>
             </label>
 
             <button
-              className={`intro-cta ${checked ? 'ready' : 'waiting'}`}
+              className={`fi-cta ${checked ? 'ready' : 'waiting'}`}
               disabled={!checked || accepting}
               onClick={accept}
             >
               {accepting ? (
-                <span className="intro-cta-dots">
+                <span className="fi-cta-dots">
                   {[0, 1, 2].map(i => (
                     <span key={i} style={{ animationDelay: `${i * 0.15}s` }} />
                   ))}
                 </span>
               ) : (
                 <>
-                  {checked ? 'Cross into the forge' : 'Accept the oath to continue'}
+                  {checked ? 'Step onto the floor' : 'Accept to continue'}
                   {checked && <ChevronRight size={15} />}
                 </>
               )}
             </button>
 
-            <p className="intro-finepoint">
+            <p className="fi-finepoint">
               You will only see this once. Your acceptance is recorded in your journey.
             </p>
           </section>
@@ -241,613 +258,472 @@ export default function InvestIntroPage() {
   )
 }
 
-// ══════════════════════════════════════════════════════════════
-// SUB-COMPONENTS
-// ══════════════════════════════════════════════════════════════
-
-function FlameGraphic() {
-  return (
-    <svg className="intro-flame" viewBox="0 0 220 220" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-      <defs>
-        <radialGradient id="introFlameOuter" cx="50%" cy="80%" r="60%">
-          <stop offset="0%" stopColor="#fff4d6" stopOpacity="0.95" />
-          <stop offset="30%" stopColor="#fbbf24" stopOpacity="0.75" />
-          <stop offset="65%" stopColor="#f97316" stopOpacity="0.5" />
-          <stop offset="100%" stopColor="#ef4444" stopOpacity="0" />
-        </radialGradient>
-        <radialGradient id="introFlameCore" cx="50%" cy="75%" r="40%">
-          <stop offset="0%" stopColor="#ffffff" stopOpacity="0.95" />
-          <stop offset="100%" stopColor="#fbbf24" stopOpacity="0" />
-        </radialGradient>
-      </defs>
-      <g className="intro-flame-core">
-        <path
-          d="M110 200 C 60 180, 50 130, 80 90 C 90 110, 100 105, 95 80 C 115 95, 130 110, 130 140 C 140 125, 150 130, 150 150 C 160 140, 165 155, 160 170 C 155 185, 140 200, 110 200 Z"
-          fill="url(#introFlameOuter)"
-        />
-        <path
-          d="M110 180 C 85 170, 80 140, 100 115 C 105 130, 115 128, 112 108 C 125 120, 135 135, 135 155 C 140 150, 145 158, 142 170 C 138 180, 128 188, 110 188 Z"
-          fill="url(#introFlameCore)"
-        />
-      </g>
-    </svg>
-  )
-}
-
 function IntroCard({ title, body, accent, glyph }: {
   title: string; body: string; accent: string; glyph: string
 }) {
   return (
-    <div className="intro-card" style={{ ['--accent' as string]: accent }}>
-      <div className="intro-card-glyph" aria-hidden>{glyph}</div>
-      <div className="intro-card-body">
-        <div className="intro-card-title">{title}</div>
+    <div className="fi-card" style={{ ['--fi-accent' as string]: accent }}>
+      <div className="fi-card-glyph" aria-hidden>{glyph}</div>
+      <div className="fi-card-body">
+        <div className="fi-card-title">{title}</div>
         <p>{body}</p>
       </div>
     </div>
   )
 }
 
-function IntroParticles({ active }: { active: boolean }) {
-  const count = 28
-  return (
-    <div className={`intro-particles ${active ? 'on' : ''}`} aria-hidden>
-      {Array.from({ length: count }).map((_, i) => {
-        const left = Math.random() * 100
-        const dur = 10 + Math.random() * 16
-        const delay = Math.random() * 20
-        const drift = Math.random() * 50 - 25
-        const opacity = 0.25 + Math.random() * 0.4
-        return (
-          <span
-            key={i}
-            className="intro-particle"
-            style={{
-              left: `${left}%`,
-              animationDuration: `${dur}s`,
-              animationDelay: `${delay}s`,
-              ['--drift' as string]: `${drift}px`,
-              opacity,
-            }}
-          />
-        )
-      })}
-    </div>
-  )
-}
-
-// ══════════════════════════════════════════════════════════════
-// STYLES
-// ══════════════════════════════════════════════════════════════
 function IntroStyles() {
   return (
     <style jsx global>{`
-      @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500&family=JetBrains+Mono:wght@300;400;500&display=swap');
+      @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,500;8..60,600&family=Inter:wght@300;400;500;600&family=IBM+Plex+Mono:wght@300;400;500&display=swap');
 
-      .intro-root {
-        font-family: 'Fraunces', Georgia, serif;
-        color: rgba(255, 240, 220, 0.92);
-        background: #050201;
+      .fi-root {
+        font-family: 'Inter', system-ui, sans-serif;
+        color: rgba(241, 245, 249, 0.92);
+        background: #050810;
         min-height: 100vh;
         position: relative;
         overflow-x: hidden;
       }
-      .intro-root * { box-sizing: border-box; }
-      .intro-root .mono { font-family: 'JetBrains Mono', monospace; }
-      .intro-root .eyebrow {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 10px;
-        letter-spacing: 0.26em;
+      .fi-root * { box-sizing: border-box; }
+      .fi-root .mono { font-family: 'IBM Plex Mono', monospace; }
+      .fi-eyebrow {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 10px; letter-spacing: 0.26em;
         text-transform: uppercase;
-        color: rgba(255, 180, 100, 0.55);
+        color: rgba(148, 163, 184, 0.6);
+        font-weight: 500;
       }
 
-      /* ── Atmospheric layers ──────────────────────── */
-      .intro-vignette {
-        position: fixed; inset: 0; z-index: 0; pointer-events: none;
-        background: radial-gradient(ellipse at 50% 50%, #1a0b05 0%, #0a0503 50%, #000 100%);
-      }
-      .intro-firelight {
-        position: fixed; inset: 0; z-index: 1; pointer-events: none;
+      /* Vignette */
+      .fi-vignette {
+        position: fixed; inset: 0; z-index: 0;
+        pointer-events: none;
         background:
-          radial-gradient(ellipse 800px 500px at 50% 60%, rgba(249,115,22,0.12) 0%, transparent 60%),
-          radial-gradient(ellipse 400px 300px at 50% 60%, rgba(251,191,36,0.08) 0%, transparent 70%);
-        opacity: 0;
-        transition: opacity 1.8s ease-out;
-      }
-      .phase-spark .intro-firelight { opacity: 0.4; transition-duration: 0.8s; }
-      .phase-ignite .intro-firelight { opacity: 0.9; }
-      .phase-content .intro-firelight { opacity: 1; }
-
-      /* Particles */
-      .intro-particles {
-        position: fixed; inset: 0; z-index: 2; pointer-events: none;
-        opacity: 0;
-        transition: opacity 1.6s ease-out;
-      }
-      .intro-particles.on { opacity: 1; }
-      .intro-particle {
-        position: absolute; bottom: 30vh;
-        width: 2px; height: 2px; border-radius: 50%;
-        background: rgba(255, 200, 130, 0.9);
-        box-shadow: 0 0 4px rgba(255, 180, 100, 0.8);
-        animation: intro-rise linear infinite;
-      }
-      @keyframes intro-rise {
-        0% { transform: translateY(0) translateX(0); opacity: 0; }
-        10% { opacity: 1; }
-        90% { opacity: 1; }
-        100% { transform: translateY(-80vh) translateX(var(--drift, 20px)); opacity: 0; }
+          radial-gradient(ellipse at 50% 50%, #0a0e17 0%, #050810 60%, #000 100%);
       }
 
-      /* ── The flame (center of the cold-open) ───── */
-      .intro-flame-wrap {
+      /* Price line (cold-open) */
+      .fi-tape-line {
         position: fixed;
-        left: 50%;
-        top: 50%;
+        top: 50%; left: 0; right: 0;
+        transform: translateY(-60px);
+        width: 100%; height: 200px;
+        z-index: 1; pointer-events: none;
+        opacity: 0;
+        transition: opacity 1.2s ease;
+      }
+      .fi-phase-line .fi-tape-line { opacity: 0.8; }
+      .fi-phase-ignite .fi-tape-line { opacity: 0.5; }
+      .fi-phase-content .fi-tape-line { opacity: 0.2; }
+
+      .fi-tape-path {
+        stroke-dasharray: 3000;
+        stroke-dashoffset: 3000;
+        animation: tapeDraw 1.8s cubic-bezier(0.65, 0, 0.35, 1) forwards;
+        filter: drop-shadow(0 0 6px rgba(212, 168, 87, 0.6));
+      }
+      .fi-phase-dark .fi-tape-path { animation: none; }
+      @keyframes tapeDraw {
+        to { stroke-dashoffset: 0; }
+      }
+
+      /* Portfolio orb */
+      .fi-orb-wrap {
+        position: fixed;
+        left: 50%; top: 50%;
         transform: translate(-50%, -50%);
         width: 220px; height: 220px;
-        z-index: 3;
-        transition: all 1.4s cubic-bezier(0.22, 1, 0.36, 1);
+        z-index: 2;
+        transition: all 1.2s cubic-bezier(0.22, 1, 0.36, 1);
         opacity: 0;
       }
-      .phase-dark .intro-flame-wrap {
+      .fi-phase-dark .fi-orb-wrap {
         opacity: 0;
-        transform: translate(-50%, -50%) scale(0.1);
-      }
-      .phase-spark .intro-flame-wrap {
-        opacity: 0.5;
         transform: translate(-50%, -50%) scale(0.3);
-        transition-duration: 0.6s;
       }
-      .phase-ignite .intro-flame-wrap {
+      .fi-phase-line .fi-orb-wrap {
+        opacity: 0.3;
+        transform: translate(-50%, -50%) scale(0.5);
+      }
+      .fi-phase-ignite .fi-orb-wrap {
         opacity: 1;
         transform: translate(-50%, -50%) scale(0.85);
       }
-      .phase-content .intro-flame-wrap {
-        opacity: 0.45;
-        /* Move up behind/above the content column */
-        transform: translate(-50%, -120%) scale(0.65);
+      .fi-phase-content .fi-orb-wrap {
+        opacity: 0.35;
+        transform: translate(-50%, -150%) scale(0.55);
       }
       @media (min-width: 720px) {
-        .phase-content .intro-flame-wrap {
-          transform: translate(-50%, -140%) scale(0.75);
+        .fi-phase-content .fi-orb-wrap {
+          transform: translate(-50%, -170%) scale(0.6);
         }
       }
-      .intro-flame {
+      .fi-orb {
         width: 100%; height: 100%;
-        filter: drop-shadow(0 0 40px rgba(249, 115, 22, 0.5));
+        filter: drop-shadow(0 0 30px rgba(212, 168, 87, 0.4));
       }
-      .intro-flame-core {
-        animation: introFlicker 3.2s ease-in-out infinite;
-        transform-origin: 50% 100%;
+      .fi-orb-ring {
+        animation: fiOrbSpin 80s linear infinite;
+        transform-origin: center;
       }
-      @keyframes introFlicker {
-        0%, 100% { transform: scale(1, 1); }
-        33% { transform: scale(1.03, 0.97); }
-        66% { transform: scale(0.97, 1.04); }
-      }
+      @keyframes fiOrbSpin { to { transform: rotate(360deg); } }
 
-      /* ── The opening callout text ──────────────── */
-      .intro-callout {
+      /* Callout */
+      .fi-callout {
         position: fixed;
-        left: 50%;
-        top: 50%;
+        left: 50%; top: 50%;
         transform: translate(-50%, 140px);
         text-align: center;
-        z-index: 4;
+        z-index: 3;
         opacity: 0;
-        transition: all 1.2s cubic-bezier(0.22, 1, 0.36, 1);
+        transition: all 1s cubic-bezier(0.22, 1, 0.36, 1);
         pointer-events: none;
         width: 90%; max-width: 500px;
       }
-      .phase-ignite .intro-callout {
-        opacity: 1;
-      }
-      .phase-content .intro-callout {
+      .fi-phase-ignite .fi-callout { opacity: 1; }
+      .fi-phase-content .fi-callout {
         opacity: 0;
         transform: translate(-50%, 100px);
       }
-      .intro-callout-eyebrow {
-        font-family: 'JetBrains Mono', monospace;
+      .fi-callout-eyebrow {
+        font-family: 'IBM Plex Mono', monospace;
         font-size: 10px;
         letter-spacing: 0.35em;
         text-transform: uppercase;
-        color: rgba(251, 191, 36, 0.7);
+        color: #d4a857;
         margin-bottom: 14px;
+        font-weight: 500;
       }
-      .intro-callout-title {
-        font-family: 'Fraunces', serif;
+      .fi-callout-title {
+        font-family: 'Source Serif 4', serif;
         font-size: 36px;
-        font-weight: 400;
-        font-style: italic;
-        letter-spacing: -0.015em;
+        font-weight: 500;
+        letter-spacing: -0.02em;
         line-height: 1.15;
         margin: 0;
-        color: rgba(255, 244, 214, 0.98);
+        color: #f5f5f5;
       }
-      @media (min-width: 720px) {
-        .intro-callout-title { font-size: 46px; }
-      }
-      .intro-callout-title span {
+      @media (min-width: 720px) { .fi-callout-title { font-size: 44px; } }
+      .fi-callout-title span {
         display: inline-block;
         opacity: 0;
-        transform: translateY(6px);
-        transition: opacity 0.9s ease, transform 0.9s ease;
+        transform: translateY(4px);
+        transition: opacity 0.8s ease, transform 0.8s ease;
       }
-      .phase-ignite .intro-callout-title .w1 { opacity: 1; transform: none; transition-delay: 0.1s; }
-      .phase-ignite .intro-callout-title .w2 { opacity: 1; transform: none; transition-delay: 0.3s; }
-      .phase-ignite .intro-callout-title .w3 { opacity: 1; transform: none; transition-delay: 0.5s; }
-      .phase-ignite .intro-callout-title .w4 { opacity: 1; transform: none; transition-delay: 0.6s; }
-      .phase-ignite .intro-callout-title .w5 {
-        opacity: 1; transform: none; transition-delay: 0.7s;
-        background: linear-gradient(180deg, #fff4d6, #f97316);
-        -webkit-background-clip: text; background-clip: text;
-        -webkit-text-fill-color: transparent; color: transparent;
+      .fi-phase-ignite .fi-callout-title .w1 { opacity: 1; transform: none; transition-delay: 0.1s; }
+      .fi-phase-ignite .fi-callout-title .w2 { opacity: 1; transform: none; transition-delay: 0.3s; }
+      .fi-phase-ignite .fi-callout-title .w3 { opacity: 1; transform: none; transition-delay: 0.45s; }
+      .fi-phase-ignite .fi-callout-title .w4 {
+        opacity: 1; transform: none; transition-delay: 0.6s;
+        color: #d4a857;
       }
 
-      /* Skip hint */
-      .intro-skip {
+      /* Skip */
+      .fi-skip {
         position: fixed;
         bottom: 32px;
         left: 50%;
         transform: translateX(-50%);
         z-index: 10;
-        padding: 10px 20px;
-        background: rgba(255, 255, 255, 0.04);
-        border: 1px solid rgba(255, 220, 180, 0.1);
-        border-radius: 999px;
-        color: rgba(255, 220, 180, 0.5);
-        font-family: 'JetBrains Mono', monospace;
+        padding: 9px 18px;
+        background: rgba(15, 23, 42, 0.6);
+        border: 1px solid rgba(148, 163, 184, 0.15);
+        border-radius: 4px;
+        color: rgba(148, 163, 184, 0.6);
+        font-family: 'IBM Plex Mono', monospace;
         font-size: 10px;
         letter-spacing: 0.2em;
         text-transform: uppercase;
         cursor: pointer;
         backdrop-filter: blur(6px);
-        animation: introSkipBlink 2s ease-in-out infinite 1.2s;
         transition: all 0.2s ease;
+        font-weight: 500;
+        animation: fiSkipBlink 2s ease-in-out infinite 1s;
       }
-      .intro-skip:hover {
-        color: #fbbf24;
-        border-color: rgba(249, 115, 22, 0.3);
+      .fi-skip:hover {
+        color: #d4a857;
+        border-color: rgba(212, 168, 87, 0.4);
       }
-      @keyframes introSkipBlink {
-        0%, 100% { opacity: 0.4; }
-        50% { opacity: 0.9; }
+      @keyframes fiSkipBlink {
+        0%, 100% { opacity: 0.5; }
+        50% { opacity: 1; }
       }
 
-      /* ── The content column ────────────────────── */
-      .intro-column {
+      /* Content column */
+      .fi-column {
         position: relative;
         z-index: 5;
         min-height: 100vh;
-        padding: 60vh 20px 40px;
+        padding: 62vh 20px 40px;
         opacity: 0;
-        transform: translateY(30px);
-        transition: opacity 1.2s ease 0.4s, transform 1.2s cubic-bezier(0.22, 1, 0.36, 1) 0.4s;
+        transform: translateY(20px);
+        transition: opacity 1s ease 0.3s, transform 1s cubic-bezier(0.22, 1, 0.36, 1) 0.3s;
         pointer-events: none;
       }
-      .phase-content .intro-column {
+      .fi-phase-content .fi-column {
         opacity: 1;
         transform: translateY(0);
         pointer-events: auto;
       }
-      @media (min-width: 720px) {
-        .intro-column { padding-top: 65vh; }
-      }
-      .intro-column-inner {
-        max-width: 540px;
-        margin: 0 auto;
-      }
+      @media (min-width: 720px) { .fi-column { padding-top: 65vh; } }
+      .fi-column-inner { max-width: 580px; margin: 0 auto; }
 
       /* Header */
-      .intro-header {
+      .fi-header {
         text-align: center;
-        margin-bottom: 48px;
+        margin-bottom: 44px;
         padding-bottom: 40px;
-        border-bottom: 1px solid rgba(249, 115, 22, 0.12);
+        border-bottom: 1px solid rgba(148, 163, 184, 0.1);
       }
-      .intro-header .eyebrow { margin-bottom: 16px; }
-      .intro-h2 {
-        font-family: 'Fraunces', serif;
-        font-size: 28px;
-        font-weight: 400;
-        line-height: 1.2;
-        letter-spacing: -0.01em;
+      .fi-header .fi-eyebrow { display: block; margin-bottom: 16px; }
+      .fi-h2 {
+        font-family: 'Source Serif 4', serif;
+        font-size: 28px; font-weight: 500;
+        line-height: 1.2; letter-spacing: -0.01em;
         margin: 0 0 18px;
-        color: rgba(255, 244, 214, 0.95);
+        color: #f5f5f5;
       }
-      @media (min-width: 720px) {
-        .intro-h2 { font-size: 36px; }
-      }
-      .intro-h2 em {
+      @media (min-width: 720px) { .fi-h2 { font-size: 34px; } }
+      .fi-h2 em {
         font-style: italic;
-        background: linear-gradient(180deg, #fff4d6 0%, #f97316 100%);
-        -webkit-background-clip: text; background-clip: text;
-        -webkit-text-fill-color: transparent; color: transparent;
+        color: #d4a857;
+        font-weight: 400;
       }
-      .intro-lede {
-        font-family: 'Fraunces', serif;
-        font-size: 15px;
-        line-height: 1.65;
-        color: rgba(255, 220, 180, 0.6);
+      .fi-lede {
+        font-family: 'Source Serif 4', serif;
+        font-size: 15px; line-height: 1.65;
+        color: rgba(148, 163, 184, 0.7);
         font-style: italic;
-        margin: 0 auto;
-        max-width: 440px;
+        margin: 0 auto; max-width: 460px;
       }
 
       /* Sections */
-      .intro-section {
-        margin-bottom: 40px;
-      }
-      .intro-section-label {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 10px;
-        letter-spacing: 0.28em;
-        text-transform: uppercase;
-        color: rgba(249, 115, 22, 0.6);
-        margin-bottom: 16px;
-        text-align: center;
+      .fi-section { margin-bottom: 40px; }
+      .fi-section-label {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 10px; letter-spacing: 0.28em; text-transform: uppercase;
+        color: #d4a857;
+        margin-bottom: 16px; text-align: center;
+        font-weight: 500;
       }
 
       /* Cards */
-      .intro-cards {
-        display: flex; flex-direction: column; gap: 10px;
-      }
-      .intro-card {
+      .fi-cards { display: flex; flex-direction: column; gap: 8px; }
+      .fi-card {
         display: flex; gap: 16px; align-items: flex-start;
         padding: 18px 20px;
-        border-radius: 14px;
-        background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.01));
-        border: 1px solid rgba(249, 115, 22, 0.12);
-        position: relative;
-        transition: all 0.3s ease;
+        border-radius: 4px;
+        background: rgba(15, 23, 42, 0.5);
+        border: 1px solid rgba(148, 163, 184, 0.1);
+        border-left: 3px solid var(--fi-accent, #d4a857);
+        transition: all 0.25s ease;
       }
-      .intro-card:hover {
-        border-color: var(--accent, rgba(249,115,22,0.3));
-        transform: translateY(-1px);
+      .fi-card:hover {
+        background: rgba(15, 23, 42, 0.7);
+        border-color: var(--fi-accent);
       }
-      .intro-card-glyph {
+      .fi-card-glyph {
         width: 36px; height: 36px;
         flex-shrink: 0;
-        border-radius: 50%;
+        border-radius: 2px;
         background: rgba(0, 0, 0, 0.3);
-        border: 1px solid var(--accent);
-        color: var(--accent);
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 16px;
+        border: 1px solid var(--fi-accent);
+        color: var(--fi-accent);
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 18px; font-weight: 300;
         display: flex; align-items: center; justify-content: center;
-        box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 40%, transparent);
       }
-      .intro-card-body { flex: 1; min-width: 0; }
-      .intro-card-title {
-        font-family: 'Fraunces', serif;
-        font-size: 16px;
-        font-weight: 500;
-        color: rgba(255, 244, 214, 0.95);
+      .fi-card-body { flex: 1; min-width: 0; }
+      .fi-card-title {
+        font-family: 'Source Serif 4', serif;
+        font-size: 16px; font-weight: 600;
+        color: #f5f5f5;
         margin-bottom: 6px;
         letter-spacing: -0.005em;
       }
-      .intro-card-body p {
-        font-family: 'Fraunces', serif;
-        font-size: 13px;
-        line-height: 1.6;
-        color: rgba(255, 220, 180, 0.62);
+      .fi-card-body p {
+        font-family: 'Source Serif 4', serif;
+        font-size: 13px; line-height: 1.6;
+        color: rgba(148, 163, 184, 0.75);
         margin: 0;
       }
 
-      /* Ledger (does / does not) */
-      .intro-ledger {
+      /* Ledger */
+      .fi-ledger {
         display: grid;
         grid-template-columns: 1fr;
         gap: 20px;
         padding: 22px 20px;
-        border-radius: 14px;
-        background: rgba(0, 0, 0, 0.25);
-        border: 1px solid rgba(249, 115, 22, 0.15);
+        border-radius: 4px;
+        background: rgba(15, 23, 42, 0.4);
+        border: 1px solid rgba(148, 163, 184, 0.1);
       }
       @media (min-width: 560px) {
-        .intro-ledger {
-          grid-template-columns: 1fr 1px 1fr;
-          gap: 24px;
-          padding: 24px 28px;
-        }
+        .fi-ledger { grid-template-columns: 1fr 1px 1fr; gap: 24px; padding: 24px 28px; }
       }
-      .ledger-divider {
+      .fi-ledger-divider {
         display: none;
-        background: linear-gradient(to bottom, transparent, rgba(249,115,22,0.2), transparent);
+        background: linear-gradient(to bottom, transparent, rgba(148,163,184,0.2), transparent);
       }
-      @media (min-width: 560px) {
-        .ledger-divider { display: block; }
-      }
-      .ledger-head {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 10px;
-        letter-spacing: 0.22em;
-        text-transform: uppercase;
+      @media (min-width: 560px) { .fi-ledger-divider { display: block; } }
+      .fi-ledger-head {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase;
         margin-bottom: 12px;
+        font-weight: 500;
       }
-      .ledger-does .ledger-head { color: #34d399; }
-      .ledger-doesnot .ledger-head { color: #f87171; }
-      .ledger-column ul {
+      .fi-ledger-does .fi-ledger-head { color: #10b981; }
+      .fi-ledger-doesnot .fi-ledger-head { color: #dc2626; }
+      .fi-ledger-col ul {
         list-style: none;
-        padding: 0;
-        margin: 0;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
+        padding: 0; margin: 0;
+        display: flex; flex-direction: column; gap: 8px;
       }
-      .ledger-column li {
-        font-family: 'Fraunces', serif;
-        font-size: 13px;
-        line-height: 1.5;
-        color: rgba(255, 220, 180, 0.72);
+      .fi-ledger-col li {
+        font-family: 'Source Serif 4', serif;
+        font-size: 13px; line-height: 1.55;
+        color: rgba(226, 232, 240, 0.8);
         padding-left: 16px;
         position: relative;
       }
-      .ledger-does li::before {
+      .fi-ledger-does li::before {
         content: '+';
         position: absolute; left: 0; top: 0;
-        color: #34d399;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 12px;
-        font-weight: 500;
+        color: #10b981;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 12px; font-weight: 600;
       }
-      .ledger-doesnot li::before {
+      .fi-ledger-doesnot li::before {
         content: '−';
         position: absolute; left: 0; top: 0;
-        color: #f87171;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 12px;
-        font-weight: 500;
+        color: #dc2626;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 12px; font-weight: 600;
       }
 
-      /* Honest bit (warning block) */
-      .intro-honest {
-        display: flex;
-        gap: 14px;
-        padding: 20px;
-        border-radius: 14px;
-        background: linear-gradient(180deg, rgba(251,191,36,0.08), rgba(251,191,36,0.02));
-        border: 1px solid rgba(251, 191, 36, 0.2);
+      /* Honest */
+      .fi-honest {
+        display: flex; gap: 14px;
+        padding: 18px 20px;
+        border-radius: 4px;
+        background: rgba(212, 168, 87, 0.06);
+        border: 1px solid rgba(212, 168, 87, 0.2);
+        border-left: 3px solid #d4a857;
       }
-      .intro-honest-mark {
-        font-size: 20px;
-        color: #fbbf24;
+      .fi-honest-mark {
+        width: 24px; height: 24px;
+        border-radius: 2px;
+        border: 1px solid #d4a857;
+        color: #d4a857;
+        display: flex; align-items: center; justify-content: center;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 14px; font-weight: 600;
         flex-shrink: 0;
-        line-height: 1.2;
-        filter: drop-shadow(0 0 8px rgba(251, 191, 36, 0.5));
       }
-      .intro-honest p {
-        font-family: 'Fraunces', serif;
-        font-size: 14px;
-        line-height: 1.65;
-        color: rgba(251, 191, 36, 0.85);
+      .fi-honest p {
+        font-family: 'Source Serif 4', serif;
+        font-size: 14px; line-height: 1.65;
+        color: rgba(226, 232, 240, 0.85);
         margin: 0;
         font-style: italic;
       }
 
       /* Pullquote */
-      .intro-pullquote {
-        font-family: 'Fraunces', serif;
-        font-size: 22px;
-        font-style: italic;
-        font-weight: 400;
+      .fi-pullquote {
+        font-family: 'Source Serif 4', serif;
+        font-size: 22px; font-weight: 400;
         line-height: 1.4;
-        text-align: center;
-        color: rgba(255, 244, 214, 0.92);
-        margin: 48px 0;
-        padding: 24px 20px;
-        border-top: 1px solid rgba(249, 115, 22, 0.15);
-        border-bottom: 1px solid rgba(249, 115, 22, 0.15);
-        position: relative;
+        color: #f5f5f5;
+        margin: 44px 0;
+        padding: 20px 0 20px 26px;
+        border-left: 3px solid #d4a857;
+        font-style: italic;
       }
-      @media (min-width: 720px) { .intro-pullquote { font-size: 26px; } }
-      .pq-mark {
-        display: block;
-        font-size: 52px;
-        line-height: 0.3;
-        color: #f97316;
-        opacity: 0.5;
-        margin-bottom: 14px;
-      }
+      @media (min-width: 720px) { .fi-pullquote { font-size: 26px; } }
 
       /* Oath */
-      .intro-oath {
+      .fi-oath {
         padding: 24px 20px 8px;
-        border-radius: 16px;
-        background: radial-gradient(ellipse 300px 200px at 50% 0%, rgba(249, 115, 22, 0.08), transparent 70%);
+        border-radius: 4px;
       }
-      .intro-oath .intro-section-label { color: #fbbf24; }
-      .oath-check {
-        display: flex;
-        gap: 14px;
-        align-items: flex-start;
+      .fi-oath .fi-section-label { color: #d4a857; }
+      .fi-oath-check {
+        display: flex; gap: 14px; align-items: flex-start;
         padding: 16px;
-        border-radius: 12px;
-        background: rgba(0, 0, 0, 0.25);
-        border: 1px solid rgba(249, 115, 22, 0.12);
+        border-radius: 4px;
+        background: rgba(15, 23, 42, 0.5);
+        border: 1px solid rgba(148, 163, 184, 0.12);
         margin-bottom: 20px;
         cursor: pointer;
         transition: all 0.2s ease;
       }
-      .oath-check:hover {
-        border-color: rgba(249, 115, 22, 0.3);
-      }
-      .oath-checkbox {
+      .fi-oath-check:hover { border-color: rgba(212, 168, 87, 0.3); }
+      .fi-oath-checkbox {
         width: 24px; height: 24px;
         flex-shrink: 0;
-        border-radius: 6px;
-        border: 2px solid rgba(255, 220, 180, 0.25);
+        border-radius: 3px;
+        border: 2px solid rgba(148, 163, 184, 0.3);
         background: transparent;
         display: flex; align-items: center; justify-content: center;
         cursor: pointer;
         transition: all 0.2s ease;
         padding: 0;
       }
-      .oath-checkbox.on {
-        background: linear-gradient(135deg, #fbbf24, #f97316);
-        border-color: #fbbf24;
-        box-shadow: 0 0 16px rgba(251, 191, 36, 0.5);
+      .fi-oath-checkbox.on {
+        background: #d4a857;
+        border-color: #d4a857;
       }
-      .oath-text {
-        font-family: 'Fraunces', serif;
-        font-size: 14px;
-        line-height: 1.6;
-        color: rgba(255, 220, 180, 0.75);
+      .fi-oath-text {
+        font-family: 'Source Serif 4', serif;
+        font-size: 14px; line-height: 1.6;
+        color: rgba(226, 232, 240, 0.82);
       }
 
       /* CTA */
-      .intro-cta {
+      .fi-cta {
         display: flex;
-        align-items: center;
-        justify-content: center;
+        align-items: center; justify-content: center;
         gap: 10px;
         width: 100%;
-        padding: 16px 20px;
-        border-radius: 14px;
+        padding: 15px 20px;
+        border-radius: 4px;
         border: 0;
-        font-family: 'JetBrains Mono', monospace;
+        font-family: 'IBM Plex Mono', monospace;
         font-size: 11px;
         letter-spacing: 0.22em;
         text-transform: uppercase;
-        font-weight: 500;
+        font-weight: 600;
         cursor: pointer;
-        transition: all 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+        transition: all 0.25s ease;
       }
-      .intro-cta.waiting {
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid rgba(255, 220, 180, 0.1);
-        color: rgba(255, 220, 180, 0.35);
+      .fi-cta.waiting {
+        background: rgba(15, 23, 42, 0.5);
+        border: 1px solid rgba(148, 163, 184, 0.15);
+        color: rgba(148, 163, 184, 0.4);
         cursor: not-allowed;
       }
-      .intro-cta.ready {
-        background: linear-gradient(135deg, #f97316 0%, #ef4444 100%);
-        color: #fff4d6;
-        box-shadow: 0 0 24px rgba(249, 115, 22, 0.35), 0 8px 24px rgba(239, 68, 68, 0.2);
+      .fi-cta.ready {
+        background: #d4a857;
+        color: #0a0e17;
       }
-      .intro-cta.ready:hover:not(:disabled) {
-        box-shadow: 0 0 36px rgba(249, 115, 22, 0.55), 0 8px 32px rgba(239, 68, 68, 0.3);
-        transform: translateY(-1px);
-      }
-      .intro-cta-dots {
-        display: flex; gap: 6px;
-      }
-      .intro-cta-dots span {
+      .fi-cta.ready:hover:not(:disabled) { filter: brightness(1.1); }
+      .fi-cta-dots { display: flex; gap: 6px; }
+      .fi-cta-dots span {
         width: 6px; height: 6px; border-radius: 50%;
-        background: #fff4d6;
-        animation: introCtaBounce 1s ease-in-out infinite;
+        background: #0a0e17;
+        animation: fiCtaBounce 1s ease-in-out infinite;
       }
-      @keyframes introCtaBounce {
+      @keyframes fiCtaBounce {
         0%, 100% { transform: translateY(0); opacity: 0.5; }
         50% { transform: translateY(-6px); opacity: 1; }
       }
 
-      .intro-finepoint {
-        font-family: 'Fraunces', serif;
+      .fi-finepoint {
+        font-family: 'Source Serif 4', serif;
         font-style: italic;
         font-size: 12px;
-        color: rgba(255, 220, 180, 0.3);
+        color: rgba(148, 163, 184, 0.4);
         text-align: center;
         margin: 16px 0 0;
       }
