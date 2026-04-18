@@ -4,6 +4,7 @@ import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/app/lib/auth/client'
 import { Eye, EyeOff, AlertCircle } from 'lucide-react'
+import WaliLogo from '@/app/components/WaliLogo'
 
 function LoginPageInner() {
   const router = useRouter()
@@ -64,7 +65,7 @@ function LoginPageInner() {
 
       // Check if MFA is required
       if (data.session === null) {
-        // No session yet — MFA required
+        // No session yet â€” MFA required
         const { data: factors } = await supabase.auth.mfa.listFactors()
         const totp = factors?.totp?.find(f => f.status === 'verified')
         if (totp) {
@@ -136,15 +137,8 @@ function LoginPageInner() {
       style={{ background: '#0a0d12' }}>
 
       {/* Logo */}
-      <div className="flex items-center gap-3 mb-10">
-        <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold text-white"
-          style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
-          Σ
-        </div>
-        <div>
-          <div className="text-lg font-bold tracking-tight text-white">WALI-OS</div>
-          <div className="text-[10px] font-mono text-white/25">Signal Convergence Engine</div>
-        </div>
+      <div className="mb-10">
+        <WaliLogo size="md" priority />
       </div>
 
       {/* Card */}
@@ -166,7 +160,7 @@ function LoginPageInner() {
         {/* Reset sent confirmation */}
         {resetSent ? (
           <div className="text-center space-y-4">
-            <div className="text-4xl">📧</div>
+            <div className="text-4xl">ðŸ“§</div>
             <p className="text-sm text-white/70">Password reset email sent. Check your inbox.</p>
             <button onClick={() => { setMode('login'); setResetSent(false) }}
               className="text-sm text-white/40 hover:text-white/70 underline transition-colors">
@@ -210,7 +204,7 @@ function LoginPageInner() {
                     type={showPw ? 'text' : 'password'}
                     value={password}
                     onChange={e => setPassword(e.target.value)}
-                    placeholder="••••••••"
+                    placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
                     required
                     autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
                     minLength={6}
@@ -283,7 +277,7 @@ function LoginPageInner() {
               ) : (
                 <button type="button" onClick={() => { setMode('login'); setError(null) }}
                   className="text-xs text-white/30 hover:text-white/60 transition-colors">
-                  ← Back to login
+                  â† Back to login
                 </button>
               )}
             </div>
@@ -296,7 +290,7 @@ function LoginPageInner() {
           className="text-[11px] font-mono text-white/30 hover:text-white/60 transition-colors underline">
           View pricing
         </a>
-        <span className="text-white/15 text-xs">·</span>
+        <span className="text-white/15 text-xs">Â·</span>
         <p className="text-[10px] font-mono text-white/15">
           Not financial advice
         </p>

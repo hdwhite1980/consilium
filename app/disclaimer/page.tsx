@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/app/lib/auth/client'
+import WaliLogo from '@/app/components/WaliLogo'
 
 export default function DisclaimerPage() {
   const router = useRouter()
@@ -30,13 +31,8 @@ export default function DisclaimerPage() {
       style={{ background: '#0a0d12' }}>
 
       {/* Logo */}
-      <div className="flex items-center gap-3 mb-8">
-        <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold text-white"
-          style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>Σ</div>
-        <div>
-          <div className="text-lg font-bold tracking-tight text-white">WALI-OS</div>
-          <div className="text-[10px] font-mono text-white/25">Signal Convergence Engine</div>
-        </div>
+      <div className="mb-8">
+        <WaliLogo size="md" priority />
       </div>
 
       <div className="w-full max-w-lg rounded-2xl border overflow-hidden"
@@ -99,7 +95,7 @@ export default function DisclaimerPage() {
                   borderColor: checked ? '#7c3aed' : 'rgba(255,255,255,0.2)',
                   background: checked ? '#7c3aed' : 'transparent'
                 }}>
-                {checked && <span className="text-white text-xs font-bold">✓</span>}
+                {checked && <span className="text-white text-xs font-bold">âœ“</span>}
               </div>
             </div>
             <span className="text-sm text-white/60 leading-relaxed">
@@ -110,7 +106,7 @@ export default function DisclaimerPage() {
           <button onClick={handleAccept} disabled={!checked || loading}
             className="w-full py-3.5 rounded-xl font-bold text-white transition-all hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed"
             style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
-            {loading ? 'Continuing…' : 'I understand — continue to Wali-OS'}
+            {loading ? 'Continuingâ€¦' : 'I understand â€” continue to Wali-OS'}
           </button>
         </div>
       </div>

@@ -4,13 +4,14 @@ import { useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/app/lib/auth/client'
 import { Eye, EyeOff, Check, TrendingUp, BarChart2, Brain, Shield, Zap, Calendar } from 'lucide-react'
+import WaliLogo from '@/app/components/WaliLogo'
 
 const BENEFITS = [
-  { icon: <Brain size={16} />,      color: '#a78bfa', text: 'Get a clear buy, sell, or hold verdict on any stock — with a price target and exact entry and exit levels' },
-  { icon: <BarChart2 size={16} />,  color: '#60a5fa', text: 'Every signal explained in plain English — no experience required to understand what the data is saying' },
+  { icon: <Brain size={16} />,      color: '#a78bfa', text: 'Get a clear buy, sell, or hold verdict on any stock â€” with a price target and exact entry and exit levels' },
+  { icon: <BarChart2 size={16} />,  color: '#60a5fa', text: 'Every signal explained in plain English â€” no experience required to understand what the data is saying' },
   { icon: <Shield size={16} />,     color: '#34d399', text: 'See what insiders, institutions, and lawmakers are doing with their own money before you decide' },
-  { icon: <Zap size={16} />,        color: '#fbbf24', text: "Know which stocks could move today and which setups are building for tomorrow — before the market opens" },
-  { icon: <TrendingUp size={16} />, color: '#f87171', text: 'Get specific options strategies matched to the outlook — with real contracts, real prices, and plain English risk breakdowns' },
+  { icon: <Zap size={16} />,        color: '#fbbf24', text: "Know which stocks could move today and which setups are building for tomorrow â€” before the market opens" },
+  { icon: <TrendingUp size={16} />, color: '#f87171', text: 'Get specific options strategies matched to the outlook â€” with real contracts, real prices, and plain English risk breakdowns' },
   { icon: <Calendar size={16} />,   color: '#a78bfa', text: 'Never get caught off guard by earnings, analyst changes, or market events that move your positions' },
 ]
 
@@ -59,15 +60,10 @@ function SignupInner() {
       <div className="min-h-screen flex items-center justify-center px-4"
         style={{ background: '#0a0d12' }}>
         <div className="w-full max-w-sm text-center space-y-5">
-          <div className="flex items-center justify-center gap-3 mb-6">
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold text-white"
-              style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>Σ</div>
-            <div className="text-left">
-              <div className="text-lg font-bold tracking-tight text-white">WALI-OS</div>
-              <div className="text-[10px] font-mono text-white/25">Signal Convergence Engine</div>
-            </div>
+          <div className="flex justify-center mb-6">
+            <WaliLogo size="md" priority />
           </div>
-          <div className="text-5xl mb-2">📧</div>
+          <div className="text-5xl mb-2">ðŸ“§</div>
           <h1 className="text-2xl font-bold text-white">Check your inbox</h1>
           <p className="text-sm text-white/55 leading-relaxed">
             We sent a confirmation link to <span className="text-white/80 font-medium">{email}</span>.
@@ -97,26 +93,21 @@ function SignupInner() {
   return (
     <div className="min-h-screen flex flex-col lg:flex-row" style={{ background: '#0a0d12' }}>
 
-      {/* Left — value props (hidden on small screens) */}
+      {/* Left â€” value props (hidden on small screens) */}
       <div className="hidden lg:flex flex-col justify-center px-12 py-16 flex-1 border-r"
         style={{ borderColor: 'rgba(255,255,255,0.06)', background: '#0d1117' }}>
 
         <div className="max-w-md">
           {/* Logo */}
-          <div className="flex items-center gap-3 mb-12">
-            <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-xl font-bold text-white"
-              style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>Σ</div>
-            <div>
-              <div className="text-xl font-bold tracking-tight text-white">WALI-OS</div>
-              <div className="text-[10px] font-mono text-white/25">Signal Convergence Engine</div>
-            </div>
+          <div className="mb-12">
+            <WaliLogo size="lg" priority />
           </div>
 
           <h1 className="text-3xl font-bold text-white mb-3 leading-tight">
             Stop guessing.<br />Start knowing.
           </h1>
           <p className="text-white/50 text-base mb-10 leading-relaxed">
-            Wali-OS analyzes any stock and tells you exactly what to do — with a clear signal, a price target, and entry and exit levels explained in plain English.
+            Wali-OS analyzes any stock and tells you exactly what to do â€” with a clear signal, a price target, and entry and exit levels explained in plain English.
           </p>
 
           <div className="space-y-4">
@@ -134,34 +125,29 @@ function SignupInner() {
           <div className="mt-12 pt-8 border-t" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
             <div className="flex items-baseline gap-2 mb-1">
               <span className="text-2xl font-bold text-white">$29</span>
-              <span className="text-white/40 text-sm">/month Standard · </span>
+              <span className="text-white/40 text-sm">/month Standard Â· </span>
               <span className="text-2xl font-bold text-white">$49</span>
               <span className="text-white/40 text-sm">/month Pro</span>
             </div>
             <div className="flex items-center gap-2">
               <Check size={13} style={{ color: '#34d399' }} />
-              <span className="text-sm" style={{ color: '#34d399' }}>7-day free trial · No credit card required</span>
+              <span className="text-sm" style={{ color: '#34d399' }}>7-day free trial Â· No credit card required</span>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Right — signup form */}
+      {/* Right â€” signup form */}
       <div className="flex flex-col justify-center px-6 py-12 lg:w-[440px] lg:shrink-0">
 
         {/* Mobile logo */}
-        <div className="flex items-center gap-3 mb-10 lg:hidden">
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold text-white"
-            style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>Σ</div>
-          <div>
-            <div className="text-lg font-bold tracking-tight text-white">WALI-OS</div>
-            <div className="text-[10px] font-mono text-white/25">Signal Convergence Engine</div>
-          </div>
+        <div className="mb-10 lg:hidden">
+          <WaliLogo size="md" priority />
         </div>
 
         <div className="w-full max-w-sm mx-auto">
           <h2 className="text-2xl font-bold text-white mb-1">Create your account</h2>
-          <p className="text-sm text-white/40 mb-8">Start your 7-day free trial — no card required.</p>
+          <p className="text-sm text-white/40 mb-8">Start your 7-day free trial â€” no card required.</p>
 
           <form onSubmit={handleSignup} className="space-y-4">
             {/* Email */}
@@ -196,7 +182,7 @@ function SignupInner() {
             {error && (
               <div className="flex items-start gap-2 p-3 rounded-xl"
                 style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)' }}>
-                <span className="text-red-400 mt-0.5 shrink-0">⚠</span>
+                <span className="text-red-400 mt-0.5 shrink-0">âš </span>
                 <p className="text-xs text-red-400 leading-relaxed">{error}</p>
               </div>
             )}
@@ -211,7 +197,7 @@ function SignupInner() {
             <button type="submit" disabled={loading}
               className="w-full py-3.5 rounded-xl font-bold text-white transition-all hover:opacity-90 disabled:opacity-50 text-base"
               style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
-              {loading ? 'Creating account…' : 'Start free trial'}
+              {loading ? 'Creating accountâ€¦' : 'Start free trial'}
             </button>
           </form>
 

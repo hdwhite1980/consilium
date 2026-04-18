@@ -3,6 +3,7 @@
 import { useEffect, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/app/lib/auth/client'
+import WaliLogo from '@/app/components/WaliLogo'
 
 function ConfirmInner() {
   const router = useRouter()
@@ -19,7 +20,7 @@ function ConfirmInner() {
     const error_desc = searchParams.get('error_description')
     const verified   = searchParams.get('verified')
 
-    // Already verified by auth/callback — just show success
+    // Already verified by auth/callback â€” just show success
     if (verified === 'true') {
       setStatus('success')
       setTimeout(() => router.push(next), 1500)
@@ -51,12 +52,12 @@ function ConfirmInner() {
       return
     }
 
-    // Flow 2: token_hash — handle both PKCE (pkce_ prefix) and OTP tokens
+    // Flow 2: token_hash â€” handle both PKCE (pkce_ prefix) and OTP tokens
     if (token_hash && type) {
       const isPKCE = token_hash.startsWith('pkce_')
 
       if (isPKCE) {
-        // PKCE token — exchange using exchangeCodeForSession
+        // PKCE token â€” exchange using exchangeCodeForSession
         supabase.auth.exchangeCodeForSession(token_hash).then(({ error }) => {
           if (error) {
             console.error('PKCE exchange error:', error.message)
@@ -117,13 +118,8 @@ function ConfirmInner() {
       <div className="w-full max-w-sm text-center space-y-6">
 
         {/* Logo */}
-        <div className="flex items-center justify-center gap-3 mb-8">
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold text-white"
-            style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>Σ</div>
-          <div className="text-left">
-            <div className="text-lg font-bold tracking-tight text-white">WALI-OS</div>
-            <div className="text-[10px] font-mono text-white/25">Signal Convergence Engine</div>
-          </div>
+        <div className="flex justify-center mb-8">
+          <WaliLogo size="md" priority />
         </div>
 
         {status === 'verifying' && (
@@ -134,23 +130,23 @@ function ConfirmInner() {
                   style={{ background: '#a78bfa', animationDelay: `${i * 0.15}s` }} />
               ))}
             </div>
-            <p className="text-white/50 text-sm">Verifying your email…</p>
+            <p className="text-white/50 text-sm">Verifying your emailâ€¦</p>
           </div>
         )}
 
         {status === 'success' && (
           <div className="space-y-4">
-            <div className="text-5xl">✓</div>
+            <div className="text-5xl">âœ“</div>
             <div>
               <h1 className="text-xl font-bold text-white mb-2">Email confirmed!</h1>
-              <p className="text-sm text-white/50">Taking you to Wali-OS…</p>
+              <p className="text-sm text-white/50">Taking you to Wali-OSâ€¦</p>
             </div>
           </div>
         )}
 
         {status === 'error' && (
           <div className="space-y-5">
-            <div className="text-5xl">✕</div>
+            <div className="text-5xl">âœ•</div>
             <div>
               <h1 className="text-xl font-bold text-white mb-2">Confirmation failed</h1>
               <p className="text-sm text-white/50 leading-relaxed">{message}</p>
