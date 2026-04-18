@@ -211,16 +211,16 @@ export default function TomorrowPage() {
   const handleAnalyze = (ticker: string) => router.push(`/?ticker=${ticker}`)
 
   return (
-    <div className="flex flex-col min-h-screen" style={{ background: '#0a0d12', color: 'white' }}>
+    <div className="flex flex-col min-h-screen" style={{ background: 'var(--bg)', color: 'var(--text)' }}>
 
       {/* Header */}
       <header className="flex flex-wrap items-center gap-2 px-3 py-3 border-b sticky top-0 z-10"
-        style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
+        style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
         <button onClick={() => router.push('/')}
           className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/70 transition-colors">
           <ArrowLeft size={13} /> Back
         </button>
-        <div className="w-px h-4" style={{ background: 'rgba(255,255,255,0.1)' }} />
+        <div className="w-px h-4" style={{ background: 'var(--border)' }} />
         <div className="flex items-center gap-2">
           <Calendar size={14} style={{ color: '#a78bfa' }} />
           <span className="text-sm font-bold">Tomorrow&apos;s Movers</span>
@@ -235,7 +235,7 @@ export default function TomorrowPage() {
           )}
           <button onClick={() => load(true)} disabled={loading}
             className="flex items-center gap-1.5 text-[11px] font-mono px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40"
-            style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)', border: '1px solid rgba(255,255,255,0.1)' }}>
+            style={{ background: 'var(--surface2)', color: 'var(--text3)', border: '1px solid rgba(255,255,255,0.1)' }}>
             <RefreshCw size={11} className={loading ? 'animate-spin' : ''} />
             {loading ? 'Loading...' : 'Refresh'}
           </button>
@@ -271,7 +271,7 @@ export default function TomorrowPage() {
         <div className="flex-1 overflow-y-auto">
 
           {/* Next day banner */}
-          <div className="px-4 py-4 border-b" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
+          <div className="px-4 py-4 border-b" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
             <div className="max-w-4xl mx-auto">
               <div className="flex items-start gap-3">
                 <Calendar size={16} className="shrink-0 mt-0.5" style={{ color: '#a78bfa' }} />
@@ -333,7 +333,7 @@ export default function TomorrowPage() {
                 <div className="space-y-2">
                   {data.earningsCalendar.map((e, i) => (
                     <div key={i} className="rounded-xl p-4 border"
-                      style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.07)' }}>
+                      style={{ background: 'var(--surface2)', borderColor: 'var(--border)' }}>
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <div className="flex items-center gap-2 mb-1">
@@ -372,7 +372,7 @@ export default function TomorrowPage() {
                 <div className="space-y-2">
                   {data.economicEvents.map((e, i) => (
                     <div key={i} className="flex items-start gap-3 rounded-xl p-3.5 border"
-                      style={{ background: 'rgba(255,255,255,0.02)', borderColor: `${IMPACT_COLOR[e.impact]}18` }}>
+                      style={{ background: 'var(--surface2)', borderColor: `${IMPACT_COLOR[e.impact]}18` }}>
                       <div className="shrink-0 mt-0.5">
                         <div className="w-2 h-2 rounded-full mt-1" style={{ background: IMPACT_COLOR[e.impact] }} />
                       </div>
@@ -447,7 +447,7 @@ export default function TomorrowPage() {
                                 <div key={m.ticker} className="flex flex-col items-center py-2 px-1 text-center"
                                   style={{ borderRight: i < 9 ? '1px solid rgba(255,255,255,0.04)' : 'none',
                                            borderBottom: i < 5 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
-                                  <span className="text-[10px] font-bold font-mono" style={{ color: 'rgba(255,255,255,0.7)' }}>{m.ticker}</span>
+                                  <span className="text-[10px] font-bold font-mono" style={{ color: 'var(--text2)' }}>{m.ticker}</span>
                                   <span className="text-[10px] font-mono" style={{ color: tc }}>
                                     {m.change > 0 ? '+' : ''}{m.change}%
                                   </span>

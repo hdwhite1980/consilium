@@ -87,10 +87,10 @@ export default function ScreenerPage() {
   }
 
   return (
-    <div className="min-h-screen" style={{ background: '#0a0d12', color: 'white' }}>
+    <div className="min-h-screen" style={{ background: 'var(--bg)', color: 'var(--text)' }}>
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b sticky top-0 z-10"
-        style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
+        style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
         <button onClick={() => router.push('/')} className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/70">
           <ArrowLeft size={13} /> Back
         </button>
@@ -103,7 +103,7 @@ export default function ScreenerPage() {
 
         {/* Input form */}
         <div className="rounded-2xl p-5 space-y-4"
-          style={{ background: '#111620', border: '1px solid rgba(255,255,255,0.08)' }}>
+          style={{ background: 'var(--surface)', border: '1px solid rgba(255,255,255,0.08)' }}>
 
           {/* Budget input */}
           <div>
@@ -118,7 +118,7 @@ export default function ScreenerPage() {
                 onKeyDown={e => e.key === 'Enter' && run()}
                 placeholder={type === 'stock' ? '200' : '500'}
                 className="w-full rounded-xl pl-7 pr-4 py-3 text-lg font-bold font-mono outline-none border transition-all"
-                style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }}
+                style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }}
                 onFocus={e => e.target.style.borderColor = '#7c3aed'}
                 onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.1)'}
               />
@@ -153,7 +153,7 @@ export default function ScreenerPage() {
             <label className="block text-xs font-mono text-white/40 uppercase tracking-wider mb-2">Sector</label>
             <select value={sector} onChange={e => setSector(e.target.value)}
               className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-              style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }}>
+              style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }}>
               {SECTORS.map(s => (
                 <option key={s.etf} value={s.etf}>{s.name}</option>
               ))}
@@ -207,7 +207,7 @@ export default function ScreenerPage() {
 
             {result.message && (
               <div className="rounded-xl px-4 py-3 text-sm text-white/50"
-                style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
+                style={{ background: 'var(--surface2)', border: '1px solid rgba(255,255,255,0.07)' }}>
                 {result.message}
               </div>
             )}
@@ -215,7 +215,7 @@ export default function ScreenerPage() {
             {/* Suggestion cards */}
             {result.suggestions.map((s, i) => (
               <div key={s.ticker} className="rounded-2xl overflow-hidden"
-                style={{ background: '#111620', border: '1px solid rgba(255,255,255,0.08)' }}>
+                style={{ background: 'var(--surface)', border: '1px solid rgba(255,255,255,0.08)' }}>
 
                 {/* Top row */}
                 <div className="flex items-center gap-3 px-4 py-3">
@@ -281,13 +281,13 @@ export default function ScreenerPage() {
                     )}
                     {s.suggested_strike && (
                       <span className="text-[10px] px-2 py-0.5 rounded-full font-mono"
-                        style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)' }}>
+                        style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>
                         {s.suggested_strike}
                       </span>
                     )}
                     {s.suggested_expiry && (
                       <span className="text-[10px] px-2 py-0.5 rounded-full font-mono"
-                        style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)' }}>
+                        style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>
                         {s.suggested_expiry}
                       </span>
                     )}

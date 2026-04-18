@@ -47,11 +47,11 @@ function MiniBar({ value, max = 100 }: { value: number; max?: number }) {
   const color = value >= 0 ? '#34d399' : '#f87171'
   return (
     <div className="flex items-center gap-1.5 flex-1">
-      {value < 0 && <div className="flex-1 h-1.5 rounded-full overflow-hidden flex justify-end" style={{ background: 'rgba(255,255,255,0.05)' }}>
+      {value < 0 && <div className="flex-1 h-1.5 rounded-full overflow-hidden flex justify-end" style={{ background: 'var(--surface2)' }}>
         <div className="h-full rounded-full" style={{ width: `${pctWidth}%`, background: color }} />
       </div>}
       <span className="text-[11px] font-mono w-12 text-center" style={{ color }}>{pct(value)}</span>
-      {value >= 0 && <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
+      {value >= 0 && <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--surface2)' }}>
         <div className="h-full rounded-full" style={{ width: `${pctWidth}%`, background: color }} />
       </div>}
     </div>
@@ -85,15 +85,15 @@ export default function MacroDashboard() {
   const ageMinutes = lastFetch ? Math.round((Date.now() - lastFetch.getTime()) / 60000) : 0
 
   return (
-    <div className="flex flex-col min-h-screen" style={{ background: '#0a0d12', color: 'white' }}>
+    <div className="flex flex-col min-h-screen" style={{ background: 'var(--bg)', color: 'var(--text)' }}>
 
       {/* Header */}
       <header className="flex items-center gap-3 px-4 py-3 border-b sticky top-0 z-10"
-        style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
+        style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
         <button onClick={() => router.push('/')} className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/70 transition-colors">
           <ArrowLeft size={13} /> Back
         </button>
-        <div className="w-px h-4" style={{ background: 'rgba(255,255,255,0.1)' }} />
+        <div className="w-px h-4" style={{ background: 'var(--border)' }} />
         <Globe size={14} style={{ color: '#60a5fa' }} />
         <span className="text-sm font-bold">Macro Dashboard</span>
         {data && (
@@ -106,7 +106,7 @@ export default function MacroDashboard() {
           {lastFetch && <span className="text-[10px] font-mono text-white/25">{ageMinutes}m ago</span>}
           <button onClick={() => load(true)} disabled={loading}
             className="flex items-center gap-1.5 text-[11px] font-mono px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40"
-            style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)', border: '1px solid rgba(255,255,255,0.1)' }}>
+            style={{ background: 'var(--surface2)', color: 'var(--text3)', border: '1px solid rgba(255,255,255,0.1)' }}>
             <RefreshCw size={11} className={loading ? 'animate-spin' : ''} /> Refresh
           </button>
         </div>
@@ -194,7 +194,7 @@ export default function MacroDashboard() {
               { label: 'SPY', data: data.spy, color: data.spy.change1D >= 0 ? '#34d399' : '#f87171' },
               { label: 'QQQ', data: data.qqq, color: data.qqq.change1D >= 0 ? '#34d399' : '#f87171' },
             ].map(({ label, data: d, color }) => (
-              <div key={label} className="rounded-2xl p-4 border" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.08)' }}>
+              <div key={label} className="rounded-2xl p-4 border" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
                 <div className="text-[10px] font-mono text-white/40 mb-1">{label}</div>
                 <div className="text-xl font-bold font-mono mb-0.5">${d.price.toFixed(2)}</div>
                 <div className="font-mono text-sm" style={{ color }}>{pct(d.change1D)} today</div>
@@ -204,8 +204,8 @@ export default function MacroDashboard() {
           </div>
 
           {/* Sector heatmap */}
-          <div className="rounded-2xl border overflow-hidden" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.08)' }}>
-            <div className="flex items-center gap-2.5 px-5 py-3.5 border-b" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+          <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+            <div className="flex items-center gap-2.5 px-5 py-3.5 border-b" style={{ borderColor: 'var(--border)' }}>
               <BarChart2 size={14} style={{ color: '#a78bfa' }} />
               <span className="text-sm font-bold">Sector Performance</span>
               <span className="text-[10px] text-white/30 ml-auto">Sorted by daily change</span>
@@ -234,15 +234,15 @@ export default function MacroDashboard() {
           </div>
 
           {/* Smart money flows */}
-          <div className="rounded-2xl border overflow-hidden" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.08)' }}>
-            <div className="flex items-center gap-2.5 px-5 py-3.5 border-b" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+          <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+            <div className="flex items-center gap-2.5 px-5 py-3.5 border-b" style={{ borderColor: 'var(--border)' }}>
               <Shield size={14} style={{ color: '#34d399' }} />
               <span className="text-sm font-bold">Smart Money Flows</span>
               <span className="text-[10px] text-white/30 ml-auto">Cross-asset signals</span>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-4">
               {data.smartMoney.map(s => (
-                <div key={s.ticker} className="rounded-xl p-3.5 border" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.06)' }}>
+                <div key={s.ticker} className="rounded-xl p-3.5 border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)' }}>
                   <div className="flex justify-between items-start mb-1">
                     <div>
                       <div className="text-xs font-mono font-bold text-white">{s.ticker}</div>
@@ -271,7 +271,7 @@ export default function MacroDashboard() {
               <div key={s.etf} className="rounded-2xl p-4 border cursor-pointer hover:opacity-80 transition-opacity"
                 style={{ background: `${color}06`, borderColor: `${color}25` }}
                 onClick={() => router.push(`/?ticker=${s.etf}`)}>
-                <div className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: 'rgba(255,255,255,0.3)' }}>{label}</div>
+                <div className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: 'var(--text3)' }}>{label}</div>
                 <div className="flex items-center gap-2.5 mb-1">
                   <span className="text-xl">{s.emoji}</span>
                   <span className="text-base font-bold text-white">{s.name}</span>

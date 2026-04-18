@@ -259,20 +259,20 @@ export default function GuidePage() {
   const [tab, setTab] = useState<'guide' | 'faq'>('guide')
 
   return (
-    <div className="flex flex-col min-h-screen" style={{ background: '#0a0d12', color: 'white' }}>
+    <div className="flex flex-col min-h-screen" style={{ background: 'var(--bg)', color: 'var(--text)' }}>
       <header className="flex items-center gap-3 px-4 py-3 border-b sticky top-0 z-10"
-        style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
+        style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
         <button onClick={() => router.push('/')}
           className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/70 transition-colors">
           <ArrowLeft size={13} /> Back
         </button>
-        <div className="w-px h-4" style={{ background: 'rgba(255,255,255,0.1)' }} />
+        <div className="w-px h-4" style={{ background: 'var(--border)' }} />
         <BookOpen size={14} style={{ color: '#a78bfa' }} />
         <span className="text-sm font-bold">User Guide & FAQ</span>
         <div className="flex-1" />
       </header>
 
-      <div className="flex gap-0 border-b px-4" style={{ borderColor: 'rgba(255,255,255,0.07)', background: '#111620' }}>
+      <div className="flex gap-0 border-b px-4" style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
         {(['guide', 'faq'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)}
             className="px-4 py-2.5 text-xs font-semibold capitalize border-b-2 transition-all"
@@ -300,7 +300,7 @@ export default function GuidePage() {
 
               {SECTIONS.map(s => (
                 <div key={s.id} id={s.id} className="rounded-2xl border overflow-hidden"
-                  style={{ borderColor: `${s.color}20`, background: '#111620' }}>
+                  style={{ borderColor: `${s.color}20`, background: 'var(--surface)' }}>
                   <div className="flex items-center gap-3 px-5 py-4 border-b"
                     style={{ borderColor: `${s.color}15` }}>
                     <div className="w-7 h-7 rounded-lg flex items-center justify-center"

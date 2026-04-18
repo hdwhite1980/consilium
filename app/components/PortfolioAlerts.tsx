@@ -54,8 +54,8 @@ export default function PortfolioAlerts({ isDark }: Props) {
   const txt  = isDark ? 'rgba(255,255,255,0.9)'  : 'rgba(0,0,0,0.9)'
   const txt2 = isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)'
   const txt3 = isDark ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.35)'
-  const surf = isDark ? '#111620' : '#ffffff'
-  const surf2 = isDark ? '#181e2a' : '#f5f7fb'
+  const surf = isDark ? 'var(--surface)' : '#ffffff'
+  const surf2 = isDark ? 'var(--surface2)' : '#f5f7fb'
   const brd  = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.08)'
 
   // Load existing unacked alerts

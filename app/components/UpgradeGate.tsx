@@ -19,7 +19,7 @@ export function UpgradeGate({ feature, featureName, description, children, allow
   if (!loaded || allowed) return <>{children}</>
 
   return (
-    <div className="relative min-h-screen flex flex-col" style={{ background: '#0a0d12' }}>
+    <div className="relative min-h-screen flex flex-col" style={{ background: 'var(--bg)' }}>
       {/* Blurred content preview */}
       <div className="opacity-20 pointer-events-none select-none blur-sm flex-1 overflow-hidden max-h-96">
         {children}
@@ -28,7 +28,7 @@ export function UpgradeGate({ feature, featureName, description, children, allow
       {/* Upgrade overlay */}
       <div className="absolute inset-0 flex items-center justify-center p-6">
         <div className="w-full max-w-sm rounded-2xl p-8 text-center"
-          style={{ background: '#111620', border: '1px solid rgba(167,139,250,0.3)' }}>
+          style={{ background: 'var(--surface)', border: '1px solid rgba(167,139,250,0.3)' }}>
           <div className="w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4"
             style={{ background: 'rgba(167,139,250,0.12)', border: '1px solid rgba(167,139,250,0.25)' }}>
             <Lock size={20} style={{ color: '#a78bfa' }} />
@@ -38,7 +38,7 @@ export function UpgradeGate({ feature, featureName, description, children, allow
             Pro feature
           </div>
           <h2 className="text-lg font-bold text-white mb-2">{featureName}</h2>
-          <p className="text-sm mb-6" style={{ color: 'rgba(255,255,255,0.5)' }}>{description}</p>
+          <p className="text-sm mb-6" style={{ color: 'var(--text3)' }}>{description}</p>
 
           <button
             onClick={() => router.push('/subscribe')}
@@ -49,11 +49,11 @@ export function UpgradeGate({ feature, featureName, description, children, allow
           <button
             onClick={() => router.push('/')}
             className="w-full py-2 text-xs transition-all hover:opacity-70"
-            style={{ color: 'rgba(255,255,255,0.35)' }}>
+            style={{ color: 'var(--text3)' }}>
             Back to analysis
           </button>
 
-          <p className="text-[11px] mt-4" style={{ color: 'rgba(255,255,255,0.2)' }}>
+          <p className="text-[11px] mt-4" style={{ color: 'var(--text3)' }}>
             7-day free trial includes full Pro access
           </p>
         </div>

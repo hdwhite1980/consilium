@@ -44,14 +44,14 @@ function PricingCard({
   return (
     <div className="flex flex-col rounded-2xl overflow-hidden relative"
       style={{
-        background: highlight ? 'linear-gradient(135deg, rgba(124,58,237,0.12), rgba(79,70,229,0.08))' : '#111620',
+        background: highlight ? 'linear-gradient(135deg, rgba(124,58,237,0.12), rgba(79,70,229,0.08))' : 'var(--surface)',
         border: highlight ? '2px solid rgba(167,139,250,0.4)' : '1px solid rgba(255,255,255,0.08)',
       }}>
 
       {highlight && (
         <div className="absolute top-0 left-0 right-0 flex justify-center">
           <span className="text-[11px] font-bold px-4 py-1 rounded-b-lg"
-            style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', color: 'white' }}>
+            style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', color: 'var(--text)' }}>
             Most popular
           </span>
         </div>
@@ -65,9 +65,9 @@ function PricingCard({
           </div>
           <div className="flex items-baseline gap-1.5">
             <span className="text-4xl font-bold text-white">{price}</span>
-            <span className="text-sm" style={{ color: 'rgba(255,255,255,0.4)' }}>/month</span>
+            <span className="text-sm" style={{ color: 'var(--text3)' }}>/month</span>
           </div>
-          <p className="text-sm mt-2" style={{ color: 'rgba(255,255,255,0.5)' }}>{description}</p>
+          <p className="text-sm mt-2" style={{ color: 'var(--text3)' }}>{description}</p>
         </div>
 
         <ul className="space-y-2.5">
@@ -90,11 +90,11 @@ function PricingCard({
           disabled={loading}
           className="w-full py-3.5 rounded-xl text-sm font-bold transition-all disabled:opacity-50"
           style={highlight
-            ? { background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', color: 'white' }
-            : { background: 'rgba(255,255,255,0.06)', color: 'white', border: '1px solid rgba(255,255,255,0.12)' }}>
+            ? { background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', color: 'var(--text)' }
+            : { background: 'var(--surface2)', color: 'var(--text)', border: '1px solid rgba(255,255,255,0.12)' }}>
           {loading ? 'Opening checkout...' : 'Start 7-day free trial'}
         </button>
-        <p className="text-center text-[11px] mt-2.5" style={{ color: 'rgba(255,255,255,0.3)' }}>
+        <p className="text-center text-[11px] mt-2.5" style={{ color: 'var(--text3)' }}>
           No credit card required
         </p>
       </div>
@@ -141,12 +141,12 @@ function SubscribeInner() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ background: '#0a0d12', color: 'white' }}>
+    <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg)', color: 'var(--text)' }}>
 
       {/* Header */}
-      <div className="flex items-center gap-3 px-6 py-4 border-b" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+      <div className="flex items-center gap-3 px-6 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
         <button onClick={() => router.push('/')} className="flex items-center gap-1.5 text-xs hover:opacity-70 transition-opacity"
-          style={{ color: 'rgba(255,255,255,0.4)' }}>
+          style={{ color: 'var(--text3)' }}>
           <ArrowLeft size={13} /> Back
         </button>
         <div className="flex-1" />
@@ -178,7 +178,7 @@ function SubscribeInner() {
             <h1 className="text-3xl font-bold mb-3">
               Professional AI stock analysis
             </h1>
-            <p className="text-base max-w-lg mx-auto" style={{ color: 'rgba(255,255,255,0.5)' }}>
+            <p className="text-base max-w-lg mx-auto" style={{ color: 'var(--text3)' }}>
               An AI council that argues both sides before every trade decision.
               Start free for 7 days — no credit card required.
             </p>
@@ -209,8 +209,8 @@ function SubscribeInner() {
           </div>
 
           {/* Comparison note */}
-          <div className="rounded-2xl p-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-            <p className="text-xs text-center mb-4" style={{ color: 'rgba(255,255,255,0.3)' }}>
+          <div className="rounded-2xl p-5" style={{ background: 'var(--surface2)', border: '1px solid rgba(255,255,255,0.06)' }}>
+            <p className="text-xs text-center mb-4" style={{ color: 'var(--text3)' }}>
               Not sure? During the 7-day trial you get full Pro access on both plans.
             </p>
             <div className="grid grid-cols-3 gap-4 text-center">
@@ -223,21 +223,21 @@ function SubscribeInner() {
                 { label: 'Trading Academy', standard: '✓', pro: '✓' },
               ].map(row => (
                 <div key={row.label} className="col-span-3 grid grid-cols-3 items-center py-2 border-b last:border-0"
-                  style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
-                  <span className="text-xs text-left" style={{ color: 'rgba(255,255,255,0.5)' }}>{row.label}</span>
+                  style={{ borderColor: 'var(--border)' }}>
+                  <span className="text-xs text-left" style={{ color: 'var(--text3)' }}>{row.label}</span>
                   <span className="text-xs font-mono" style={{ color: row.standard === '✓' ? '#34d399' : 'rgba(255,255,255,0.2)' }}>{row.standard}</span>
                   <span className="text-xs font-mono" style={{ color: row.pro === '✓' ? '#a78bfa' : 'rgba(255,255,255,0.2)' }}>{row.pro}</span>
                 </div>
               ))}
               <div className="col-span-3 grid grid-cols-3 mt-1">
                 <div />
-                <div className="text-[10px] font-mono uppercase tracking-widest text-center" style={{ color: 'rgba(255,255,255,0.3)' }}>Standard</div>
+                <div className="text-[10px] font-mono uppercase tracking-widest text-center" style={{ color: 'var(--text3)' }}>Standard</div>
                 <div className="text-[10px] font-mono uppercase tracking-widest text-center" style={{ color: '#a78bfa' }}>Pro</div>
               </div>
             </div>
           </div>
 
-          <p className="text-center text-xs mt-6" style={{ color: 'rgba(255,255,255,0.25)' }}>
+          <p className="text-center text-xs mt-6" style={{ color: 'var(--text3)' }}>
             Cancel anytime. Analysis is for informational purposes only — not financial advice.
           </p>
         </div>

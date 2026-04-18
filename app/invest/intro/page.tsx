@@ -59,7 +59,7 @@ export default function InvestIntroPage() {
   }
 
   return (
-    <div className={`fi-root fi-phase-${phase}`}>
+    <div data-keep-dark="true" className={`fi-root fi-phase-${phase}`}>
       <div className="fi-vignette" />
 
       {/* Horizontal price line drawing across the screen */}

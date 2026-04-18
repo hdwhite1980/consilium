@@ -157,13 +157,13 @@ export default function ComparePage() {
   return (
     <UpgradeGate feature="compare" featureName="Head-to-Head Compare" description="Run the full 6-stage debate on two stocks simultaneously and get a definitive head-to-head recommendation." allowed={canAccess} loaded={subLoaded}>
     <>
-    <div className="flex flex-col min-h-screen" style={{ background: '#0a0d12', color: 'white' }}>
+    <div className="flex flex-col min-h-screen" style={{ background: 'var(--bg)', color: 'var(--text)' }}>
       <header className="flex items-center gap-3 px-4 py-3 border-b sticky top-0 z-10"
-        style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
+        style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
         <button onClick={() => router.push('/')} className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/70 transition-colors">
           <ArrowLeft size={13} /> Back
         </button>
-        <div className="w-px h-4" style={{ background: 'rgba(255,255,255,0.1)' }} />
+        <div className="w-px h-4" style={{ background: 'var(--border)' }} />
         <span className="text-sm font-bold">Head-to-Head</span>
 
         {/* Ticker inputs */}
@@ -171,12 +171,12 @@ export default function ComparePage() {
           <input value={tickerA} onChange={e => setTickerA(e.target.value.toUpperCase())} maxLength={6}
             placeholder="NVDA"
             className="w-16 rounded-lg px-2.5 py-1.5 text-sm font-mono font-bold tracking-widest text-center outline-none border"
-            style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.12)', color: 'white' }} />
+            style={{ background: 'var(--surface2)', borderColor: 'rgba(255,255,255,0.12)', color: 'var(--text)' }} />
           <span className="text-white/30 text-xs">vs</span>
           <input value={tickerB} onChange={e => setTickerB(e.target.value.toUpperCase())} maxLength={6}
             placeholder="AMD"
             className="w-16 rounded-lg px-2.5 py-1.5 text-sm font-mono font-bold tracking-widest text-center outline-none border"
-            style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.12)', color: 'white' }} />
+            style={{ background: 'var(--surface2)', borderColor: 'rgba(255,255,255,0.12)', color: 'var(--text)' }} />
         </div>
 
         {/* TF buttons */}
@@ -184,7 +184,7 @@ export default function ComparePage() {
           {(['1D','1W','1M','3M'] as const).map(t => (
             <button key={t} onClick={() => setTimeframe(t)}
               className="px-2 py-1.5 rounded-md text-xs font-mono border transition-all"
-              style={{ background: timeframe === t ? 'rgba(167,139,250,0.15)' : '#181e2a', borderColor: timeframe === t ? '#a78bfa' : 'rgba(255,255,255,0.08)', color: timeframe === t ? '#a78bfa' : 'rgba(255,255,255,0.3)' }}>{t}</button>
+              style={{ background: timeframe === t ? 'rgba(167,139,250,0.15)' : 'var(--surface2)', borderColor: timeframe === t ? '#a78bfa' : 'rgba(255,255,255,0.08)', color: timeframe === t ? '#a78bfa' : 'rgba(255,255,255,0.3)' }}>{t}</button>
           ))}
         </div>
 
@@ -193,7 +193,7 @@ export default function ComparePage() {
           {(Object.entries(PERSONAS) as [Persona, typeof PERSONAS[Persona]][]).map(([key, p]) => (
             <button key={key} onClick={() => setPersona(key)} title={p.label}
               className="px-2 py-1.5 rounded-md text-xs border transition-all"
-              style={{ background: persona === key ? `${p.color}18` : '#181e2a', borderColor: persona === key ? p.color : 'rgba(255,255,255,0.08)', color: persona === key ? p.color : 'rgba(255,255,255,0.3)' }}>
+              style={{ background: persona === key ? `${p.color}18` : 'var(--surface2)', borderColor: persona === key ? p.color : 'rgba(255,255,255,0.08)', color: persona === key ? p.color : 'rgba(255,255,255,0.3)' }}>
               {p.icon}
             </button>
           ))}
@@ -234,7 +234,7 @@ export default function ComparePage() {
           {(mdA || mdB) && (
             <div className="grid grid-cols-2 gap-4">
               {[{ md: mdA, ticker: tickerA.toUpperCase() }, { md: mdB, ticker: tickerB.toUpperCase() }].map(({ md, ticker }) => (
-                <div key={ticker} className="rounded-2xl border p-4 space-y-2" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.08)' }}>
+                <div key={ticker} className="rounded-2xl border p-4 space-y-2" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
                   <div className="flex items-center justify-between">
                     <span className="font-mono font-bold text-lg text-white">{ticker}</span>
                     {md && <span className="font-mono text-white/60">${md.currentPrice.toFixed(2)}</span>}
@@ -291,14 +291,14 @@ export default function ComparePage() {
                     ))}
                   </div>
                   <div className="flex items-center gap-2">
-                    <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.07)' }}>
+                    <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
                       <div className="h-full rounded-full" style={{ width: `${j.confidence}%`, background: SIG_COLOR[j.signal] }} />
                     </div>
                     <span className="text-[10px] font-mono text-white/40">{j.confidence}%</span>
                   </div>
                   <button onClick={() => router.push(`/?ticker=${ticker}`)}
                     className="w-full text-[10px] font-mono py-1.5 rounded-lg transition-all hover:opacity-80"
-                    style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)' }}>
+                    style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>
                     Full debate for {ticker} →
                   </button>
                 </div>
@@ -354,7 +354,7 @@ export default function ComparePage() {
               </div>
 
               {/* Relative value */}
-              <div className="rounded-xl p-3.5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
+              <div className="rounded-xl p-3.5" style={{ background: 'var(--surface2)', border: '1px solid rgba(255,255,255,0.07)' }}>
                 <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-1.5">Relative valuation</div>
                 <p className="text-xs text-white/60 leading-relaxed">{comparison.relativeValue}</p>
               </div>

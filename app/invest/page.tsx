@@ -201,7 +201,7 @@ function StartScreen({ onStart }: { onStart: (balance: number) => Promise<void> 
   const presets = [5, 10, 25, 50, 100, 250]
 
   return (
-    <div className="fl-root fl-start">
+    <div data-keep-dark="true" className="fl-root fl-start">
       <TapeDrift />
       <div className="fl-start-inner">
         <div className="fl-logo" style={{ marginBottom: 24 }}>wali · floor</div>
@@ -736,7 +736,7 @@ function FloorInner() {
   const openPnLPositive = value.openPnL >= 0
 
   return (
-    <div className="fl-root">
+    <div data-keep-dark="true" className="fl-root">
       <TapeDrift />
 
       {showTutorial && <Tutorial config={INVEST_TUTORIAL} autoStart onComplete={() => setShowTutorial(false)} onSkip={() => setShowTutorial(false)} />}

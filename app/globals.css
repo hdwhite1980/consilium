@@ -3,7 +3,8 @@
 @tailwind utilities;
 
 /* ── Dark theme (default) ─────────────────────────── */
-:root {
+:root,
+[data-keep-dark="true"] {
   --bg:          #0a0d12;
   --surface:     #111620;
   --surface2:    #181e2a;
@@ -42,6 +43,23 @@
   --shadow:      0 4px 24px rgba(0,0,0,0.08);
   --nav-bg:      #ffffff;
   --card-bg:     #ffffff;
+}
+
+/* ── Force-dark sections — even when global theme is light ───
+   Used by /invest which has its own dark aesthetic by design. */
+:root[data-theme="light"] [data-keep-dark="true"] {
+  --bg:          #0a0d12;
+  --surface:     #111620;
+  --surface2:    #181e2a;
+  --surface3:    #1e2535;
+  --border:      rgba(255,255,255,0.08);
+  --border2:     rgba(255,255,255,0.16);
+  --text:        #f1f5f9;
+  --text2:       rgba(255,255,255,0.82);
+  --text3:       rgba(255,255,255,0.6);
+  --nav-bg:      #0d1117;
+  --card-bg:     #111620;
+  color-scheme: dark;
 }
 
 /* ── User-controlled font size ────────────────────── */
@@ -107,10 +125,9 @@ body {
 .t-text3    { color: var(--text3); }
 .t-card     { background: var(--card-bg); border: 1px solid var(--border); }
 
-/* ── Light-mode safety net ─────────────────────────────
-   For any component still using hardcoded Tailwind text-white/XX
-   classes, these overrides force readable colors in light mode.
-   Dark mode is unaffected — Tailwind's generated rules still apply. */
+/* ── Light-mode safety net for text-white/XX ────────────
+   Components using Tailwind text-white opacity utilities get
+   automatically flipped to readable colors in light mode. */
 :root[data-theme="light"] .text-white,
 :root[data-theme="light"] [class*="text-white/"] {
   color: var(--text2) !important;
@@ -136,6 +153,13 @@ body {
 :root[data-theme="light"] .text-white\/15,
 :root[data-theme="light"] .text-white\/10 {
   color: var(--text3) !important;
+}
+
+/* Force-dark opt-out: do NOT apply the light-mode overrides
+   inside elements marked as force-dark. */
+:root[data-theme="light"] [data-keep-dark="true"] .text-white,
+:root[data-theme="light"] [data-keep-dark="true"] [class*="text-white/"] {
+  color: inherit !important;
 }
 
 /* Accessibility: honor OS-level reduced-motion preference */

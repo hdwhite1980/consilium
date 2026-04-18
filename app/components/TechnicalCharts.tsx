@@ -413,7 +413,7 @@ function ScoreBadge({ score, bias }: { score: number; bias: string }) {
 // ── Indicator Card wrapper ────────────────────────────────────
 function ICard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl p-2.5 sm:p-3 border" style={{ background: 'var(--surface2)', borderColor: 'rgba(255,255,255,0.07)' }}>
+    <div className="rounded-xl p-2.5 sm:p-3 border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)' }}>
       <div className="text-[10px] font-mono uppercase tracking-widest t-text3 mb-2">{title}</div>
       {children}
     </div>
@@ -435,7 +435,7 @@ function Explain({ color, what, means }: { color: string; what: string; means: s
         <div className="text-[9px] font-mono uppercase tracking-widest mb-1" style={{ color }}>
           What it means for this stock right now
         </div>
-        <p className="leading-relaxed font-medium" style={{ color: 'rgba(255,255,255,0.75)' }}>{means}</p>
+        <p className="leading-relaxed font-medium" style={{ color: 'var(--text2)' }}>{means}</p>
       </div>
     </div>
   )
@@ -917,7 +917,7 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
               </div>
               <div className="flex justify-between items-center">
                 <div className="text-center">
-                  <div className="text-[10px] font-mono" style={{ color: 'rgba(255,255,255,0.35)' }}>Lower bound</div>
+                  <div className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>Lower bound</div>
                   <div className="text-lg font-bold font-mono" style={{ color: '#34d399' }}>${t.goldenZone.goldenPocketLow.toFixed(2)}</div>
                 </div>
                 <div className="text-center">
@@ -927,12 +927,12 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
                   </div>
                 </div>
                 <div className="text-center">
-                  <div className="text-[10px] font-mono" style={{ color: 'rgba(255,255,255,0.35)' }}>Upper bound</div>
+                  <div className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>Upper bound</div>
                   <div className="text-lg font-bold font-mono" style={{ color: '#f87171' }}>${t.goldenZone.goldenPocketHigh.toFixed(2)}</div>
                 </div>
               </div>
               {!t.goldenZone.inGoldenZone && (
-                <div className="text-[10px] text-center mt-2" style={{ color: 'rgba(255,255,255,0.35)' }}>
+                <div className="text-[10px] text-center mt-2" style={{ color: 'var(--text3)' }}>
                   {t.goldenZone.distToZone.toFixed(1)}% away from zone
                 </div>
               )}
@@ -978,7 +978,7 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
               <div className="text-2xl font-bold font-mono" style={{ color: t.atrSignal === 'high_volatility' ? '#f87171' : t.atrSignal === 'low_volatility' ? '#34d399' : '#fbbf24' }}>
                 ${sf(t.atr14!)}
               </div>
-              <div className="text-[10px] font-mono" style={{ color: 'rgba(255,255,255,0.35)' }}>{sf(t.atrPct!, 1)}% of price</div>
+              <div className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>{sf(t.atrPct!, 1)}% of price</div>
             </div>
             <div className="text-right space-y-1">
               <div className="text-[10px] font-mono" style={{ color: 'rgba(248,113,113,0.8)' }}>2× ATR stop: ${sf(t.stopLossATR!)}</div>
@@ -1033,7 +1033,7 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
       {t.cci != null && (
         <ICard title="CCI — Commodity Channel Index (20)">
           <div className="flex items-center gap-3 mb-3">
-            <div className="flex-1 h-3 rounded-full overflow-hidden relative" style={{ background: 'rgba(255,255,255,0.05)' }}>
+            <div className="flex-1 h-3 rounded-full overflow-hidden relative" style={{ background: 'var(--surface2)' }}>
               <div className="absolute left-1/2 top-0 bottom-0 w-px" style={{ background: 'rgba(255,255,255,0.15)' }} />
               <div className="h-full rounded-full absolute"
                 style={{
@@ -1072,7 +1072,7 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
                 </div>
               )}
             </div>
-            <div className="text-right text-[10px] font-mono" style={{ color: 'rgba(255,255,255,0.35)' }}>
+            <div className="text-right text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
               <div>Tenkan: ${sf(t.ichimokuTenkan!)}</div>
               <div>Kijun: ${sf(t.ichimokuKijun!)}</div>
             </div>
@@ -1097,7 +1097,7 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
               { label: 'ROC 10-period', val: t.roc10!, color: t.roc10! >= 0 ? '#34d399' : '#f87171' },
               { label: 'ROC 20-period', val: t.roc20!, color: t.roc20! >= 0 ? '#34d399' : '#f87171' },
             ].map(({ label, val, color }) => (
-              <div key={label} className="text-center p-2 rounded-lg" style={{ background: 'rgba(255,255,255,0.03)' }}>
+              <div key={label} className="text-center p-2 rounded-lg" style={{ background: 'var(--surface2)' }}>
                 <div className="text-xl font-bold font-mono" style={{ color }}>{val >= 0 ? '+' : ''}{sf(val, 1)}%</div>
                 <div className="text-[9px] font-mono" style={{ color: 'var(--text3)' }}>{label}</div>
               </div>
@@ -1126,7 +1126,7 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
               <div className="text-2xl font-bold font-mono" style={{ color: t.relStrengthVsSector! > 0 ? '#34d399' : t.relStrengthVsSector! < 0 ? '#f87171' : '#fbbf24' }}>
                 {t.relStrengthVsSector! >= 0 ? '+' : ''}{sf(t.relStrengthVsSector!, 1)}%
               </div>
-              <div className="text-[10px] font-mono" style={{ color: 'rgba(255,255,255,0.35)' }}>vs sector this period</div>
+              <div className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>vs sector this period</div>
             </div>
             <div className="text-base font-bold font-mono" style={{ color: t.relStrengthSignal === 'outperforming' ? '#34d399' : t.relStrengthSignal === 'underperforming' ? '#f87171' : '#fbbf24' }}>
               {(t.relStrengthSignal ?? '').toUpperCase()}
@@ -1147,7 +1147,7 @@ export default function TechnicalCharts({ ticker, technicals }: TechnicalChartsP
       {/* TradingView */}
       <button onClick={() => setShowTV(!showTV)}
         className="w-full py-2 rounded-lg text-xs font-mono transition-all hover:opacity-80"
-        style={{ background: 'rgba(255,255,255,0.03)', color: 'rgba(255,255,255,0.35)', border: '1px solid rgba(255,255,255,0.07)' }}>
+        style={{ background: 'var(--surface2)', color: 'var(--text3)', border: '1px solid rgba(255,255,255,0.07)' }}>
         {showTV ? '▲ Hide' : '▼ Show'} TradingView live chart
       </button>
       {showTV && (

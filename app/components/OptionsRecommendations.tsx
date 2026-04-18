@@ -152,7 +152,7 @@ export default function OptionsRecommendations({
 
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b"
-        style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+        style={{ borderColor: 'var(--border)' }}>
         <div className="flex items-center gap-2">
           <span className="text-sm font-bold t-text">Options Strategy</span>
           <span className="text-[10px] font-mono px-2 py-0.5 rounded-full"
@@ -163,7 +163,7 @@ export default function OptionsRecommendations({
         {!data && (
           <button onClick={load} disabled={loading}
             className="text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40"
-            style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', color: 'white' }}>
+            style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', color: 'var(--text)' }}>
             {loading ? 'Analyzing…' : 'Get options recommendation'}
           </button>
         )}
@@ -257,7 +257,7 @@ export default function OptionsRecommendations({
 
           {/* Greeks explained */}
           {data.recommendation.greeksExplained && (
-            <div className="rounded-xl p-3.5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
+            <div className="rounded-xl p-3.5" style={{ background: 'var(--surface2)', border: '1px solid rgba(255,255,255,0.07)' }}>
               <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5 t-text3">Understanding the numbers (Greeks)</div>
               <p className="text-xs t-text2 leading-relaxed">{data.recommendation.greeksExplained}</p>
             </div>

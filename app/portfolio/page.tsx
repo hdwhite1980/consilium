@@ -97,11 +97,11 @@ const gradeColor = (g: string) => ({ A: '#34d399', B: '#60a5fa', C: '#fbbf24', D
 function Section({ title, icon, color, children, defaultOpen = true }: { title: string; icon: React.ReactNode; color: string; children: React.ReactNode; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className="rounded-2xl border overflow-hidden" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.08)' }}>
-      <button onClick={() => setOpen(!open)} className="w-full flex items-center gap-2 px-5 py-3.5 border-b" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+    <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+      <button onClick={() => setOpen(!open)} className="w-full flex items-center gap-2 px-5 py-3.5 border-b" style={{ borderColor: 'var(--border)' }}>
         <span style={{ color }}>{icon}</span>
         <span className="text-xs font-bold uppercase tracking-wider" style={{ color }}>{title}</span>
-        <span className="ml-auto" style={{ color: 'rgba(255,255,255,0.3)' }}>{open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}</span>
+        <span className="ml-auto" style={{ color: 'var(--text3)' }}>{open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}</span>
       </button>
       {open && <div className="px-5 py-4">{children}</div>}
     </div>
@@ -487,15 +487,15 @@ function PortfolioInner() {
   const VERDICT_BG: Record<string, string> = { EXIT: 'rgba(248,113,113,0.1)', WATCH: 'rgba(251,191,36,0.08)', HOLD: 'rgba(52,211,153,0.06)', ADD: 'rgba(96,165,250,0.08)' }
 
   return (
-    <div className="flex flex-col min-h-screen" style={{ background: '#0a0d12', color: 'white' }}>
+    <div className="flex flex-col min-h-screen" style={{ background: 'var(--bg)', color: 'var(--text)' }}>
 
       {/* Header */}
       <header className="flex items-center gap-3 px-4 py-3 border-b sticky top-0 z-10"
-        style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
+        style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
         <button onClick={() => router.push('/')} className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/70">
           <ArrowLeft size={13} /> Back
         </button>
-        <div className="w-px h-4" style={{ background: 'rgba(255,255,255,0.1)' }} />
+        <div className="w-px h-4" style={{ background: 'var(--border)' }} />
         <BarChart2 size={14} style={{ color: '#a78bfa' }} />
         <span className="text-sm font-bold">Portfolio</span>
         {positions.length > 0 && (
@@ -518,7 +518,7 @@ function PortfolioInner() {
             {positions.length > 0 && (
               <>
                 {cachedAge !== null && !analyzing && (
-                  <span className="text-[10px] hidden sm:block" style={{ color: 'rgba(255,255,255,0.3)' }}>
+                  <span className="text-[10px] hidden sm:block" style={{ color: 'var(--text3)' }}>
                     {cachedAge === 0 ? 'just analyzed' : `${cachedAge < 60 ? `${cachedAge}m` : `${Math.round(cachedAge/60)}h`} old`}
                   </span>
                 )}
@@ -530,7 +530,7 @@ function PortfolioInner() {
                 </button>
                 <button onClick={() => runAnalysis(true)} disabled={analyzing}
                   className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40"
-                  style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', color: 'white' }}>
+                  style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', color: 'var(--text)' }}>
                   <RefreshCw size={12} className={analyzing ? 'animate-spin' : ''} />
                   {analyzing ? 'Analyzing...' : cachedAge !== null ? '↻ Re-analyze' : 'Analyze'}
                 </button>
@@ -554,7 +554,7 @@ function PortfolioInner() {
 
       {/* Tab bar */}
       <div className="flex border-b px-4 gap-1 sticky top-[49px] z-10"
-        style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
+        style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
         {TABS.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
             className="flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold transition-all border-b-2"
@@ -576,10 +576,10 @@ function PortfolioInner() {
             <>
               {/* Add position form */}
               {showAdd && (
-                <div className="rounded-2xl border p-5 space-y-4" style={{ background: '#111620', borderColor: 'rgba(167,139,250,0.25)' }}>
+                <div className="rounded-2xl border p-5 space-y-4" style={{ background: 'var(--surface)', borderColor: 'rgba(167,139,250,0.25)' }}>
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-bold text-white">Add position</h3>
-                    <div className="flex rounded-lg overflow-hidden border" style={{ borderColor: 'rgba(255,255,255,0.1)' }}>
+                    <div className="flex rounded-lg overflow-hidden border" style={{ borderColor: 'var(--border)' }}>
                       {(['stock','option'] as const).map(t => (
                         <button key={t} onClick={() => setAddType(t)}
                           className="px-3 py-1.5 text-xs font-semibold transition-all"
@@ -598,7 +598,7 @@ function PortfolioInner() {
                     <input value={addTicker} onChange={e => setAddTicker(e.target.value.toUpperCase())}
                       placeholder={addType === 'option' ? 'NVDA' : 'AAPL'} maxLength={6}
                       className="w-full rounded-xl px-3 py-2.5 text-sm font-mono font-bold outline-none border"
-                      style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                      style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                   </div>
 
                   {addType === 'stock' ? (
@@ -608,13 +608,13 @@ function PortfolioInner() {
                         <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Shares</label>
                         <input value={addShares} onChange={e => setAddShares(e.target.value)} placeholder="100" type="number" min="0"
                           className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                          style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                          style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                       </div>
                       <div>
                         <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Avg cost per share ($)</label>
                         <input value={addCost} onChange={e => setAddCost(e.target.value)} placeholder="0.00" type="number" min="0"
                           className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                          style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                          style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                       </div>
                     </div>
                   ) : (
@@ -647,13 +647,13 @@ function PortfolioInner() {
                           <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Strike price ($)</label>
                           <input value={addStrike} onChange={e => setAddStrike(e.target.value)} placeholder="195" type="number" min="0"
                             className="w-full rounded-xl px-3 py-2.5 text-sm font-mono outline-none border"
-                            style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                            style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                         </div>
                         <div>
                           <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Expiry date</label>
                           <input value={addExpiry} onChange={e => setAddExpiry(e.target.value)} type="date"
                             className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                            style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                            style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                         </div>
                       </div>
                       {/* Contracts + Premium */}
@@ -662,13 +662,13 @@ function PortfolioInner() {
                           <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Contracts</label>
                           <input value={addContracts} onChange={e => setAddContracts(e.target.value)} placeholder="1" type="number" min="1"
                             className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                            style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                            style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                         </div>
                         <div>
                           <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Entry premium / share ($)</label>
                           <input value={addCost} onChange={e => setAddCost(e.target.value)} placeholder="2.50" type="number" min="0" step="0.01"
                             className="w-full rounded-xl px-3 py-2.5 text-sm font-mono outline-none border"
-                            style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                            style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                         </div>
                       </div>
                       {/* Total cost preview */}
@@ -692,7 +692,7 @@ function PortfolioInner() {
                       {addLoading ? 'Adding...' : `Add ${addType === 'option' ? `${addOptionType.toUpperCase()} option` : 'position'}`}
                     </button>
                     <button onClick={() => setShowAdd(false)} className="px-4 py-2 rounded-xl text-sm transition-all hover:opacity-80"
-                      style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)' }}>Cancel</button>
+                      style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>Cancel</button>
                   </div>
                 </div>
               )}
@@ -765,7 +765,7 @@ function PortfolioInner() {
                                 </span>
                               )}
                               <span className="text-[9px] font-mono px-1.5 py-0.5 rounded capitalize"
-                                style={{ background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.3)' }}>
+                                style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>
                                 {c.moneyness?.replace('_', ' ')}
                               </span>
                             </div>
@@ -773,7 +773,7 @@ function PortfolioInner() {
                         </div>
                         <button onClick={() => runHealthCheck(c.ticker)} disabled={checkTicker === c.ticker}
                           className="shrink-0 p-1.5 rounded-lg hover:opacity-80 disabled:opacity-30 transition-opacity"
-                          style={{ color: 'rgba(255,255,255,0.2)' }}>
+                          style={{ color: 'var(--text3)' }}>
                           {checkTicker === c.ticker
                             ? <div className="w-3 h-3 rounded-full border border-t-white/60 border-white/20 animate-spin" />
                             : <RefreshCw size={12} />}
@@ -790,7 +790,7 @@ function PortfolioInner() {
                         <div className="px-3 pb-2.5 flex flex-wrap gap-1">
                           {c.flags.map(f => (
                             <span key={f} className="text-[9px] px-1.5 py-0.5 rounded-full font-mono"
-                              style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.35)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                              style={{ background: 'var(--surface2)', color: 'var(--text3)', border: '1px solid rgba(255,255,255,0.08)' }}>
                               {f}
                             </span>
                           ))}
@@ -816,12 +816,12 @@ function PortfolioInner() {
 
               {/* Positions list */}
               {positions.length > 0 && (
-                <div className="rounded-2xl border overflow-hidden" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.08)' }}>
-                  <div className="px-5 py-3 border-b flex items-center justify-between" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+                <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+                  <div className="px-5 py-3 border-b flex items-center justify-between" style={{ borderColor: 'var(--border)' }}>
                     <span className="text-xs font-bold text-white/60 uppercase tracking-wider">Holdings</span>
                     {totalValue > 0 && <span className="text-xs font-mono text-white/40">Total: {fmtK(totalValue)}</span>}
                   </div>
-                  <div className="divide-y" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+                  <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
                     {positions.map(pos => {
                       const data = positionData.find(p => p.ticker === pos.ticker)
                       const signalColor = data ? SIG_COLOR[data.signal] : 'rgba(255,255,255,0.3)'
@@ -927,7 +927,7 @@ function PortfolioInner() {
                             {analysis.overallSignal === 'BULLISH' ? <TrendingUp size={16} className="inline mr-1" /> : analysis.overallSignal === 'BEARISH' ? <TrendingDown size={16} className="inline mr-1" /> : <Minus size={16} className="inline mr-1" />}
                             {analysis.overallSignal}
                           </span>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)' }}>{analysis.overallConviction} conviction</span>
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full" style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>{analysis.overallConviction} conviction</span>
                         </div>
                         <h2 className="text-base font-bold text-white leading-snug">{analysis.headline}</h2>
                       </div>
@@ -941,12 +941,12 @@ function PortfolioInner() {
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     {[
-                      { label: 'Portfolio Value', val: fmtK(metrics.totalValue), color: 'white' },
+                      { label: 'Portfolio Value', val: fmtK(metrics.totalValue), color: 'var(--text)' },
                       { label: 'Total P&L', val: `${metrics.totalGainLoss >= 0 ? '+' : ''}${fmtK(Math.abs(metrics.totalGainLoss))} (${pct(metrics.totalGainLossPct)})`, color: metrics.totalGainLoss >= 0 ? '#34d399' : '#f87171' },
-                      { label: 'Signals', val: `${metrics.signals.BULLISH}B · ${metrics.signals.NEUTRAL}N · ${metrics.signals.BEARISH}Be`, color: 'white' },
+                      { label: 'Signals', val: `${metrics.signals.BULLISH}B · ${metrics.signals.NEUTRAL}N · ${metrics.signals.BEARISH}Be`, color: 'var(--text)' },
                       { label: 'Earnings 30d', val: `${metrics.upcomingEarnings.length} positions`, color: metrics.upcomingEarnings.length > 0 ? '#fbbf24' : '#34d399' },
                     ].map(m => (
-                      <div key={m.label} className="rounded-xl p-3.5 border" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.07)' }}>
+                      <div key={m.label} className="rounded-xl p-3.5 border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)' }}>
                         <div className="text-[10px] font-mono text-white/30 mb-1">{m.label}</div>
                         <div className="text-sm font-bold font-mono" style={{ color: m.color }}>{m.val}</div>
                       </div>
@@ -961,7 +961,7 @@ function PortfolioInner() {
                             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0 mt-0.5" style={{ background: `${SEV_COLOR[r.severity]}15`, color: SEV_COLOR[r.severity] }}>{r.severity}</span>
                             <div>
                               <p className="text-sm text-white/70">{r.risk}</p>
-                              <div className="flex gap-1 mt-1">{r.tickers.map(t => <span key={t} className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)' }}>{t}</span>)}</div>
+                              <div className="flex gap-1 mt-1">{r.tickers.map(t => <span key={t} className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>{t}</span>)}</div>
                             </div>
                           </div>
                         ))}
@@ -994,7 +994,7 @@ function PortfolioInner() {
                               <span className="text-white/60">{s.sector}</span>
                               <span className="font-mono text-white/80">{s.pct.toFixed(1)}%</span>
                             </div>
-                            <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
+                            <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--surface2)' }}>
                               <div className="h-full rounded-full" style={{ width: `${s.pct}%`, background: s.pct > 40 ? '#f87171' : s.pct > 25 ? '#fbbf24' : '#a78bfa' }} />
                             </div>
                           </div>
@@ -1040,7 +1040,7 @@ function PortfolioInner() {
                   { label: 'Reinvested', val: `$${reinvestedDividends.toFixed(2)}`, color: '#a78bfa' },
                   { label: 'Cash Kept', val: `$${(totalDividends - reinvestedDividends).toFixed(2)}`, color: '#fbbf24' },
                 ].map(s => (
-                  <div key={s.label} className="rounded-xl p-3 border" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.08)' }}>
+                  <div key={s.label} className="rounded-xl p-3 border" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
                     <div className="text-[10px] font-mono text-white/30 mb-1">{s.label}</div>
                     <div className="text-sm font-bold font-mono" style={{ color: s.color }}>{s.val}</div>
                   </div>
@@ -1049,11 +1049,11 @@ function PortfolioInner() {
 
               {/* Upcoming dividends from portfolio */}
               {divSchedule.length > 0 && (
-                <div className="rounded-2xl border overflow-hidden" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.08)' }}>
-                  <div className="px-4 py-3 border-b" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+                <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+                  <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
                     <span className="text-xs font-bold text-white/60 uppercase tracking-wider">📅 Upcoming Dividends</span>
                   </div>
-                  <div className="divide-y" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+                  <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
                     {divSchedule.slice(0, 10).map((d, i) => (
                       <div key={i} className="flex items-center gap-3 px-4 py-3">
                         <span className="font-mono font-bold text-sm">{d.ticker}</span>
@@ -1069,38 +1069,38 @@ function PortfolioInner() {
 
               {/* Log dividend form */}
               {showLogDiv && (
-                <div className="rounded-2xl border p-5" style={{ background: '#111620', borderColor: 'rgba(52,211,153,0.25)' }}>
+                <div className="rounded-2xl border p-5" style={{ background: 'var(--surface)', borderColor: 'rgba(52,211,153,0.25)' }}>
                   <h3 className="text-sm font-bold text-white mb-4">Log dividend received</h3>
                   <div className="grid grid-cols-2 gap-3 mb-3">
                     <div>
                       <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Ticker</label>
                       <input value={divTicker} onChange={e => setDivTicker(e.target.value.toUpperCase())} placeholder="AAPL"
                         className="w-full rounded-xl px-3 py-2.5 text-sm font-mono font-bold outline-none border"
-                        style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                        style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                     </div>
                     <div>
                       <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Amount per share ($)</label>
                       <input value={divAmount} onChange={e => setDivAmount(e.target.value)} placeholder="0.24" type="number" step="0.0001"
                         className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                        style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                        style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                     </div>
                     <div>
                       <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Shares held</label>
                       <input value={divShares} onChange={e => setDivShares(e.target.value)} placeholder="100" type="number"
                         className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                        style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                        style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                     </div>
                     <div>
                       <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Ex-dividend date</label>
                       <input value={divExDate} onChange={e => setDivExDate(e.target.value)} type="date"
                         className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                        style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                        style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                     </div>
                     <div>
                       <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Pay date (optional)</label>
                       <input value={divPayDate} onChange={e => setDivPayDate(e.target.value)} type="date"
                         className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                        style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                        style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                     </div>
                     <div className="flex items-end">
                       {divAmount && divShares && (
@@ -1128,13 +1128,13 @@ function PortfolioInner() {
                         <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Shares purchased</label>
                         <input value={divReinvestShares} onChange={e => setDivReinvestShares(e.target.value)} placeholder="1.2" type="number" step="0.0001"
                           className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                          style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                          style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                       </div>
                       <div>
                         <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Price paid per share</label>
                         <input value={divReinvestPrice} onChange={e => setDivReinvestPrice(e.target.value)} placeholder="185.00" type="number"
                           className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                          style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                          style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                       </div>
                     </div>
                   )}
@@ -1145,7 +1145,7 @@ function PortfolioInner() {
                       {savingDiv ? 'Saving...' : 'Save dividend'}
                     </button>
                     <button onClick={() => setShowLogDiv(false)} className="px-4 py-2 rounded-xl text-sm"
-                      style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)' }}>Cancel</button>
+                      style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>Cancel</button>
                   </div>
                 </div>
               )}
@@ -1164,11 +1164,11 @@ function PortfolioInner() {
                 </div>
               )}
               {dividends.length > 0 && (
-                <div className="rounded-2xl border overflow-hidden" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.08)' }}>
-                  <div className="px-4 py-3 border-b" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+                <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+                  <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
                     <span className="text-xs font-bold text-white/60 uppercase tracking-wider">Dividend History</span>
                   </div>
-                  <div className="divide-y" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+                  <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
                     {dividends.map(d => (
                       <div key={d.id} className="flex items-center gap-3 px-4 py-3">
                         <div className="flex-1">
@@ -1205,7 +1205,7 @@ function PortfolioInner() {
                   { label: 'Realized P&L', val: `${realizedReinvestPnL >= 0 ? '+' : ''}$${realizedReinvestPnL.toFixed(2)}`, color: realizedReinvestPnL >= 0 ? '#34d399' : '#f87171' },
                   { label: 'Dividend Capital', val: `$${reinvestedDividends.toFixed(2)}`, color: '#fbbf24' },
                 ].map(s => (
-                  <div key={s.label} className="rounded-xl p-3 border" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.08)' }}>
+                  <div key={s.label} className="rounded-xl p-3 border" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
                     <div className="text-[10px] font-mono text-white/30 mb-1">{s.label}</div>
                     <div className="text-sm font-bold font-mono" style={{ color: s.color }}>{s.val}</div>
                   </div>
@@ -1238,33 +1238,33 @@ function PortfolioInner() {
 
               {/* Add reinvest trade form */}
               {showAddReinvest && (
-                <div className="rounded-2xl border p-5" style={{ background: '#111620', borderColor: 'rgba(251,191,36,0.25)' }}>
+                <div className="rounded-2xl border p-5" style={{ background: 'var(--surface)', borderColor: 'rgba(251,191,36,0.25)' }}>
                   <h3 className="text-sm font-bold mb-4">Log reinvestment trade</h3>
                   <div className="grid grid-cols-3 gap-3 mb-3">
                     <div>
                       <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Ticker</label>
                       <input value={rTicker} onChange={e => setRTicker(e.target.value.toUpperCase())} placeholder="NVDA"
                         className="w-full rounded-xl px-3 py-2.5 text-sm font-mono font-bold outline-none border"
-                        style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                        style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                     </div>
                     <div>
                       <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Shares</label>
                       <input value={rShares} onChange={e => setRShares(e.target.value)} placeholder="5" type="number"
                         className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                        style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                        style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                     </div>
                     <div>
                       <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Entry price</label>
                       <input value={rEntry} onChange={e => setREntry(e.target.value)} placeholder="185.00" type="number"
                         className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                        style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                        style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                     </div>
                   </div>
                   <div className="mb-3">
                     <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Notes (optional)</label>
                     <input value={rNotes} onChange={e => setRNotes(e.target.value)} placeholder="e.g. AAPL dividend reinvestment"
                       className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                      style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                      style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                   </div>
                   <div className="flex gap-2">
                     <button onClick={addReinvestTrade} disabled={savingReinvest || !rTicker || !rShares || !rEntry}
@@ -1273,7 +1273,7 @@ function PortfolioInner() {
                       {savingReinvest ? 'Saving...' : 'Add trade'}
                     </button>
                     <button onClick={() => setShowAddReinvest(false)} className="px-4 py-2 rounded-xl text-sm"
-                      style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)' }}>Cancel</button>
+                      style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>Cancel</button>
                   </div>
                 </div>
               )}
@@ -1287,8 +1287,8 @@ function PortfolioInner() {
                 </div>
               )}
               {reinvestTrades.length > 0 && (
-                <div className="rounded-2xl border overflow-hidden" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.08)' }}>
-                  <div className="divide-y" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+                <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+                  <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
                     {reinvestTrades.map(t => {
                       const isOpen = !t.exit_price
                       const pnlColor = (t.pnl ?? 0) >= 0 ? '#34d399' : '#f87171'
@@ -1301,7 +1301,7 @@ function PortfolioInner() {
                               {isOpen ? (
                                 <span className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399' }}>OPEN</span>
                               ) : (
-                                <span className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)' }}>CLOSED</span>
+                                <span className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>CLOSED</span>
                               )}
                             </div>
                             <div className="flex items-center gap-3 mt-0.5">
@@ -1338,9 +1338,9 @@ function PortfolioInner() {
                   {[
                     { label: 'Win Rate', val: journalStats.winRate != null ? `${journalStats.winRate.toFixed(0)}%` : '—', color: (journalStats.winRate ?? 0) >= 50 ? '#34d399' : '#f87171' },
                     { label: 'Avg P&L', val: journalStats.avgPnl != null ? `${journalStats.avgPnl >= 0 ? '+' : ''}${journalStats.avgPnl.toFixed(1)}%` : '—', color: (journalStats.avgPnl ?? 0) >= 0 ? '#34d399' : '#f87171' },
-                    { label: 'Total Trades', val: `${journalStats.totalTrades}`, color: 'white' },
+                    { label: 'Total Trades', val: `${journalStats.totalTrades}`, color: 'var(--text)' },
                   ].map(s => (
-                    <div key={s.label} className="rounded-xl p-3 border" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.08)' }}>
+                    <div key={s.label} className="rounded-xl p-3 border" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
                       <div className="text-[10px] font-mono text-white/30 mb-1">{s.label}</div>
                       <div className="text-sm font-bold font-mono" style={{ color: s.color }}>{s.val}</div>
                     </div>
@@ -1356,7 +1356,7 @@ function PortfolioInner() {
               </button>
 
               {showAddJournal && (
-                <div className="rounded-2xl p-4 space-y-3" style={{ background: '#111620', border: '1px solid rgba(255,255,255,0.08)' }}>
+                <div className="rounded-2xl p-4 space-y-3" style={{ background: 'var(--surface)', border: '1px solid rgba(255,255,255,0.08)' }}>
                   <div className="text-xs font-semibold text-white/50">Log a trade manually</div>
                   {/* Stock vs Option */}
                   <div className="grid grid-cols-2 gap-2">
@@ -1371,9 +1371,9 @@ function PortfolioInner() {
                   {/* Ticker + Signal */}
                   <div className="grid grid-cols-2 gap-2">
                     <input value={jTicker} onChange={e => setJTicker(e.target.value.toUpperCase())} placeholder="Ticker"
-                      className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                      className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                     <select value={jSignal} onChange={e => setJSignal(e.target.value as any)}
-                      className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }}>
+                      className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }}>
                       <option value="BULLISH">BULLISH</option>
                       <option value="BEARISH">BEARISH</option>
                       <option value="NEUTRAL">NEUTRAL</option>
@@ -1393,14 +1393,14 @@ function PortfolioInner() {
                       </div>
                       <div className="grid grid-cols-3 gap-2">
                         <input value={jStrike} onChange={e => setJStrike(e.target.value)} placeholder="Strike $" type="number"
-                          className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                          className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                         <input value={jExpiry} onChange={e => setJExpiry(e.target.value)} placeholder="Expiry" type="date"
-                          className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                          className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                         <input value={jContracts} onChange={e => setJContracts(e.target.value)} placeholder="Contracts" type="number"
-                          className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                          className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                       </div>
                       <input value={jPremium} onChange={e => setJPremium(e.target.value)} placeholder="Entry premium per share ($)" type="number"
-                        className="w-full rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                        className="w-full rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                       {jPremium && jContracts && (
                         <div className="text-[10px] text-white/40 text-center">
                           Total cost: <span style={{ color: '#a78bfa' }}>${(parseFloat(jPremium) * parseInt(jContracts) * 100).toFixed(2)}</span>
@@ -1412,22 +1412,22 @@ function PortfolioInner() {
                   {jType === 'stock' && (
                     <div className="grid grid-cols-3 gap-2">
                       <input value={jEntryPrice} onChange={e => setJEntryPrice(e.target.value)} placeholder="Entry $" type="number"
-                        className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                        className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                       <input value={jStop} onChange={e => setJStop(e.target.value)} placeholder="Stop $" type="number"
-                        className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                        className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                       <input value={jTarget} onChange={e => setJTarget(e.target.value)} placeholder="Target $" type="number"
-                        className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                        className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                     </div>
                   )}
                   {/* Timeframe + notes */}
                   <div className="grid grid-cols-2 gap-2">
                     <select value={jTimeframe} onChange={e => setJTimeframe(e.target.value)}
-                      className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }}>
+                      className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }}>
                       <option value="1D">1D</option><option value="1W">1W</option>
                       <option value="1M">1M</option><option value="3M">3M</option>
                     </select>
                     <input value={jNotes} onChange={e => setJNotes(e.target.value)} placeholder="Notes (optional)"
-                      className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                      className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                   </div>
                   <div className="flex gap-2">
                     <button onClick={addJournalEntry}
@@ -1479,7 +1479,7 @@ function PortfolioInner() {
                 const isExpanded = expandedEntry === entry.id
                 const signalColor = SIG_COLOR[entry.signal] || '#94a3b8'
                 return (
-                  <div key={entry.id} className="rounded-2xl border overflow-hidden" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.08)' }}>
+                  <div key={entry.id} className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
                     <div className="flex items-center gap-3 px-4 py-3 cursor-pointer"
                       onClick={() => setExpandedEntry(isExpanded ? null : entry.id)}>
                       <div className="flex items-center gap-1.5">
@@ -1514,7 +1514,7 @@ function PortfolioInner() {
                     </div>
 
                     {isExpanded && (
-                      <div className="px-4 pb-4 space-y-3 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+                      <div className="px-4 pb-4 space-y-3 border-t" style={{ borderColor: 'var(--border)' }}>
                         <div className="grid grid-cols-3 gap-2 pt-3">
                           {(entry.position_type === 'option' ? [
                             { label: 'Premium', val: entry.entry_premium ? `$${entry.entry_premium.toFixed(2)}/sh` : '—' },
@@ -1525,7 +1525,7 @@ function PortfolioInner() {
                             { label: 'Stop', val: entry.stop_loss ? `$${entry.stop_loss.toFixed(2)}` : '—' },
                             { label: 'Target', val: entry.take_profit ? `$${entry.take_profit.toFixed(2)}` : '—' },
                           ]).map(f => (
-                            <div key={f.label} className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                            <div key={f.label} className="rounded-lg p-2.5" style={{ background: 'var(--surface2)' }}>
                               <div className="text-[10px] text-white/30 mb-0.5">{f.label}</div>
                               <div className="text-sm font-mono font-bold">{f.val}</div>
                             </div>
@@ -1535,7 +1535,7 @@ function PortfolioInner() {
                         {entry.notes && <p className="text-xs text-white/50 leading-relaxed">{entry.notes}</p>}
 
                         {entry.postmortem && (
-                          <div className="rounded-xl p-3 space-y-2" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                          <div className="rounded-xl p-3 space-y-2" style={{ background: 'var(--surface2)' }}>
                             <div className="flex items-center gap-2">
                               <Star size={11} style={{ color: gradeColor(entry.postmortem.council_grade) }} />
                               <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: gradeColor(entry.postmortem.council_grade) }}>
@@ -1567,12 +1567,12 @@ function PortfolioInner() {
                                   <input value={resolveData.exit_premium} onChange={e => setResolveData(d => ({ ...d, exit_premium: e.target.value }))}
                                     placeholder="e.g. 4.50" type="number"
                                     className="w-full rounded-lg px-3 py-2 text-sm outline-none border"
-                                    style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                                    style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                                 ) : (
                                   <input value={resolveData.exit_price} onChange={e => setResolveData(d => ({ ...d, exit_price: e.target.value }))}
                                     placeholder="$0.00" type="number"
                                     className="w-full rounded-lg px-3 py-2 text-sm outline-none border"
-                                    style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                                    style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                                 )}
                                 {entry.position_type === 'option' && resolveData.exit_premium && entry.entry_premium && (
                                   <div className="text-[9px] mt-1" style={{ color: parseFloat(resolveData.exit_premium) >= entry.entry_premium ? '#34d399' : '#f87171' }}>
@@ -1584,7 +1584,7 @@ function PortfolioInner() {
                                 <label className="text-[10px] text-white/30 block mb-1">Outcome</label>
                                 <select value={resolveData.outcome} onChange={e => setResolveData(d => ({ ...d, outcome: e.target.value }))}
                                   className="w-full rounded-lg px-3 py-2 text-sm outline-none border"
-                                  style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }}>
+                                  style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }}>
                                   <option value="win">Win ✓</option>
                                   <option value="loss">Loss ✗</option>
                                   <option value="breakeven">Breakeven</option>
@@ -1594,7 +1594,7 @@ function PortfolioInner() {
                             <input value={resolveData.notes} onChange={e => setResolveData(d => ({ ...d, notes: e.target.value }))}
                               placeholder="What happened? (optional)"
                               className="w-full rounded-lg px-3 py-2 text-sm outline-none border"
-                              style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }} />
+                              style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                             <button onClick={() => handleResolve(entry.id)} disabled={!!resolving || !resolveData.exit_price}
                               className="w-full py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-40"
                               style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
@@ -1617,5 +1617,5 @@ function PortfolioInner() {
 }
 
 export default function PortfolioPage() {
-  return <Suspense fallback={<div style={{ background: '#0a0d12', minHeight: '100vh' }} />}><PortfolioInner /></Suspense>
+  return <Suspense fallback={<div style={{ background: 'var(--bg)', minHeight: '100vh' }} />}><PortfolioInner /></Suspense>
 }

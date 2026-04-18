@@ -113,7 +113,7 @@ function MoverCard({ mover, onAnalyze }: { mover: NewsMover; onAnalyze: (ticker:
           </div>
 
           {/* Catalyst */}
-          <div className="rounded-lg p-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
+          <div className="rounded-lg p-3" style={{ background: 'var(--surface2)', border: '1px solid rgba(255,255,255,0.07)' }}>
             <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-1">Catalyst</div>
             <p className="text-xs text-white/65 leading-relaxed">{mover.catalyst}</p>
           </div>
@@ -325,17 +325,17 @@ export default function NewsPage() {
     : null
 
   return (
-    <div className="flex flex-col min-h-screen" style={{ background: '#0a0d12', color: 'white' }}>
+    <div className="flex flex-col min-h-screen" style={{ background: 'var(--bg)', color: 'var(--text)' }}>
 
       {/* Header */}
       <header className="flex flex-wrap items-center gap-2 px-3 py-3 border-b sticky top-0 z-10"
-        style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
+        style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
         <button onClick={() => router.push('/')}
           className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/70 transition-colors">
           <ArrowLeft size={13} />
           Back
         </button>
-        <div className="w-px h-4" style={{ background: 'rgba(255,255,255,0.1)' }} />
+        <div className="w-px h-4" style={{ background: 'var(--border)' }} />
         <div className="flex items-center gap-2">
           <Zap size={14} style={{ color: '#fbbf24' }} />
           <span className="text-sm font-bold">Today&apos;s Movers</span>
@@ -370,7 +370,7 @@ export default function NewsPage() {
           )}
           <button onClick={() => load(true)} disabled={loading}
             className="flex items-center gap-1.5 text-[11px] font-mono px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40"
-            style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)', border: '1px solid rgba(255,255,255,0.1)' }}>
+            style={{ background: 'var(--surface2)', color: 'var(--text3)', border: '1px solid rgba(255,255,255,0.1)' }}>
             <RefreshCw size={11} className={loading ? 'animate-spin' : ''} />
             {loading ? 'Loading...' : isCached ? '↻ Fresh run' : 'Refresh'}
           </button>
@@ -411,7 +411,7 @@ export default function NewsPage() {
         <div className="flex-1 overflow-y-auto">
 
           {/* Market summary banner */}
-          <div className="px-5 py-4 border-b" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
+          <div className="px-5 py-4 border-b" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
             <div className="max-w-4xl mx-auto">
             {isCached && (
               <div className="flex items-center justify-between px-3 py-2 rounded-lg mb-3"
@@ -511,13 +511,13 @@ export default function NewsPage() {
             )}
 
             {/* Live Market Monitor */}
-            <div className="rounded-2xl border overflow-hidden" style={{ background: '#0d1117', borderColor: monitorAlerts.some(a => !a.acknowledged && a.urgency === 'critical') ? 'rgba(248,113,113,0.4)' : monitorAlerts.some(a => !a.acknowledged && a.urgency === 'high') ? 'rgba(251,191,36,0.3)' : 'rgba(255,255,255,0.07)' }}>
-              <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+            <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--nav-bg)', borderColor: monitorAlerts.some(a => !a.acknowledged && a.urgency === 'critical') ? 'rgba(248,113,113,0.4)' : monitorAlerts.some(a => !a.acknowledged && a.urgency === 'high') ? 'rgba(251,191,36,0.3)' : 'rgba(255,255,255,0.07)' }}>
+              <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
                 <div className="flex items-center gap-2">
                   <div className="relative">
                     <span className="text-base">🔴</span>
                     {newAlertCount > 0 && (
-                      <span className="absolute -top-1 -right-1 text-[9px] font-bold px-1 rounded-full" style={{ background: '#f87171', color: 'white', minWidth: '14px', textAlign: 'center' }}>
+                      <span className="absolute -top-1 -right-1 text-[9px] font-bold px-1 rounded-full" style={{ background: '#f87171', color: 'var(--text)', minWidth: '14px', textAlign: 'center' }}>
                         {newAlertCount}
                       </span>
                     )}
@@ -570,7 +570,7 @@ export default function NewsPage() {
                             {(alert.raw_data?.affected_tickers || []).filter((t: string) => t !== alert.ticker).slice(0, 3).map((t: string) => (
                               <button key={t} onClick={() => handleAnalyze(t)}
                                 className="text-[9px] font-mono px-1.5 py-0.5 rounded hover:opacity-80"
-                                style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)' }}>
+                                style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>
                                 {t}
                               </button>
                             ))}
@@ -589,7 +589,7 @@ export default function NewsPage() {
                         {!alert.acknowledged && (
                           <button onClick={() => acknowledgeAlert(alert.id)}
                             className="shrink-0 text-[10px] px-2 py-1 rounded hover:opacity-80 mt-0.5"
-                            style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.3)' }}>
+                            style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>
                             ✓
                           </button>
                         )}
@@ -606,8 +606,8 @@ export default function NewsPage() {
             </div>
 
             {/* Market Intelligence Digest */}
-            <div className="rounded-2xl border overflow-hidden" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
-              <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+            <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+              <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
                 <div className="flex items-center gap-2">
                   <span>📊</span>
                   <span className="text-sm font-bold">Market Intelligence</span>
@@ -633,14 +633,14 @@ export default function NewsPage() {
 
               {/* Pre-Market Brief */}
               {premarket && (
-                <div className="px-5 py-4 border-b" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+                <div className="px-5 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
                   <div className="flex items-center gap-2 mb-2 flex-wrap">
                     <span className="text-xs font-bold" style={{ color: '#60a5fa' }}>☀ Pre-Market</span>
                     <span className="text-[10px] px-2 py-0.5 rounded-full font-mono font-bold"
                       style={{ background: premarket.sentiment_score > 20 ? 'rgba(52,211,153,0.12)' : premarket.sentiment_score < -20 ? 'rgba(248,113,113,0.12)' : 'rgba(251,191,36,0.12)', color: premarket.sentiment_score > 20 ? '#34d399' : premarket.sentiment_score < -20 ? '#f87171' : '#fbbf24' }}>
                       {premarket.sentiment_label?.replace('_',' ')} {premarket.sentiment_score > 0 ? '+' : ''}{premarket.sentiment_score}
                     </span>
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)' }}>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full" style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>
                       {premarket.open_direction?.replace('_',' ')}{premarket.expected_move ? ` ±${premarket.expected_move}%` : ''}
                     </span>
                   </div>
@@ -681,7 +681,7 @@ export default function NewsPage() {
                     {digestExpanded ? '▲ collapse' : '▼ read full brief'}
                   </button>
                   {digestExpanded && premarket.brief_text && (
-                    <div className="mt-2 text-[11px] leading-relaxed text-white/55 whitespace-pre-wrap border-t pt-3 max-h-96 overflow-y-auto" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+                    <div className="mt-2 text-[11px] leading-relaxed text-white/55 whitespace-pre-wrap border-t pt-3 max-h-96 overflow-y-auto" style={{ borderColor: 'var(--border)' }}>
                       {premarket.brief_text.replace(/<json>[\s\S]*?<\/json>/gi, '').trim()}
                     </div>
                   )}
@@ -721,8 +721,8 @@ export default function NewsPage() {
             </div>
 
             {/* Social & Political Signals */}
-            <div className="rounded-2xl border overflow-hidden" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
-              <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+            <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+              <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
                 <div className="flex items-center gap-2">
                   <span>📡</span>
                   <span className="text-sm font-bold">Social & Political Signals</span>
@@ -736,7 +736,7 @@ export default function NewsPage() {
               </div>
 
               {socialSignals.length > 0 ? (
-                <div className="divide-y" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+                <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
                   {socialSignals.slice(0, 8).map(s => (
                     <div key={s.id} className="px-5 py-3">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -808,7 +808,7 @@ export default function NewsPage() {
                               <div key={m.ticker} className="flex flex-col items-center py-2 px-1 text-center"
                                 style={{ borderRight: i < 9 ? '1px solid rgba(255,255,255,0.04)' : 'none',
                                          borderBottom: i < 5 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
-                                <span className="text-[10px] font-bold font-mono" style={{ color: 'rgba(255,255,255,0.7)' }}>{m.ticker}</span>
+                                <span className="text-[10px] font-bold font-mono" style={{ color: 'var(--text2)' }}>{m.ticker}</span>
                                 <span className="text-[10px] font-mono" style={{ color: tc }}>
                                   {m.change > 0 ? '+' : ''}{m.change}%
                                 </span>
