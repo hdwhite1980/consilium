@@ -17,6 +17,8 @@ import { fetchSmartMoney } from './signals/smart-money'
 import { fetchOptionsFlow } from './signals/options-flow'
 import { buildConvictionOutput } from './signals/conviction'
 import { getLatestDigestContext } from './market-digest'
+import { getLatestSocialContext } from './social-signals'
+import { getMonitorAlerts } from './market-monitor'
 
 export type SignalBundle = {
   ticker: string
@@ -57,6 +59,8 @@ export type SignalBundle = {
     optionsSection: string
     convictionSection: string
     digestContext: string  // end-of-day market regime context
+    socialContext: string   // social/political signal context
+    monitorAlerts: string   // breaking market alerts (last 2 hours)
     fullBundle: string  // everything combined
   }
 }
@@ -206,7 +210,7 @@ Focus on technical signals, volume trends, and market structure for directional 
       fundamentals: cryptoFundamentals,
       smartMoney: cryptoSmartMoney,
       optionsFlow, conviction,
-      aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: '', fullBundle },
+      aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: '', socialContext: '', monitorAlerts: '', fullBundle },
     }
   }
 
@@ -312,7 +316,7 @@ Focus on central bank policy signals, economic data releases, and technical stru
       fundamentals: forexFundamentals,
       smartMoney: forexSmartMoney,
       optionsFlow, conviction,
-      aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: '', fullBundle },
+      aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: '', socialContext: '', monitorAlerts: '', fullBundle },
     }
   }
 
@@ -351,8 +355,10 @@ Focus on central bank policy signals, economic data releases, and technical stru
 
   // Phases 1-4 in parallel
   onProgress?.('Fetching market context, fundamentals, smart money, options...')
-  // Fetch digest context in parallel with other data — fast DB read, no external calls
+  // Fetch digest + social context in parallel — fast DB reads
   const digestContextPromise = getLatestDigestContext().catch(() => '')
+  const socialContextPromise = getLatestSocialContext(sym).catch(() => '')
+  const monitorAlertsPromise = getMonitorAlerts(sym, 120).catch(() => '')
 
   const [marketContext, fundamentals, smartMoney, optionsFlow, edgarData] = await Promise.all([
     buildMarketContext(sym, timeframe),
@@ -368,7 +374,7 @@ Focus on central bank policy signals, economic data releases, and technical stru
   // Congressional trades: 4s max (House XML or QuiverQuant)
   // fetchAllFilingsForTicker (13-F, Form 4 XML) is intentionally excluded from hot path
   // — it makes 15+ HTTP calls and is seeded via /api/sec-filings cron instead
-  const [secFilingsContext, legislativeContext, digestContext] = await Promise.all([
+  const [secFilingsContext, legislativeContext, digestContext, socialContext, monitorAlerts] = await Promise.all([
     Promise.race([
       (async () => {
         // Check cache first — only fetch if no data exists for this ticker
@@ -395,6 +401,8 @@ Focus on central bank policy signals, economic data releases, and technical stru
       new Promise<string>(r => setTimeout(() => r(''), 8000))
     ]).catch(() => ''),
     digestContextPromise,
+    socialContextPromise,
+    monitorAlertsPromise,
   ])
 
   // Compute relative strength vs sector now that we have both
@@ -438,7 +446,9 @@ Focus on central bank policy signals, economic data releases, and technical stru
   const convictionSection = conviction.summary
 
   const fullBundle = [
-    digestContext || null,  // market regime context first — sets the stage
+    monitorAlerts || null,  // breaking alerts first — most time-sensitive
+    digestContext || null,  // market regime context — sets the stage
+    socialContext || null,  // social/political signals — Trump posts, Elon, Fed, etc.
     newsSection, priceSection, technicalsSection, marketSection,
     fundamentalsSection, smartMoneySection, optionsSection, convictionSection,
   ].filter(Boolean).join('\n\n')
@@ -447,6 +457,6 @@ Focus on central bank policy signals, economic data releases, and technical stru
     ticker: sym, timeframe, timestamp: new Date().toISOString(),
     bars, news, currentPrice,
     technicals, marketContext, fundamentals, smartMoney, optionsFlow, conviction,
-    aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: digestContext || '', fullBundle },
+    aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: digestContext || '', socialContext: socialContext || '', monitorAlerts: monitorAlerts || '', fullBundle },
   }
 }

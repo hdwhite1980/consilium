@@ -168,6 +168,12 @@ export default function NewsPage() {
   const [premarket, setPremarket] = useState<any>(null)
   const [digestLoading, setDigestLoading] = useState(false)
   const [digestExpanded, setDigestExpanded] = useState(false)
+  const [socialSignals, setSocialSignals] = useState<any[]>([])
+  const [socialLoading, setSocialLoading] = useState(false)
+  const [monitorAlerts, setMonitorAlerts] = useState<any[]>([])
+  const [monitorRunning, setMonitorRunning] = useState(false)
+  const [lastMonitorRun, setLastMonitorRun] = useState<Date | null>(null)
+  const [newAlertCount, setNewAlertCount] = useState(0)
   const [statusMsg, setStatusMsg] = useState('Loading today\'s market intelligence...')
   const [error, setError] = useState<string | null>(null)
   const [generatedAt, setGeneratedAt] = useState<string | null>(null)
@@ -230,6 +236,64 @@ export default function NewsPage() {
       .then(r => r.json())
       .then(d => { if (d.digest) setDigest(d.digest); if (d.brief) setPremarket(d.brief) })
       .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/social-signals')
+      .then(r => r.json())
+      .then(d => setSocialSignals(d.signals || []))
+      .catch(() => {})
+  }, [])
+
+  const scanSocial = async () => {
+    setSocialLoading(true)
+    try {
+      await fetch('/api/social-signals', { method: 'POST' })
+      const d = await fetch('/api/social-signals').then(r => r.json())
+      setSocialSignals(d.signals || [])
+    } finally { setSocialLoading(false) }
+  }
+
+  const loadMonitorAlerts = async () => {
+    try {
+      const d = await fetch('/api/monitor').then(r => r.json())
+      const alerts = d.alerts || []
+      setMonitorAlerts(alerts)
+      setNewAlertCount(alerts.filter((a: any) => !a.acknowledged).length)
+    } catch {}
+  }
+
+  const runMonitor = async () => {
+    setMonitorRunning(true)
+    try {
+      await fetch('/api/monitor', { method: 'POST' })
+      await loadMonitorAlerts()
+      setLastMonitorRun(new Date())
+    } finally { setMonitorRunning(false) }
+  }
+
+  const acknowledgeAlert = async (id: string) => {
+    await fetch('/api/monitor', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [id] }),
+    })
+    setMonitorAlerts(prev => prev.map(a => a.id === id ? { ...a, acknowledged: true } : a))
+    setNewAlertCount(prev => Math.max(0, prev - 1))
+  }
+
+  // Poll monitor alerts every 3 minutes while page is open
+  useEffect(() => {
+    loadMonitorAlerts()
+    const interval = setInterval(async () => {
+      // Auto-run monitor + refresh alerts
+      try {
+        await fetch('/api/monitor', { method: 'POST' })
+        await loadMonitorAlerts()
+        setLastMonitorRun(new Date())
+      } catch {}
+    }, 3 * 60 * 1000) // every 3 minutes
+    return () => clearInterval(interval)
   }, [])
 
   const runDigest = async (type: 'digest' | 'premarket') => {
@@ -446,6 +510,101 @@ export default function NewsPage() {
               </div>
             )}
 
+            {/* Live Market Monitor */}
+            <div className="rounded-2xl border overflow-hidden" style={{ background: '#0d1117', borderColor: monitorAlerts.some(a => !a.acknowledged && a.urgency === 'critical') ? 'rgba(248,113,113,0.4)' : monitorAlerts.some(a => !a.acknowledged && a.urgency === 'high') ? 'rgba(251,191,36,0.3)' : 'rgba(255,255,255,0.07)' }}>
+              <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+                <div className="flex items-center gap-2">
+                  <div className="relative">
+                    <span className="text-base">🔴</span>
+                    {newAlertCount > 0 && (
+                      <span className="absolute -top-1 -right-1 text-[9px] font-bold px-1 rounded-full" style={{ background: '#f87171', color: 'white', minWidth: '14px', textAlign: 'center' }}>
+                        {newAlertCount}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-sm font-bold">Live Monitor</span>
+                  <span className="text-[9px] font-mono px-2 py-0.5 rounded-full" style={{ background: 'rgba(52,211,153,0.12)', color: '#34d399' }}>
+                    auto-scan every 3min
+                  </span>
+                  {lastMonitorRun && (
+                    <span className="text-[9px] text-white/25 font-mono">
+                      last: {lastMonitorRun.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  )}
+                </div>
+                <button onClick={runMonitor} disabled={monitorRunning}
+                  className="text-[10px] font-mono px-2.5 py-1.5 rounded-lg disabled:opacity-40 hover:opacity-80"
+                  style={{ background: 'rgba(248,113,113,0.1)', color: '#f87171', border: '1px solid rgba(248,113,113,0.2)' }}>
+                  {monitorRunning ? '⟳ Scanning...' : '⟳ Scan Now'}
+                </button>
+              </div>
+
+              {monitorAlerts.length > 0 ? (
+                <div className="divide-y max-h-96 overflow-y-auto" style={{ borderColor: 'rgba(255,255,255,0.04)' }}>
+                  {monitorAlerts.map(alert => (
+                    <div key={alert.id} className="px-5 py-3 transition-opacity" style={{ opacity: alert.acknowledged ? 0.4 : 1 }}>
+                      <div className="flex items-start gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                              style={{
+                                background: alert.urgency === 'critical' ? 'rgba(248,113,113,0.2)' : alert.urgency === 'high' ? 'rgba(251,191,36,0.15)' : 'rgba(255,255,255,0.08)',
+                                color: alert.urgency === 'critical' ? '#f87171' : alert.urgency === 'high' ? '#fbbf24' : '#9ca3af',
+                              }}>
+                              {alert.urgency.toUpperCase()}
+                            </span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded font-mono"
+                              style={{
+                                background: alert.market_impact === 'bullish' ? 'rgba(52,211,153,0.1)' : alert.market_impact === 'bearish' ? 'rgba(248,113,113,0.1)' : 'rgba(255,255,255,0.05)',
+                                color: alert.market_impact === 'bullish' ? '#34d399' : alert.market_impact === 'bearish' ? '#f87171' : '#9ca3af',
+                              }}>
+                              {alert.market_impact}
+                            </span>
+                            {alert.ticker && (
+                              <button onClick={() => handleAnalyze(alert.ticker)}
+                                className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded hover:opacity-80"
+                                style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>
+                                {alert.ticker}
+                              </button>
+                            )}
+                            {(alert.raw_data?.affected_tickers || []).filter((t: string) => t !== alert.ticker).slice(0, 3).map((t: string) => (
+                              <button key={t} onClick={() => handleAnalyze(t)}
+                                className="text-[9px] font-mono px-1.5 py-0.5 rounded hover:opacity-80"
+                                style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)' }}>
+                                {t}
+                              </button>
+                            ))}
+                            <span className="text-[9px] text-white/25 ml-auto">
+                              {Math.round((Date.now() - new Date(alert.created_at).getTime()) / 60000)}m ago
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-white/70 mb-1 leading-relaxed font-medium">{alert.headline}</p>
+                          {alert.analysis && <p className="text-[10px] text-white/45 mb-1 leading-relaxed">{alert.analysis}</p>}
+                          {alert.action && (
+                            <p className="text-[10px] font-semibold" style={{ color: alert.urgency === 'critical' ? '#f87171' : '#fbbf24' }}>
+                              → {alert.action}
+                            </p>
+                          )}
+                        </div>
+                        {!alert.acknowledged && (
+                          <button onClick={() => acknowledgeAlert(alert.id)}
+                            className="shrink-0 text-[10px] px-2 py-1 rounded hover:opacity-80 mt-0.5"
+                            style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.3)' }}>
+                            ✓
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="px-5 py-6 text-center">
+                  <p className="text-sm text-white/25">No alerts yet</p>
+                  <p className="text-[10px] text-white/15 mt-1">Monitoring news every 3 minutes. Hit Scan Now to check immediately.</p>
+                </div>
+              )}
+            </div>
+
             {/* Market Intelligence Digest */}
             <div className="rounded-2xl border overflow-hidden" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
               <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
@@ -557,6 +716,63 @@ export default function NewsPage() {
                 <div className="px-5 py-8 text-center">
                   <p className="text-sm text-white/30 mb-1">No market digest yet</p>
                   <p className="text-xs text-white/20">Run EOD Digest after 4pm or Pre-Market Brief before 9:30am</p>
+                </div>
+              )}
+            </div>
+
+            {/* Social & Political Signals */}
+            <div className="rounded-2xl border overflow-hidden" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
+              <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+                <div className="flex items-center gap-2">
+                  <span>📡</span>
+                  <span className="text-sm font-bold">Social & Political Signals</span>
+                  <span className="text-[10px] text-white/30 font-mono">Trump · Elon · Fed · Buffett</span>
+                </div>
+                <button onClick={scanSocial} disabled={socialLoading}
+                  className="text-[10px] font-mono px-2.5 py-1.5 rounded-lg disabled:opacity-40 hover:opacity-80"
+                  style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.2)' }}>
+                  {socialLoading ? 'Scanning...' : '⚡ Scan Now'}
+                </button>
+              </div>
+
+              {socialSignals.length > 0 ? (
+                <div className="divide-y" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+                  {socialSignals.slice(0, 8).map(s => (
+                    <div key={s.id} className="px-5 py-3">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                          style={{
+                            background: s.market_impact === 'bullish' ? 'rgba(52,211,153,0.12)' : s.market_impact === 'bearish' ? 'rgba(248,113,113,0.12)' : 'rgba(251,191,36,0.1)',
+                            color: s.market_impact === 'bullish' ? '#34d399' : s.market_impact === 'bearish' ? '#f87171' : '#fbbf24',
+                          }}>
+                          {s.impact_magnitude?.toUpperCase()} {s.market_impact?.toUpperCase()}
+                        </span>
+                        <span className="text-[10px] font-semibold text-white/70">{s.person_label}</span>
+                        <span className="text-[9px] text-white/25">{new Date(s.detected_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        {s.affected_tickers?.length > 0 && (
+                          <div className="flex gap-1 flex-wrap">
+                            {s.affected_tickers.slice(0, 4).map((t: string) => (
+                              <button key={t} onClick={() => handleAnalyze(t)}
+                                className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded hover:opacity-80"
+                                style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa' }}>
+                                {t}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-white/60 mb-1 leading-relaxed">{s.headline}</p>
+                      {s.analysis && <p className="text-[10px] text-white/40 leading-relaxed">{s.analysis}</p>}
+                      {s.action_signal && (
+                        <p className="text-[10px] mt-1 font-semibold" style={{ color: '#fbbf24' }}>→ {s.action_signal}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="px-5 py-8 text-center">
+                  <p className="text-sm text-white/30 mb-1">No signals yet</p>
+                  <p className="text-xs text-white/20">Scan to detect Trump, Elon, Fed, and Buffett statements from today's news</p>
                 </div>
               )}
             </div>
