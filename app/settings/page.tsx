@@ -3,7 +3,8 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/app/lib/auth/client'
-import { ArrowLeft, Shield, ShieldCheck, ShieldOff, LogOut, CreditCard, Zap, Crown, CheckCircle, ExternalLink } from 'lucide-react'
+import { useTheme } from '@/app/lib/theme'
+import { ArrowLeft, Shield, ShieldCheck, ShieldOff, LogOut, CreditCard, Zap, Crown, CheckCircle, ExternalLink, Type, Palette } from 'lucide-react'
 
 interface MFAFactor { id: string; factor_type: string; status: string; friendly_name?: string }
 
@@ -54,9 +55,10 @@ export default function SettingsPage() {
   const [notifSaved, setNotifSaved] = useState(false)
 
   const isDark = useDarkMode()
-  const txt  = isDark ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.9)'
-  const txt2 = isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)'
-  const txt3 = isDark ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.35)'
+  const { fontSize, setFontSize } = useTheme()
+  const txt  = isDark ? 'rgba(255,255,255,0.95)' : 'rgba(0,0,0,0.95)'
+  const txt2 = isDark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.85)'
+  const txt3 = isDark ? 'rgba(255,255,255,0.5)'  : 'rgba(0,0,0,0.65)'
   const surf = isDark ? '#111620' : '#ffffff'
   const surf2 = isDark ? '#181e2a' : '#f5f7fb'
   const brd  = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.08)'
@@ -219,6 +221,56 @@ export default function SettingsPage() {
           <div>
             <div className="text-[10px] font-mono uppercase tracking-widest mb-1" style={{ color: txt3 }}>Email</div>
             <div className="text-sm font-mono" style={{ color: txt }}>{user?.email}</div>
+          </div>
+        </Section>
+
+        {/* Appearance */}
+        <Section title="Appearance">
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <Type size={14} style={{ color: txt2 }} />
+              <div className="text-sm font-semibold" style={{ color: txt }}>Text size</div>
+            </div>
+            <div className="text-xs mb-3" style={{ color: txt3 }}>
+              Adjust text size across the entire app. Changes apply immediately and persist across sessions.
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              {([
+                { key: 'sm' as const, label: 'Small',    sample: '14px' },
+                { key: 'md' as const, label: 'Default',  sample: '16px' },
+                { key: 'lg' as const, label: 'Large',    sample: '18px' },
+                { key: 'xl' as const, label: 'X-Large',  sample: '20px' },
+              ]).map(opt => {
+                const active = fontSize === opt.key
+                return (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => setFontSize(opt.key)}
+                    aria-pressed={active}
+                    className="rounded-lg py-3 px-2 transition-all hover:opacity-90 focus:outline focus:outline-2 focus:outline-offset-1"
+                    style={{
+                      background: active ? 'rgba(167,139,250,0.15)' : surf2,
+                      border: 1px solid ${active ? '#a78bfa' : brd},
+                      color: active ? '#a78bfa' : txt,
+                      outlineColor: '#a78bfa',
+                    }}>
+                    <div className="text-sm font-semibold">{opt.label}</div>
+                    <div className="text-[10px] font-mono mt-0.5" style={{ color: active ? '#a78bfa' : txt3 }}>{opt.sample}</div>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="pt-3 border-t" style={{ borderColor: brd }}>
+            <div className="flex items-center gap-2 mb-2">
+              <Palette size={14} style={{ color: txt2 }} />
+              <div className="text-sm font-semibold" style={{ color: txt }}>Theme</div>
+            </div>
+            <div className="text-xs" style={{ color: txt3 }}>
+              Toggle dark/light mode from the sun/moon button in the top nav.
+            </div>
           </div>
         </Section>
 
