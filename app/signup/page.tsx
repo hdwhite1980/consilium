@@ -61,7 +61,7 @@ function SignupInner() {
         style={{ background: '#0a0d12' }}>
         <div className="w-full max-w-sm text-center space-y-5">
           <div className="flex justify-center mb-6">
-            <WaliLogo size="md" priority />
+            <WaliLogo size="xl" priority />
           </div>
           <div className="text-5xl mb-2">ðŸ“§</div>
           <h1 className="text-2xl font-bold text-white">Check your inbox</h1>
@@ -142,7 +142,7 @@ function SignupInner() {
 
         {/* Mobile logo */}
         <div className="mb-10 lg:hidden">
-          <WaliLogo size="md" priority />
+          <WaliLogo size="xl" priority />
         </div>
 
         <div className="w-full max-w-sm mx-auto">

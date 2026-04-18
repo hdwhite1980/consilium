@@ -119,7 +119,7 @@ function ConfirmInner() {
 
         {/* Logo */}
         <div className="flex justify-center mb-8">
-          <WaliLogo size="md" priority />
+          <WaliLogo size="xl" priority />
         </div>
 
         {status === 'verifying' && (

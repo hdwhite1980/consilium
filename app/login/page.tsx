@@ -138,7 +138,7 @@ function LoginPageInner() {
 
       {/* Logo */}
       <div className="mb-10">
-        <WaliLogo size="md" priority />
+        <WaliLogo size="xl" priority />
       </div>
 
       {/* Card */}

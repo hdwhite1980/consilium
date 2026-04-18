@@ -32,7 +32,7 @@ export default function DisclaimerPage() {
 
       {/* Logo */}
       <div className="mb-8">
-        <WaliLogo size="md" priority />
+        <WaliLogo size="xl" priority />
       </div>
 
       <div className="w-full max-w-lg rounded-2xl border overflow-hidden"
