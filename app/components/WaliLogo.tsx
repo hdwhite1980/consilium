@@ -19,7 +19,7 @@ import Link from 'next/link'
  * is layered on top by default.
  * ─────────────────────────────────────────────────────────────── */
 
-type LogoSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl'
+type LogoSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl' | 'xxl'
 
 interface WaliLogoProps {
   size?: LogoSize
@@ -39,11 +39,12 @@ interface WaliLogoProps {
 }
 
 const SIZE_MAP: Record<LogoSize, { px: number; className: string }> = {
-  xs: { px: 28,  className: 'h-7 w-7' },
-  sm: { px: 36,  className: 'h-9 w-9' },
-  md: { px: 48,  className: 'h-12 w-12' },
-  lg: { px: 64,  className: 'h-16 w-16' },
-  xl: { px: 96,  className: 'h-24 w-24' },
+  xs:  { px: 28,  className: 'h-7 w-7' },
+  sm:  { px: 36,  className: 'h-9 w-9' },
+  md:  { px: 48,  className: 'h-12 w-12' },
+  lg:  { px: 64,  className: 'h-16 w-16' },
+  xl:  { px: 160, className: 'h-40 w-40' },
+  xxl: { px: 288, className: 'h-72 w-72' },
 }
 
 export default function WaliLogo({
