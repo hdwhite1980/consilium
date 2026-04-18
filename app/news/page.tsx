@@ -164,6 +164,10 @@ export default function NewsPage() {
   const [data, setData] = useState<NewsPageData | null>(null)
   const [loading, setLoading] = useState(true)
   const [macroThemes, setMacroThemes] = useState<Array<{id:string;theme_name:string;theme_summary:string;playbook:string;sectors_to_watch:string[];tickers_to_watch:string[];urgency:string}>>([])
+  const [digest, setDigest] = useState<any>(null)
+  const [premarket, setPremarket] = useState<any>(null)
+  const [digestLoading, setDigestLoading] = useState(false)
+  const [digestExpanded, setDigestExpanded] = useState(false)
   const [statusMsg, setStatusMsg] = useState('Loading today\'s market intelligence...')
   const [error, setError] = useState<string | null>(null)
   const [generatedAt, setGeneratedAt] = useState<string | null>(null)
@@ -220,6 +224,23 @@ export default function NewsPage() {
       .then(d => setMacroThemes(d.themes || []))
       .catch(() => {})
   }, [])
+
+  useEffect(() => {
+    fetch('/api/market-digest')
+      .then(r => r.json())
+      .then(d => { if (d.digest) setDigest(d.digest); if (d.brief) setPremarket(d.brief) })
+      .catch(() => {})
+  }, [])
+
+  const runDigest = async (type: 'digest' | 'premarket') => {
+    setDigestLoading(true)
+    try {
+      await fetch(type === 'premarket' ? '/api/market-digest?type=premarket' : '/api/market-digest', { method: 'POST' })
+      const d = await fetch('/api/market-digest').then(r => r.json())
+      if (d.digest) setDigest(d.digest)
+      if (d.brief) setPremarket(d.brief)
+    } finally { setDigestLoading(false) }
+  }
 
   useEffect(() => { load() }, [load])
 
@@ -425,6 +446,121 @@ export default function NewsPage() {
               </div>
             )}
 
+            {/* Market Intelligence Digest */}
+            <div className="rounded-2xl border overflow-hidden" style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.07)' }}>
+              <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+                <div className="flex items-center gap-2">
+                  <span>📊</span>
+                  <span className="text-sm font-bold">Market Intelligence</span>
+                  {(premarket?.brief_date || digest?.digest_date) && (
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full" style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)' }}>
+                      {premarket?.brief_date || digest?.digest_date}
+                    </span>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => runDigest('premarket')} disabled={digestLoading}
+                    className="text-[10px] font-mono px-2.5 py-1.5 rounded-lg disabled:opacity-40 hover:opacity-80"
+                    style={{ background: 'rgba(96,165,250,0.1)', color: '#60a5fa', border: '1px solid rgba(96,165,250,0.2)' }}>
+                    {digestLoading ? '...' : '☀ Pre-Market'}
+                  </button>
+                  <button onClick={() => runDigest('digest')} disabled={digestLoading}
+                    className="text-[10px] font-mono px-2.5 py-1.5 rounded-lg disabled:opacity-40 hover:opacity-80"
+                    style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)' }}>
+                    {digestLoading ? '...' : '🌙 EOD Digest'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Pre-Market Brief */}
+              {premarket && (
+                <div className="px-5 py-4 border-b" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+                  <div className="flex items-center gap-2 mb-2 flex-wrap">
+                    <span className="text-xs font-bold" style={{ color: '#60a5fa' }}>☀ Pre-Market</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-mono font-bold"
+                      style={{ background: premarket.sentiment_score > 20 ? 'rgba(52,211,153,0.12)' : premarket.sentiment_score < -20 ? 'rgba(248,113,113,0.12)' : 'rgba(251,191,36,0.12)', color: premarket.sentiment_score > 20 ? '#34d399' : premarket.sentiment_score < -20 ? '#f87171' : '#fbbf24' }}>
+                      {premarket.sentiment_label?.replace('_',' ')} {premarket.sentiment_score > 0 ? '+' : ''}{premarket.sentiment_score}
+                    </span>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)' }}>
+                      {premarket.open_direction?.replace('_',' ')}{premarket.expected_move ? ` ±${premarket.expected_move}%` : ''}
+                    </span>
+                  </div>
+                  <p className="text-sm font-semibold text-white mb-2">{premarket.headline}</p>
+                  {premarket.top_catalysts?.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {premarket.top_catalysts.map((c: string) => (
+                        <span key={c} className="text-[10px] px-2 py-0.5 rounded-full font-mono" style={{ background: 'rgba(96,165,250,0.08)', color: '#60a5fa', border: '1px solid rgba(96,165,250,0.15)' }}>{c}</span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-3 mb-2">
+                    {premarket.sectors_bullish?.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-mono text-white/30 mb-1">BULLISH</p>
+                        <div className="flex flex-wrap gap-1">
+                          {premarket.sectors_bullish.map((s: string) => <span key={s} className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399' }}>{s}</span>)}
+                        </div>
+                      </div>
+                    )}
+                    {premarket.sectors_bearish?.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-mono text-white/30 mb-1">BEARISH</p>
+                        <div className="flex flex-wrap gap-1">
+                          {premarket.sectors_bearish.map((s: string) => <span key={s} className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ background: 'rgba(248,113,113,0.1)', color: '#f87171' }}>{s}</span>)}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  {premarket.tickers_to_watch?.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {premarket.tickers_to_watch.map((t: string) => (
+                        <button key={t} onClick={() => handleAnalyze(t)} className="text-xs font-mono font-bold px-2.5 py-1 rounded-lg hover:opacity-80" style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)' }}>{t}</button>
+                      ))}
+                    </div>
+                  )}
+                  <button onClick={() => setDigestExpanded(!digestExpanded)} className="text-[10px] font-mono text-white/30 hover:text-white/60">
+                    {digestExpanded ? '▲ collapse' : '▼ read full brief'}
+                  </button>
+                  {digestExpanded && premarket.brief_text && (
+                    <div className="mt-2 text-[11px] leading-relaxed text-white/55 whitespace-pre-wrap border-t pt-3 max-h-96 overflow-y-auto" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+                      {premarket.brief_text.replace(/<json>[\s\S]*?<\/json>/gi, '').trim()}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* EOD Digest */}
+              {digest && (
+                <div className="px-5 py-4">
+                  <div className="flex items-center gap-2 mb-2 flex-wrap">
+                    <span className="text-xs font-bold" style={{ color: '#a78bfa' }}>🌙 EOD Digest</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-mono font-bold"
+                      style={{ background: digest.sentiment_score > 20 ? 'rgba(52,211,153,0.12)' : digest.sentiment_score < -20 ? 'rgba(248,113,113,0.12)' : 'rgba(251,191,36,0.12)', color: digest.sentiment_score > 20 ? '#34d399' : digest.sentiment_score < -20 ? '#f87171' : '#fbbf24' }}>
+                      {digest.sentiment_label?.replace('_',' ')} {digest.sentiment_score > 0 ? '+' : ''}{digest.sentiment_score}
+                    </span>
+                  </div>
+                  {digest.key_themes?.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {digest.key_themes.map((t: string) => <span key={t} className="text-[10px] px-2 py-0.5 rounded-full font-mono" style={{ background: 'rgba(167,139,250,0.08)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.15)' }}>{t}</span>)}
+                    </div>
+                  )}
+                  {digest.overnight_risks?.length > 0 && (
+                    <div className="space-y-1">
+                      {digest.overnight_risks.map((r: string) => <p key={r} className="text-[11px] text-white/45">⚠ {r}</p>)}
+                    </div>
+                  )}
+                  {digest.premarket_outlook && <p className="text-[11px] text-white/40 italic mt-1">{digest.premarket_outlook}</p>}
+                </div>
+              )}
+
+              {!digest && !premarket && (
+                <div className="px-5 py-8 text-center">
+                  <p className="text-sm text-white/30 mb-1">No market digest yet</p>
+                  <p className="text-xs text-white/20">Run EOD Digest after 4pm or Pre-Market Brief before 9:30am</p>
+                </div>
+              )}
+            </div>
+
             {/* Sector Top Movers — live per-sector breakdown */}
             {data.sectorTopMovers && (data.sectorTopMovers?.length ?? 0) > 0 && (
               <div>
@@ -433,7 +569,7 @@ export default function NewsPage() {
                   <span className="text-[10px] font-mono text-white/15">— live</span>
                 </div>
                 <div className="space-y-2">
-                  {data.sectorTopMovers.map((s) => {
+                  {data.sectorTopMovers.filter(s => s.topMovers.length > 0).map((s) => {
                     const col = s.direction === 'up' ? '#34d399' : s.direction === 'down' ? '#f87171' : '#fbbf24'
                     return (
                       <div key={s.etf} className="rounded-xl border overflow-hidden"
