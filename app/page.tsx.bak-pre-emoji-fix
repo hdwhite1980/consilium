@@ -12,16 +12,14 @@ import WaliLogo from '@/app/components/WaliLogo'
 import {
   TrendingUp, TrendingDown, Minus, Clock, AlertTriangle,
   BarChart2, Globe, DollarSign, Activity, Shield, Zap, LogOut, BookOpen,
-  Sun, Moon, Menu, X, Calendar, Flame, Briefcase, Search, Trophy,
-  Scale, LineChart, PieChart, Hourglass, RotateCw, Check, Target,
-  Star, ClipboardList, Wallet, RefreshCw, FileText
+  Sun, Moon, Menu, X
 } from 'lucide-react'
 
 type Signal = 'BULLISH' | 'BEARISH' | 'NEUTRAL'
 
 // ── Log Trade Menu ────────────────────────────────────────────────────────────
 function LogTradeMenu({ destinations }: {
-  destinations: Array<{ icon: React.ReactNode; label: string; desc: string; color: string; onClick: () => void }>
+  destinations: Array<{ icon: string; label: string; desc: string; color: string; onClick: () => void }>
 }) {
   const [open, setOpen] = useState(false)
   const idRef = useRef<string>(`logtrade-${Math.random().toString(36).slice(2, 9)}`)
@@ -37,7 +35,7 @@ function LogTradeMenu({ destinations }: {
         className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all hover:opacity-90 focus:outline focus:outline-2 focus:outline-offset-1"
         style={{ background: 'rgba(52,211,153,0.08)', color: '#34d399', border: '1px solid rgba(52,211,153,0.2)', outlineColor: '#34d399' }}>
         <span className="flex items-center gap-1.5">
-          <ClipboardList size={12} aria-hidden="true" />
+          <span aria-hidden="true">📋</span>
           <span>Acted on this analysis? Log your trade</span>
         </span>
         <span style={{ color: 'rgba(52,211,153,0.5)' }} aria-hidden="true">{open ? '▲' : '▼'}</span>
@@ -71,10 +69,10 @@ type Stage  = 'idle' | 'building' | 'gemini' | 'claude' | 'gpt' | 'judge' | 'don
 type TF     = '1D' | '1W' | '1M' | '3M'
 type Persona = 'balanced' | 'technical' | 'fundamental'
 
-const PERSONAS: Record<Persona, { label: string; icon: React.ReactNode; color: string; desc: string }> = {
-  balanced:    { label: 'Balanced',    icon: <Scale size={12} />,     color: '#a78bfa', desc: 'Equal weight to technicals and fundamentals' },
-  technical:   { label: 'Technical',   icon: <LineChart size={12} />, color: '#60a5fa', desc: 'Follows price action and chart patterns' },
-  fundamental: { label: 'Fundamental', icon: <PieChart size={12} />,  color: '#34d399', desc: 'Prioritizes business value and analyst consensus' },
+const PERSONAS: Record<Persona, { label: string; icon: string; color: string; desc: string }> = {
+  balanced:    { label: 'Balanced',    icon: '⚖',  color: '#a78bfa', desc: 'Equal weight to technicals and fundamentals' },
+  technical:   { label: 'Technical',   icon: '📈', color: '#60a5fa', desc: 'Follows price action and chart patterns' },
+  fundamental: { label: 'Fundamental', icon: '📊', color: '#34d399', desc: 'Prioritizes business value and analyst consensus' },
 }
 
 interface Bar { t: string; o: number; h: number; l: number; c: number; v: number }
@@ -551,23 +549,23 @@ function HomeInner() {
   const bg    = isDark ? '#0a0d12' : '#f0f2f7'
   const surf  = isDark ? '#111620' : '#ffffff'
   const surf2 = isDark ? '#181e2a' : '#f5f7fb'
-  const brd   = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.1)'
-  const brd2  = isDark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.18)'
+  const brd   = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.08)'
+  const brd2  = isDark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.15)'
   const txt   = isDark ? 'white' : '#0f172a'
-  const txt2  = isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.72)'
-  const txt3  = isDark ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.5)'
+  const txt2  = isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)'
+  const txt3  = isDark ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.35)'
   const inputBg = isDark ? '#181e2a' : '#f0f2f7'
 
-  const NAV_ITEMS: Array<{ label: string; icon: React.ReactNode; path: string; color: string }> = [
-    { label: 'Today',        icon: <Zap size={12} />,           path: '/news',         color: '#fbbf24' },
-    { label: 'Tomorrow',     icon: <Calendar size={12} />,      path: '/tomorrow',     color: '#a78bfa' },
-    { label: 'Invest',       icon: <Flame size={12} />,         path: '/invest',       color: '#f97316' },
-    { label: 'Portfolio',    icon: <Briefcase size={12} />,     path: '/portfolio',    color: '#34d399' },
-    { label: 'Macro',        icon: <Globe size={12} />,         path: '/macro',        color: '#60a5fa' },
-    { label: 'Screener',     icon: <Search size={12} />,        path: '/screener',     color: '#a78bfa' },
-    { label: 'Compare',      icon: <Scale size={12} />,         path: '/compare',      color: '#f87171' },
-    { label: 'Track Record', icon: <Trophy size={12} />,        path: '/track-record', color: '#fbbf24' },
-    { label: 'Guide',        icon: <BookOpen size={12} />,      path: '/guide',        color: txt3 },
+  const NAV_ITEMS = [
+    { label: 'Today', icon: '⚡', path: '/news',        color: '#fbbf24' },
+    { label: 'Tomorrow', icon: '📅', path: '/tomorrow', color: '#a78bfa' },
+    { label: 'Invest', icon: '🔥', path: '/invest',     color: '#f97316' },
+    { label: 'Portfolio', icon: '💼', path: '/portfolio', color: '#34d399' },
+    { label: 'Macro',    icon: '🌍', path: '/macro',       color: '#60a5fa' },
+    { label: 'Screener', icon: '🔍', path: '/screener',    color: '#a78bfa' },
+    { label: 'Compare', icon: '⚡', path: '/compare',   color: '#f87171' },
+    { label: 'Track Record', icon: '🏆', path: '/track-record', color: '#fbbf24' },
+    { label: 'Guide', icon: '📖', path: '/guide',       color: txt3 },
   ]
 
   return (
@@ -602,7 +600,7 @@ function HomeInner() {
               {preMarketBrief.one_line && <p style={{ color: txt2 }} className="leading-relaxed">{preMarketBrief.one_line}</p>}
               {preMarketBrief.risk_of_day && (
                 <div className="flex items-start gap-1.5">
-                  <AlertTriangle size={11} style={{ color: '#f87171' }} aria-hidden="true" />
+                  <span style={{ color: '#f87171' }} aria-hidden="true">⚠</span>
                   <span style={{ color: txt2 }}><strong className="font-semibold">Risk:</strong> {preMarketBrief.risk_of_day}</span>
                 </div>
               )}
@@ -746,7 +744,7 @@ function HomeInner() {
                 aria-label={whyMoving.loading ? 'Analyzing price movement' : `Explain why ${ticker} is moving`}
                 className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40 focus:outline focus:outline-2 focus:outline-offset-1"
                 style={{ background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24', outlineColor: '#fbbf24' }}>
-                {whyMoving.loading ? <Hourglass size={11} aria-hidden="true" /> : <Zap size={11} aria-hidden="true" />}
+                <span aria-hidden="true">{whyMoving.loading ? '⏳' : '⚡'}</span>
                 <span>{whyMoving.loading ? 'Analyzing…' : `Why is ${ticker} moving?`}</span>
               </button>
             )}
@@ -807,7 +805,7 @@ function HomeInner() {
                       border: `1px solid ${subStatus.daysLeft <= 2 ? 'rgba(248,113,113,0.4)' : 'rgba(251,191,36,0.35)'}`,
                       outlineColor: subStatus.daysLeft <= 2 ? '#f87171' : '#fbbf24',
                     }}>
-                    <Hourglass size={9} aria-hidden="true" className="inline mr-1" />{subStatus.daysLeft}d
+                    <span aria-hidden="true">⏳ </span>{subStatus.daysLeft}d
                   </button>
                 )}
                 <button
@@ -926,14 +924,14 @@ function HomeInner() {
           }}>
           <span className="text-xs" style={{ color: txt2 }}>
             {cached.ageMinutes > 60
-              ? <><strong style={{ color: '#f87171' }} className="inline-flex items-center gap-1"><AlertTriangle size={11} />Stale — {cached.ageMinutes}m old.</strong> Price may have moved.</>
-              : <span className="inline-flex items-center gap-1"><Clock size={11} />Cached analysis · {cached.ageMinutes}m ago</span>
+              ? <><strong style={{ color: '#f87171' }}>⚠ Stale — {cached.ageMinutes}m old.</strong> Price may have moved.</>
+              : <>⏱ Cached analysis · {cached.ageMinutes}m ago</>
             }
           </span>
           <button onClick={forceRun}
             className="text-[10px] font-mono px-2.5 py-1 rounded-full transition-all hover:opacity-80"
             style={{ background: cached.ageMinutes > 60 ? 'rgba(248,113,113,0.15)' : 'rgba(251,191,36,0.15)', color: cached.ageMinutes > 60 ? '#f87171' : '#fbbf24', border: `1px solid ${cached.ageMinutes > 60 ? 'rgba(248,113,113,0.3)' : 'rgba(251,191,36,0.3)'}` }}>
-            <span className="inline-flex items-center gap-1"><RefreshCw size={11} />Refresh</span>
+            ↻ Refresh
           </button>
         </div>
       )}
@@ -1003,7 +1001,7 @@ function HomeInner() {
                       // Not enough bars for a valid cross signal
                       return <span style={{ color: txt3 }}>N/A</span>
                     }
-                    return <span style={{ color: t.goldenCross ? '#34d399' : '#f87171' }}>{t.goldenCross ? 'Golden' : 'Death'}</span>
+                    return <span style={{ color: t.goldenCross ? '#34d399' : '#f87171' }}>{t.goldenCross ? 'Golden ✓' : 'Death ✗'}</span>
                   })()],
                 ['vs SMA200', (() => {
                     const t = md!.technicals
@@ -1138,9 +1136,9 @@ function HomeInner() {
               )}
               {/* Candle pattern */}
               {md.technicals.candlePattern && (
-                <div className="mt-1 px-2 py-1.5 rounded-lg" style={{ background: md.technicals.candlePattern.type === 'bullish' ? 'rgba(52,211,153,0.08)' : md.technicals.candlePattern.type === 'bearish' ? 'rgba(248,113,113,0.08)' : 'var(--surface2)', border: `1px solid ${md.technicals.candlePattern.type === 'bullish' ? 'rgba(52,211,153,0.2)' : md.technicals.candlePattern.type === 'bearish' ? 'rgba(248,113,113,0.2)' : 'var(--border)'}` }}>
+                <div className="mt-1 px-2 py-1.5 rounded-lg" style={{ background: md.technicals.candlePattern.type === 'bullish' ? 'rgba(52,211,153,0.08)' : md.technicals.candlePattern.type === 'bearish' ? 'rgba(248,113,113,0.08)' : 'rgba(255,255,255,0.04)', border: `1px solid ${md.technicals.candlePattern.type === 'bullish' ? 'rgba(52,211,153,0.2)' : md.technicals.candlePattern.type === 'bearish' ? 'rgba(248,113,113,0.2)' : 'rgba(255,255,255,0.08)'}` }}>
                   <div className="text-[10px] font-semibold mb-0.5" style={{ color: md.technicals.candlePattern.type === 'bullish' ? '#34d399' : md.technicals.candlePattern.type === 'bearish' ? '#f87171' : txt }}>
-                    {md.technicals.candlePattern.name}
+                    🕯 {md.technicals.candlePattern.name}
                     <span className="ml-1 font-normal opacity-60">({md.technicals.candlePattern.strength})</span>
                   </div>
                   <div className="text-[10px] leading-relaxed" style={{ color: txt3 }}>{md.technicals.candlePattern.description}</div>
@@ -1148,9 +1146,9 @@ function HomeInner() {
               )}
               {/* Chart pattern */}
               {md.technicals.chartPattern && (
-                <div className="mt-1 px-2 py-1.5 rounded-lg" style={{ background: md.technicals.chartPattern.type === 'bullish' ? 'rgba(52,211,153,0.08)' : md.technicals.chartPattern.type === 'bearish' ? 'rgba(248,113,113,0.08)' : 'var(--surface2)', border: `1px solid ${md.technicals.chartPattern.type === 'bullish' ? 'rgba(52,211,153,0.2)' : md.technicals.chartPattern.type === 'bearish' ? 'rgba(248,113,113,0.2)' : 'var(--border)'}` }}>
+                <div className="mt-1 px-2 py-1.5 rounded-lg" style={{ background: md.technicals.chartPattern.type === 'bullish' ? 'rgba(52,211,153,0.08)' : md.technicals.chartPattern.type === 'bearish' ? 'rgba(248,113,113,0.08)' : 'rgba(255,255,255,0.04)', border: `1px solid ${md.technicals.chartPattern.type === 'bullish' ? 'rgba(52,211,153,0.2)' : md.technicals.chartPattern.type === 'bearish' ? 'rgba(248,113,113,0.2)' : 'rgba(255,255,255,0.08)'}` }}>
                   <div className="text-[10px] font-semibold mb-0.5 flex items-center justify-between" style={{ color: md.technicals.chartPattern.type === 'bullish' ? '#34d399' : md.technicals.chartPattern.type === 'bearish' ? '#f87171' : txt }}>
-                    <span>{md.technicals.chartPattern.name}</span>
+                    <span>📊 {md.technicals.chartPattern.name}</span>
                     <span className="font-normal opacity-60 text-[9px]">{md.technicals.chartPattern.confidence}</span>
                   </div>
                   <div className="text-[10px] leading-relaxed" style={{ color: txt3 }}>{md.technicals.chartPattern.description}</div>
@@ -1187,7 +1185,7 @@ function HomeInner() {
                     {gz.inGoldenZone && (
                       <div className="text-[10px] font-bold text-center py-1 rounded-lg mb-2 animate-pulse"
                         style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.3)' }}>
-                        Price is in the Golden Zone
+                        ⭐ Price is in the Golden Zone
                       </div>
                     )}
                     {!gz.inGoldenZone && (
@@ -1212,7 +1210,7 @@ function HomeInner() {
                         <div key={l.level} className="flex justify-between text-xs"
                           style={{ opacity: isPocket ? 1 : isInPocket ? 0.9 : 0.65 }}>
                           <span style={{ color: isPocket ? '#fbbf24' : txt3 }}>
-                            {(l.level * 100).toFixed(1)}%{isPocket ? ' ◆' : ''}
+                            {isPocket ? '★ ' : ''}{(l.level * 100).toFixed(1)}%
                           </span>
                           <span className="font-mono text-[11px]" style={{ color: l.type === 'support' ? '#34d399' : '#f87171' }}>
                             ${l.price.toFixed(2)}
@@ -1266,7 +1264,7 @@ function HomeInner() {
                   border: `1px solid ${cached.ageMinutes > 60 ? 'rgba(248,113,113,0.3)' : 'rgba(251,191,36,0.18)'}`,
                 }}>
                 <div className="flex items-center gap-2">
-                  {cached.ageMinutes > 60 ? <AlertTriangle size={11} /> : <Clock size={11} />}
+                  <span>{cached.ageMinutes > 60 ? '⚠' : '⏱'}</span>
                   <span className="text-xs" style={{ color: 'var(--text2)' }}>
                     {cached.ageMinutes > 60
                       ? <><strong style={{ color: '#f87171' }}>Stale analysis — {cached.ageMinutes} minutes old.</strong> Price may have moved significantly. Run a fresh analysis.</>
@@ -1281,14 +1279,14 @@ function HomeInner() {
                     color: cached.ageMinutes > 60 ? '#f87171' : '#fbbf24',
                     border: `1px solid ${cached.ageMinutes > 60 ? 'rgba(248,113,113,0.3)' : 'rgba(251,191,36,0.3)'}`,
                   }}>
-                  <span className="inline-flex items-center gap-1.5"><RefreshCw size={11} />Run fresh analysis</span>
+                  ↻ Run fresh analysis
                 </button>
               </div>
             )}
 
             {stage === 'idle' && (
               <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
-                <BarChart2 size={40} style={{ opacity: 0.6, color: 'var(--text3)' }} />
+                <div className="text-4xl opacity-60">📊</div>
                 <div className="text-base font-semibold" style={{ color: 'var(--text2)' }}>Enter a ticker and click Analyze</div>
                 <div className="text-xs font-mono" style={{ color: 'var(--text3)' }}>Stocks · Crypto · Forex (EUR/USD, GBP/JPY...)</div>
               </div>
@@ -1339,7 +1337,7 @@ function HomeInner() {
                   <div className="text-xs"><div className="mb-1" style={{ color: 'var(--text3)' }}>Fundamental</div><div className="leading-relaxed" style={{ color: 'var(--text2)' }}>{cla.fundamentalBasis}</div></div>
                 </div>
                 <div className="flex flex-wrap gap-1.5 mb-1.5">{cla.catalysts.map((c, i) => <Chip key={i} label={c} color="#a78bfa" />)}</div>
-                <div className="flex flex-wrap gap-1.5">{cla.keyRisks.map((r, i) => <Chip key={i} label={r} color="#f87171" />)}</div>
+                <div className="flex flex-wrap gap-1.5">{cla.keyRisks.map((r, i) => <Chip key={i} label={`⚠ ${r}`} color="#f87171" />)}</div>
                 <div className="flex items-center justify-between mt-2">
                   <span className="text-xs font-mono" style={{ color: '#a78bfa' }}>Target: {cla.target}</span>
                 </div>
@@ -1358,7 +1356,7 @@ function HomeInner() {
                 badge={<>
                   <SBadge s={gpt.signal} sm />
                   <span className="text-[10px] font-mono ml-1" style={{ color: gpt.agrees ? '#34d399' : '#fbbf24' }}>
-                    {gpt.agrees ? 'agrees' : 'challenges'}
+                    {gpt.agrees ? '✓ agrees' : '⚡ challenges'}
                   </span>
                   <span className="text-[10px] font-mono ml-1" style={{ color: 'var(--text3)' }}>Stage 3</span>
                 </>}
@@ -1368,7 +1366,7 @@ function HomeInner() {
                 {gpt.challenges.length > 0 && (
                   <div className="space-y-1">
                     {gpt.challenges.map((c, i) => (
-                      <div key={i} className="text-xs flex gap-1.5" style={{ color: 'var(--text2)' }}><AlertTriangle size={11} style={{ color: '#fbbf24', flexShrink: 0, marginTop: 2 }} />{c}</div>
+                      <div key={i} className="text-xs flex gap-1.5" style={{ color: 'var(--text2)' }}><span style={{ color: '#fbbf24' }}>⚠</span>{c}</div>
                     ))}
                   </div>
                 )}
@@ -1394,7 +1392,7 @@ function HomeInner() {
               <div className="pt-2 space-y-3">
                 {reb.researchQuestion && (
                   <div className="rounded-lg p-3" style={{ background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.15)' }}>
-                    <div className="text-[10px] font-mono uppercase tracking-widest mb-1" style={{ color: '#60a5fa' }}>News Scout consulted</div>
+                    <div className="text-[10px] font-mono uppercase tracking-widest mb-1" style={{ color: '#60a5fa' }}>🔍 News Scout consulted</div>
                     <div className="text-xs mb-1.5 italic" style={{ color: 'var(--text2)' }}>Q: {reb.researchQuestion}</div>
                     <div className="text-xs leading-relaxed" style={{ color: 'var(--text)' }}>{reb.researchAnswer}</div>
                   </div>
@@ -1403,7 +1401,7 @@ function HomeInner() {
                 {reb.concedes.length > 0 && (
                   <div className="rounded-lg p-3" style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.15)' }}>
                     <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#f87171' }}>Concedes</div>
-                    {reb.concedes.map((c, i) => <div key={i} className="text-xs flex gap-1.5 mb-1" style={{ color: 'var(--text2)' }}><Check size={11} style={{ color: '#f87171', flexShrink: 0, marginTop: 2 }} />{c}</div>)}
+                    {reb.concedes.map((c, i) => <div key={i} className="text-xs flex gap-1.5 mb-1" style={{ color: 'var(--text2)' }}><span style={{ color: '#f87171' }}>✓</span>{c}</div>)}
                   </div>
                 )}
                 {reb.maintains.length > 0 && (
@@ -1434,7 +1432,7 @@ function HomeInner() {
               <div className="pt-2 space-y-3">
                 {ctr.researchQuestion && (
                   <div className="rounded-lg p-3" style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.15)' }}>
-                    <div className="text-[10px] font-mono uppercase tracking-widest mb-1" style={{ color: '#f87171' }}>News Scout consulted</div>
+                    <div className="text-[10px] font-mono uppercase tracking-widest mb-1" style={{ color: '#f87171' }}>🔍 News Scout consulted</div>
                     <div className="text-xs mb-1.5 italic" style={{ color: 'var(--text2)' }}>Q: {ctr.researchQuestion}</div>
                     <div className="text-xs leading-relaxed" style={{ color: 'var(--text)' }}>{ctr.researchAnswer}</div>
                   </div>
@@ -1443,13 +1441,13 @@ function HomeInner() {
                 {ctr.yieldsOn.length > 0 && (
                   <div className="rounded-lg p-3" style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.15)' }}>
                     <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#34d399' }}>Now agrees on</div>
-                    {ctr.yieldsOn.map((y, i) => <div key={i} className="text-xs flex gap-1.5 mb-1" style={{ color: 'var(--text2)' }}><Check size={11} style={{ color: '#34d399', flexShrink: 0, marginTop: 2 }} />{y}</div>)}
+                    {ctr.yieldsOn.map((y, i) => <div key={i} className="text-xs flex gap-1.5 mb-1" style={{ color: 'var(--text2)' }}><span style={{ color: '#34d399' }}>✓</span>{y}</div>)}
                   </div>
                 )}
                 {ctr.pressesOn.length > 0 && (
                   <div className="rounded-lg p-3" style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.15)' }}>
                     <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#f87171' }}>Still pressing</div>
-                    {ctr.pressesOn.map((p, i) => <div key={i} className="text-xs flex gap-1.5 mb-1" style={{ color: 'var(--text2)' }}><AlertTriangle size={11} style={{ color: '#fbbf24', flexShrink: 0, marginTop: 2 }} />{p}</div>)}
+                    {ctr.pressesOn.map((p, i) => <div key={i} className="text-xs flex gap-1.5 mb-1" style={{ color: 'var(--text2)' }}><span style={{ color: '#fbbf24' }}>⚠</span>{p}</div>)}
                   </div>
                 )}
                 <p className="text-xs italic border-l-2 pl-3" style={{ color: 'var(--text3)', borderColor: 'rgba(248,113,113,0.35)' }}>Closing: {ctr.closingArgument}</p>
@@ -1463,7 +1461,7 @@ function HomeInner() {
               <div className="animate-slide-up rounded-xl p-5 border-2 space-y-4"
                 style={{ background: 'rgba(251,191,36,0.05)', borderColor: 'rgba(251,191,36,0.3)' }}>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <Scale size={13} style={{ color: '#fbbf24' }} />
+                  <span style={{ color: '#fbbf24', fontSize: 15 }}>⚖</span>
                   <span className="text-sm font-bold" style={{ color: '#fbbf24' }}>Council Verdict</span>
                   <SBadge s={jud.signal} />
                   <span className="text-[10px] font-mono px-2 py-0.5 rounded-full"
@@ -1480,7 +1478,7 @@ function HomeInner() {
                   <div className="rounded-2xl p-4 mt-1"
                     style={{ background: 'rgba(251,191,36,0.08)', border: '2px solid rgba(251,191,36,0.3)' }}>
                     <div className="text-[10px] font-mono uppercase tracking-widest mb-3" style={{ color: '#fbbf24' }}>
-                      Trade Plan
+                      ⚡ Trade Plan
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       {(() => {
@@ -1530,7 +1528,7 @@ function HomeInner() {
                             label: 'Entry',
                             val: jud.entryPrice,
                             color: isBearish ? '#f87171' : '#34d399',
-                            icon: isBearish ? <TrendingDown size={13} /> : <TrendingUp size={13} />,
+                            icon: isBearish ? '▼' : '▶',
                             bg: isBearish ? 'rgba(248,113,113,0.1)' : 'rgba(52,211,153,0.1)',
                             border: isBearish ? 'rgba(248,113,113,0.25)' : 'rgba(52,211,153,0.25)',
                             hint: isBearish ? 'short / wait for drop' : 'buy zone',
@@ -1540,7 +1538,7 @@ function HomeInner() {
                             label: 'Stop Loss',
                             val: stopVal,
                             color: '#f87171',
-                            icon: <X size={13} />,
+                            icon: '✕',
                             bg: 'rgba(248,113,113,0.1)',
                             border: 'rgba(248,113,113,0.25)',
                             hint: isBearish ? 'exit if price rises here' : 'exit if price falls here',
@@ -1550,7 +1548,7 @@ function HomeInner() {
                             label: 'Take Profit',
                             val: tpVal,
                             color: '#34d399',
-                            icon: <Target size={13} />,
+                            icon: '★',
                             bg: 'rgba(52,211,153,0.1)',
                             border: 'rgba(52,211,153,0.25)',
                             hint: isBearish ? 'target below entry' : 'target above entry',
@@ -1560,18 +1558,18 @@ function HomeInner() {
                             label: 'Time Horizon',
                             val: jud.timeHorizon,
                             color: '#a78bfa',
-                            icon: <Clock size={13} />,
+                            icon: '◷',
                             bg: 'rgba(167,139,250,0.1)',
                             border: 'rgba(167,139,250,0.25)',
                             hint: '',
                             fixed: false,
                           },
-                        ] as Array<{label:string;val:string;color:string;icon:React.ReactNode;bg:string;border:string;hint:string;fixed:boolean}>)
+                        ] as Array<{label:string;val:string;color:string;icon:string;bg:string;border:string;hint:string;fixed:boolean}>)
                       })().map(({ label, val, color, icon, bg, border, hint, fixed }) => (
                         <div key={label} className="rounded-xl p-3 flex flex-col gap-1"
                           style={{ background: bg, border: `1px solid ${border}` }}>
                           <div className="flex items-center gap-1.5">
-                            <span style={{ color }} className="shrink-0 inline-flex">{icon}</span>
+                            <span className="text-sm" style={{ color }}>{icon}</span>
                             <span className="text-[10px] font-mono uppercase tracking-widest" style={{ color: `${color}99` }}>{label}</span>
                             {fixed && <span className="text-[9px] px-1 rounded" style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>corrected</span>}
                           </div>
@@ -1616,7 +1614,7 @@ function HomeInner() {
                               <div className="text-base font-bold font-mono leading-none" style={{ color: col }}>{sc.probability}%</div>
                             </div>
                             <div className="flex-1">
-                              <div className="h-1 rounded-full mb-1 overflow-hidden" style={{ background: 'var(--surface2)' }}>
+                              <div className="h-1 rounded-full mb-1 overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
                                 <div className="h-full rounded-full" style={{ width: `${sc.probability}%`, background: col }} />
                               </div>
                               <div className="text-[10px] leading-relaxed" style={{ color: 'var(--text3)' }}>{sc.trigger}</div>
@@ -1674,7 +1672,7 @@ function HomeInner() {
                     }}
                     className="w-full py-2 rounded-xl text-xs font-semibold transition-all hover:opacity-80 flex items-center justify-center gap-1.5 mb-3"
                     style={{ background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.2)', color: '#34d399' }}>
-                    Log this trade to Journal
+                    📒 Log this trade to Journal
                   </button>
                 )}
 
@@ -1695,7 +1693,7 @@ function HomeInner() {
                       <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{jud.actionPlan}</p>
                       {(cStop || cTp) && (
                         <div className="mt-2 text-[11px] leading-relaxed px-3 py-2 rounded-lg" style={{ background: 'rgba(251,191,36,0.08)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)' }}>
-                          Note: price levels in the text above were recalculated — {cStop ? `stop corrected to ${cStop}` : ''}{cStop && cTp ? ', ' : ''}{cTp ? `target corrected to ${cTp}` : ''} (ATR-derived, direction-validated). Use the Trade Plan boxes above.
+                          ⚠ Note: price levels in the text above were recalculated — {cStop ? `stop corrected to ${cStop}` : ''}{cStop && cTp ? ', ' : ''}{cTp ? `target corrected to ${cTp}` : ''} (ATR-derived, direction-validated). Use the Trade Plan boxes above.
                         </div>
                       )}
                     </div>
@@ -1724,10 +1722,10 @@ function HomeInner() {
                     router.push('/portfolio?tab=journal')
                   }
                   const destinations = [
-                    { icon: <FileText size={16} />, label: 'Trade Journal', desc: 'Track outcome + AI post-mortem', color: '#34d399', onClick: logToJournal },
-                    { icon: <Wallet size={16} />, label: 'Reinvestment Tracker', desc: 'Deploy gains with AI strategies', color: '#a78bfa', onClick: () => router.push(`/reinvestment?${params}`) },
-                    { icon: <Briefcase size={16} />, label: 'Portfolio', desc: 'Add position to your portfolio', color: '#60a5fa', onClick: () => router.push(`/portfolio?add=${ticker}&price=${entryPrice.toFixed(2)}`) },
-                    { icon: <Flame size={16} />, label: 'Invest Journey', desc: 'Track as part of your journey', color: '#fbbf24', onClick: () => router.push(`/invest?ticker=${ticker}&signal=${jud.signal}`) },
+                    { icon: '📒', label: 'Trade Journal', desc: 'Track outcome + AI post-mortem', color: '#34d399', onClick: logToJournal },
+                    { icon: '💰', label: 'Reinvestment Tracker', desc: 'Deploy gains with AI strategies', color: '#a78bfa', onClick: () => router.push(`/reinvestment?${params}`) },
+                    { icon: '💼', label: 'Portfolio', desc: 'Add position to your portfolio', color: '#60a5fa', onClick: () => router.push(`/portfolio?add=${ticker}&price=${entryPrice.toFixed(2)}`) },
+                    { icon: '🔥', label: 'Invest Journey', desc: 'Track as part of your journey', color: '#fbbf24', onClick: () => router.push(`/invest?ticker=${ticker}&signal=${jud.signal}`) },
                   ]
                   return <LogTradeMenu destinations={destinations} />
                 })()}
@@ -1760,7 +1758,7 @@ function HomeInner() {
 
                 {/* Council options view — collapsible */}
                 {jud.optionsStrategy && (
-                  <Collapsible title="Council Options View" icon={<Scale size={14} />} color="#a78bfa">
+                  <Collapsible title="Council Options View" icon={<span>⚖</span>} color="#a78bfa">
                     <p className="text-sm leading-relaxed pt-2" style={{ color: 'var(--text2)' }}>{jud.optionsStrategy}</p>
                   </Collapsible>
                 )}
@@ -1779,7 +1777,7 @@ function HomeInner() {
 
             {/* Options Recommendations — collapsible */}
             {stage === 'done' && jud && md && (
-              <Collapsible title="Options Strategy" icon={<BarChart2 size={14} />} color="#34d399"
+              <Collapsible title="Options Strategy" icon={<span>📊</span>} color="#34d399"
                 badge={<span className="text-[10px] font-mono px-2 py-0.5 rounded-full ml-1" style={{ background: `${SIG_COLOR[jud.signal]}15`, color: SIG_COLOR[jud.signal], border: `1px solid ${SIG_COLOR[jud.signal]}25` }}>{jud.signal} on {ticker}</span>}>
                 <div className="pt-2">
               <OptionsRecommendations
@@ -1806,7 +1804,7 @@ function HomeInner() {
             {/* Signal matrix */}
             {stage === 'done' && (md?.conviction?.signals?.length ?? 0) > 0 && (
               <div className="animate-slide-up rounded-xl p-4 border"
-                style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+                style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.06)' }}>
                 <div className="text-[10px] font-mono uppercase tracking-widest mb-3" style={{ color: 'var(--text3)' }}>Signal matrix — {md!.conviction?.signals?.length ?? 0} signals analyzed</div>
                 <div className="space-y-1">
                   {(md!.conviction?.signals ?? []).map((s, i) => (
@@ -1815,7 +1813,7 @@ function HomeInner() {
                         style={{ background: s.direction === 'bullish' ? '#34d399' : s.direction === 'bearish' ? '#f87171' : '#fbbf24' }} />
                       <span className="w-20 shrink-0 text-[10px] font-mono" style={{ color: 'var(--text3)' }}>{s.category}</span>
                       <span className="flex-1 text-[10px] truncate" style={{ color: 'var(--text2)' }}>{s.signal}</span>
-                      <div className="w-14 h-1 rounded-full overflow-hidden shrink-0" style={{ background: 'var(--surface2)' }}>
+                      <div className="w-14 h-1 rounded-full overflow-hidden shrink-0" style={{ background: 'rgba(255,255,255,0.05)' }}>
                         <div className="h-full rounded-full"
                           style={{
                             width: `${Math.abs(s.score / 10) * 100}%`,
@@ -1831,13 +1829,13 @@ function HomeInner() {
             {err && (
               <div role="alert" aria-live="assertive" className="rounded-xl p-4 text-sm font-mono"
                 style={{ background: 'rgba(248,113,113,0.07)', border: '1px solid rgba(248,113,113,0.22)', color: '#fca5a5' }}>
-                <AlertTriangle size={14} aria-hidden="true" className="inline mr-1.5" style={{ verticalAlign: 'text-bottom' }} />{err}
+                <span aria-hidden="true">⚠ </span>{err}
               </div>
             )}
           </div>
 
           <div className="px-5 py-2 border-t shrink-0 flex items-center gap-2"
-            style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
+            style={{ borderColor: 'rgba(255,255,255,0.05)', background: '#111620' }}>
             <Clock size={9} style={{ color: 'var(--text3)' }} />
             <span className="text-[9px] font-mono" style={{ color: 'var(--text3)' }}>
               For informational purposes only. Not financial advice. AI models can be wrong. Always do your own research.
@@ -1860,7 +1858,7 @@ function HomeInner() {
           style={{ background: surf, border: '1px solid rgba(251,191,36,0.3)' }}
           onClick={e => e.stopPropagation()}>
           <div className="flex items-center gap-2 px-4 py-3 border-b" style={{ borderColor: brd }}>
-            <Zap size={14} style={{ color: '#fbbf24' }} aria-hidden="true" />
+            <span style={{ color: '#fbbf24' }} aria-hidden="true">⚡</span>
             <span id="why-moving-title" className="text-sm font-bold" style={{ color: txt }}>Why is {ticker} moving?</span>
             <button
               type="button"
@@ -1900,7 +1898,7 @@ function HomeInner() {
                     <p className="text-xs leading-relaxed" style={{ color: txt2 }}>{v.action}</p>
                   </div>
                   <div className="rounded-lg px-3 py-2" style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.15)' }}>
-                    <span className="text-[10px] font-mono" style={{ color: '#fca5a5' }}><AlertTriangle size={10} aria-hidden="true" className="inline mr-0.5" />Risk: </span>
+                    <span className="text-[10px] font-mono" style={{ color: '#fca5a5' }}><span aria-hidden="true">⚠ </span>Risk: </span>
                     <span className="text-xs" style={{ color: txt2 }}>{v.risk}</span>
                   </div>
                 </div>
