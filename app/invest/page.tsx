@@ -3,8 +3,11 @@
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowLeft, Plus, X, RefreshCw, Sparkles, Flame } from 'lucide-react'
-import InvestLessons from '@/app/components/InvestLessons'
 import { Tutorial, TutorialLauncher, INVEST_TUTORIAL } from '@/app/components/Tutorial'
+import { FiresideLesson } from '@/app/components/fireside/FiresideLesson'
+import { ForgeEmbers } from '@/app/components/fireside/ForgeEmbers'
+import { useContextualLessons } from '@/app/components/fireside/useContextualLessons'
+import { INVEST_LESSONS, findLessonByTrigger, type InvestLesson } from '@/app/lib/invest-lessons'
 
 // ══════════════════════════════════════════════════════════════
 // TYPES
@@ -32,6 +35,7 @@ interface Journey {
   total_trades: number
   winning_trades: number
   first_win_at: string | null
+  forge_seen_at?: string | null
 }
 
 interface Stage {
@@ -105,9 +109,6 @@ interface ForgeData {
   sectorWinds: SectorWind[]
 }
 
-// ══════════════════════════════════════════════════════════════
-// HELPERS
-// ══════════════════════════════════════════════════════════════
 const fmt$ = (n: number | null | undefined, decimals = 2) => {
   const v = n ?? 0
   if (Math.abs(v) < 100) return `${v < 0 ? '-' : ''}$${Math.abs(v).toFixed(decimals)}`
@@ -126,10 +127,6 @@ const isMarketOpen = () => {
   return mins >= 9 * 60 + 30 && mins < 16 * 60
 }
 
-// ══════════════════════════════════════════════════════════════
-// PARTICLE FIELD — rising embers from the bottom of the screen.
-// Volatility (derived from abs sum of sector 1D changes) drives speed.
-// ══════════════════════════════════════════════════════════════
 function EmberField({ intensity = 1 }: { intensity?: number }) {
   const count = 36
   return (
@@ -141,26 +138,20 @@ function EmberField({ intensity = 1 }: { intensity?: number }) {
         const drift = Math.random() * 60 - 30
         const opacity = 0.3 + Math.random() * 0.5
         return (
-          <span
-            key={i}
-            className="forge-particle"
+          <span key={i} className="forge-particle"
             style={{
               left: `${left}%`,
               animationDuration: `${dur}s`,
               animationDelay: `${delay}s`,
               ['--drift' as string]: `${drift}px`,
               opacity,
-            }}
-          />
+            }} />
         )
       })}
     </div>
   )
 }
 
-// ══════════════════════════════════════════════════════════════
-// FLAME SVG — procedurally flickering, color-shifts by stage
-// ══════════════════════════════════════════════════════════════
 function FlameGraphic({ color }: { color: string }) {
   return (
     <svg className="flame-svg" viewBox="0 0 220 220" xmlns="http://www.w3.org/2000/svg" aria-hidden>
@@ -177,22 +168,13 @@ function FlameGraphic({ color }: { color: string }) {
         </radialGradient>
       </defs>
       <g className="flame-core">
-        <path
-          d="M110 200 C 60 180, 50 130, 80 90 C 90 110, 100 105, 95 80 C 115 95, 130 110, 130 140 C 140 125, 150 130, 150 150 C 160 140, 165 155, 160 170 C 155 185, 140 200, 110 200 Z"
-          fill="url(#flameGrad)"
-        />
-        <path
-          d="M110 180 C 85 170, 80 140, 100 115 C 105 130, 115 128, 112 108 C 125 120, 135 135, 135 155 C 140 150, 145 158, 142 170 C 138 180, 128 188, 110 188 Z"
-          fill="url(#flameCore)"
-        />
+        <path d="M110 200 C 60 180, 50 130, 80 90 C 90 110, 100 105, 95 80 C 115 95, 130 110, 130 140 C 140 125, 150 130, 150 150 C 160 140, 165 155, 160 170 C 155 185, 140 200, 110 200 Z" fill="url(#flameGrad)" />
+        <path d="M110 180 C 85 170, 80 140, 100 115 C 105 130, 115 128, 112 108 C 125 120, 135 135, 135 155 C 140 150, 145 158, 142 170 C 138 180, 128 188, 110 188 Z" fill="url(#flameCore)" />
       </g>
     </svg>
   )
 }
 
-// ══════════════════════════════════════════════════════════════
-// START SCREEN — first-time balance entry
-// ══════════════════════════════════════════════════════════════
 function StartScreen({ onStart }: { onStart: (balance: number) => Promise<void> }) {
   const [amount, setAmount] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -206,66 +188,32 @@ function StartScreen({ onStart }: { onStart: (balance: number) => Promise<void> 
       <div className="forge-start-inner">
         <div className="forge-logo" style={{ marginBottom: 24 }}>wali · forge</div>
         <h1 className="forge-start-title">Light the first ember.</h1>
-        <p className="forge-start-sub">
-          Every journey starts with what you have. Enter your first balance — even $1 is enough to begin.
-        </p>
-
+        <p className="forge-start-sub">Every journey starts with what you have. Enter your first balance — even $1 is enough to begin.</p>
         <div className="forge-start-presets">
           {presets.map(p => (
-            <button
-              key={p}
-              className={`preset-chip ${num === p ? 'active' : ''}`}
-              onClick={() => setAmount(String(p))}
-            >
-              ${p}
-            </button>
+            <button key={p} className={`preset-chip ${num === p ? 'active' : ''}`} onClick={() => setAmount(String(p))}>${p}</button>
           ))}
         </div>
-
         <div className="forge-start-input-row">
           <span className="forge-dollar">$</span>
-          <input
-            type="number"
-            value={amount}
-            onChange={e => setAmount(e.target.value)}
-            placeholder="0.00"
-            min="1"
-            step="0.01"
-            inputMode="decimal"
-            autoFocus
-          />
+          <input type="number" value={amount} onChange={e => setAmount(e.target.value)}
+            placeholder="0.00" min="1" step="0.01" inputMode="decimal" autoFocus />
         </div>
-
-        <button
-          className="forge-primary-btn forge-start-btn"
-          disabled={!valid || submitting}
+        <button className="forge-primary-btn forge-start-btn" disabled={!valid || submitting}
           onClick={async () => {
             if (!valid) return
             setSubmitting(true)
             try { await onStart(num) } finally { setSubmitting(false) }
-          }}
-        >
+          }}>
           {submitting ? 'Lighting…' : 'Begin the journey →'}
         </button>
-
-        <p className="forge-start-fineprint">
-          You can change this later. The balance is your starting point — from there, trades you log
-          grow or shrink it.
-        </p>
+        <p className="forge-start-fineprint">You can change this later. The balance is your starting point.</p>
       </div>
     </div>
   )
 }
 
-// ══════════════════════════════════════════════════════════════
-// LOG-TRADE SHEET — the walkthrough we specced
-// ══════════════════════════════════════════════════════════════
-function LogTradeSheet({
-  prefill,
-  cashRemaining,
-  onClose,
-  onSave,
-}: {
+function LogTradeSheet({ prefill, cashRemaining, onClose, onSave }: {
   prefill?: Partial<Idea>
   cashRemaining: number
   onClose: () => void
@@ -285,7 +233,6 @@ function LogTradeSheet({
   const overBudget = cost > cashRemaining
   const valid = ticker.length >= 1 && sharesNum > 0 && priceNum > 0
 
-  // Pull live price when ticker is entered manually (not from a spark)
   const lookupPrice = useCallback(async () => {
     if (!ticker) return
     setFetchingPrice(true)
@@ -304,34 +251,19 @@ function LogTradeSheet({
           <span className="eyebrow">log a trade</span>
           <button className="forge-close-btn" onClick={onClose} aria-label="Close"><X size={16} /></button>
         </div>
-
         <div className="forge-sheet-body">
           <h2 className="forge-sheet-title">
-            {prefill?.ticker ? (
-              <>Taking the <em>{prefill.ticker}</em> spark</>
-            ) : (
-              <>What did you buy?</>
-            )}
+            {prefill?.ticker ? <>Taking the <em>{prefill.ticker}</em> spark</> : <>What did you buy?</>}
           </h2>
-
-          {prefill?.rationale && (
-            <p className="forge-sheet-sub">{prefill.rationale}</p>
-          )}
-
-          {/* Ticker (editable only when no prefill) */}
+          {prefill?.rationale && <p className="forge-sheet-sub">{prefill.rationale}</p>}
           <div className="forge-field">
             <label>Ticker</label>
             <div className="forge-field-row">
-              <input
-                type="text"
-                value={ticker}
+              <input type="text" value={ticker}
                 onChange={e => setTicker(e.target.value.toUpperCase())}
                 onBlur={() => { if (!prefill && ticker) lookupPrice() }}
-                placeholder="e.g. PLTR"
-                maxLength={6}
-                disabled={!!prefill?.ticker}
-                className="ticker-input"
-              />
+                placeholder="e.g. PLTR" maxLength={6}
+                disabled={!!prefill?.ticker} className="ticker-input" />
               {!prefill?.ticker && (
                 <button className="inline-btn" onClick={lookupPrice} disabled={!ticker || fetchingPrice}>
                   {fetchingPrice ? '…' : 'Fetch price'}
@@ -339,73 +271,38 @@ function LogTradeSheet({
               )}
             </div>
           </div>
-
           <div className="forge-field-pair">
             <div className="forge-field">
               <label>Shares</label>
-              <input
-                type="number"
-                value={shares}
-                onChange={e => setShares(e.target.value)}
-                placeholder="0"
-                min="0"
-                step="1"
-                inputMode="numeric"
-              />
+              <input type="number" value={shares} onChange={e => setShares(e.target.value)}
+                placeholder="0" min="0" step="1" inputMode="numeric" />
             </div>
             <div className="forge-field">
               <label>Entry price</label>
-              <input
-                type="number"
-                value={price}
-                onChange={e => setPrice(e.target.value)}
-                placeholder="0.00"
-                min="0"
-                step="0.01"
-                inputMode="decimal"
-              />
+              <input type="number" value={price} onChange={e => setPrice(e.target.value)}
+                placeholder="0.00" min="0" step="0.01" inputMode="decimal" />
             </div>
           </div>
-
-          {/* Live math preview */}
           <div className="forge-math-preview">
-            <div className="forge-math-row">
-              <span>Position size</span>
-              <span className="mono">{fmt$(cost)}</span>
-            </div>
-            <div className="forge-math-row">
-              <span>Cash remaining</span>
-              <span className="mono">{fmt$(cashRemaining)}</span>
-            </div>
+            <div className="forge-math-row"><span>Position size</span><span className="mono">{fmt$(cost)}</span></div>
+            <div className="forge-math-row"><span>Cash remaining</span><span className="mono">{fmt$(cashRemaining)}</span></div>
             <div className="forge-math-row strong">
               <span>After this trade</span>
-              <span className="mono" style={{ color: overBudget ? '#f87171' : '#34d399' }}>
-                {fmt$(cashAfter)}
-              </span>
+              <span className="mono" style={{ color: overBudget ? '#f87171' : '#34d399' }}>{fmt$(cashAfter)}</span>
             </div>
             {overBudget && (
-              <div className="forge-math-warning">
-                Over budget by {fmt$(Math.abs(cashAfter))}. Reduce shares or lower entry.
-              </div>
+              <div className="forge-math-warning">Over budget by {fmt$(Math.abs(cashAfter))}. Reduce shares or lower entry.</div>
             )}
           </div>
-
           <div className="forge-field">
             <label>Notes <span style={{ opacity: 0.5 }}>(optional)</span></label>
-            <textarea
-              value={notes}
-              onChange={e => setNotes(e.target.value)}
-              placeholder="Why this trade? Catalyst, setup, plan…"
-              rows={2}
-            />
+            <textarea value={notes} onChange={e => setNotes(e.target.value)}
+              placeholder="Why this trade? Catalyst, setup, plan…" rows={2} />
           </div>
         </div>
-
         <div className="forge-sheet-footer">
           <button className="forge-ghost-btn" onClick={onClose}>Cancel</button>
-          <button
-            className="forge-primary-btn"
-            disabled={!valid || overBudget || saving}
+          <button className="forge-primary-btn" disabled={!valid || overBudget || saving}
             onClick={async () => {
               if (!valid || overBudget) return
               setSaving(true)
@@ -419,8 +316,7 @@ function LogTradeSheet({
                   notes: notes || undefined,
                 })
               } finally { setSaving(false) }
-            }}
-          >
+            }}>
             {saving ? 'Logging…' : 'Log this trade →'}
           </button>
         </div>
@@ -429,14 +325,7 @@ function LogTradeSheet({
   )
 }
 
-// ══════════════════════════════════════════════════════════════
-// CLOSE-TRADE SHEET
-// ══════════════════════════════════════════════════════════════
-function CloseTradeSheet({
-  trade,
-  onClose,
-  onSave,
-}: {
+function CloseTradeSheet({ trade, onClose, onSave }: {
   trade: Trade
   onClose: () => void
   onSave: (exitPrice: number) => Promise<void>
@@ -458,46 +347,28 @@ function CloseTradeSheet({
         </div>
         <div className="forge-sheet-body">
           <h2 className="forge-sheet-title">Lock it in or learn from it.</h2>
-          <p className="forge-sheet-sub">
-            You bought <span className="mono">{trade.shares}</span> shares at <span className="mono">{fmt$(trade.entry_price)}</span>.
-            What was your exit?
-          </p>
+          <p className="forge-sheet-sub">You bought <span className="mono">{trade.shares}</span> shares at <span className="mono">{fmt$(trade.entry_price)}</span>. What was your exit?</p>
           <div className="forge-field">
             <label>Exit price</label>
-            <input
-              type="number"
-              value={exitPrice}
-              onChange={e => setExitPrice(e.target.value)}
-              placeholder="0.00"
-              min="0"
-              step="0.01"
-              autoFocus
-              inputMode="decimal"
-            />
+            <input type="number" value={exitPrice} onChange={e => setExitPrice(e.target.value)}
+              placeholder="0.00" min="0" step="0.01" autoFocus inputMode="decimal" />
           </div>
           {valid && (
             <div className={`forge-pnl-preview ${isWin ? 'win' : 'loss'}`}>
-              <div className="forge-pnl-big mono">
-                {pnl >= 0 ? '+' : ''}{fmt$(pnl)}
-              </div>
-              <div className="forge-pnl-sub mono">
-                {fmtPct(pnlPct)} · {isWin ? 'locked-in win' : 'learning experience'}
-              </div>
+              <div className="forge-pnl-big mono">{pnl >= 0 ? '+' : ''}{fmt$(pnl)}</div>
+              <div className="forge-pnl-sub mono">{fmtPct(pnlPct)} · {isWin ? 'locked-in win' : 'learning experience'}</div>
             </div>
           )}
         </div>
         <div className="forge-sheet-footer">
           <button className="forge-ghost-btn" onClick={onClose}>Cancel</button>
-          <button
-            className="forge-primary-btn"
-            disabled={!valid || saving}
+          <button className="forge-primary-btn" disabled={!valid || saving}
             onClick={async () => {
               if (!valid) return
               setSaving(true)
               try { await onSave(exitNum) } finally { setSaving(false) }
             }}
-            style={isWin ? { background: 'linear-gradient(135deg,#34d399,#059669)' } : undefined}
-          >
+            style={isWin ? { background: 'linear-gradient(135deg,#34d399,#059669)' } : undefined}>
             {saving ? 'Closing…' : isWin ? 'Lock in the win 🔥' : 'Close trade'}
           </button>
         </div>
@@ -506,9 +377,6 @@ function CloseTradeSheet({
   )
 }
 
-// ══════════════════════════════════════════════════════════════
-// FIRST-WIN CEREMONY
-// ══════════════════════════════════════════════════════════════
 function FirstWinMoment({ amount, onDismiss }: { amount: number; onDismiss: () => void }) {
   return (
     <div className="first-win-overlay">
@@ -523,43 +391,59 @@ function FirstWinMoment({ amount, onDismiss }: { amount: number; onDismiss: () =
   )
 }
 
-// ══════════════════════════════════════════════════════════════
-// MAIN PAGE
-// ══════════════════════════════════════════════════════════════
+function ContextualBell({ lesson, onOpen, onDismiss }: { lesson: InvestLesson; onOpen: () => void; onDismiss: () => void }) {
+  return (
+    <div className="ctx-bell-wrap">
+      <button className="ctx-bell" onClick={onOpen}>
+        <div className="ctx-bell-glow" />
+        <div className="ctx-bell-body">
+          <div className="ctx-bell-eyebrow">the fire speaks · {lesson.duration}</div>
+          <div className="ctx-bell-title">{lesson.title}</div>
+          <div className="ctx-bell-sub">{lesson.subtitle}</div>
+        </div>
+        <span className="ctx-bell-arrow">→</span>
+      </button>
+      <button className="ctx-bell-dismiss" onClick={onDismiss} aria-label="Dismiss"><X size={12} /></button>
+    </div>
+  )
+}
+
 function ForgeInner() {
   const router = useRouter()
-
-  // Data
   const [data, setData] = useState<ForgeData | null>(null)
   const [loading, setLoading] = useState(true)
   const [introAccepted, setIntroAccepted] = useState<boolean | null>(null)
-
-  // Ideas (sparks)
   const [ideas, setIdeas] = useState<Idea[]>([])
   const [loadingIdeas, setLoadingIdeas] = useState(false)
   const [stokedAt, setStokedAt] = useState<Date | null>(null)
-
-  // UI state
   const [logSheetOpen, setLogSheetOpen] = useState(false)
   const [logPrefill, setLogPrefill] = useState<Partial<Idea> | undefined>(undefined)
   const [closeTarget, setCloseTarget] = useState<Trade | null>(null)
   const [firstWinAmount, setFirstWinAmount] = useState<number | null>(null)
   const [showTutorial, setShowTutorial] = useState(false)
   const [mobileView, setMobileView] = useState<'flame' | 'sparks' | 'trades' | 'embers'>('flame')
+  const [openLessonId, setOpenLessonId] = useState<string | null>(null)
+  const [ctxLesson, setCtxLesson] = useState<InvestLesson | null>(null)
+  const [completedIds, setCompletedIds] = useState<Set<string>>(new Set())
 
   const didCheckIntro = useRef(false)
 
-  // Check intro acceptance once
   useEffect(() => {
     if (didCheckIntro.current) return
     didCheckIntro.current = true
-    fetch('/api/invest/intro')
-      .then(r => r.json())
-      .then(d => setIntroAccepted(!!d.accepted))
-      .catch(() => setIntroAccepted(true)) // fail-open so user isn't stranded
+    fetch('/api/invest/intro').then(r => r.json()).then(d => setIntroAccepted(!!d.accepted)).catch(() => setIntroAccepted(true))
   }, [])
 
-  // Load forge data
+  useEffect(() => {
+    fetch('/api/invest/lessons').then(r => r.json()).then(d => {
+      const ids = new Set<string>(
+        ((d.progress ?? []) as Array<{ lesson_id: string; correct: boolean }>)
+          .filter(p => p.correct).map(p => p.lesson_id)
+      )
+      setCompletedIds(ids)
+    }).catch(() => {})
+  }, [])
+
   const loadData = useCallback(async () => {
     try {
       const res = await fetch('/api/invest/forge')
@@ -572,19 +456,33 @@ function ForgeInner() {
 
   useEffect(() => { loadData() }, [loadData])
 
-  // Refresh data every 5 min during market hours
   useEffect(() => {
-    const interval = setInterval(() => {
-      if (isMarketOpen()) loadData()
-    }, 5 * 60 * 1000)
+    const interval = setInterval(() => { if (isMarketOpen()) loadData() }, 5 * 60 * 1000)
     return () => clearInterval(interval)
   }, [loadData])
 
-  // Auto-fetch sparks once data arrives and journey exists and no sparks yet
+  const { pendingTrigger, dismissTrigger } = useContextualLessons({
+    stage: data?.stage.name ?? 'Spark',
+    openTrades: data?.openTrades ?? [],
+    closedTrades: data?.closedTrades ?? [],
+    forgeSeen: !!data?.journey?.forge_seen_at,
+  })
+
   useEffect(() => {
-    if (data?.journey && ideas.length === 0 && !loadingIdeas && !stokedAt) {
-      stokeFlame()
-    }
+    if (!pendingTrigger || !data) return
+    const lesson = findLessonByTrigger(
+      pendingTrigger,
+      data.stage.name,
+      completedIds,
+      data.stats.totalTrades,
+      data.stats.closedCount > 0
+    )
+    if (lesson) setCtxLesson(lesson)
+    else dismissTrigger()
+  }, [pendingTrigger, data, completedIds, dismissTrigger])
+
+  useEffect(() => {
+    if (data?.journey && ideas.length === 0 && !loadingIdeas && !stokedAt) stokeFlame()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.journey])
 
@@ -609,32 +507,22 @@ function ForgeInner() {
     setLoadingIdeas(false)
   }
 
-  const openLogFromSpark = (idea: Idea) => {
-    setLogPrefill(idea)
-    setLogSheetOpen(true)
-  }
-
-  const openLogBlank = () => {
-    setLogPrefill(undefined)
-    setLogSheetOpen(true)
-  }
+  const openLogFromSpark = (idea: Idea) => { setLogPrefill(idea); setLogSheetOpen(true) }
+  const openLogBlank = () => { setLogPrefill(undefined); setLogSheetOpen(true) }
 
   const saveLogTrade = async (payload: { ticker: string; shares: number; entry_price: number; council_signal?: string; confidence?: number; notes?: string }) => {
     await fetch('/api/invest', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'open_trade', ...payload }),
     })
-    setLogSheetOpen(false)
-    setLogPrefill(undefined)
+    setLogSheetOpen(false); setLogPrefill(undefined)
     await loadData()
   }
 
   const saveCloseTrade = async (exitPrice: number) => {
     if (!closeTarget) return
     const res = await fetch('/api/invest', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'close_trade', id: closeTarget.id, exit_price: exitPrice }),
     })
     const body = await res.json()
@@ -647,14 +535,34 @@ function ForgeInner() {
 
   const setStartBalance = async (balance: number) => {
     await fetch('/api/invest', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'set_balance', balance }),
     })
     await loadData()
   }
 
-  // ── Render states ─────────────────────────────────────────
+  const handleLessonComplete = async (lessonId: string, correct: boolean, answer: number) => {
+    try {
+      await fetch('/api/invest/lessons', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lessonId, quizAnswer: answer, correct }),
+      })
+      if (correct) setCompletedIds(prev => new Set(prev).add(lessonId))
+    } catch { /* ignore */ }
+  }
+
+  const openLessonById = (lessonId: string) => setOpenLessonId(lessonId)
+  const closeLesson = () => setOpenLessonId(null)
+  const openCtxLesson = () => {
+    if (!ctxLesson) return
+    setOpenLessonId(ctxLesson.id)
+    setCtxLesson(null)
+    dismissTrigger()
+  }
+  const dismissCtxLesson = () => { setCtxLesson(null); dismissTrigger() }
+
+  const openLesson = openLessonId ? INVEST_LESSONS.find(l => l.id === openLessonId) ?? null : null
+
   if (loading || introAccepted === null) {
     return (
       <div className="forge-loading">
@@ -667,65 +575,29 @@ function ForgeInner() {
     )
   }
 
-  if (introAccepted === false) {
-    router.replace('/invest/intro')
-    return null
-  }
+  if (introAccepted === false) { router.replace('/invest/intro'); return null }
 
   if (!data?.journey) {
-    return (
-      <>
-        <StartScreen onStart={setStartBalance} />
-        <ForgeStyles />
-      </>
-    )
+    return (<><StartScreen onStart={setStartBalance} /><ForgeStyles /></>)
   }
 
   const { stage, stages, value, openTrades, stats, sectorWinds } = data
   const stageIdx = stages.findIndex(s => s.name === stage.name)
-
-  // Intensity for particles: higher on volatile days
   const volatility = Math.min(2, sectorWinds.reduce((s, w) => s + Math.abs(w.change1D ?? 0), 0) / 10 || 1)
 
   return (
     <div className="forge-root">
-      {/* Ambient atmosphere */}
       <div className="forge-sky" />
       <EmberField intensity={volatility} />
 
-      {/* Modals / overlays */}
-      {showTutorial && (
-        <Tutorial
-          config={INVEST_TUTORIAL}
-          autoStart
-          onComplete={() => setShowTutorial(false)}
-          onSkip={() => setShowTutorial(false)}
-        />
-      )}
-      {firstWinAmount != null && (
-        <FirstWinMoment amount={firstWinAmount} onDismiss={() => setFirstWinAmount(null)} />
-      )}
-      {logSheetOpen && (
-        <LogTradeSheet
-          prefill={logPrefill}
-          cashRemaining={value.cashRemaining}
-          onClose={() => { setLogSheetOpen(false); setLogPrefill(undefined) }}
-          onSave={saveLogTrade}
-        />
-      )}
-      {closeTarget && (
-        <CloseTradeSheet
-          trade={closeTarget}
-          onClose={() => setCloseTarget(null)}
-          onSave={saveCloseTrade}
-        />
-      )}
+      {showTutorial && <Tutorial config={INVEST_TUTORIAL} autoStart onComplete={() => setShowTutorial(false)} onSkip={() => setShowTutorial(false)} />}
+      {firstWinAmount != null && <FirstWinMoment amount={firstWinAmount} onDismiss={() => setFirstWinAmount(null)} />}
+      {logSheetOpen && <LogTradeSheet prefill={logPrefill} cashRemaining={value.cashRemaining} onClose={() => { setLogSheetOpen(false); setLogPrefill(undefined) }} onSave={saveLogTrade} />}
+      {closeTarget && <CloseTradeSheet trade={closeTarget} onClose={() => setCloseTarget(null)} onSave={saveCloseTrade} />}
+      {openLesson && <FiresideLesson lesson={openLesson} balance={value.total} onClose={closeLesson} onComplete={handleLessonComplete} alreadyCompleted={completedIds.has(openLesson.id)} />}
 
-      {/* Topbar */}
       <header className="forge-topbar">
-        <button className="forge-backbtn" onClick={() => router.push('/')} aria-label="Back">
-          <ArrowLeft size={14} />
-        </button>
+        <button className="forge-backbtn" onClick={() => router.push('/')} aria-label="Back"><ArrowLeft size={14} /></button>
         <span className="forge-logo">wali · forge</span>
         <span className="eyebrow forge-eyebrow-inline">invest journey</span>
         <div className="forge-topbar-spacer" />
@@ -736,23 +608,16 @@ function ForgeInner() {
         <TutorialLauncher tutorialId="invest" label="How it works" />
       </header>
 
-      {/* Mobile-only tab switcher */}
       <nav className="forge-mobile-nav">
         {(['flame', 'sparks', 'trades', 'embers'] as const).map(v => (
-          <button
-            key={v}
-            className={mobileView === v ? 'active' : ''}
-            onClick={() => setMobileView(v)}
-          >
-            {v === 'flame' ? 'flame' : v === 'sparks' ? `sparks${ideas.length ? ` · ${ideas.length}` : ''}` : v === 'trades' ? `open · ${openTrades.length}` : 'embers'}
+          <button key={v} className={mobileView === v ? 'active' : ''} onClick={() => setMobileView(v)}>
+            {v === 'flame' ? 'flame' : v === 'sparks' ? `sparks${ideas.length ? ` · ${ideas.length}` : ''}` : v === 'trades' ? `open · ${openTrades.length}` : ctxLesson ? 'embers · !' : 'embers'}
           </button>
         ))}
       </nav>
 
-      {/* Main three-column grid */}
       <div className="forge-stage">
 
-        {/* LEFT — stage ladder */}
         <aside className={`forge-ladder ${mobileView === 'flame' ? 'mv-show' : 'mv-hide'}`}>
           <div className="forge-ladder-title">
             <div className="eyebrow">the path</div>
@@ -772,22 +637,17 @@ function ForgeInner() {
               </div>
             )
           })}
-
-          {/* Tethers — progress + streak */}
           <div className="tether">
             <div className="tether-row">
               <span className="k">to {stage.nextStageName ?? 'apex'}</span>
               <span className="v mono">{stage.nextStageName ? fmt$(stage.toNext) : '—'}</span>
             </div>
-            <div className="bar">
-              <div className="fill" style={{ width: `${stage.progressPct}%` }} />
-            </div>
+            <div className="bar"><div className="fill" style={{ width: `${stage.progressPct}%` }} /></div>
             <div className="tether-row" style={{ marginTop: 10, marginBottom: 0 }}>
               <span className="k">streak</span>
               <span className="v mono">{stats.winStreak} · 🔥</span>
             </div>
           </div>
-
           <div className="tether">
             <div className="tether-row"><span className="k">win rate</span><span className="v mono">{stats.winRate}%</span></div>
             <div className="tether-row"><span className="k">best streak</span><span className="v mono">{stats.bestStreak}</span></div>
@@ -800,9 +660,7 @@ function ForgeInner() {
           </div>
         </aside>
 
-        {/* CENTER — flame hero + sector winds + sparks */}
         <main className={`forge-center ${mobileView === 'flame' || mobileView === 'sparks' ? 'mv-show' : 'mv-hide'}`}>
-
           {(mobileView === 'flame' || mobileView === 'sparks') && (
             <div className={`flame-hero ${mobileView === 'sparks' ? 'compact' : ''}`}>
               <div className="flame-ring" />
@@ -821,23 +679,17 @@ function ForgeInner() {
 
           {mobileView === 'flame' && (
             <div className="stage-caption">
-              <h1>
-                You are at <em>{stage.name}</em>
-              </h1>
+              <h1>You are at <em>{stage.name}</em></h1>
               <p>{stage.tagline}</p>
             </div>
           )}
 
-          {/* Sector winds ribbon */}
           {sectorWinds.length > 0 && (
             <div className="sector-winds">
               <div className="winds-label eyebrow">sector winds · today</div>
               <div className="sector-scroll">
                 {sectorWinds.map(w => (
-                  <div
-                    key={w.etf}
-                    className={`sector-chip ${w.change1D >= 0.5 ? 'bull' : w.change1D <= -0.5 ? 'bear' : 'neutral'}`}
-                  >
+                  <div key={w.etf} className={`sector-chip ${w.change1D >= 0.5 ? 'bull' : w.change1D <= -0.5 ? 'bear' : 'neutral'}`}>
                     <span className="bar" />
                     <span className="nm mono">{w.etf}</span>
                     <span className="pct mono">{fmtPct(w.change1D)}</span>
@@ -847,7 +699,6 @@ function ForgeInner() {
             </div>
           )}
 
-          {/* Constellation of sparks */}
           <div className="constellation">
             <div className="constellation-header">
               <h2>Tonight's sparks</h2>
@@ -856,39 +707,26 @@ function ForgeInner() {
                 {loadingIdeas ? 'stoking…' : 'stoke the flame'}
               </button>
             </div>
-
             {loadingIdeas && ideas.length === 0 ? (
-              <div className="sparks-loading">
-                <Sparkles size={22} style={{ color: '#fbbf24' }} />
-                <p>The council is reading the market…</p>
-              </div>
+              <div className="sparks-loading"><Sparkles size={22} style={{ color: '#fbbf24' }} /><p>The council is reading the market…</p></div>
             ) : ideas.length === 0 ? (
-              <div className="sparks-empty">
-                <p>No sparks yet. Stoke the flame to see tonight's picks.</p>
-              </div>
+              <div className="sparks-empty"><p>No sparks yet. Stoke the flame to see tonight's picks.</p></div>
             ) : (
               <div className="picks-grid">
                 {ideas.map((idea, i) => {
                   const price = idea.livePrice ?? idea.price
                   return (
-                    <div
-                      key={`${idea.ticker}-${i}`}
-                      className="pick-spark"
+                    <div key={`${idea.ticker}-${i}`} className="pick-spark"
                       onClick={() => openLogFromSpark(idea)}
-                      style={{ animationDelay: `${i * 0.08}s` }}
-                    >
+                      style={{ animationDelay: `${i * 0.08}s` }}>
                       <div className="tk">
                         <span className="sym">{idea.ticker}</span>
                         <span className="px mono">{fmt$(price)}</span>
                       </div>
-                      {idea.catalyst && (
-                        <div className="why">{idea.catalyst}</div>
-                      )}
+                      {idea.catalyst && <div className="why">{idea.catalyst}</div>}
                       <div className="meta">
                         <span className="mono">{idea.suggestedShares} sh</span>
-                        <span className="sig mono">
-                          {idea.signal?.toLowerCase() ?? 'bull'} · {idea.confidence ?? 0}%
-                        </span>
+                        <span className="sig mono">{idea.signal?.toLowerCase() ?? 'bull'} · {idea.confidence ?? 0}%</span>
                       </div>
                     </div>
                   )
@@ -898,32 +736,28 @@ function ForgeInner() {
           </div>
         </main>
 
-        {/* RIGHT — open trades + embers (lessons) */}
         <aside className={`forge-right ${mobileView === 'trades' || mobileView === 'embers' ? 'mv-show' : 'mv-hide'}`}>
+          {ctxLesson && (mobileView === 'flame' || mobileView === 'embers') && (
+            <ContextualBell lesson={ctxLesson} onOpen={openCtxLesson} onDismiss={dismissCtxLesson} />
+          )}
 
           {(mobileView === 'flame' || mobileView === 'trades') && (
             <div className="right-section">
               <div className="eyebrow">open · in play</div>
               <h3>{openTrades.length === 0 ? 'No positions yet' : openTrades.length === 1 ? 'One position' : `${openTrades.length} positions`}</h3>
-
               {openTrades.length === 0 ? (
                 <p className="right-empty">Tap a spark in the center to open your first trade.</p>
               ) : (
                 openTrades.map(t => {
                   const isUp = (t.pnl ?? 0) >= 0
                   return (
-                    <button
-                      key={t.id}
-                      className="trade-card"
+                    <button key={t.id} className="trade-card"
                       style={{ ['--tc' as string]: isUp ? '#34d399' : '#f87171' }}
-                      onClick={() => setCloseTarget(t)}
-                    >
+                      onClick={() => setCloseTarget(t)}>
                       <div className="heartbeat" />
                       <div className="row1">
                         <span className="sym">{t.ticker}</span>
-                        <span className={`pnl mono ${isUp ? 'up' : 'dn'}`}>
-                          {t.pnlPct != null ? fmtPct(t.pnlPct) : '—'}
-                        </span>
+                        <span className={`pnl mono ${isUp ? 'up' : 'dn'}`}>{t.pnlPct != null ? fmtPct(t.pnlPct) : '—'}</span>
                       </div>
                       <div className="row2 mono">
                         <span>{t.shares} sh @ {fmt$(t.entry_price)}</span>
@@ -939,25 +773,22 @@ function ForgeInner() {
           {(mobileView === 'flame' || mobileView === 'embers') && (
             <div className="right-section">
               <div className="eyebrow">embers · wisdom</div>
-              <h3>Lessons along the way</h3>
-              <div className="embers-wrap">
-                <InvestLessons
-                  currentStage={stage.name}
-                  totalTrades={stats.totalTrades}
-                  closedTrades={stats.closedCount}
-                  isDark={true}
-                />
-              </div>
+              <h3>Lessons at the fire</h3>
+              <ForgeEmbers
+                currentStage={stage.name}
+                totalTrades={stats.totalTrades}
+                closedTrades={stats.closedCount}
+                balance={value.total}
+                onOpenLesson={openLessonById}
+                pulseLessonId={ctxLesson?.id ?? null}
+              />
             </div>
           )}
         </aside>
       </div>
 
-      {/* Footer action bar */}
       <div className="forge-actions">
-        <button className="forge-ghost-btn" onClick={openLogBlank}>
-          <Plus size={12} /> Log manually
-        </button>
+        <button className="forge-ghost-btn" onClick={openLogBlank}><Plus size={12} /> Log manually</button>
         <div className="forge-actions-spacer" />
         <button className="forge-primary-btn" onClick={stokeFlame} disabled={loadingIdeas}>
           <Flame size={12} /> {loadingIdeas ? 'Stoking…' : 'New sparks'}
@@ -969,10 +800,6 @@ function ForgeInner() {
   )
 }
 
-// ══════════════════════════════════════════════════════════════
-// STYLES — single injected stylesheet. Kept as a component so
-// it lives with the page and ships together.
-// ══════════════════════════════════════════════════════════════
 function ForgeStyles() {
   return (
     <style jsx global>{`
@@ -996,16 +823,13 @@ function ForgeStyles() {
         color: rgba(255, 180, 100, 0.55);
       }
 
-      /* ── Atmosphere ────────────────────────────── */
       .forge-sky {
         position: fixed; inset: 0; pointer-events: none; z-index: 0;
         background:
           radial-gradient(ellipse 800px 400px at 50% 100%, rgba(249,115,22,0.18) 0%, transparent 60%),
           radial-gradient(ellipse 400px 200px at 50% 100%, rgba(251,191,36,0.15) 0%, transparent 70%);
       }
-      .forge-particles {
-        position: fixed; inset: 0; pointer-events: none; z-index: 1;
-      }
+      .forge-particles { position: fixed; inset: 0; pointer-events: none; z-index: 1; }
       .forge-particle {
         position: absolute; bottom: -10px;
         width: 2px; height: 2px; border-radius: 50%;
@@ -1020,10 +844,7 @@ function ForgeStyles() {
         100% { transform: translateY(-90vh) translateX(var(--drift, 20px)); opacity: 0; }
       }
 
-      /* ── Loading ───────────────────────────────── */
-      .forge-loading {
-        display: flex; align-items: center; justify-content: center;
-      }
+      .forge-loading { display: flex; align-items: center; justify-content: center; }
       .forge-loading-dots { display: flex; gap: 6px; z-index: 2; }
       .forge-loading-dots span {
         width: 8px; height: 8px; border-radius: 50%;
@@ -1032,12 +853,8 @@ function ForgeStyles() {
       }
       @keyframes dotBounce { 0%,100%{transform:translateY(0);opacity:0.4;} 50%{transform:translateY(-8px);opacity:1;} }
 
-      /* ── Start screen ──────────────────────────── */
       .forge-start { display: flex; align-items: center; justify-content: center; padding: 40px 20px; }
-      .forge-start-inner {
-        max-width: 440px; width: 100%;
-        text-align: center; position: relative; z-index: 2;
-      }
+      .forge-start-inner { max-width: 440px; width: 100%; text-align: center; position: relative; z-index: 2; }
       .forge-start-title {
         font-family: 'Fraunces', serif;
         font-size: 36px; font-weight: 400; font-style: italic;
@@ -1045,11 +862,7 @@ function ForgeStyles() {
         background: linear-gradient(180deg, #fff4d6, #f97316);
         -webkit-background-clip: text; background-clip: text; color: transparent;
       }
-      .forge-start-sub {
-        font-size: 15px; line-height: 1.5;
-        color: rgba(255, 220, 180, 0.6);
-        margin: 0 0 32px;
-      }
+      .forge-start-sub { font-size: 15px; line-height: 1.5; color: rgba(255, 220, 180, 0.6); margin: 0 0 32px; }
       .forge-start-presets { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 20px; }
       .preset-chip {
         padding: 8px 14px; border-radius: 999px;
@@ -1079,7 +892,6 @@ function ForgeStyles() {
       .forge-start-btn { width: 100%; max-width: 300px; margin: 0 auto 20px; display: block; }
       .forge-start-fineprint { font-size: 12px; color: rgba(255,220,180,0.4); font-style: italic; line-height: 1.5; }
 
-      /* ── Topbar ────────────────────────────────── */
       .forge-topbar {
         position: sticky; top: 0; z-index: 10;
         display: flex; align-items: center; gap: 14px;
@@ -1123,18 +935,14 @@ function ForgeStyles() {
         letter-spacing: 0.15em; color: rgba(52, 211, 153, 0.9); text-transform: uppercase;
       }
 
-      /* ── Mobile tab bar ────────────────────────── */
       .forge-mobile-nav {
-        display: flex;
-        gap: 2px;
+        display: flex; gap: 2px;
         padding: 8px 16px 0;
-        position: relative;
-        z-index: 3;
+        position: relative; z-index: 3;
         border-bottom: 1px solid rgba(249,115,22,0.08);
       }
       .forge-mobile-nav button {
-        flex: 1;
-        padding: 10px 6px;
+        flex: 1; padding: 10px 6px;
         background: transparent; border: 0; cursor: pointer;
         font-family: 'JetBrains Mono', monospace; font-size: 10px;
         letter-spacing: 0.12em; text-transform: uppercase;
@@ -1145,31 +953,17 @@ function ForgeStyles() {
       .forge-mobile-nav button.active { color: #fbbf24; border-bottom-color: #f97316; }
       @media (min-width: 960px) { .forge-mobile-nav { display: none; } }
 
-      /* ── Main stage grid ───────────────────────── */
       .forge-stage {
-        display: grid;
-        grid-template-columns: 1fr;
+        display: grid; grid-template-columns: 1fr;
         position: relative; z-index: 2;
         min-height: calc(100vh - 120px);
       }
-      @media (min-width: 960px) {
-        .forge-stage {
-          grid-template-columns: 240px minmax(0, 1fr) 300px;
-        }
-      }
-
+      @media (min-width: 960px) { .forge-stage { grid-template-columns: 240px minmax(0, 1fr) 300px; } }
       .mv-hide { display: none; }
       .mv-show { display: block; }
-      @media (min-width: 960px) {
-        .mv-hide, .mv-show { display: block; }
-      }
+      @media (min-width: 960px) { .mv-hide, .mv-show { display: block; } }
 
-      /* ── LEFT: Ladder ──────────────────────────── */
-      .forge-ladder {
-        padding: 24px 20px;
-        border-right: 1px solid rgba(249,115,22,0.1);
-        position: relative;
-      }
+      .forge-ladder { padding: 24px 20px; border-right: 1px solid rgba(249,115,22,0.1); position: relative; }
       @media (max-width: 959px) {
         .forge-ladder { border-right: 0; border-bottom: 1px solid rgba(249,115,22,0.1); }
       }
@@ -1212,16 +1006,11 @@ function ForgeStyles() {
       }
       .stage-row.future .info .name { color: rgba(255, 220, 180, 0.28); }
       .stage-row.current .info .name { color: #fff4d6; font-style: italic; }
-      .stage-row .info .range {
-        font-size: 10px; color: rgba(255, 180, 100, 0.5); margin-top: 2px;
-      }
+      .stage-row .info .range { font-size: 10px; color: rgba(255, 180, 100, 0.5); margin-top: 2px; }
       .stage-row.future .info .range { color: rgba(255, 180, 100, 0.18); }
 
-      /* Tethers */
       .tether {
-        margin-top: 20px;
-        padding: 12px 14px;
-        border-radius: 10px;
+        margin-top: 20px; padding: 12px 14px; border-radius: 10px;
         background: linear-gradient(180deg, rgba(249,115,22,0.08), rgba(249,115,22,0.02));
         border: 1px solid rgba(249,115,22,0.15);
       }
@@ -1254,14 +1043,9 @@ function ForgeStyles() {
       }
       @keyframes barShimmer { 0%,100%{opacity:0.4;} 50%{opacity:1;} }
 
-      /* ── CENTER: Flame + sparks ────────────────── */
-      .forge-center {
-        padding: 28px 20px 40px;
-        display: flex; flex-direction: column; align-items: center;
-      }
+      .forge-center { padding: 28px 20px 40px; display: flex; flex-direction: column; align-items: center; }
       .flame-hero {
-        position: relative;
-        width: 300px; height: 300px;
+        position: relative; width: 300px; height: 300px;
         display: flex; align-items: center; justify-content: center;
         margin-top: 8px;
       }
@@ -1276,14 +1060,8 @@ function ForgeStyles() {
       .flame-ring.r2 { inset: 24px; animation-duration: 60s; animation-direction: reverse; border-color: rgba(251,191,36,0.15); }
       .flame-ring.r3 { inset: 56px; animation-duration: 80s; border-color: rgba(239,68,68,0.1); }
       @keyframes slowSpin { to { transform: rotate(360deg); } }
-      .flame-svg {
-        position: relative; z-index: 2;
-        width: 200px; height: 200px;
-      }
-      .flame-core {
-        animation: flameFlicker 3s ease-in-out infinite;
-        transform-origin: 50% 100%;
-      }
+      .flame-svg { position: relative; z-index: 2; width: 200px; height: 200px; }
+      .flame-core { animation: flameFlicker 3s ease-in-out infinite; transform-origin: 50% 100%; }
       @keyframes flameFlicker {
         0%,100% { transform: scale(1, 1); }
         33% { transform: scale(1.02, 0.98); }
@@ -1305,8 +1083,7 @@ function ForgeStyles() {
       .stage-caption { text-align: center; margin-top: 20px; max-width: 520px; }
       .stage-caption h1 {
         font-family: 'Fraunces', serif; font-size: 30px; font-weight: 400;
-        margin: 0; letter-spacing: -0.01em;
-        color: rgba(255, 230, 200, 0.92);
+        margin: 0; letter-spacing: -0.01em; color: rgba(255, 230, 200, 0.92);
       }
       .stage-caption h1 em {
         font-style: italic;
@@ -1320,7 +1097,6 @@ function ForgeStyles() {
         margin: 4px 0 0; font-style: italic;
       }
 
-      /* Sector winds */
       .sector-winds { margin-top: 28px; width: 100%; max-width: 560px; }
       .winds-label { text-align: center; margin-bottom: 10px; }
       .sector-scroll {
@@ -1335,10 +1111,7 @@ function ForgeStyles() {
         display: flex; align-items: center; gap: 6px;
         transition: all 0.3s ease;
       }
-      .sector-chip .bar {
-        width: 3px; height: 12px; border-radius: 2px;
-        background: rgba(255,255,255,0.2);
-      }
+      .sector-chip .bar { width: 3px; height: 12px; border-radius: 2px; background: rgba(255,255,255,0.2); }
       .sector-chip.bull .bar { background: #34d399; box-shadow: 0 0 6px #34d399; }
       .sector-chip.bear .bar { background: #f87171; box-shadow: 0 0 6px #f87171; }
       .sector-chip .nm { font-size: 10px; color: rgba(255,220,180,0.85); }
@@ -1347,7 +1120,6 @@ function ForgeStyles() {
       .sector-chip.bear .pct { color: #f87171; }
       .sector-chip.neutral .pct { color: rgba(255,220,180,0.5); }
 
-      /* Constellation */
       .constellation { margin-top: 32px; width: 100%; max-width: 620px; }
       .constellation-header {
         display: flex; align-items: baseline; justify-content: space-between;
@@ -1419,8 +1191,7 @@ function ForgeStyles() {
       }
       .pick-spark .tk .sym {
         font-family: 'Fraunces', serif; font-size: 17px; font-weight: 500;
-        color: rgba(255, 244, 214, 0.98);
-        letter-spacing: -0.01em;
+        color: rgba(255, 244, 214, 0.98); letter-spacing: -0.01em;
       }
       .pick-spark .tk .px { font-size: 12px; color: rgba(255, 220, 180, 0.7); }
       .pick-spark .why {
@@ -1434,16 +1205,11 @@ function ForgeStyles() {
       }
       .pick-spark .meta span {
         font-size: 9px; letter-spacing: 0.1em;
-        color: rgba(255, 180, 100, 0.6);
-        text-transform: uppercase;
+        color: rgba(255, 180, 100, 0.6); text-transform: uppercase;
       }
       .pick-spark .meta .sig { color: #34d399; }
 
-      /* ── RIGHT: Trades + embers ────────────────── */
-      .forge-right {
-        padding: 24px 20px;
-        border-left: 1px solid rgba(249,115,22,0.1);
-      }
+      .forge-right { padding: 24px 20px; border-left: 1px solid rgba(249,115,22,0.1); }
       @media (max-width: 959px) {
         .forge-right { border-left: 0; border-top: 1px solid rgba(249,115,22,0.1); }
       }
@@ -1493,12 +1259,75 @@ function ForgeStyles() {
         color: rgba(255,220,180,0.45);
       }
 
-      .embers-wrap {
-        /* InvestLessons component brings its own styles; we just give it container */
-        margin-top: 4px;
+      .ctx-bell-wrap {
+        position: relative; margin-bottom: 20px;
+        animation: ctxBellIn 0.6s cubic-bezier(0.22,1,0.36,1);
       }
+      @keyframes ctxBellIn {
+        from { opacity: 0; transform: translateY(-8px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      .ctx-bell {
+        display: flex; align-items: center; gap: 14px;
+        width: 100%; padding: 14px 16px;
+        border-radius: 12px;
+        background: linear-gradient(135deg, rgba(249,115,22,0.12), rgba(239,68,68,0.06));
+        border: 1px solid rgba(249,115,22,0.35);
+        cursor: pointer; text-align: left;
+        transition: all 0.3s ease;
+        box-shadow: 0 0 20px rgba(249,115,22,0.15);
+        position: relative; overflow: hidden;
+      }
+      .ctx-bell:hover {
+        box-shadow: 0 0 28px rgba(249,115,22,0.35);
+        transform: translateY(-1px);
+      }
+      .ctx-bell-glow {
+        position: absolute; top: -50%; left: -20%;
+        width: 80px; height: 200%;
+        background: radial-gradient(ellipse, rgba(251,191,36,0.4), transparent 70%);
+        animation: ctxBellGlow 4s ease-in-out infinite;
+      }
+      @keyframes ctxBellGlow {
+        0%,100% { transform: translateX(0); opacity: 0.3; }
+        50% { transform: translateX(200px); opacity: 0.7; }
+      }
+      .ctx-bell-body { flex: 1; min-width: 0; position: relative; z-index: 1; }
+      .ctx-bell-eyebrow {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase;
+        color: #fbbf24; margin-bottom: 4px;
+      }
+      .ctx-bell-title {
+        font-family: 'Fraunces', serif; font-style: italic;
+        font-size: 14px; font-weight: 500;
+        color: rgba(255,244,214,0.98);
+        line-height: 1.25; margin-bottom: 2px;
+      }
+      .ctx-bell-sub {
+        font-family: 'Fraunces', serif;
+        font-size: 12px; font-style: italic;
+        color: rgba(255,220,180,0.55);
+        line-height: 1.35;
+        overflow: hidden; text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+      }
+      .ctx-bell-arrow {
+        color: #fbbf24; font-size: 18px; font-weight: 300;
+        flex-shrink: 0; position: relative; z-index: 1;
+      }
+      .ctx-bell-dismiss {
+        position: absolute; top: 6px; right: 6px;
+        width: 20px; height: 20px; border-radius: 50%;
+        background: rgba(0,0,0,0.3);
+        border: 1px solid rgba(255,220,180,0.1);
+        color: rgba(255,220,180,0.5);
+        display: flex; align-items: center; justify-content: center;
+        cursor: pointer; z-index: 2;
+      }
+      .ctx-bell-dismiss:hover { color: rgba(255,220,180,0.9); }
 
-      /* ── Footer action bar ─────────────────────── */
       .forge-actions {
         position: sticky; bottom: 0; z-index: 5;
         padding: 14px 20px;
@@ -1535,7 +1364,6 @@ function ForgeStyles() {
       }
       .forge-primary-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-      /* ── Sheets ────────────────────────────────── */
       .forge-sheet-overlay {
         position: fixed; inset: 0; z-index: 40;
         background: rgba(0, 0, 0, 0.72);
@@ -1618,8 +1446,7 @@ function ForgeStyles() {
         color: #fbbf24;
         font-family: 'JetBrains Mono', monospace; font-size: 10px;
         letter-spacing: 0.12em; text-transform: uppercase;
-        cursor: pointer;
-        white-space: nowrap;
+        cursor: pointer; white-space: nowrap;
       }
       .inline-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
@@ -1666,7 +1493,6 @@ function ForgeStyles() {
         background: rgba(0,0,0,0.2);
       }
 
-      /* ── First-win ceremony ────────────────────── */
       .first-win-overlay {
         position: fixed; inset: 0; z-index: 50;
         background: radial-gradient(circle at 50% 50%, rgba(249,115,22,0.25) 0%, rgba(10,5,3,0.95) 60%);
@@ -1707,21 +1533,17 @@ function ForgeStyles() {
   )
 }
 
-// ══════════════════════════════════════════════════════════════
-// EXPORT
-// ══════════════════════════════════════════════════════════════
+
 export default function InvestPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="forge-loading">
-          <div className="forge-loading-dots">
-            {[0, 1, 2].map(i => <span key={i} style={{ animationDelay: `${i * 0.15}s` }} />)}
-          </div>
-          <ForgeStyles />
+    <Suspense fallback={
+      <div className="forge-loading">
+        <div className="forge-loading-dots">
+          {[0, 1, 2].map(i => <span key={i} style={{ animationDelay: `${i * 0.15}s` }} />)}
         </div>
-      }
-    >
+        <ForgeStyles />
+      </div>
+    }>
       <ForgeInner />
     </Suspense>
   )

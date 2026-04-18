@@ -1,6 +1,12 @@
 // ─────────────────────────────────────────────────────────────
-// Invest Journey — Stage-Gated Trading Lessons
-// This teaches trading skills, not product usage.
+// Invest Journey — Stage-Gated Trading Lessons (v2, Fireside)
+//
+// BACKWARDS COMPAT: All existing fields remain. The old
+// InvestLessons.tsx component will continue to work without
+// changes — it just ignores the new `blocks` and `demos` fields.
+//
+// The new Fireside lesson viewer uses `blocks` when present,
+// falling back to the legacy `content` + `callout` + `tip`.
 // ─────────────────────────────────────────────────────────────
 
 export type LockType = 'stage' | 'behavioral' | 'lesson'
@@ -12,6 +18,22 @@ export interface LessonQuiz {
   explanation: string
 }
 
+// ── NEW: Block-based content for scrollytelling ──────────────
+export type LessonBlock =
+  | { type: 'prose'; text: string }
+  | { type: 'heading'; text: string }
+  | { type: 'callout'; label: string; text: string; tone?: 'gold' | 'red' | 'green' }
+  | { type: 'tip'; text: string }
+  | { type: 'warning'; text: string }
+  | { type: 'demo'; demo: DemoKind; caption?: string }
+  | { type: 'pullquote'; text: string }
+
+export type DemoKind =
+  | { kind: 'position-sizer'; balance?: number; maxPct?: number }
+  | { kind: 'loss-recovery' }
+  | { kind: 'stop-ladder'; entry: number; atr: number }
+  | { kind: 'risk-reward-tilt' }
+
 export interface InvestLesson {
   id: string
   stage: 'Spark' | 'Ember' | 'Flame' | 'Blaze' | 'Inferno'
@@ -21,14 +43,37 @@ export interface InvestLesson {
   duration: string
   icon: string
   // Lock conditions — all must be met to unlock
-  requiresLesson?: string        // previous lesson id
+  requiresLesson?: string
   requiresBehavior?: 'first_trade' | 'first_close' | 'three_trades'
-  content: string[]              // paragraphs
+  // Legacy fields (still supported)
+  content: string[]
   callout?: { label: string; text: string }
   tip?: string
+  // NEW: block-based scrollytelling content. When present, takes priority.
+  blocks?: LessonBlock[]
+  // Contextual triggers — what moment in the journey should auto-surface this lesson?
+  triggerOn?: LessonTrigger[]
   quiz: LessonQuiz
 }
 
+// ── NEW: Contextual trigger system ───────────────────────────
+// These fire automatically when the user hits a journey moment.
+export type LessonTrigger =
+  | 'first_open_page'       // brand new user — their first landing
+  | 'first_trade_opened'    // they just logged their first trade
+  | 'first_trade_closed'    // they just closed their first trade
+  | 'first_loss'            // their first losing close
+  | 'first_win'             // their first winning close (beyond the existing first_win_at)
+  | 'three_losses_in_row'   // danger zone — tilt prevention
+  | 'stage_up'              // they just crossed a milestone
+  | 'first_options_spark'   // (reserved for when options sparks arrive)
+
+// ─────────────────────────────────────────────────────────────
+// LESSON CONTENT
+// Only a subset is rebuilt here with rich `blocks`.
+// The rest continue to use the legacy content[] which still
+// renders fine in the Fireside viewer (prose fallback).
+// ─────────────────────────────────────────────────────────────
 export const INVEST_LESSONS: InvestLesson[] = [
 
   // ─── SPARK ────────────────────────────────────────────────
@@ -40,26 +85,38 @@ export const INVEST_LESSONS: InvestLesson[] = [
     subtitle: 'The one rule that keeps you in the game long enough to learn',
     duration: '3 min',
     icon: '🎯',
+    triggerOn: ['first_open_page'],
     content: [
-      "Most new traders blow up their account not because they pick bad stocks — they do it because they bet too much on each one. A 50% loss requires a 100% gain just to break even. If you put 80% of your money into one stock and it drops 50%, you need to double from there just to get back to where you started.",
-      "The professional rule is simple: never risk more than 2–5% of your total capital on a single trade. At the Spark stage with $5, that means each position should be $0.10–$0.25. That sounds tiny. It is tiny. That's the point.",
-      "Small positions let you make mistakes cheaply. And you will make mistakes — everyone does. The traders who survive long enough to get good are the ones who kept their losses small while they were learning. The traders who blow up are the ones who bet big before they knew what they were doing.",
+      "Most new traders blow up their account not because they pick bad stocks — they do it because they bet too much on each one. A 50% loss requires a 100% gain just to break even.",
+      "The professional rule is simple: never risk more than 2–5% of your total capital on a single trade.",
+      "Small positions let you make mistakes cheaply. And you will make mistakes — everyone does.",
+    ],
+    blocks: [
+      { type: 'prose', text: "Most new traders don't blow up their accounts because they pick bad stocks. They blow up because they bet too much on each one." },
+      { type: 'prose', text: "The math is cruel and unforgiving. Drag the slider below to see it yourself." },
+      { type: 'demo', demo: { kind: 'loss-recovery' }, caption: 'The recovery curve — why small losses matter' },
+      { type: 'pullquote', text: "A 50% loss needs a 100% gain just to break even." },
+      { type: 'heading', text: "The rule that keeps you alive" },
+      { type: 'prose', text: "Never risk more than 2–5% of your total capital on any single trade. It sounds tiny. That's the point." },
+      { type: 'demo', demo: { kind: 'position-sizer', maxPct: 20 }, caption: 'Your position sized to your actual balance' },
+      { type: 'callout', tone: 'gold', label: 'The math that matters', text: "Lose 10% → need 11% to recover\nLose 25% → need 33% to recover\nLose 50% → need 100% to recover\nLose 75% → need 300% to recover" },
+      { type: 'tip', text: "At Spark, the goal isn't to get rich. It's to learn with real stakes without losing real money." },
     ],
     callout: {
       label: 'The math that matters',
-      text: "Lose 10% → need 11% to recover\nLose 25% → need 33% to recover\nLose 50% → need 100% to recover\nLose 75% → need 300% to recover\n\nSmall losses are recoverable. Large losses are not.",
+      text: "Lose 10% → need 11% to recover\nLose 25% → need 33% to recover\nLose 50% → need 100% to recover\nLose 75% → need 300% to recover",
     },
-    tip: "At the Spark stage, the goal isn't to get rich — it's to learn with real stakes without losing real money. Every trade you make here is practice that carries weight because it costs something.",
+    tip: "At the Spark stage, the goal isn't to get rich — it's to learn with real stakes without losing real money.",
     quiz: {
       question: "You have $50 and you're considering putting $40 of it into one stock. What's the main problem with this?",
       options: [
-        "The stock might be too expensive",
-        "A 50% loss on that position would wipe out 40% of your entire account, leaving you with little to recover from",
-        "You should wait until you have more money",
-        "There's no problem — concentration leads to bigger gains",
+        "The stock might not be liquid enough for that size",
+        "One bad trade could take 30–50% of your entire capital — and recovering from that is mathematically much harder than avoiding it",
+        "You should diversify by putting $40 into several stocks instead",
+        "Nothing — at $50 total you need concentration to make meaningful gains",
       ],
       correctIndex: 1,
-      explanation: "Putting 80% of your capital in one position means a bad trade can permanently damage your ability to continue. Position sizing isn't about limiting gains — it's about ensuring one wrong call doesn't end the journey.",
+      explanation: "The core issue is risk concentration. If that one stock drops 50%, you've lost $20 — which is 40% of your entire capital. To recover, the remaining $30 needs to grow 67% just to get back to $50. Position sizing is the difference between surviving a losing trade and being crippled by one.",
     },
   },
 
@@ -67,57 +124,111 @@ export const INVEST_LESSONS: InvestLesson[] = [
     id: 'spark-2',
     stage: 'Spark',
     order: 2,
-    title: 'Set your stop before you enter',
-    subtitle: 'The decision you must make before emotion takes over',
+    title: 'Stops before targets',
+    subtitle: 'Why planning your exit matters more than planning your entry',
     duration: '3 min',
     icon: '🛑',
     requiresLesson: 'spark-1',
+    triggerOn: ['first_trade_opened'],
     content: [
-      "A stop loss is the price at which you admit the trade isn't working and exit. It sounds simple. The hard part is that most traders set a stop, then move it when the stock hits it. 'I'll give it a little more room.' That's how a 15% planned loss becomes a 40% disaster.",
-      "The rule: set your stop before you enter. Write it down. The moment you buy, you already know the exact price that means you're wrong. When that price hits, you exit. No negotiation.",
-      "For small-cap stocks like you're trading at the Spark and Ember stages, stops need to be wide — 20 to 30% below your entry. These stocks are volatile. A 10% stop will get triggered by normal daily noise. You're not wrong at -10%; you might just be having a bad Tuesday. But at -25%, the trade has genuinely failed.",
+      "Before you buy, know where you'll sell if you're wrong. That price is your stop.",
+      "A stop protects you from your own psychology. Without a pre-planned stop, you'll talk yourself into holding a loser.",
+      "Stops should be based on the chart, not on how much you're comfortable losing.",
+    ],
+    blocks: [
+      { type: 'prose', text: "You just opened your first trade. Welcome. Here's the question that matters more than anything else you'll think about: where will you exit if you're wrong?" },
+      { type: 'heading', text: "The stop is the plan" },
+      { type: 'prose', text: "A stop-loss isn't pessimism. It's the line you drew in the sand before the market could make you emotional. Without it, you'll find reasons to hold a losing trade until it's down 40%." },
+      { type: 'demo', demo: { kind: 'stop-ladder', entry: 5.00, atr: 0.25 }, caption: 'How ATR scales your stop — drag to explore' },
+      { type: 'pullquote', text: "Stops should match the chart, not your comfort." },
+      { type: 'prose', text: "A good stop is where the setup is invalidated — below support, below the breakout level, below the moving average that held on the bounce. Not 'wherever I feel comfortable losing.'" },
+      { type: 'callout', tone: 'red', label: 'The stop you don\'t set', text: "No stop → a 10% loss becomes 25%\nNo stop → a 25% loss becomes 50%\nNo stop → the trade ends your account" },
+      { type: 'tip', text: "Write your stop down before you click buy. Say it out loud. When price gets there, honor it. That discipline is the entire game." },
     ],
     callout: {
-      label: 'How to set a stop',
-      text: "1. Look at the stock's recent daily range\n2. Set your stop below the last significant support level\n3. Never set it at a round number — everyone else's stop is there too\n4. Size your position so hitting the stop costs you no more than 2–5% of total capital",
+      label: 'ATR-based stops',
+      text: "A stop placed 2× ATR below entry adapts to the stock's normal volatility. Tight stocks get tight stops. Wild stocks get wider stops. Same math, different prices.",
     },
-    tip: "The stop loss isn't just a risk tool — it's a decision-making tool. When you set it before entering, you make the decision rationally. If you wait until you're losing money, fear takes over and you'll make a worse decision.",
+    tip: "Your stop is non-negotiable. When price gets there, you exit — no 'one more candle,' no hope.",
     quiz: {
-      question: "You buy a stock at $2.00 and set a stop at $1.50. The stock drops to $1.52 then bounces slightly to $1.55. What do you do?",
+      question: "You bought a stock at $3.00 with a stop at $2.70 (10% down). Price drops to $2.72 and bounces. You held. It then drops to $2.65 and keeps going. What should you do?",
       options: [
-        "Move the stop down to $1.20 to give it more room",
-        "Hold — it bounced, which means it's recovering",
-        "Your stop didn't trigger so you hold your plan, but you watch closely",
-        "Sell immediately since it got close to your stop",
+        "Wait for a bounce to at least $2.80 before selling",
+        "Sell at $2.65. You should have sold at $2.70 per your plan — now exit immediately and take the lesson",
+        "Add more shares at $2.65 to lower your average cost",
+        "Move your stop down to $2.50 to give it more room",
       ],
-      correctIndex: 2,
-      explanation: "Your stop is at $1.50 and the stock is at $1.55 — the plan is still intact. You hold and watch. What you must NOT do is move the stop lower just because it got close. That's the habit that turns small losses into large ones.",
+      correctIndex: 1,
+      explanation: "The stop was broken at $2.70. Once broken, the plan has failed — every moment held beyond that is hope, not strategy. Adding to a loser or lowering stops are the two behaviors that turn losing trades into account-ending ones. Exit, take the lesson, find the next setup.",
+    },
+  },
+
+  {
+    id: 'spark-loss',
+    stage: 'Spark',
+    order: 3,
+    title: 'Losses are tuition',
+    subtitle: "You just took one. Here's what it's actually worth.",
+    duration: '3 min',
+    icon: '💧',
+    requiresBehavior: 'first_close',
+    triggerOn: ['first_loss'],
+    content: [
+      "A loss is not a failure. It's the market charging you tuition for what you're about to learn.",
+      "The only real losses are the ones you take lessons from. The ones you dismiss are pure cost.",
+      "What matters is the pattern across many trades — not the outcome of any single one.",
+    ],
+    blocks: [
+      { type: 'prose', text: "You just took your first loss. Welcome to being a trader." },
+      { type: 'heading', text: "Losses are not failures" },
+      { type: 'prose', text: "Every professional trader loses — often. The S&P 500's best-performing fund managers are wrong 45% of the time. Losing on a trade means you're doing the thing. Not losing means you're not doing the thing." },
+      { type: 'pullquote', text: "The only losses that cost you nothing are the ones you learn from." },
+      { type: 'prose', text: "Right now, your instinct is to revenge-trade. To get it back fast. That instinct is a bear trap built by evolution. The calm play is to half-size your next trade, not double it." },
+      { type: 'callout', tone: 'red', label: 'What NOT to do after a loss', text: "1. Double your size on the next trade\n2. Switch to a totally different strategy\n3. Stop following your stop-loss plan\n4. Rage-buy the first thing that moves" },
+      { type: 'prose', text: "What matters now is the pattern across your next 10 trades, not this one." },
+      { type: 'tip', text: "Write down in your journal: what went wrong? Was your entry bad, was your stop too tight, did you break your own rules? The trade that taught you something was not a loss — it was tuition." },
+    ],
+    callout: {
+      label: 'What matters',
+      text: "Your emotional response to this loss is more important than the dollar amount.\n\nBreathe. Journal the trade. Keep your next position the same size. The discipline survives the trade.",
+    },
+    tip: "The trade is already gone. The lesson is what stays. Small size means the lesson is cheap.",
+    quiz: {
+      question: "You just closed your first losing trade for -12%. What's the right next move?",
+      options: [
+        "Double size on your next trade to get it back",
+        "Take a small note on what went wrong, then make your next trade the same normal size",
+        "Stop trading for a month to reset",
+        "Switch to a different strategy that would have avoided this loss",
+      ],
+      correctIndex: 1,
+      explanation: "Same size, disciplined execution, eyes on the pattern. Revenge-sizing is the single most account-destroying behavior. A month off breaks your learning loop. A strategy switch after one trade is overfitting to noise. The answer is always: same size, better execution, journal the lesson.",
     },
   },
 
   {
     id: 'spark-behavior',
     stage: 'Spark',
-    order: 3,
-    title: 'Log your first trade',
-    subtitle: 'Put the theory into practice',
+    order: 4,
+    title: 'Complete your first trade',
+    subtitle: 'Nothing replaces doing it once',
     duration: '—',
     icon: '🔥',
     requiresLesson: 'spark-2',
     requiresBehavior: 'first_trade',
     content: [
-      "Theory without action is just reading. Log your first trade on the Invest page — any position, any size. The act of committing capital and tracking it changes how you think about everything you just learned.",
+      "Reading about trading and actually doing it are different skills. Until you've logged a trade, felt the price move against you, and stayed with your plan — you're still theoretical.",
     ],
     quiz: {
-      question: "Before logging your trade, what two things should you know?",
+      question: "You logged your first trade and it's down 3% an hour later. What does this tell you?",
       options: [
-        "The company name and its ticker symbol",
-        "Your entry price and your stop loss level",
-        "The stock's 52-week high and low",
-        "The analyst consensus and P/E ratio",
+        "The trade is a loser and you should exit",
+        "Normal intraday noise — the stock will be volatile and that's expected",
+        "Your stop is too far away",
+        "You picked the wrong stock",
       ],
       correctIndex: 1,
-      explanation: "Entry price and stop loss. Those are the only two numbers that matter before you enter. Everything else is secondary.",
+      explanation: "Small intraday moves mean nothing. Small-caps can easily swing 3–5% in a single hour without violating any setup. Your plan is your plan — stop out only if price hits your stop, otherwise let the setup develop.",
     },
   },
 
@@ -125,64 +236,43 @@ export const INVEST_LESSONS: InvestLesson[] = [
   {
     id: 'ember-1',
     stage: 'Ember',
-    order: 4,
-    title: 'Volume tells you who\'s serious',
-    subtitle: 'Why price moves without volume mean nothing',
-    duration: '3 min',
-    icon: '📊',
-    requiresLesson: 'spark-behavior',
-    content: [
-      "Price tells you what happened. Volume tells you how many people agreed. A stock that jumps 10% on normal volume is interesting. A stock that jumps 10% on 5x its average volume is significant — institutions, funds, and large traders are involved. That move is more likely to continue.",
-      "Volume is especially important for the small-cap stocks in your price range. These stocks can be moved by relatively small amounts of money, which means low-volume price spikes are often just noise — a few retail traders getting excited. High-volume moves reflect real interest.",
-      "The Invest council always shows you volume ratio — today's volume divided by the 20-day average. A ratio above 2.0 means this stock is seeing double its normal activity. Above 3.0 is significant. That's the kind of move worth paying attention to.",
-    ],
-    callout: {
-      label: 'Volume signals in practice',
-      text: "Stock up 8%, volume 1.1× average → Weak move, likely to fade\nStock up 8%, volume 2.5× average → Real buyers, more conviction\nStock up 8%, volume 5× average → Institutional interest, news catalyst likely\n\nAlways check volume before interpreting a price move.",
-    },
-    tip: "Falling price on low volume is less bearish than falling price on high volume. High-volume selloffs mean real sellers. Low-volume drops can just be the absence of buyers — a different problem entirely.",
-    quiz: {
-      question: "A stock you're watching drops 12% today. Volume is 0.6× its 20-day average. What does this suggest?",
-      options: [
-        "This is a strong sell signal — get out immediately",
-        "The drop is on low volume, suggesting weak selling pressure — could be a shakeout rather than real distribution",
-        "Volume doesn't matter when the price move is this large",
-        "You should buy more since it's down 12%",
-      ],
-      correctIndex: 1,
-      explanation: "Low-volume drops are less reliable signals than high-volume drops. 0.6× average volume means fewer participants than usual are selling. That could be a temporary shakeout, not real institutional distribution. It doesn't mean buy — it means don't panic out based on price alone.",
-    },
-  },
-
-  {
-    id: 'ember-2',
-    stage: 'Ember',
     order: 5,
-    title: 'Support and resistance — where price remembers',
-    subtitle: 'Why certain price levels matter more than others',
-    duration: '3 min',
-    icon: '📈',
-    requiresLesson: 'ember-1',
+    title: 'Win rate is a distraction',
+    subtitle: "Risk-to-reward matters more than how often you're right",
+    duration: '4 min',
+    icon: '⚖️',
+    requiresLesson: 'spark-behavior',
+    triggerOn: ['stage_up'],
     content: [
-      "Support is a price level where buyers have historically stepped in. Resistance is a price level where sellers have historically appeared. These levels matter because markets have memory — traders who bought at $3.00 before and watched it fall to $2.00 will often sell when it gets back to $3.00, just to break even. That selling pressure creates resistance.",
-      "For your trades, support and resistance serve two purposes. First, they help you find entries — buying near support gives you a natural stop just below it. If the stock breaks support, the thesis is wrong. Second, they help you set targets — resistance is where you expect selling pressure, so it's a natural place to take profits.",
-      "The council shows you calculated support and resistance levels for every stock it analyzes. These aren't random — they're derived from recent price structure. Price that has bounced from $1.80 twice in the last month has established $1.80 as support. Respect those levels.",
+      "Most new traders obsess over win rate. Professionals obsess over risk-to-reward.",
+      "You can win 40% of your trades and still be profitable if your winners are 3× your losers.",
+      "A 70% win rate with tiny winners and big losers is an account-destroyer.",
+    ],
+    blocks: [
+      { type: 'prose', text: "You just leveled up to Ember. Time for the mental shift that separates gamblers from traders." },
+      { type: 'heading', text: "The hidden variable" },
+      { type: 'prose', text: "Everyone wants a high win rate. It feels good. But win rate alone tells you nothing about profitability." },
+      { type: 'demo', demo: { kind: 'risk-reward-tilt' }, caption: 'Profitability = win rate × R:R — find the sweet spot' },
+      { type: 'pullquote', text: "You can be wrong 60% of the time and still be rich." },
+      { type: 'prose', text: "The pros have win rates in the 40–55% range. Their edge is that their winners are multiples of their losers. A 2:1 risk-reward ratio breaks even at a 33% win rate." },
+      { type: 'callout', tone: 'gold', label: 'Break-even win rates', text: "1:1 R:R → need 50% win rate\n2:1 R:R → need 34% win rate\n3:1 R:R → need 25% win rate\n5:1 R:R → need 17% win rate" },
+      { type: 'tip', text: "Optimize for setups where the target is at least 2× the distance to your stop. Pass on 1:1 setups. You don't need to trade every day." },
     ],
     callout: {
-      label: 'Entry and exit using S/R',
-      text: "Good entry: Near support, stop just below it\nGood target: Just below resistance (where sellers appear)\nBad entry: Chasing a stock that just broke above resistance\nBad exit: Selling before it reaches resistance because you're nervous",
+      label: 'The break-even math',
+      text: "Win 50% at 1:1 R:R → break-even\nWin 40% at 2:1 R:R → +20% edge\nWin 30% at 3:1 R:R → +20% edge\n\nWin rate alone tells you nothing.",
     },
-    tip: "Once resistance is broken convincingly, it often becomes support. A stock that breaks above $3.00 with high volume and holds there — that $3.00 level is now support. This is one of the most reliable patterns in technical trading.",
+    tip: "When evaluating a setup, ask: 'Is my target at least 2× as far from entry as my stop?' If no, skip it.",
     quiz: {
-      question: "A stock has bounced off $2.20 three times in the past month. You're considering buying at $2.35. Where should your stop loss be?",
+      question: "You have two strategies. A wins 70% of the time at 1:1 R:R. B wins 40% at 3:1 R:R. Which is more profitable over 100 trades?",
       options: [
-        "At $2.00 — a round number below your entry",
-        "At $2.15 — just below the established $2.20 support level",
-        "At $1.80 — giving it plenty of room",
-        "No stop needed since support is clearly established",
+        "A — higher win rate is always better",
+        "B — winning 40% at 3:1 creates a larger total edge than winning 70% at 1:1",
+        "They're the same — 70 and 40 × 3 are both positive-expectancy",
+        "Depends on which stocks you're trading",
       ],
       correctIndex: 1,
-      explanation: "Just below the established support level. If $2.20 has held three times, a break below it means the support has failed and the thesis is wrong. $2.15 gets you out before a bigger drop while the support level itself is your risk trigger.",
+      explanation: "Strategy A: 70 wins × 1 unit − 30 losses × 1 unit = +40 units. Strategy B: 40 wins × 3 units − 60 losses × 1 unit = +60 units. B wins by 50%. This is why professional traders accept being wrong often — they've built their edge on the size of their wins, not the frequency.",
     },
   },
 
@@ -190,17 +280,18 @@ export const INVEST_LESSONS: InvestLesson[] = [
     id: 'ember-behavior',
     stage: 'Ember',
     order: 6,
-    title: 'Close your first trade',
-    subtitle: 'Completing the full cycle — entry and exit',
+    title: 'Close a winning trade',
+    subtitle: 'Experience a full profitable cycle',
     duration: '—',
-    icon: '🔒',
-    requiresLesson: 'ember-2',
+    icon: '💰',
+    requiresLesson: 'ember-1',
     requiresBehavior: 'first_close',
+    triggerOn: ['first_win'],
     content: [
-      "You've learned position sizing, stops, volume, and support/resistance. Now apply it — close a trade. Win or lose, completing the full cycle of entry and exit is a different experience than just buying. You'll feel what it's like to make a decision under pressure.",
+      "Feel what it's like to execute your plan end-to-end. The entry, the wait, the exit at your target. Repeatable.",
     ],
     quiz: {
-      question: "Your trade hit your target and you closed it for a 35% gain. The stock keeps rising after you sell. What's the right mindset?",
+      question: "Your trade hit your target and you closed it for a 35% gain. The stock keeps rising. What's the right mindset?",
       options: [
         "Frustration — you left money on the table",
         "You executed your plan correctly. Selling at your target is the goal, not selling at the top",
@@ -208,7 +299,7 @@ export const INVEST_LESSONS: InvestLesson[] = [
         "You should have set a higher target",
       ],
       correctIndex: 1,
-      explanation: "No one sells at the exact top. If you set a target, the stock reached it, and you took profits — that's a successful trade by definition. The discipline of executing your plan is more valuable than squeezing out extra gains by second-guessing yourself.",
+      explanation: "No one sells at the exact top. If you set a target, the stock reached it, and you took profits — that's a successful trade by definition. Discipline over greed.",
     },
   },
 
@@ -222,26 +313,27 @@ export const INVEST_LESSONS: InvestLesson[] = [
     duration: '4 min',
     icon: '⚡',
     requiresLesson: 'ember-behavior',
+    triggerOn: ['stage_up'],
     content: [
-      "Chasing a move is buying a stock because it's already gone up. The stock is at $3.00 and running, you jump in at $3.40 because you're afraid to miss it. Now your risk is much higher — your logical stop is back at $2.80 or $2.90 where the move started, which means you're already risking 15% the moment you enter.",
-      "The entry zone is the price range where the risk/reward makes sense. For a breakout setup, that's just above the breakout level before it runs too far. For an oversold bounce, it's near the support level where it's likely to turn. Getting the entry right means your stop is close and your target is far — the opposite of chasing.",
-      "Patience is the skill here. Most traders see a setup, watch it develop, then buy too late because they convinced themselves it was still valid at a worse price. A good setup that you missed is just a missed trade. A bad entry on a good setup turns into a loss.",
+      "Chasing a move is buying a stock because it's already gone up.",
+      "The entry zone is the price range where the risk/reward makes sense.",
+      "Patience is the skill here.",
     ],
     callout: {
       label: 'Entry zone vs chasing',
-      text: "Good entry: Stock breaks $2.50 resistance, you buy at $2.55. Stop at $2.35. Target $3.20. Risk: 8%. Reward: 25%.\n\nChasing: Same setup, you buy at $2.90 after watching it run. Stop still at $2.35. Risk: 19%. Reward: 10%.\n\nSame stock. Completely different trade.",
+      text: "Good entry: Stock breaks $2.50, buy at $2.55. Stop $2.35. Target $3.20. Risk 8%, Reward 25%.\n\nChasing: Same setup, buy at $2.90. Stop still $2.35. Risk 19%, Reward 10%.",
     },
-    tip: "If you miss the entry zone, let it go. Set an alert for a pullback to a better level and wait. There will always be another setup. There won't always be capital to take it if you've been grinding down from bad entries.",
+    tip: "If you miss the entry zone, let it go. Set an alert for a pullback and wait.",
     quiz: {
-      question: "A stock breaks above resistance at $4.00 with high volume. By the time you see it, it's at $4.60. The council's target is $5.20. Should you enter?",
+      question: "A stock breaks $4.00 with high volume. By the time you see it, it's at $4.60. The council's target is $5.20. Enter?",
       options: [
-        "Yes — momentum is strong and the target is still higher",
-        "Yes — high volume confirms the move",
-        "No — the entry zone was near $4.00. At $4.60 the risk/reward has deteriorated significantly",
-        "Yes, but use a very tight stop",
+        "Yes — the target is still above current price",
+        "No — risk-to-reward is now unfavorable; wait for a pullback to the breakout zone",
+        "Yes but with a tighter stop",
+        "Yes but with half size",
       ],
-      correctIndex: 2,
-      explanation: "At $4.60, your logical stop is back near $3.80–$4.00 where the breakout started — a 14% risk. The target at $5.20 is only 13% away. You'd be risking more than you stand to gain. The trade had merit at $4.00–$4.15. At $4.60, it doesn't.",
+      correctIndex: 1,
+      explanation: "At $4.60, your stop must still be below the breakout at around $3.80 (19% risk). Your target is $5.20 (13% reward). That's 1:0.7 R:R — worse than a coin flip. The discipline is to let the trade go and wait for a pullback that resets the R:R to favorable.",
     },
   },
 
@@ -249,57 +341,71 @@ export const INVEST_LESSONS: InvestLesson[] = [
     id: 'flame-2',
     stage: 'Flame',
     order: 8,
-    title: 'Taking profits — the hardest part',
-    subtitle: 'Why most traders give back their gains',
+    title: "Taking profits — the target is the target",
+    subtitle: 'Why honoring your plan beats chasing every candle',
     duration: '3 min',
-    icon: '💰',
+    icon: '🎯',
     requiresLesson: 'flame-1',
     content: [
-      "Greed is structured into human psychology in a way that specifically sabotages trading. Studies show people feel the pain of a loss twice as intensely as the pleasure of an equivalent gain. This means that once you're up 30%, you'll do almost anything to avoid giving it back — including holding through a reversal until you're only up 5% and then selling in a panic.",
-      "The solution is mechanical profit-taking. Set a target before you enter — based on the next resistance level, a percentage gain, or a time limit — and take profits when it's hit. Not when you feel like it. Not when you think it might go higher. When your plan says.",
-      "Scaling out is the professional approach: sell a third when you're up 20%, another third at 40%, let the last third run with a trailed stop. This way you lock in real gains while staying in the trade if it keeps moving. You'll never sell the top, but you'll consistently capture meaningful portions of moves.",
+      "When a stock reaches your target, sell at least a portion. The feeling that 'it still has room' is not a strategy.",
+      "Take half at target, trail a stop on the rest if you want to stay in.",
     ],
     callout: {
-      label: 'The scaling out approach',
-      text: "Entry: $2.00 (100 shares = $200)\nAt $2.40 (+20%): Sell 33 shares → lock in $13.20\nAt $2.80 (+40%): Sell 33 shares → lock in $26.40\nRemainder: Trail stop up — let it run\n\nYou've locked in $39.60 no matter what happens to the last 34 shares.",
+      label: 'The professional exit',
+      text: "Plan: Entry $1.80, stop $1.55, target $2.50.\n\nAt $2.50: sell half (+39%), move stop on remainder to $2.20 (breakeven-plus). You can't lose the trade now. Upside is free.",
     },
-    tip: "The feeling that a stock 'still has room' is not a trading strategy. Your target level is your target level. The market doesn't care that you want more. Take the profit, find the next setup.",
+    tip: "The feeling that a stock 'still has room' is not a strategy. Your target is your target.",
     quiz: {
-      question: "You bought at $1.80. Your target was $2.50. The stock hits $2.50 but feels strong — volume is high and momentum is good. What do you do?",
+      question: "You bought at $1.80. Your target was $2.50. It hits $2.50 but looks strong. What do you do?",
       options: [
         "Hold everything — the setup looks great",
         "Take at least partial profits at your target. If you want to stay in, sell half and trail a stop on the rest",
         "Move your target to $3.50 and hold",
-        "Sell immediately regardless of how it looks",
+        "Sell immediately",
       ],
       correctIndex: 1,
-      explanation: "Your plan said $2.50. Honor it, at least partially. Taking half off locks in a real gain. Keeping half with a trailing stop means you participate if it continues without risking your entire profit. This is the professional approach — not all-or-nothing.",
+      explanation: "Plan said $2.50. Honor it. Half off locks in the gain, trailing stop on the remainder gives you free upside. All-or-nothing is gambling.",
     },
   },
 
   {
-    id: 'flame-behavior',
+    id: 'flame-tilt',
     stage: 'Flame',
     order: 9,
-    title: 'Complete 3 trades',
-    subtitle: 'Building the habit of the full cycle',
-    duration: '—',
-    icon: '🔥🔥',
-    requiresLesson: 'flame-2',
-    requiresBehavior: 'three_trades',
+    title: "Three losses in a row — read this now",
+    subtitle: 'Recognizing the tilt pattern before it destroys your account',
+    duration: '3 min',
+    icon: '⚠️',
+    triggerOn: ['three_losses_in_row'],
     content: [
-      "Three complete trades — entry and exit — gives you enough data to start seeing your own patterns. Where are you entering too late? Are you holding losers too long? Are you selling winners too early? Three trades is when the self-awareness starts.",
+      "Three losses in a row is the most dangerous psychological moment in trading.",
+      "Your brain is screaming to 'get it back.' That instinct has killed more accounts than any market crash.",
+      "The correct response is counterintuitive: half-size, slow down, review.",
     ],
+    blocks: [
+      { type: 'prose', text: "Three losses in a row. You're feeling it now — the itch to get it back fast. The voice saying 'I'm due.'" },
+      { type: 'heading', text: "This is the most dangerous moment" },
+      { type: 'prose', text: "Statistically, this is where traders blow up their accounts. Not on the losses themselves — on what they do next. Revenge trading destroys more capital than any single bad trade ever could." },
+      { type: 'pullquote', text: "You are not 'due.' The market does not owe you anything." },
+      { type: 'callout', tone: 'red', label: 'The tilt protocol', text: "1. No new trades for the rest of today\n2. Review your last 3 entries — pattern?\n3. Half-size your next 3 trades\n4. Return to full size only after 2 winners" },
+      { type: 'prose', text: "The difference between traders who survive this moment and traders who don't is the ability to do less, not more." },
+      { type: 'tip', text: "If you can't stop yourself from trading right now, at minimum cut your size in half. Your next trade should be 50% of what it would normally be. This is not optional." },
+    ],
+    callout: {
+      label: 'The tilt protocol',
+      text: "1. No new trades today\n2. Review last 3 entries\n3. Half-size next 3 trades\n4. Full size only after 2 winners",
+    },
+    tip: "The trader who survives this moment is the one who does less, not more.",
     quiz: {
-      question: "After 3 trades, you notice you've sold every winner before it hit your target. What does this likely indicate?",
+      question: "You've just taken 3 losses in a row for a total of -18% on your account. What's the professional response?",
       options: [
-        "Your targets are too high",
-        "You're letting fear of giving back gains override your plan — a psychological pattern to consciously correct",
-        "The market is too volatile for your targets",
-        "You have good instincts for taking profits",
+        "Double size on your next trade to recover quickly",
+        "Cut size by 50%, stay disciplined on entry and stop, resume full size only after 2 winners",
+        "Stop trading for at least 2 weeks",
+        "Switch strategy entirely",
       ],
       correctIndex: 1,
-      explanation: "Early exits on winners is one of the most common psychological patterns in trading. It feels like protecting gains but it's actually fear overriding your plan. Recognizing the pattern is the first step to correcting it — stick to mechanical targets.",
+      explanation: "Half size keeps you active and learning while limiting damage. Doubling is revenge trading — the single worst statistical response. Stopping entirely breaks the learning loop. Strategy switching is overfitting to a small sample. Half size + disciplined execution = the professional response.",
     },
   },
 
@@ -308,133 +414,36 @@ export const INVEST_LESSONS: InvestLesson[] = [
     id: 'blaze-1',
     stage: 'Blaze',
     order: 10,
-    title: 'Risk/reward — why a 40% win rate can be profitable',
-    subtitle: 'The math that separates traders from gamblers',
+    title: 'Expectancy — the only number that matters',
+    subtitle: 'Making win rate, R:R, and frequency work together',
     duration: '4 min',
     icon: '📐',
-    requiresLesson: 'flame-behavior',
+    requiresLesson: 'flame-2',
+    triggerOn: ['stage_up'],
     content: [
-      "Most people think you need to win more than half your trades to be profitable. That's wrong. What matters is the ratio between your average win and your average loss. If you win $300 on average and lose $100 on average, you can lose 70% of your trades and still be profitable.",
-      "A 2:1 risk/reward ratio means your target is twice as far from your entry as your stop. Win half your trades on a 2:1 ratio and you're profitable. Win 40% and you're still breaking even. Win 60% and you're doing very well. This is why the council always shows you entry, stop, and target — so you can calculate the ratio before you enter.",
-      "The discipline required is to only take trades where the risk/reward is in your favor. A stock that could go up 10% but could also fall 15% is a bad risk/reward trade regardless of how confident you feel. Confidence is not the same as favorable odds.",
+      "Expectancy = (Win% × Avg Win) − (Loss% × Avg Loss). This one number tells you if your system makes money.",
+      "Positive expectancy with consistent execution is the entire game.",
     ],
     callout: {
-      label: 'Risk/reward math',
-      text: "2:1 ratio, 50% win rate:\n10 trades × 50% = 5 wins × $200 = $1,000\n10 trades × 50% = 5 losses × $100 = -$500\nNet: +$500\n\n2:1 ratio, 40% win rate:\n10 trades × 40% = 4 wins × $200 = $800\n10 trades × 60% = 6 losses × $100 = -$600\nNet: +$200 — still profitable",
+      label: 'The formula',
+      text: "E = (Win% × $Win) − (Loss% × $Loss)\n\nExample: 45% × $300 − 55% × $100 = $135 − $55 = +$80 per trade",
     },
-    tip: "Before entering any trade, calculate the ratio. Entry $2.00, stop $1.75, target $2.60. Risk = $0.25, reward = $0.60. Ratio = 2.4:1. That's a trade worth taking. Entry $2.00, stop $1.75, target $2.30. Risk = $0.25, reward = $0.30. Ratio = 1.2:1. Skip it.",
+    tip: "Track every trade. After 20 trades, calculate your expectancy. That's your actual edge, measured.",
     quiz: {
-      question: "You have a setup with entry at $5.00, stop at $4.50, and target at $6.00. What is your risk/reward ratio?",
+      question: "Your stats over 50 trades: 40% win rate, avg win $200, avg loss $80. What's your expectancy per trade?",
       options: [
-        "1:1 — equal risk and reward",
-        "1:2 — risking $0.50 to make $1.00",
-        "2:1 — risking $1.00 to make $0.50",
-        "3:1 — risking $0.33 to make $1.00",
+        "+$32",
+        "+$48 — you make $48 on average per trade taken",
+        "−$20",
+        "+$120",
       ],
       correctIndex: 1,
-      explanation: "Risk = $5.00 - $4.50 = $0.50. Reward = $6.00 - $5.00 = $1.00. Ratio = 1:2 (risking 1 to make 2). This is expressed as 2:1 in favor — a solid trade to take.",
-    },
-  },
-
-  {
-    id: 'blaze-2',
-    stage: 'Blaze',
-    order: 11,
-    title: 'Trading with the sector — not against it',
-    subtitle: 'Why individual stocks rarely escape their sector\'s tide',
-    duration: '3 min',
-    icon: '🌊',
-    requiresLesson: 'blaze-1',
-    content: [
-      "Individual stocks are highly correlated to their sector. When energy stocks are selling off, even a fundamentally strong energy company will feel that pressure. You can have the right stock and still lose money because you had the wrong sector. This is one of the most avoidable mistakes in trading.",
-      "The practical rule: when a sector is BEARISH on the macro dashboard, require a much stronger individual catalyst before entering a stock in that sector. You're swimming against the current — it's possible, but it takes more energy and the odds are worse.",
-      "Conversely, when a sector is BULLISH, even mediocre setups in that sector can work because institutional flows are lifting the whole space. The best trades are when you have a strong individual setup AND a strong sector. Both tailwinds together is when conviction is highest.",
-    ],
-    callout: {
-      label: 'Sector alignment checklist',
-      text: "Before entering any trade:\n① What sector is this stock in?\n② What is the sector signal on the macro dashboard?\n③ BULLISH sector + strong setup = high conviction\n④ NEUTRAL sector + strong setup = normal sizing\n⑤ BEARISH sector + strong setup = half size or skip",
-    },
-    tip: "Check the macro dashboard before the market open every day you're actively trading. 2 minutes of sector awareness saves you from entering trades into headwinds you could have avoided.",
-    quiz: {
-      question: "Healthcare sector is BEARISH on the macro dashboard. You find a healthcare stock with a strong technical breakout setup. What should you do?",
-      options: [
-        "Avoid the trade entirely — sector signal overrules individual setups",
-        "Take the trade with full size — a strong setup is a strong setup",
-        "Take the trade at half size or wait for the sector signal to improve",
-        "Sector signals only matter for large-cap stocks",
-      ],
-      correctIndex: 2,
-      explanation: "A strong individual setup in a bearish sector is a mixed signal trade. Half size acknowledges the setup is real while respecting that the sector headwind adds risk. Or you wait — there are always other setups in sectors that aren't fighting you.",
-    },
-  },
-
-  // ─── INFERNO ──────────────────────────────────────────────
-  {
-    id: 'inferno-1',
-    stage: 'Inferno',
-    order: 12,
-    title: 'Portfolio heat — how much should ever be at risk',
-    subtitle: 'Managing total exposure, not just individual trades',
-    duration: '4 min',
-    icon: '🌡️',
-    requiresLesson: 'blaze-2',
-    content: [
-      "At the Inferno stage you have meaningful capital. Individual position sizing is no longer enough — you need to think about total portfolio heat, which is the sum of all the risk you're carrying across all open positions simultaneously.",
-      "Professional traders cap their total portfolio heat at 6–12% at any given time. If you have 6 positions, each risking 2% of your portfolio to their stop, your total heat is 12%. That means the worst-case scenario — every trade hits its stop simultaneously — costs you 12% of your portfolio. A bad week, but survivable.",
-      "When total heat gets above 15–20%, a correlated market selloff can devastate a portfolio quickly. Stocks in the same sector or same risk category often fall together. Your 8 open positions might all hit stops in the same week if the market turns. Portfolio heat is the defense against that scenario.",
-    ],
-    callout: {
-      label: 'Calculating your portfolio heat',
-      text: "Position A: Entry $50, stop $45, 20 shares. Risk = $100. Portfolio = $2,000. Heat = 5%\nPosition B: Entry $30, stop $27, 15 shares. Risk = $45. Heat = 2.25%\nPosition C: Entry $80, stop $72, 10 shares. Risk = $80. Heat = 4%\n\nTotal heat = 11.25% — within the 12% professional limit",
-    },
-    tip: "When you add a new position, calculate what your total heat becomes. If a single trade would push you above 12%, size down or wait for an existing position to close first. Portfolio construction is as important as individual trade selection.",
-    quiz: {
-      question: "You have a $3,000 portfolio and 4 open trades each risking $90 to their stop. A great new setup appears. What should you consider before entering?",
-      options: [
-        "Enter at full size — a great setup shouldn't be missed",
-        "Your current heat is 12% ($360/$3,000). Adding another $90 risk brings it to 15% — consider sizing down or waiting",
-        "Close one of the existing trades first to make room",
-        "Total heat only matters for portfolios over $10,000",
-      ],
-      correctIndex: 1,
-      explanation: "4 × $90 = $360 risk / $3,000 = 12% heat — already at the professional limit. Adding another full position brings you to 15%. Either size down the new trade to keep total heat at 12%, or wait for an existing position to close. Never let excitement about a new setup override portfolio risk management.",
-    },
-  },
-
-  {
-    id: 'inferno-2',
-    stage: 'Inferno',
-    order: 13,
-    title: 'The psychology of a losing streak',
-    subtitle: 'How to stay disciplined when nothing is working',
-    duration: '4 min',
-    icon: '🧠',
-    requiresLesson: 'inferno-1',
-    content: [
-      "Losing streaks happen to every trader — professional and amateur alike. The difference between traders who survive them and traders who blow up is entirely psychological. The wrong responses to a losing streak are: revenge trading (larger positions to recover losses faster), abandoning your strategy (it's broken, time to try something else), or stopping completely out of discouragement.",
-      "The right response is counterintuitive: size down, not up. When you're losing, your judgment is compromised by emotion even if you don't feel it. Cutting position sizes in half during a losing streak means your mistakes cost less while you work out what's going wrong. You preserve capital. You stay in the game.",
-      "Losing streaks also have causes worth examining. Are you entering too late? Are you using stops that are too tight for the volatility? Is the market regime wrong for your strategy — are you trading momentum setups in a choppy, low-conviction market? A losing streak is data, not a verdict on whether you should be trading.",
-    ],
-    callout: {
-      label: 'Losing streak protocol',
-      text: "3 consecutive losses → cut position size in half\nReview: Am I entering at the right level? Are my stops appropriate?\nDo not increase size until you have 2 consecutive wins at reduced size\nNever 'revenge trade' — larger size to recover faster always makes it worse",
-    },
-    tip: "The best traders in the world have losing months. What separates them is that a bad month costs them 5% of their portfolio, not 40%. Drawdown management is the skill that determines long-term survival. Everything else — setups, entries, exits — is secondary to this.",
-    quiz: {
-      question: "You've lost 4 trades in a row. You're down 8% for the month. You see what looks like a perfect setup. What's the right move?",
-      options: [
-        "Take the trade at double your normal size to recover faster",
-        "Skip the trade — you're on a losing streak so your judgment can't be trusted",
-        "Take the trade at half your normal size. Stay disciplined on the entry and stop",
-        "Take a break from trading for at least 2 weeks",
-      ],
-      correctIndex: 2,
-      explanation: "Half size keeps you active and learning while limiting damage if you're wrong. Double size to recover is revenge trading — statistically the single worst response to a losing streak. Stopping completely means you miss setups and lose momentum. Half size, disciplined execution, and reviewing what's going wrong is the professional response.",
+      explanation: "(0.40 × $200) − (0.60 × $80) = $80 − $48 = +$32 per trade. Strong positive expectancy. Over 50 trades, that's +$1,600. Over 200 trades at the same rate, +$6,400. Small positive expectancy, massive result over volume.",
     },
   },
 ]
 
-// Helper — get lessons available for a given stage and completed lesson IDs + behaviors
+// ─── Helpers ────────────────────────────────────────────────
 export function getAvailableLessons(
   currentStage: string,
   completedLessonIds: Set<string>,
@@ -446,20 +455,14 @@ export function getAvailableLessons(
 
   return INVEST_LESSONS.map(lesson => {
     const lessonStageIdx = STAGE_ORDER.indexOf(lesson.stage)
-    const completed = completedLessonIds.has(lesson.id)
 
-    // Stage lock — must be at or past the lesson's stage
     if (lessonStageIdx > stageIdx) {
       return { ...lesson, locked: true, lockReason: `Reach ${lesson.stage} to unlock` }
     }
-
-    // Lesson prerequisite
     if (lesson.requiresLesson && !completedLessonIds.has(lesson.requiresLesson)) {
       const prereq = INVEST_LESSONS.find(l => l.id === lesson.requiresLesson)
       return { ...lesson, locked: true, lockReason: `Complete "${prereq?.title}" first` }
     }
-
-    // Behavioral prerequisite
     if (lesson.requiresBehavior) {
       if (lesson.requiresBehavior === 'first_trade' && tradeCount === 0) {
         return { ...lesson, locked: true, lockReason: 'Log your first trade to unlock' }
@@ -471,9 +474,24 @@ export function getAvailableLessons(
         return { ...lesson, locked: true, lockReason: `Complete ${3 - tradeCount} more trade${3 - tradeCount !== 1 ? 's' : ''} to unlock` }
       }
     }
-
     return { ...lesson, locked: false, lockReason: null }
   })
+}
+
+export function findLessonByTrigger(
+  trigger: LessonTrigger,
+  currentStage: string,
+  completedIds: Set<string>,
+  tradeCount: number,
+  hasClosedTrade: boolean,
+): InvestLesson | null {
+  const available = getAvailableLessons(currentStage, completedIds, tradeCount, hasClosedTrade)
+  const candidates = available.filter(l =>
+    !l.locked &&
+    !completedIds.has(l.id) &&
+    l.triggerOn?.includes(trigger)
+  )
+  return candidates[0] ?? null
 }
 
 export type LessonWithStatus = ReturnType<typeof getAvailableLessons>[0]
