@@ -7,18 +7,21 @@
 //   Apr 19 (a58f): Gap #1 — Sequential debate (Lead → Devil → Rebuttal → Counter)
 //                  Previously Devil and Rebuttal ran in parallel with a hardcoded
 //                  empty challenge set, making the Rebuttal stage non-functional.
-//   Apr 19 (a58f): Gap #2 — Gemini 2.5 Pro Judge (with GEMINI_JUDGE env toggle
-//                  and automatic Claude Opus fallback on any Gemini failure).
-//   Apr 19 (NEW):  Gap #3 — Calibrated adversarial Devil's Advocate.
-//                  Prompts rewritten so the Devil genuinely stress-tests the
-//                  Lead Analyst's thesis, BUT calibrated so that if the data
-//                  genuinely supports the Lead, the Devil returns an HONEST
-//                  NEUTRAL rather than manufacturing bearishness.
-//   Apr 19 (NEW):  Gap #4 — Symmetric Judge presentation.
-//                  Judge now sees both sides' arguments in parallel structure —
-//                  same field count, same depth. Removes the "challenges appear
-//                  twice, concessions show only the Lead losing" bias that
-//                  previously weighted toward the Devil.
+//   Apr 19 (a58f): Gap #2 — Gemini 2.5 Pro Judge (GEMINI_JUDGE env toggle,
+//                  automatic Claude Opus fallback on any Gemini failure).
+//   Apr 19 (b*):   Gap #3 — Calibrated adversarial Devil's Advocate with
+//                  explicit permission to return NEUTRAL when data supports Lead.
+//   Apr 19 (b*):   Gap #4 — Symmetric Judge presentation (both sides get
+//                  identical field structure across both rounds).
+//   Apr 19 (c*):   Gap #5 — Multi-source Round 2 research:
+//                  - News questions trigger parallel fetch from Alpaca + Finnhub
+//                    ticker-news endpoints (fresh headlines, last 6h)
+//                  - Sentiment/narrative questions trigger Grok x_search
+//                  - Fundamentals questions still use Finnhub structured data
+//                  - All sources run in parallel, dedupe, synthesized by Gemini
+//   Apr 19 (c*):   Gap #6 — Judge correction logging to judge_corrections table.
+//                  Every time sanitizeJudgeResult fixes a directional error,
+//                  we write a row so we can measure Gemini vs Claude accuracy.
 //
 // ─────────────────────────────────────────────────────────────
 
@@ -28,6 +31,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 import { buildMacroIntelligenceContext } from './macro-intelligence'
 import type { SignalBundle } from './aggregator'
 import { runSocialScout, formatSocialSentimentForPrompt, type SocialSentiment } from './social-scout'
+import { callGrok } from './grok'
 
 function getAnthropic() { return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) }
 function getOpenAI()    { return new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) }
@@ -220,7 +224,121 @@ function extractText(content: any[]): string {
   return block.text
 }
 
-// Targeted Gemini research during debate — fetches fresh live data and answers
+// ─────────────────────────────────────────────────────────────
+// GAP #5 — Multi-source Round 2 research helpers
+// ─────────────────────────────────────────────────────────────
+// When Lead/Devil ask a research question mid-debate, we now pull from
+// multiple sources in parallel based on what the question is actually
+// asking. Previously we only pulled structured data (earnings, metrics)
+// even when the question was about fresh news or sentiment.
+
+/**
+ * Fetch fresh ticker-specific news from Alpaca (last N hours).
+ * Returns formatted one-line entries with timestamps.
+ */
+async function fetchFreshAlpacaNews(ticker: string, hours = 6): Promise<string[]> {
+  const key = process.env.ALPACA_API_KEY
+  const secret = process.env.ALPACA_SECRET_KEY
+  if (!key || !secret) return []
+  const since = new Date(Date.now() - hours * 3600000).toISOString()
+  try {
+    const res = await fetch(
+      `https://data.alpaca.markets/v1beta1/news?symbols=${ticker}&limit=10&start=${since}&sort=desc`,
+      { headers: { 'APCA-API-KEY-ID': key, 'APCA-API-SECRET-KEY': secret } }
+    )
+    if (!res.ok) return []
+    const data = await res.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return ((data.news as any[]) || []).slice(0, 5).map((n: { created_at: string; headline: string; summary?: string }) => {
+      const ts = new Date(n.created_at).toISOString().slice(5, 16).replace('T', ' ')
+      const headline = (n.headline || '').slice(0, 140)
+      const summary  = (n.summary  || '').slice(0, 140)
+      return `[${ts}] ${headline}${summary ? ' — ' + summary : ''}`
+    })
+  } catch { return [] }
+}
+
+/**
+ * Fetch fresh ticker-specific news from Finnhub company-news endpoint.
+ * Overlaps with Alpaca but covers some different outlets (Reuters, Barron's).
+ */
+async function fetchFreshFinnhubNews(ticker: string, hours = 6): Promise<string[]> {
+  const key = process.env.FINNHUB_API_KEY
+  if (!key) return []
+  // Finnhub uses date-range, minimum 1 day granularity
+  const daysBack = Math.max(1, Math.ceil(hours / 24))
+  const from = new Date(Date.now() - daysBack * 86400000).toISOString().split('T')[0]
+  const to   = new Date().toISOString().split('T')[0]
+  try {
+    const res = await fetch(
+      `https://finnhub.io/api/v1/company-news?symbol=${ticker}&from=${from}&to=${to}&token=${key}`
+    )
+    if (!res.ok) return []
+    const data = await res.json()
+    // Filter to last N hours since Finnhub returns full day; newest first
+    const cutoff = Date.now() - hours * 3600000
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return ((data as any[]) || [])
+      .filter((n: { datetime: number }) => (n.datetime * 1000) >= cutoff)
+      .sort((a: { datetime: number }, b: { datetime: number }) => b.datetime - a.datetime)
+      .slice(0, 5)
+      .map((n: { datetime: number; headline: string; summary?: string }) => {
+        const ts = new Date(n.datetime * 1000).toISOString().slice(5, 16).replace('T', ' ')
+        const headline = (n.headline || '').slice(0, 140)
+        const summary  = (n.summary  || '').slice(0, 140)
+        return `[${ts}] ${headline}${summary ? ' — ' + summary : ''}`
+      })
+  } catch { return [] }
+}
+
+/**
+ * Fire Grok x_search for sentiment-heavy questions only. Returns the
+ * narrative answer or empty string if nothing substantive was found.
+ */
+async function fetchGrokSentiment(ticker: string, question: string): Promise<string> {
+  try {
+    const result = await callGrok(
+      [
+        {
+          role: 'system',
+          content: `You analyze live X (Twitter) posts and social sentiment for ${ticker}. A council member is running a stock debate and has a specific question. Answer in 2-3 sentences, citing specific notable posts or aggregated retail reactions you can verify. If you cannot find at least 3 distinct recent posts addressing this, return exactly: "Insufficient live sentiment signal."`,
+        },
+        { role: 'user', content: question },
+      ],
+      { temperature: 0.3, maxTokens: 400, searchEnabled: true, timeoutMs: 25000 }
+    )
+    const clean = result.trim()
+    if (clean.length < 20 || clean.toLowerCase().includes('insufficient live sentiment')) return ''
+    return clean.slice(0, 600)
+  } catch (e) {
+    console.warn('[grok-sentiment] failed:', (e as Error).message?.slice(0, 100))
+    return ''
+  }
+}
+
+/**
+ * Dedupe headlines by first 60 chars, case-insensitive.
+ * Alpaca and Finnhub frequently syndicate the same articles.
+ */
+function dedupeHeadlines(all: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const h of all) {
+    // Strip the [MM-DD HH:MM] timestamp prefix for comparison
+    const body = h.replace(/^\[[^\]]+\]\s*/, '').toLowerCase()
+    const key  = body.slice(0, 60)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(h)
+    if (out.length >= 6) break
+  }
+  return out
+}
+
+// ─────────────────────────────────────────────────────────────
+// Targeted Gemini research during debate — fetches fresh live data
+// and synthesizes a short answer usable mid-debate.
+// ─────────────────────────────────────────────────────────────
 export async function runTargetedResearch(
   bundle: SignalBundle,
   question: string,
@@ -228,14 +346,22 @@ export async function runTargetedResearch(
 ): Promise<string> {
 
   const q = question.toLowerCase()
-  const needsNews        = q.includes('news') || q.includes('recent') || q.includes('latest') || q.includes('announced') || q.includes('report') || q.includes('catalyst')
-  const needsFundamentals = q.includes('earnings') || q.includes('revenue') || q.includes('pe ') || q.includes('p/e') || q.includes('margin') || q.includes('eps') || q.includes('guidance') || q.includes('analyst') || q.includes('upgrade') || q.includes('downgrade') || q.includes('target')
-  const needsOptions     = q.includes('option') || q.includes('put') || q.includes('call') || q.includes('iv ') || q.includes('implied vol') || q.includes('short interest') || q.includes('unusual')
-  const needsTechnicals  = q.includes('support') || q.includes('resistance') || q.includes('rsi') || q.includes('macd') || q.includes('volume') || q.includes('moving average') || q.includes('trend') || q.includes('vwap') || q.includes('breakout') || q.includes('breakdown')
-  const needsMacro       = q.includes('vix') || q.includes('fed') || q.includes('rate') || q.includes('market') || q.includes('sector') || q.includes('spy') || q.includes('inflation') || q.includes('macro')
+
+  // Question classification
+  const needsNews          = q.includes('news') || q.includes('recent') || q.includes('latest') || q.includes('announced') || q.includes('report') || q.includes('catalyst') || q.includes('breaking')
+  const needsFundamentals  = q.includes('earnings') || q.includes('revenue') || q.includes('pe ') || q.includes('p/e') || q.includes('margin') || q.includes('eps') || q.includes('guidance') || q.includes('analyst') || q.includes('upgrade') || q.includes('downgrade') || q.includes('target')
+  const needsOptions       = q.includes('option') || q.includes('put') || q.includes('call') || q.includes('iv ') || q.includes('implied vol') || q.includes('short interest') || q.includes('unusual')
+  const needsTechnicals    = q.includes('support') || q.includes('resistance') || q.includes('rsi') || q.includes('macd') || q.includes('volume') || q.includes('moving average') || q.includes('trend') || q.includes('vwap') || q.includes('breakout') || q.includes('breakdown')
+  const needsMacro         = q.includes('vix') || q.includes('fed') || q.includes('rate') || q.includes('market') || q.includes('sector') || q.includes('spy') || q.includes('inflation') || q.includes('macro')
+  // New: sentiment-heavy questions → route to Grok
+  const needsSentiment     = q.includes('sentiment') || q.includes('narrative') || q.includes('saying') || q.includes('buzz') || q.includes('reaction') ||
+                             q.includes('twitter') || q.includes('x post') || q.includes('crowd') || q.includes('retail') ||
+                             q.includes('fomo') || q.includes('bearish talk') || q.includes('bullish talk') ||
+                             q.includes('management said') || q.includes('conference call') || q.includes('reacting')
 
   const liveDataParts: string[] = []
 
+  // ── Structured fundamentals data (existing behavior) ──
   if (needsTechnicals || needsFundamentals) {
     try {
       const key = process.env.FINNHUB_API_KEY
@@ -284,6 +410,31 @@ export async function runTargetedResearch(
     } catch { /* non-critical */ }
   }
 
+  // ── GAP #5: Fresh news from Alpaca + Finnhub (parallel) ──
+  // Fires when question is news-related OR when it's sentiment-related
+  // (because sentiment questions often reference news catalysts too).
+  if (needsNews || needsSentiment) {
+    try {
+      const [alpacaHeadlines, finnhubHeadlines] = await Promise.all([
+        fetchFreshAlpacaNews(bundle.ticker, 6),
+        fetchFreshFinnhubNews(bundle.ticker, 6),
+      ])
+      const deduped = dedupeHeadlines([...alpacaHeadlines, ...finnhubHeadlines])
+      if (deduped.length > 0) {
+        liveDataParts.push(`FRESH HEADLINES (last 6h, deduped across Alpaca + Finnhub):\n${deduped.join('\n')}`)
+      }
+    } catch { /* non-critical */ }
+  }
+
+  // ── GAP #5: Grok x_search for sentiment-heavy questions ──
+  if (needsSentiment) {
+    const grokAnswer = await fetchGrokSentiment(bundle.ticker, question)
+    if (grokAnswer) {
+      liveDataParts.push(`LIVE X SENTIMENT (Grok x_search):\n${grokAnswer}`)
+    }
+  }
+
+  // ── Options data (existing) ──
   if (needsOptions) {
     try {
       const tradierKey = process.env.TRADIER_API_KEY
@@ -322,6 +473,7 @@ export async function runTargetedResearch(
     } catch { /* non-critical */ }
   }
 
+  // ── Macro data (existing) ──
   if (needsMacro) {
     try {
       const key = process.env.FINNHUB_API_KEY
@@ -343,9 +495,10 @@ export async function runTargetedResearch(
   }
 
   const liveData = liveDataParts.length > 0
-    ? `\nFRESH LIVE DATA (just fetched):\n${liveDataParts.join('\n')}`
+    ? `\nFRESH LIVE DATA (just fetched):\n${liveDataParts.join('\n\n')}`
     : ''
 
+  // ── Pull pre-built bundle sections for topical context ──
   const sections: string[] = []
   if (needsNews || !needsTechnicals) sections.push(bundle.aiContext.newsSection)
   if (needsTechnicals) sections.push(bundle.aiContext.technicalsSection)
@@ -368,8 +521,8 @@ ${liveData}
 SIGNAL DATA FROM BUNDLE:
 ${sections.join('\n\n')}
 
-Answer in 2-4 sentences using the freshest data available, prioritizing the LIVE DATA section if present. Include specific numbers, dates, and percentages. Be direct and decisive — this goes straight into the debate. If the data genuinely doesn't support the question, say so clearly.`)
-      return result.response.text().trim().slice(0, 600)
+Answer in 2-4 sentences using the freshest data available, prioritizing the LIVE DATA section if present. When FRESH HEADLINES are shown, cite at least one by timestamp if it's directly relevant. When LIVE X SENTIMENT is shown, reference it explicitly. Include specific numbers, dates, and percentages. Be direct and decisive — this goes straight into the debate. If the data genuinely doesn't support the question, say so clearly.`)
+      return result.response.text().trim().slice(0, 700)
     } catch (e) {
       const msg = (e as Error).message ?? ''
       if (!msg.includes('503') && !msg.includes('overload') && !msg.includes('404')) throw e
@@ -476,10 +629,6 @@ JSON ONLY:
 // ─────────────────────────────────────────────────────────────
 // DEVIL'S ADVOCATE — calibrated adversarial framing
 // ─────────────────────────────────────────────────────────────
-// The Devil's job is to stress-test the thesis, not to manufacture
-// bearishness. Rules 1-2 explicitly permit honest NEUTRAL when the
-// data genuinely supports the Lead — this is the calibration that
-// prevents the model from inventing opposition for the sake of it.
 export async function runGPT(bundle: SignalBundle, gemini: GeminiResult, claude: ClaudeResult, social?: SocialSentiment): Promise<GptResult> {
   const devilSystemPrompt = `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. Your role is not to be balanced — it is to stress-test the Lead Analyst's thesis to the point of collapse using data. You are the skeptic institutional PM who has watched retail traders lose money being wrong for the right reasons.
 
@@ -546,7 +695,6 @@ export async function runRebuttal(
   gpt: GptResult
 ): Promise<RebuttalResult> {
 
-  // ── Step 1: Lead Analyst identifies the single most important data gap ──
   const researchAsk = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 150,
@@ -565,11 +713,9 @@ What ONE question should the News Scout research right now to help you respond? 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const researchQuestion = extractText(researchAsk.content as any[]).trim()
 
-  // ── Step 2: Gemini runs the targeted research ──
   const researchContext = `${bundle.aiContext.technicalsSection}\n${bundle.aiContext.fundamentalsSection}\n${bundle.aiContext.smartMoneySection}\n${bundle.aiContext.optionsSection}\n${bundle.aiContext.marketSection}`
   const researchAnswer = await runTargetedResearch(bundle, researchQuestion, researchContext)
 
-  // ── Step 3: Lead Analyst rebuts with fresh research in hand ──
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 800,
@@ -638,9 +784,6 @@ What ONE question should the News Scout research right now to help you counter? 
   const researchContext = `${bundle.aiContext.technicalsSection}\n${bundle.aiContext.fundamentalsSection}\n${bundle.aiContext.smartMoneySection}\n${bundle.aiContext.optionsSection}\n${bundle.aiContext.marketSection}`
   const researchAnswer = await runTargetedResearch(bundle, researchQuestion, researchContext)
 
-  // Counter stage inherits the same calibration as the initial Devil's Advocate
-  // prompt — press on what survives scrutiny, yield on what doesn't, return
-  // NEUTRAL if the Lead's rebuttal genuinely survived.
   const counterSystem = `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research. Use it. This is your final shot.
 
 CALIBRATION: If the Lead Analyst's rebuttal genuinely resolved your strongest challenges and the fresh research confirms their thesis, you must yield honestly — a thoughtful yield beats manufactured pressure. The Judge weighs argument QUALITY. If you still see cracks, press on them with the fresh research as ammunition. Be sharp, specific, and data-driven.`
@@ -686,7 +829,6 @@ JSON ONLY:
 // ─────────────────────────────────────────────────────────────
 // JUDGE — split into two implementations with env toggle
 // ─────────────────────────────────────────────────────────────
-
 function buildJudgeSystemPrompt(bundle: SignalBundle, judgePersona: Record<string, string>, judgePersonaKey: string): string {
   return `You are the Judge of an elite AI stock council for ${bundle.ticker}. The council has three roles: News Scout, Lead Analyst, and Devil's Advocate. You hold NO prior position. ${judgePersona[judgePersonaKey] ?? judgePersona.balanced} 
 
@@ -713,13 +855,6 @@ function buildJudgeUserPrompt(
 ): string {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const personaLabel = (( bundle as any).persona ?? 'balanced').toUpperCase()
-
-  // ── Symmetric presentation of both sides ──
-  // Previous version stacked the Lead's evidence as separate bullets (catalysts,
-  // technicalBasis, fundamentalBasis) while showing the Devil as a single blob.
-  // Now both sides get identical structure: Position | Thesis | Evidence | 
-  // Target/Scenario | Counter. This removes the subtle anchoring bias that
-  // over-weighted the first-read Lead position.
 
   const newsScout = `NEWS SCOUT BRIEFING (neutral source):
 ${gemini.summary}
@@ -824,7 +959,6 @@ JSON ONLY — include ALL fields below:
 }`
 }
 
-// ── Claude Opus implementation (fallback) ──
 async function runJudgeClaude(
   bundle: SignalBundle,
   gemini: GeminiResult,
@@ -859,7 +993,6 @@ async function runJudgeClaude(
   return { ...raw, judgeModel: 'claude-opus-4-7' }
 }
 
-// ── Gemini 2.5 Pro implementation (default) ──
 async function runJudgeGemini(
   bundle: SignalBundle,
   gemini: GeminiResult,
@@ -898,8 +1031,6 @@ async function runJudgeGemini(
   return { ...raw, judgeModel: 'gemini-2.5-pro' }
 }
 
-// Public entry point — picks implementation based on env toggle.
-// Default: Gemini. Set GEMINI_JUDGE=false to revert to Claude Opus.
 export async function runJudge(
   bundle: SignalBundle,
   gemini: GeminiResult,
@@ -927,8 +1058,50 @@ export async function runJudge(
 }
 
 // ─────────────────────────────────────────────────────────────
-// Stop/target sanity fix — the AI sometimes gets direction wrong
+// GAP #6 — Judge correction logging
 // ─────────────────────────────────────────────────────────────
+// Every time sanitizeJudgeResult fixes a directional error, log it
+// so we can measure Gemini vs Claude accuracy over time.
+// Fire-and-forget: never blocks the pipeline on logging failure.
+
+function logJudgeCorrection(
+  bundle: SignalBundle,
+  judgeModel: string | undefined,
+  signal: string,
+  field: 'stopLoss' | 'takeProfit',
+  originalValue: string,
+  correctedValue: string,
+  atrUsed: number,
+  entryPrice: number,
+): void {
+  // Fire-and-forget; any error is swallowed
+  void (async () => {
+    try {
+      const { createClient } = await import('@supabase/supabase-js')
+      const admin = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      )
+      await admin.from('judge_corrections').insert({
+        ticker: bundle.ticker,
+        timeframe: bundle.timeframe,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        persona: ((bundle as any).persona ?? 'balanced') as string,
+        judge_model: judgeModel ?? 'unknown',
+        signal,
+        corrected_field: field,
+        original_value: originalValue?.slice(0, 500) ?? '',
+        corrected_value: correctedValue?.slice(0, 500) ?? '',
+        atr_used: atrUsed > 0 ? atrUsed : null,
+        entry_price: entryPrice > 0 ? entryPrice : null,
+      })
+    } catch (e) {
+      // Never let logging break the pipeline
+      console.warn('[judge-correction] log failed:', (e as Error).message?.slice(0, 100))
+    }
+  })()
+}
+
 function extractPrice(s: string): number | null {
   const m = s?.match(/\$(\d{1,6}(?:\.\d{1,2})?)/)
   return m ? parseFloat(m[1]) : null
@@ -952,12 +1125,14 @@ function sanitizeJudgeResult(judge: JudgeResult, bundle: SignalBundle): JudgeRes
       const corrected = (atr > 0 ? entry - atr * 2 : entry * 0.93).toFixed(2)
       fixedStop = `$${corrected} — 2× ATR below entry (auto-corrected)`
       console.warn(`[pipeline] BULLISH stop ${stop} was >= entry ${entry} — corrected to ${corrected}`)
+      logJudgeCorrection(bundle, judge.judgeModel, signal, 'stopLoss', judge.stopLoss, fixedStop, atr, entry)
     }
 
     if (tp !== null && tp <= entry) {
       const corrected = (atr > 0 ? entry + atr * 3 : entry * 1.08).toFixed(2)
       fixedTarget = `$${corrected} first target (auto-corrected), extended target at resistance`
       console.warn(`[pipeline] BULLISH target ${tp} was <= entry ${entry} — corrected to ${corrected}`)
+      logJudgeCorrection(bundle, judge.judgeModel, signal, 'takeProfit', judge.takeProfit, fixedTarget, atr, entry)
     }
 
     return { ...judge, stopLoss: fixedStop, takeProfit: fixedTarget }
@@ -971,12 +1146,14 @@ function sanitizeJudgeResult(judge: JudgeResult, bundle: SignalBundle): JudgeRes
       const corrected = (atr > 0 ? entry + atr * 2 : entry * 1.07).toFixed(2)
       fixedStop = `$${corrected} — 2× ATR above entry (auto-corrected)`
       console.warn(`[pipeline] BEARISH stop ${stop} was <= entry ${entry} — corrected to ${corrected}`)
+      logJudgeCorrection(bundle, judge.judgeModel, signal, 'stopLoss', judge.stopLoss, fixedStop, atr, entry)
     }
 
     if (tp !== null && tp >= entry) {
       const corrected = (atr > 0 ? entry - atr * 3 : entry * 0.92).toFixed(2)
       fixedTarget = `$${corrected} first target (auto-corrected)`
       console.warn(`[pipeline] BEARISH target ${tp} was >= entry ${entry} — corrected to ${corrected}`)
+      logJudgeCorrection(bundle, judge.judgeModel, signal, 'takeProfit', judge.takeProfit, fixedTarget, atr, entry)
     }
 
     return { ...judge, stopLoss: fixedStop, takeProfit: fixedTarget }
@@ -994,7 +1171,6 @@ export async function runPipeline(
 ): Promise<PipelineResult> {
   const transcript: TranscriptMessage[] = []
 
-  // ── Stage 1: News Scout + Social Scout (parallel — they're independent) ──
   onProgress('gemini_start', {})
   onProgress('grok_start', {})
   const [gemini, social] = await Promise.all([
@@ -1005,7 +1181,6 @@ export async function runPipeline(
   onProgress('gemini_done', gemini)
   onProgress('grok_done', social)
 
-  // Inject macro intelligence context into bundle for Lead Analyst and Judge
   const macroContext = await buildMacroIntelligenceContext(
     bundle.ticker,
     bundle.aiContext?.technicalsSection ? ['technology','energy','financials'] : []
@@ -1015,31 +1190,26 @@ export async function runPipeline(
     bundle = { ...bundle, aiContext: { ...bundle.aiContext, macroIntelligenceSection: macroContext } as any }
   }
 
-  // ── Stage 2: Lead Analyst ─────────────────────────────────
   onProgress('claude_start', { gemini })
   const claude = await runClaude(bundle, gemini, social)
   transcript.push({ role: 'claude', stage: 'lead_analyst', content: claude.reasoning, signal: claude.signal, confidence: claude.confidence, timestamp: ts() })
   onProgress('claude_done', claude)
 
-  // ── Stage 3: Devil's Advocate — sees Lead's ACTUAL thesis and attacks ──
   onProgress('gpt_start', { gemini, claude })
   const gpt = await runGPT(bundle, gemini, claude, social)
   transcript.push({ role: 'gpt', stage: 'devils_advocate', content: gpt.reasoning, signal: gpt.signal, confidence: gpt.confidence, timestamp: ts() })
   onProgress('gpt_done', gpt)
 
-  // ── Stage 4: Lead Analyst Rebuttal — sees Devil's ACTUAL challenges ──
   onProgress('rebuttal_start', { claude, gpt })
   const rebuttal = await runRebuttal(bundle, claude, gpt)
   transcript.push({ role: 'claude', stage: 'rebuttal', content: rebuttal.rebuttal, signal: rebuttal.signal, confidence: rebuttal.confidence, timestamp: ts() })
   onProgress('rebuttal_done', rebuttal)
 
-  // ── Stage 5: Devil's Advocate Counter — sees the rebuttal, final shot ──
   onProgress('counter_start', { gpt, rebuttal })
   const counter = await runCounter(bundle, gpt, rebuttal)
   transcript.push({ role: 'gpt', stage: 'counter', content: counter.finalChallenge, timestamp: ts() })
   onProgress('counter_done', counter)
 
-  // ── Stage 6: Judge — Gemini 2.5 Pro by default, symmetric side-by-side view ──
   onProgress('judge_start', {})
   const judge = await runJudge(bundle, gemini, claude, gpt, rebuttal, counter, 1, social)
   transcript.push({ role: 'judge', stage: 'arbitrator', content: judge.summary, signal: judge.signal, confidence: judge.confidence, timestamp: ts() })
