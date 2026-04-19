@@ -89,6 +89,24 @@ export interface CounterResult {
   closingArgument: string
 }
 
+export interface CalibrationResult {
+  // The draft confidence produced by the first Judge call (pre-calibration)
+  draftConfidence: number
+  draftSignal: Signal
+  // Calibrator's recommended adjustment
+  recommendedConfidence: number
+  adjustmentDelta: number              // recommended - draft (can be negative)
+  adjustmentDirection: 'up' | 'down' | 'unchanged'
+  confidenceBand: { low: number; high: number }
+  // Rationale
+  reasoning: string
+  overconfidenceFlags: string[]        // signs the draft was too confident
+  underconfidenceFlags: string[]       // signs the draft was too cautious
+  mutualConcessions: boolean           // did BOTH sides concede meaningful points?
+  unresolvedChallenge: string | null   // the strongest still-open Devil point
+  calibratorModel: string
+}
+
 export interface JudgeResult {
   signal: Signal
   confidence: number
@@ -120,6 +138,7 @@ export interface PipelineResult {
   rebuttal?: RebuttalResult
   counter?: CounterResult
   judge: JudgeResult
+  calibration?: CalibrationResult
   transcript: TranscriptMessage[]
   social: SocialSentiment
 }
@@ -1298,6 +1317,205 @@ async function runJudgeGemini(
   return { ...raw, judgeModel: 'gemini-2.5-pro' }
 }
 
+// ─────────────────────────────────────────────────────────────
+// GAP #8 — Confidence Calibration Round
+// ─────────────────────────────────────────────────────────────
+// LLMs systematically overconfidence their predictions. The calibrator
+// reads the full debate transcript + draft verdict and recommends a
+// confidence adjustment. Claude Opus runs this (different family than
+// the Gemini Judge) for model-diversity calibration.
+//
+// Direction: bidirectional. Calibrator can push up OR down, with
+// asymmetric thresholds: pushing down is the default when both sides
+// made valid points; pushing up requires strong convergence from both.
+
+/**
+ * Build the calibration system prompt. Independent of lens/persona
+ * because calibration is about confidence math, not analytical framing.
+ */
+function buildCalibratorSystemPrompt(bundle: SignalBundle): string {
+  return `You are the Confidence Calibrator in an elite AI stock council for ${bundle.ticker}. The Judge has just produced a DRAFT verdict. Your job — your ONLY job — is to review the debate and recommend whether the Judge's confidence number should move up, down, or stay.
+
+You are NOT re-arguing the case. You are NOT second-guessing the direction (BULLISH/BEARISH/NEUTRAL). You are auditing the CONFIDENCE NUMBER.
+
+CALIBRATION PRINCIPLES:
+
+1. LLMs systematically overconfidence predictions. The base rate bias is toward numbers that are too high. When in doubt, lean toward lowering.
+
+2. Mutual concessions indicate real uncertainty. If BOTH Lead and Devil conceded meaningful points in Round 2, confidence should reflect that this was a genuinely ambiguous setup — regardless of how strong the winning argument sounded. A 78% confidence on a debate where both sides honestly conceded is almost certainly overcalibrated.
+
+3. Asymmetric thresholds:
+   - PUSH DOWN when you see: mutual concessions, unresolved challenge from the losing side, research answers that partially supported the other side, surface-level argument quality, reflexivity concerns (late cycle, all-time highs, extreme positioning)
+   - PUSH UP requires: strong mutual convergence from both sides, losing side explicitly yielded on multiple points, overwhelming data convergence, clear catalyst alignment
+
+4. Timeframe honesty. A 3-month thesis with 80% confidence is often more justified than a 1-day call with 80% confidence — short timeframes have more noise. Factor this in.
+
+5. Signal-specific calibration:
+   - NEUTRAL can warrant HIGH confidence (70-80%+) when data is genuinely ambiguous
+   - BULLISH/BEARISH above 75% should be rare and only justified by overwhelming convergence
+   - Most real-world calls belong in the 55-72% range
+
+6. Your recommendation is ADVISORY. The Judge will still produce the final verdict. But a well-reasoned recommendation should rarely be ignored.
+
+${timeframeContext(bundle.timeframe)}`
+}
+
+async function runCalibrator(
+  bundle: SignalBundle,
+  draftJudge: JudgeResult,
+  gemini: GeminiResult,
+  claude: ClaudeResult,
+  gpt: GptResult,
+  rebuttal: RebuttalResult | undefined,
+  counter: CounterResult | undefined,
+): Promise<CalibrationResult> {
+
+  const systemPrompt = buildCalibratorSystemPrompt(bundle)
+
+  const concedesCount = rebuttal?.concedes?.length ?? 0
+  const yieldsCount = counter?.yieldsOn?.length ?? 0
+  const bothConceded = concedesCount > 0 && yieldsCount > 0
+
+  const userPrompt = `TICKER: ${bundle.ticker} | TIMEFRAME: ${bundle.timeframe} | PRICE: $${bundle.currentPrice.toFixed(2)}
+
+━━━ DRAFT VERDICT (what you're calibrating) ━━━
+Judge model:     ${draftJudge.judgeModel ?? 'unknown'}
+Draft signal:    ${draftJudge.signal}
+Draft confidence: ${draftJudge.confidence}%
+Draft summary:   ${draftJudge.summary}
+Winning argument: ${draftJudge.winningArgument}
+Dissenting view:  ${draftJudge.dissent}
+
+━━━ DEBATE EVIDENCE (what you use to calibrate) ━━━
+
+LEAD ANALYST (${claude.signal} @ ${claude.confidence}% initially):
+  Reasoning: ${claude.reasoning}
+  ${rebuttal ? `After research, updated to ${rebuttal.signal} @ ${rebuttal.confidence}%.
+  CONCEDED (${concedesCount} points): ${rebuttal.concedes.join('; ')}
+  MAINTAINED: ${rebuttal.maintains.join('; ')}
+  Final stance: ${rebuttal.finalStance}` : '(no rebuttal)'}
+
+DEVIL'S ADVOCATE (${gpt.signal} @ ${gpt.confidence}% initially):
+  Reasoning: ${gpt.reasoning}
+  Strongest counter: ${gpt.strongestCounterArgument}
+  ${counter ? `After research, final challenge: ${counter.finalChallenge}
+  YIELDED (${yieldsCount} points): ${counter.yieldsOn.join('; ')}
+  STILL PRESSING: ${counter.pressesOn.join('; ')}
+  Closing: ${counter.closingArgument}` : '(no counter)'}
+
+NEWS SCOUT: ${gemini.summary}
+
+━━━ CALIBRATION OBSERVATIONS ━━━
+- Both sides conceded meaningful points: ${bothConceded ? 'YES — this is a strong signal of genuine ambiguity; confidence should be moderate' : 'NO — one or both sides did not concede, check if this was intellectual honesty or stubbornness'}
+- Rebuttal research contradicted Lead's initial thesis: inspect rebuttal.researchAnswer vs Lead reasoning
+- Counter research strengthened or weakened Devil's case: inspect counter.researchAnswer
+
+━━━ YOUR TASK ━━━
+
+Output a calibration recommendation. Your recommendation should move the confidence number if the evidence supports it, and leave it unchanged if the draft is genuinely well-calibrated.
+
+Do NOT change the signal direction. Only calibrate confidence.
+
+JSON ONLY:
+{
+  "draftConfidence": ${draftJudge.confidence},
+  "draftSignal": "${draftJudge.signal}",
+  "recommendedConfidence": <0-100 integer — your calibrated recommendation>,
+  "adjustmentDelta": <recommendedConfidence - draftConfidence, can be negative>,
+  "adjustmentDirection": "up|down|unchanged",
+  "confidenceBand": { "low": <integer>, "high": <integer> },
+  "reasoning": "2-3 sentences explaining why confidence should move (or stay). Cite specific concessions, unresolved challenges, or convergence evidence.",
+  "overconfidenceFlags": ["specific signs the draft was too confident, 0-3 items"],
+  "underconfidenceFlags": ["specific signs the draft was too cautious, 0-3 items"],
+  "mutualConcessions": ${bothConceded},
+  "unresolvedChallenge": "the single strongest still-open challenge from the losing side, or null if thesis cleanly won"
+}`
+
+  try {
+    const msg = await getAnthropic().messages.create({
+      model: 'claude-opus-4-7',
+      max_tokens: 1200,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }]
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const raw = parseJSON<Omit<CalibrationResult, 'calibratorModel'>>(extractText(msg.content as any[]))
+    // Clamp recommendedConfidence to 0-100 and recompute delta/direction defensively
+    const clampedRec = Math.max(0, Math.min(100, Math.round(raw.recommendedConfidence)))
+    const delta = clampedRec - draftJudge.confidence
+    const direction: 'up' | 'down' | 'unchanged' =
+      Math.abs(delta) < 2 ? 'unchanged' : delta > 0 ? 'up' : 'down'
+
+    return {
+      ...raw,
+      draftConfidence: draftJudge.confidence,
+      draftSignal: draftJudge.signal,
+      recommendedConfidence: clampedRec,
+      adjustmentDelta: delta,
+      adjustmentDirection: direction,
+      calibratorModel: 'claude-opus-4-7',
+    }
+  } catch (err) {
+    // If calibrator fails, return a no-op calibration so pipeline doesn't crash
+    console.warn('[calibrator] failed, returning no-op:', (err as Error).message?.slice(0, 200))
+    return {
+      draftConfidence: draftJudge.confidence,
+      draftSignal: draftJudge.signal,
+      recommendedConfidence: draftJudge.confidence,
+      adjustmentDelta: 0,
+      adjustmentDirection: 'unchanged',
+      confidenceBand: { low: draftJudge.confidence, high: draftJudge.confidence },
+      reasoning: 'Calibrator unavailable — draft confidence preserved unchanged.',
+      overconfidenceFlags: [],
+      underconfidenceFlags: [],
+      mutualConcessions: bothConceded,
+      unresolvedChallenge: null,
+      calibratorModel: 'calibrator-failed',
+    }
+  }
+}
+
+/**
+ * Log calibration result to the calibration_log table for backtest analysis.
+ * Fire-and-forget — never blocks pipeline on logging failure.
+ */
+function logCalibration(
+  bundle: SignalBundle,
+  calibration: CalibrationResult,
+  finalJudge: JudgeResult,
+): void {
+  void (async () => {
+    try {
+      const { createClient } = await import('@supabase/supabase-js')
+      const admin = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      )
+      await admin.from('calibration_log').insert({
+        ticker: bundle.ticker,
+        timeframe: bundle.timeframe,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        persona: ((bundle as any).persona ?? 'balanced') as string,
+        judge_model: finalJudge.judgeModel ?? 'unknown',
+        calibrator_model: calibration.calibratorModel,
+        signal: finalJudge.signal,
+        draft_confidence: calibration.draftConfidence,
+        recommended_confidence: calibration.recommendedConfidence,
+        final_confidence: finalJudge.confidence,
+        adjustment_delta: calibration.adjustmentDelta,
+        adjustment_direction: calibration.adjustmentDirection,
+        mutual_concessions: calibration.mutualConcessions,
+        unresolved_challenge: calibration.unresolvedChallenge?.slice(0, 500) ?? null,
+        reasoning: calibration.reasoning?.slice(0, 1000) ?? null,
+        overconfidence_flag_count: calibration.overconfidenceFlags?.length ?? 0,
+        underconfidence_flag_count: calibration.underconfidenceFlags?.length ?? 0,
+      })
+    } catch (e) {
+      console.warn('[calibration-log] failed:', (e as Error).message?.slice(0, 100))
+    }
+  })()
+}
+
 export async function runJudge(
   bundle: SignalBundle,
   gemini: GeminiResult,
@@ -1308,19 +1526,155 @@ export async function runJudge(
   round = 1,
   social?: SocialSentiment
 ): Promise<JudgeResult> {
+  // Note: calibration result is stored on the returned judge via a side-channel
+  // attached during pipeline orchestration. This function returns JudgeResult
+  // for backward compatibility with any caller that just wants the final verdict.
+  return runJudgeWithCalibration(bundle, gemini, claude, gpt, rebuttal, counter, round, social)
+    .then(r => r.judge)
+}
+
+/**
+ * Internal: runs Judge draft → Calibrator → Judge final (Option B architecture).
+ * Returns BOTH the final verdict AND the calibration metadata so the pipeline
+ * can log the calibration and expose it to the UI.
+ *
+ * If calibration produces an 'unchanged' recommendation, we skip the second
+ * Judge call entirely and apply the draft as the final verdict — saves cost
+ * in the common case where the draft was already well-calibrated.
+ */
+export async function runJudgeWithCalibration(
+  bundle: SignalBundle,
+  gemini: GeminiResult,
+  claude: ClaudeResult,
+  gpt: GptResult,
+  rebuttal?: RebuttalResult,
+  counter?: CounterResult,
+  round = 1,
+  social?: SocialSentiment
+): Promise<{ judge: JudgeResult; calibration: CalibrationResult }> {
+
   const useGemini = process.env.GEMINI_JUDGE !== 'false'
   const judgeRunner = useGemini ? runJudgeGemini : runJudgeClaude
 
+  // ── Step 1: Draft verdict from the primary Judge ──
+  let draft: JudgeResult
   try {
-    const result = await judgeRunner(bundle, gemini, claude, gpt, rebuttal, counter, round, social)
-    return sanitizeJudgeResult(result, bundle)
+    draft = await judgeRunner(bundle, gemini, claude, gpt, rebuttal, counter, round, social)
   } catch (err) {
     if (useGemini) {
-      console.warn('[judge] Gemini failed, falling back to Claude Opus:', (err as Error).message?.slice(0, 200))
-      const result = await runJudgeClaude(bundle, gemini, claude, gpt, rebuttal, counter, round, social)
-      return sanitizeJudgeResult({ ...result, judgeModel: 'claude-opus-4-7-fallback' }, bundle)
+      console.warn('[judge] Gemini failed on draft, falling back to Claude Opus:', (err as Error).message?.slice(0, 200))
+      draft = await runJudgeClaude(bundle, gemini, claude, gpt, rebuttal, counter, round, social)
+      draft.judgeModel = 'claude-opus-4-7-fallback'
+    } else {
+      throw err
     }
-    throw err
+  }
+
+  // ── Step 2: Calibrator reviews the draft confidence ──
+  const calibration = await runCalibrator(bundle, draft, gemini, claude, gpt, rebuttal, counter)
+
+  // ── Step 3: If calibrator recommended an adjustment, re-run the Judge
+  //    with the calibration as explicit guidance. Otherwise skip and save cost.
+  let finalJudge: JudgeResult
+
+  if (calibration.adjustmentDirection === 'unchanged') {
+    // Draft was well-calibrated — no second Judge call needed
+    finalJudge = sanitizeJudgeResult(draft, bundle)
+  } else {
+    // Re-run Judge with calibration input
+    try {
+      finalJudge = await runJudgeWithCalibrationInput(
+        bundle, gemini, claude, gpt, rebuttal, counter, round, social,
+        draft, calibration, useGemini
+      )
+      finalJudge = sanitizeJudgeResult(finalJudge, bundle)
+    } catch (err) {
+      // If the final call fails, fall back to draft with the calibrator's
+      // recommended confidence applied directly. Better than losing the debate.
+      console.warn('[judge-final] re-run failed, applying calibration to draft:', (err as Error).message?.slice(0, 200))
+      finalJudge = sanitizeJudgeResult({
+        ...draft,
+        confidence: calibration.recommendedConfidence,
+      }, bundle)
+    }
+  }
+
+  // ── Fire-and-forget: log calibration for backtest analysis ──
+  logCalibration(bundle, calibration, finalJudge)
+
+  return { judge: finalJudge, calibration }
+}
+
+/**
+ * Re-run the Judge with calibration input. Uses the same Judge model (Gemini
+ * by default, Claude fallback). The calibration recommendation is injected
+ * into the Judge's user prompt as explicit guidance.
+ */
+async function runJudgeWithCalibrationInput(
+  bundle: SignalBundle,
+  gemini: GeminiResult,
+  claude: ClaudeResult,
+  gpt: GptResult,
+  rebuttal: RebuttalResult | undefined,
+  counter: CounterResult | undefined,
+  round: number,
+  social: SocialSentiment | undefined,
+  draft: JudgeResult,
+  calibration: CalibrationResult,
+  useGemini: boolean,
+): Promise<JudgeResult> {
+
+  const calibrationGuidance = `
+
+━━━ CALIBRATION GUIDANCE FROM INDEPENDENT REVIEWER ━━━
+
+Your DRAFT verdict was ${draft.signal} @ ${draft.confidence}% confidence.
+
+An independent calibrator (Claude Opus) reviewed the full debate and the draft, and recommends:
+  - Adjust confidence ${calibration.adjustmentDirection.toUpperCase()} to approximately ${calibration.recommendedConfidence}%
+  - Reasonable confidence band: ${calibration.confidenceBand.low}%–${calibration.confidenceBand.high}%
+  - Reasoning: ${calibration.reasoning}
+  ${calibration.overconfidenceFlags.length > 0 ? `- Overconfidence flags raised: ${calibration.overconfidenceFlags.join('; ')}` : ''}
+  ${calibration.underconfidenceFlags.length > 0 ? `- Underconfidence flags raised: ${calibration.underconfidenceFlags.join('; ')}` : ''}
+  ${calibration.unresolvedChallenge ? `- Strongest unresolved challenge: "${calibration.unresolvedChallenge}"` : ''}
+
+This calibrator did not form an opinion on direction (BULLISH/BEARISH/NEUTRAL) — only on how certain you should be. You are NOT required to follow this recommendation blindly, but well-reasoned calibration advice should rarely be ignored. Use the recommended confidence as your baseline and only deviate if you have a specific reason.
+
+Keep your verdict structure identical to the draft. Primarily update the confidence number and, if needed, soften or strengthen the summary/winningArgument/dissent to match the new calibrated confidence level.`
+
+  // Build a user prompt that re-uses the main Judge logic but appends calibration guidance
+  if (useGemini) {
+    const systemPrompt = buildJudgeSystemPrompt(bundle)
+    const userPrompt = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social)
+    const fullPrompt = `${systemPrompt}\n\n${userPrompt}${calibrationGuidance}`
+
+    const model = getGenAI().getGenerativeModel({
+      model: 'gemini-2.5-pro',
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: 4096,
+        responseMimeType: 'application/json',
+      },
+    })
+    const result = await model.generateContent(fullPrompt)
+    const text = result.response.text()
+    const raw = parseJSON<JudgeResult>(text)
+    return { ...raw, judgeModel: 'gemini-2.5-pro-calibrated' }
+  } else {
+    const systemPrompt = buildJudgeSystemPrompt(bundle)
+    const userPrompt = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social) + calibrationGuidance
+
+    const msg = await getAnthropic().messages.create({
+      model: 'claude-opus-4-7',
+      max_tokens: 4000,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }]
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const textBlock = msg.content.find((b: any) => b.type === 'text') as { type: 'text'; text: string } | undefined
+    if (!textBlock) throw new Error('No text content in calibrated Judge response')
+    const raw = parseJSON<JudgeResult>(textBlock.text)
+    return { ...raw, judgeModel: 'claude-opus-4-7-calibrated' }
   }
 }
 
@@ -1472,9 +1826,9 @@ export async function runPipeline(
   onProgress('counter_done', counter)
 
   onProgress('judge_start', {})
-  const judge = await runJudge(bundle, gemini, claude, gpt, rebuttal, counter, 1, social)
+  const { judge, calibration } = await runJudgeWithCalibration(bundle, gemini, claude, gpt, rebuttal, counter, 1, social)
   transcript.push({ role: 'judge', stage: 'arbitrator', content: judge.summary, signal: judge.signal, confidence: judge.confidence, timestamp: ts() })
   onProgress('judge_done', judge)
 
-  return { gemini, claude, gpt, rebuttal, counter, judge, transcript, social }
+  return { gemini, claude, gpt, rebuttal, counter, judge, calibration, transcript, social }
 }
