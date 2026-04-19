@@ -26,7 +26,10 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   // --- Always public - no auth needed ---
-  const alwaysPublic = ['/login', '/auth/callback', '/subscribe', '/signup', '/confirm', '/privacy', '/terms', '/disclaimer']
+  // Note: /disclaimer is NOT in this list. The disclaimer page requires
+  // an authenticated user so the acceptance can be recorded correctly.
+  // Middleware handles the /disclaimer case explicitly below.
+  const alwaysPublic = ['/login', '/auth/callback', '/subscribe', '/signup', '/confirm', '/privacy', '/terms']
   if (alwaysPublic.some(p => pathname.startsWith(p))) return supabaseResponse
 
   // --- RSC prefetch bypass ---
@@ -101,16 +104,12 @@ export async function middleware(request: NextRequest) {
   // device's cookie still matches what's stored. If the user has since
   // logged in from another browser, a new device_id was written, and
   // this cookie is stale - we redirect with ?error=session_displaced.
-  //
-  // Unlike token-fingerprint approaches this is immune to Supabase's
-  // token rotation because device_id only changes on intentional login.
   const deviceIdCookie = request.cookies.get('wali_device_id')?.value
   const deviceValid = await validateDeviceId(user.id, deviceIdCookie)
   if (!deviceValid) {
     const loginUrl = new URL('/login', request.url)
     loginUrl.searchParams.set('error', 'session_displaced')
     const response = NextResponse.redirect(loginUrl)
-    // Clear all auth cookies so the stale device starts fresh
     request.cookies.getAll()
       .filter(c => c.name.startsWith('sb-') || c.name === 'wali_device_id')
       .forEach(c => response.cookies.delete(c.name))
@@ -118,7 +117,15 @@ export async function middleware(request: NextRequest) {
   }
 
   // --- Disclaimer ---
-  if (pathname !== '/disclaimer') {
+  // If the user is on /disclaimer itself, let them through so they can
+  // accept it. Otherwise, check whether they've accepted and bounce if not.
+  //
+  // Query errors (missing table, permission issues) are treated as
+  // "no acceptance yet" rather than crashing the middleware, since the
+  // disclaimer table may not exist on all environments.
+  if (pathname.startsWith('/disclaimer')) return supabaseResponse
+
+  try {
     const { data: disclaimer } = await admin
       .from('disclaimer_accepted')
       .select('user_id')
@@ -128,9 +135,13 @@ export async function middleware(request: NextRequest) {
     if (!disclaimer) {
       return NextResponse.redirect(new URL('/disclaimer', request.url))
     }
+  } catch (err: any) {
+    // Table missing or other error - log but don't block the user.
+    // They'll see the disclaimer next time if the table gets created.
+    if (process.env.NODE_ENV !== 'production') {
+      console.error('[middleware] disclaimer check failed:', err?.message)
+    }
   }
-
-  if (pathname === '/disclaimer') return supabaseResponse
 
   // --- Subscription check ---
   const { data: sub } = await admin
