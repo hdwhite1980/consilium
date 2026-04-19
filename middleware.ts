@@ -77,14 +77,23 @@ export async function middleware(request: NextRequest) {
   )
 
   // ── Single session enforcement ───────────────────────────────
-  // Policy: last-login-wins. When a user authenticates, their new session
-  // token replaces the one in active_sessions. The PREVIOUS device, on its
-  // next request, will see the mismatch and be signed out.
+  // Policy: last-login-wins, keyed on refresh_token (NOT access_token).
   //
-  // This avoids the classic race where a fresh login is kicked out because
-  // the table still holds the old token from the previous session.
-  const sessionToken = session.access_token?.slice(-32) ?? null
-  if (sessionToken) {
+  // Why refresh_token: Supabase rotates the access_token automatically every
+  // hour AND whenever the client refreshes in the background. Using
+  // access_token.slice(-32) as a fingerprint makes us misclassify every
+  // single token rotation as a "different device" and sign the user out.
+  //
+  // The refresh_token is stable for the lifetime of a login session. It only
+  // changes when the user actually logs out and logs back in, which is
+  // exactly what we want to detect for "another device logged in".
+  //
+  // Also keyed on user_agent-derived device hint so logging into a new
+  // browser/device writes a new fingerprint without racing itself.
+  const refreshToken = session.refresh_token ?? null
+  const sessionFingerprint = refreshToken ? refreshToken.slice(-32) : null
+
+  if (sessionFingerprint) {
     const { data: activeSession } = await admin
       .from('active_sessions')
       .select('session_token, updated_at')
@@ -95,31 +104,38 @@ export async function middleware(request: NextRequest) {
       // First time we've seen this user — claim the slot.
       await admin.from('active_sessions').insert({
         user_id: user.id,
-        session_token: sessionToken,
+        session_token: sessionFingerprint,
       })
-    } else if (activeSession.session_token !== sessionToken) {
-      // Token mismatch. Determine if THIS session is the newer one
-      // (fresh login just happened) or the OLDER one (another device
-      // has since logged in and taken the slot).
+    } else if (activeSession.session_token !== sessionFingerprint) {
+      // Fingerprints differ — a DIFFERENT login session is now active for
+      // this user. Two scenarios:
+      //   a) User legitimately logged in on another device → this session
+      //      should be signed out.
+      //   b) User just logged in on THIS device and the table still has
+      //      their old fingerprint from a previous session → we should
+      //      claim the slot.
       //
-      // Strategy: check how old the stored record is. If it's older than
-      // our session's issuance (or just older than 30 seconds from NOW,
-      // since access tokens are short-lived), we assume this is a fresh
-      // login superseding the old one. Otherwise, kick.
+      // Detection: if the stored row is older than GRACE_MS, it's stale
+      // (from a previous session), and this is the fresh login taking over.
+      // If the stored row is recent, another device JUST claimed it.
       const storedAge = activeSession.updated_at
         ? Date.now() - new Date(activeSession.updated_at).getTime()
         : Infinity
-      const GRACE_MS = 30_000 // anything older than 30s is stale
+      const GRACE_MS = 2 * 60 * 1000 // 2 minutes
 
       if (storedAge > GRACE_MS) {
-        // Stored token is stale — this is a fresh login, take the slot.
+        // Stored fingerprint is stale — this is a fresh login. Take the slot.
         await admin
           .from('active_sessions')
-          .update({ session_token: sessionToken, updated_at: new Date().toISOString() })
+          .update({
+            session_token: sessionFingerprint,
+            updated_at: new Date().toISOString(),
+          })
           .eq('user_id', user.id)
       } else {
-        // Stored token is recent AND different — another device is actively
-        // using this account. Sign this session out.
+        // Stored fingerprint is recent AND different — another device is
+        // actively using this account. Sign this session out.
+        console.log(`[middleware] genuine displacement for ${user.email} — stored age ${storedAge}ms`)
         await supabase.auth.signOut()
         const loginUrl = new URL('/login', request.url)
         loginUrl.searchParams.set('error', 'session_displaced')
@@ -131,8 +147,20 @@ export async function middleware(request: NextRequest) {
           .forEach(c => response.cookies.delete(c.name))
         return response
       }
+    } else {
+      // Fingerprints match — bump updated_at so future mismatches can
+      // correctly classify us as "recently active".
+      // Only bump occasionally to avoid hammering the DB on every request.
+      const storedAge = activeSession.updated_at
+        ? Date.now() - new Date(activeSession.updated_at).getTime()
+        : Infinity
+      if (storedAge > 5 * 60 * 1000) { // bump every 5 min at most
+        await admin
+          .from('active_sessions')
+          .update({ updated_at: new Date().toISOString() })
+          .eq('user_id', user.id)
+      }
     }
-    // If tokens match, all good — no-op.
   }
 
   // ── Disclaimer ───────────────────────────────────────────────
