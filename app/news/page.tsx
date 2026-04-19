@@ -311,7 +311,7 @@ export default function NewsPage() {
   const handleSignOut = async () => {
     try { await (createClient()).auth.signOut({ scope: 'local' }) } catch {}
     try { await fetch('/api/auth/session', { method: 'DELETE' }) } catch {}
-    window.location.href = '/login'router.refresh()
+    window.location.href = '/login'
   }
 
   const handleAnalyze = (ticker: string) => {
