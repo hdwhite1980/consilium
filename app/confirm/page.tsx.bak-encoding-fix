@@ -20,7 +20,7 @@ function ConfirmInner() {
     const error_desc = searchParams.get('error_description')
     const verified   = searchParams.get('verified')
 
-    // Already verified by auth/callback — just show success
+    // Already verified by auth/callback â€” just show success
     if (verified === 'true') {
       setStatus('success')
       setTimeout(() => router.push(next), 1500)
@@ -52,12 +52,12 @@ function ConfirmInner() {
       return
     }
 
-    // Flow 2: token_hash — handle both PKCE (pkce_ prefix) and OTP tokens
+    // Flow 2: token_hash â€” handle both PKCE (pkce_ prefix) and OTP tokens
     if (token_hash && type) {
       const isPKCE = token_hash.startsWith('pkce_')
 
       if (isPKCE) {
-        // PKCE token — exchange using exchangeCodeForSession
+        // PKCE token â€” exchange using exchangeCodeForSession
         supabase.auth.exchangeCodeForSession(token_hash).then(({ error }) => {
           if (error) {
             console.error('PKCE exchange error:', error.message)
@@ -130,16 +130,16 @@ function ConfirmInner() {
                   style={{ background: '#a78bfa', animationDelay: `${i * 0.15}s` }} />
               ))}
             </div>
-            <p className="text-white/50 text-sm">Verifying your email…</p>
+            <p className="text-white/50 text-sm">Verifying your emailâ€¦</p>
           </div>
         )}
 
         {status === 'success' && (
           <div className="space-y-4">
-            <div className="text-5xl">✓</div>
+            <div className="text-5xl">âœ“</div>
             <div>
               <h1 className="text-xl font-bold text-white mb-2">Email confirmed!</h1>
-              <p className="text-sm text-white/50">Taking you to Wali-OS…</p>
+              <p className="text-sm text-white/50">Taking you to Wali-OSâ€¦</p>
             </div>
           </div>
         )}
