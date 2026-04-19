@@ -29,14 +29,21 @@ export async function middleware(request: NextRequest) {
   if (alwaysPublic.some(p => pathname.startsWith(p))) return supabaseResponse
 
   // ── RSC prefetch bypass ─────────────────────────────────────
-  // Next.js fires RSC prefetch requests (with _rsc query param and/or
-  // RSC header) that race with the main navigation. When the main nav
-  // and the prefetch both call getSession() in parallel, Supabase's
-  // refresh token rotation invalidates whichever request arrives second,
-  // causing a false auth error that bounces the user to /login.
-  // Skip middleware auth entirely for RSC prefetches - the main nav
-  // will handle auth correctly on its own.
-  if (request.nextUrl.searchParams.has('_rsc') || request.headers.get('rsc') === '1' || request.headers.get('next-router-prefetch') === '1') {
+  // Next.js fires RSC prefetch requests that race with main navigations.
+  // When both call getSession() in parallel, Supabase's refresh token
+  // rotation invalidates whichever request arrives second, causing a
+  // false auth error that bounces the user to /login.
+  //
+  // Detect ALL of the following prefetch/RSC signals:
+  const isRSC = request.headers.get('rsc') === '1'
+                || request.headers.get('next-router-prefetch') === '1'
+                || request.headers.get('next-router-state-tree') !== null
+                || request.headers.get('purpose') === 'prefetch'
+                || request.headers.get('sec-purpose')?.includes('prefetch') === true
+                || request.nextUrl.searchParams.has('_rsc')
+                || request.nextUrl.search.includes('_rsc=')
+  if (isRSC) {
+    console.log('[middleware] RSC/prefetch bypass:', pathname, request.nextUrl.search)
     return supabaseResponse
   }
 
