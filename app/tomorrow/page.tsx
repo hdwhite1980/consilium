@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, RefreshCw, Calendar, Clock, TrendingUp, TrendingDown, AlertTriangle, BookOpen, Zap } from 'lucide-react'
+import { ArrowLeft, RefreshCw, Calendar, Clock, TrendingUp, TrendingDown, AlertTriangle, BookOpen, Zap, Eye, BarChart3, Factory, Newspaper, Globe, Search } from 'lucide-react'
 import { createClient } from '@/app/lib/auth/client'
 
 interface WatchlistItem {
@@ -72,19 +72,22 @@ const MAG_LABEL = { high: 'Big move expected', medium: 'Moderate move', low: 'Sm
 const RISK_COLOR = { high: '#f87171', medium: '#fbbf24', low: '#34d399' }
 const IMPACT_COLOR = { high: '#f87171', medium: '#fbbf24', low: '#94a3b8' }
 
-const SETUP_ICONS: Record<string, string> = {
-  earnings: '📊',
-  technical_breakout: '📈',
-  news_continuation: '📰',
-  sector_play: '🏭',
-  macro_event: '🌐',
-  catalyst: '⚡',
+function setupIcon(setupType: string, color: string) {
+  const props = { size: 16, style: { color, flexShrink: 0 } }
+  switch (setupType) {
+    case 'earnings':           return <BarChart3 {...props} />
+    case 'technical_breakout': return <TrendingUp {...props} />
+    case 'news_continuation':  return <Newspaper {...props} />
+    case 'sector_play':        return <Factory {...props} />
+    case 'macro_event':        return <Globe {...props} />
+    case 'catalyst':           return <Zap {...props} />
+    default:                   return <Search {...props} />
+  }
 }
 
 function WatchCard({ item, onAnalyze }: { item: WatchlistItem; onAnalyze: (t: string) => void }) {
   const [expanded, setExpanded] = useState(false)
   const color = SIG_COLOR[item.signal]
-  const icon = SETUP_ICONS[item.setupType] ?? '🔍'
 
   return (
     <div className="rounded-xl border transition-all"
@@ -92,7 +95,7 @@ function WatchCard({ item, onAnalyze }: { item: WatchlistItem; onAnalyze: (t: st
       <div className="p-4 cursor-pointer" onClick={() => setExpanded(!expanded)}>
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
-            <span className="text-lg shrink-0">{icon}</span>
+            {setupIcon(item.setupType, color)}
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="font-mono font-bold text-sm px-2 py-0.5 rounded-md"
@@ -169,6 +172,24 @@ export default function TomorrowPage() {
   const [status, setStatus] = useState('Preparing tomorrow\'s playbook...')
   const [error, setError] = useState<string | null>(null)
 
+  // Pre-Market Brief state (from /api/market-digest)
+  const [premarket, setPremarket] = useState<{
+    brief_date?: string; headline?: string; sentiment_score?: number; sentiment_label?: string;
+    open_direction?: string; expected_move?: number; top_catalysts?: string[];
+    sectors_bullish?: string[]; sectors_bearish?: string[]; tickers_to_watch?: string[];
+    brief_text?: string;
+  } | null>(null)
+  const [briefExpanded, setBriefExpanded] = useState(false)
+  const [briefLoading, setBriefLoading] = useState(false)
+
+  // Social & Political Signals state (from /api/social-signals)
+  const [socialSignals, setSocialSignals] = useState<Array<{
+    id: string; person_label: string; headline: string; analysis?: string;
+    action_signal?: string; market_impact?: 'bullish' | 'bearish' | 'neutral';
+    impact_magnitude?: string; affected_tickers?: string[]; detected_at: string;
+  }>>([])
+  const [socialLoading, setSocialLoading] = useState(false)
+
   const load = useCallback(async (refresh = false) => {
     setLoading(true)
     setError(null)
@@ -200,6 +221,40 @@ export default function TomorrowPage() {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  // Pull latest pre-market brief on mount
+  useEffect(() => {
+    fetch('/api/market-digest')
+      .then(r => r.json())
+      .then(d => { if (d.brief) setPremarket(d.brief) })
+      .catch(() => {})
+  }, [])
+
+  // Pull cached social signals on mount
+  useEffect(() => {
+    fetch('/api/social-signals')
+      .then(r => r.json())
+      .then(d => setSocialSignals(d.signals || []))
+      .catch(() => {})
+  }, [])
+
+  const runPreMarketBrief = async () => {
+    setBriefLoading(true)
+    try {
+      await fetch('/api/market-digest?type=premarket', { method: 'POST' })
+      const d = await fetch('/api/market-digest').then(r => r.json())
+      if (d.brief) setPremarket(d.brief)
+    } finally { setBriefLoading(false) }
+  }
+
+  const scanSocial = async () => {
+    setSocialLoading(true)
+    try {
+      await fetch('/api/social-signals', { method: 'POST' })
+      const d = await fetch('/api/social-signals').then(r => r.json())
+      setSocialSignals(d.signals || [])
+    } finally { setSocialLoading(false) }
+  }
 
   const handleSignOut = async () => {
     // Server cleanup first (best effort)
@@ -241,7 +296,7 @@ export default function TomorrowPage() {
           {data?.cached && !loading && (
             <span className="text-[10px] font-mono px-2.5 py-1 rounded-full"
               style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.25)' }}>
-              ⏱ {data.ageMinutes}m ago
+              <Clock size={10} aria-hidden="true" className="inline-block mr-1" />{data.ageMinutes}m ago
             </span>
           )}
           <button onClick={() => load(true)} disabled={loading}
@@ -273,7 +328,7 @@ export default function TomorrowPage() {
 
       {error && !loading && (
         <div className="flex flex-col items-center justify-center flex-1 gap-3 p-8">
-          <div className="text-sm text-red-400">⚠ {error}</div>
+          <div className="text-sm text-red-400 flex items-center gap-1.5"><AlertTriangle size={13} aria-hidden="true" /> {error}</div>
           <button onClick={() => load()} className="text-xs text-white/40 hover:text-white/60 underline">Try again</button>
         </div>
       )}
@@ -304,6 +359,122 @@ export default function TomorrowPage() {
           </div>
 
           <div className="max-w-4xl mx-auto px-3 sm:px-5 py-5 space-y-8">
+
+            {/* Pre-Market Brief - sentiment, open direction, expected move */}
+            <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+              <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+                <div className="flex items-center gap-2">
+                  <Calendar size={14} style={{ color: '#60a5fa' }} />
+                  <span className="text-sm font-bold">Pre-Market Brief</span>
+                  {premarket?.brief_date && (
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full"
+                      style={{ background: 'rgba(96,165,250,0.12)', color: '#60a5fa', border: '1px solid rgba(96,165,250,0.2)' }}>
+                      {premarket.brief_date}
+                    </span>
+                  )}
+                </div>
+                <button onClick={runPreMarketBrief} disabled={briefLoading}
+                  className="text-[10px] font-mono px-2.5 py-1.5 rounded-lg disabled:opacity-40 hover:opacity-80"
+                  style={{ background: 'rgba(96,165,250,0.1)', color: '#60a5fa', border: '1px solid rgba(96,165,250,0.2)' }}
+                  aria-label={briefLoading ? 'Refreshing brief' : 'Refresh pre-market brief'}>
+                  {briefLoading ? '...' : 'Refresh'}
+                </button>
+              </div>
+
+              {premarket ? (
+                <div className="px-5 py-4">
+                  <div className="flex items-center gap-2 mb-2 flex-wrap">
+                    {typeof premarket.sentiment_score === 'number' && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full font-mono font-bold"
+                        style={{
+                          background: premarket.sentiment_score > 20 ? 'rgba(52,211,153,0.12)' : premarket.sentiment_score < -20 ? 'rgba(248,113,113,0.12)' : 'rgba(251,191,36,0.12)',
+                          color: premarket.sentiment_score > 20 ? '#34d399' : premarket.sentiment_score < -20 ? '#f87171' : '#fbbf24',
+                        }}>
+                        {premarket.sentiment_label?.replace('_',' ')} {premarket.sentiment_score > 0 ? '+' : ''}{premarket.sentiment_score}
+                      </span>
+                    )}
+                    {premarket.open_direction && (
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full"
+                        style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>
+                        {premarket.open_direction.replace('_',' ')}{premarket.expected_move ? ` +/- ${premarket.expected_move}%` : ''}
+                      </span>
+                    )}
+                  </div>
+                  {premarket.headline && (
+                    <p className="text-sm font-semibold mb-2" style={{ color: 'var(--text)' }}>{premarket.headline}</p>
+                  )}
+                  {premarket.top_catalysts && premarket.top_catalysts.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {premarket.top_catalysts.map((c: string) => (
+                        <span key={c} className="text-[10px] px-2 py-0.5 rounded-full font-mono"
+                          style={{ background: 'rgba(96,165,250,0.08)', color: '#60a5fa', border: '1px solid rgba(96,165,250,0.15)' }}>
+                          {c}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-3 mb-2">
+                    {premarket.sectors_bullish && premarket.sectors_bullish.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-mono mb-1" style={{ color: 'var(--text3)' }}>BULLISH</p>
+                        <div className="flex flex-wrap gap-1">
+                          {premarket.sectors_bullish.map((s: string) => (
+                            <span key={s} className="text-[10px] px-1.5 py-0.5 rounded font-mono"
+                              style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399' }}>{s}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {premarket.sectors_bearish && premarket.sectors_bearish.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-mono mb-1" style={{ color: 'var(--text3)' }}>BEARISH</p>
+                        <div className="flex flex-wrap gap-1">
+                          {premarket.sectors_bearish.map((s: string) => (
+                            <span key={s} className="text-[10px] px-1.5 py-0.5 rounded font-mono"
+                              style={{ background: 'rgba(248,113,113,0.1)', color: '#f87171' }}>{s}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  {premarket.tickers_to_watch && premarket.tickers_to_watch.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {premarket.tickers_to_watch.map((t: string) => (
+                        <button key={t} onClick={() => handleAnalyze(t)}
+                          className="text-xs font-mono font-bold px-2.5 py-1 rounded-lg hover:opacity-80"
+                          style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)' }}
+                          aria-label={`Analyze ${t}`}>
+                          {t}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {premarket.brief_text && (
+                    <>
+                      <button onClick={() => setBriefExpanded(!briefExpanded)}
+                        className="text-[10px] font-mono transition-opacity hover:opacity-80"
+                        style={{ color: 'var(--text3)' }}
+                        aria-expanded={briefExpanded}
+                        aria-controls="pre-market-full-text">
+                        {briefExpanded ? 'collapse' : 'read full brief'}
+                      </button>
+                      {briefExpanded && (
+                        <div id="pre-market-full-text"
+                          className="mt-2 text-[11px] leading-relaxed whitespace-pre-wrap border-t pt-3 max-h-96 overflow-y-auto"
+                          style={{ borderColor: 'var(--border)', color: 'var(--text2)' }}>
+                          {premarket.brief_text.replace(/<json>[\s\S]*?<\/json>/gi, '').trim()}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              ) : (
+                <div className="px-5 py-6 text-center">
+                  <p className="text-sm mb-1" style={{ color: 'var(--text3)' }}>No pre-market brief yet</p>
+                  <p className="text-xs" style={{ color: 'var(--text3)' }}>Tap Refresh to generate one for tomorrow&apos;s session</p>
+                </div>
+              )}
+            </div>
 
             {/* Opening bell playbook */}
             <div className="rounded-xl p-4" style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.2)' }}>
@@ -338,7 +509,7 @@ export default function TomorrowPage() {
             {data.earningsCalendar?.length > 0 && (
               <div>
                 <div className="flex items-center gap-2 mb-3">
-                  <span className="text-sm">📊</span>
+                  <BarChart3 size={14} style={{ color: '#a78bfa' }} aria-hidden="true" />
                   <span className="text-sm font-semibold text-white">Earnings Tomorrow</span>
                 </div>
                 <div className="space-y-2">
@@ -404,11 +575,72 @@ export default function TomorrowPage() {
               </div>
             )}
 
+            {/* Social & Political Signals */}
+            <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+              <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+                <div className="flex items-center gap-2">
+                  <Eye size={14} style={{ color: '#fbbf24' }} />
+                  <span className="text-sm font-bold">Social &amp; Political Signals</span>
+                  <span className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>Trump &middot; Elon &middot; Fed &middot; Buffett</span>
+                </div>
+                <button onClick={scanSocial} disabled={socialLoading}
+                  className="text-[10px] font-mono px-2.5 py-1.5 rounded-lg disabled:opacity-40 hover:opacity-80"
+                  style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.2)' }}
+                  aria-label={socialLoading ? 'Scanning for new signals' : 'Scan for new social signals'}>
+                  {socialLoading ? 'Scanning...' : 'Scan Now'}
+                </button>
+              </div>
+
+              {socialSignals.length > 0 ? (
+                <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
+                  {socialSignals.slice(0, 8).map(s => (
+                    <div key={s.id} className="px-5 py-3">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                          style={{
+                            background: s.market_impact === 'bullish' ? 'rgba(52,211,153,0.12)' : s.market_impact === 'bearish' ? 'rgba(248,113,113,0.12)' : 'rgba(251,191,36,0.1)',
+                            color: s.market_impact === 'bullish' ? '#34d399' : s.market_impact === 'bearish' ? '#f87171' : '#fbbf24',
+                          }}>
+                          {s.impact_magnitude?.toUpperCase()} {s.market_impact?.toUpperCase()}
+                        </span>
+                        <span className="text-[10px] font-semibold" style={{ color: 'var(--text2)' }}>{s.person_label}</span>
+                        <span className="text-[9px] font-mono" style={{ color: 'var(--text3)' }}>
+                          {new Date(s.detected_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                        {s.affected_tickers && s.affected_tickers.length > 0 && (
+                          <div className="flex gap-1 flex-wrap">
+                            {s.affected_tickers.slice(0, 4).map((t: string) => (
+                              <button key={t} onClick={() => handleAnalyze(t)}
+                                className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded hover:opacity-80"
+                                style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa' }}
+                                aria-label={`Analyze ${t}`}>
+                                {t}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <p className="text-[11px] mb-1 leading-relaxed" style={{ color: 'var(--text2)' }}>{s.headline}</p>
+                      {s.analysis && <p className="text-[10px] leading-relaxed" style={{ color: 'var(--text3)' }}>{s.analysis}</p>}
+                      {s.action_signal && (
+                        <p className="text-[10px] mt-1 font-semibold" style={{ color: '#fbbf24' }}>&rarr; {s.action_signal}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="px-5 py-6 text-center">
+                  <p className="text-sm mb-1" style={{ color: 'var(--text3)' }}>No signals yet</p>
+                  <p className="text-xs" style={{ color: 'var(--text3)' }}>Scan to detect Trump, Elon, Fed, and Buffett statements affecting tomorrow&apos;s markets</p>
+                </div>
+              )}
+            </div>
+
             {/* Sector Setups + Live Top Movers */}
             {((data.sectorSetups?.length ?? 0) > 0 || (data.sectorTopMovers?.length ?? 0) > 0) && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm">🏭</span>
+                  <Factory size={14} style={{ color: 'var(--text2)' }} aria-hidden="true" />
                   <span className="text-sm font-semibold text-white">Sector Setups</span>
                 </div>
 

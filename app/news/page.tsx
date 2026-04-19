@@ -3,8 +3,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/app/lib/auth/client'
-import { LogOut } from 'lucide-react'
-import { TrendingUp, TrendingDown, RefreshCw, ArrowLeft, Eye, Zap, Globe } from 'lucide-react'
+import {
+  LogOut, TrendingUp, TrendingDown, RefreshCw, ArrowLeft, Eye, Zap, Globe, AlertTriangle, BarChart3, Sun, Moon, Radio, Check, Calendar, Clock
+} from 'lucide-react'
 
 // ── Types ──────────────────────────────────────────────────────
 interface NewsMover {
@@ -353,7 +354,7 @@ export default function NewsPage() {
         <button onClick={() => router.push('/tomorrow')}
           className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-lg transition-all hover:opacity-80"
           style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)' }}>
-          📅 Tomorrow
+          <Calendar size={12} aria-hidden="true" /> Tomorrow
         </button>
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-mono text-white/25">AI-powered market intelligence</span>
@@ -364,7 +365,7 @@ export default function NewsPage() {
               ? (
                 <span className="flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 rounded-full"
                   style={{ background: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)' }}>
-                  ⏱ Cached today · {timeAgo}m ago
+                  <Clock size={10} aria-hidden="true" className="inline-block mr-1" />Cached today · {timeAgo}m ago
                 </span>
               ) : (
                 <span className="text-[10px] font-mono text-white/30">
@@ -375,7 +376,7 @@ export default function NewsPage() {
           {isCached && !loading && (
             <span className="flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 rounded-full"
               style={{ background: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)' }}>
-              ⏱ Cached · {cacheAge === 0 ? 'just now' : `${cacheAge}m ago`}
+              <Clock size={10} aria-hidden="true" className="inline-block mr-1" />Cached · {cacheAge === 0 ? 'just now' : `${cacheAge}m ago`}
             </span>
           )}
           <button onClick={() => load(true)} disabled={loading}
@@ -411,7 +412,7 @@ export default function NewsPage() {
       {/* Error state */}
       {error && !loading && (
         <div className="flex flex-col items-center justify-center flex-1 gap-3 p-8">
-          <div className="text-sm text-red-400 font-mono">⚠ {error}</div>
+          <div className="text-sm text-red-400 font-mono flex items-center gap-1.5"><AlertTriangle size={13} aria-hidden="true" /> {error}</div>
           <button onClick={() => load()} className="text-xs text-white/40 hover:text-white/60 underline">Try again</button>
         </div>
       )}
@@ -427,7 +428,7 @@ export default function NewsPage() {
               <div className="flex items-center justify-between px-3 py-2 rounded-lg mb-3"
                 style={{ background: 'rgba(251,191,36,0.07)', border: '1px solid rgba(251,191,36,0.15)' }}>
                 <span className="text-[11px] text-white/50">
-                  ⏱ Showing today&apos;s cached analysis — refreshes automatically each day
+                  <Clock size={10} aria-hidden="true" className="inline-block mr-1" />Showing today&apos;s cached analysis — refreshes automatically each day
                 </span>
                 <button onClick={() => load(true)}
                   className="text-[10px] font-mono px-2.5 py-1 rounded-full transition-all hover:opacity-80"
@@ -525,7 +526,7 @@ export default function NewsPage() {
               <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
                 <div className="flex items-center gap-2">
                   <div className="relative">
-                    <span className="text-base">🔴</span>
+                    <span className="w-2.5 h-2.5 rounded-full inline-block animate-pulse" style={{ background: '#f87171' }} aria-hidden="true" />
                     {newAlertCount > 0 && (
                       <span className="absolute -top-1 -right-1 text-[9px] font-bold px-1 rounded-full" style={{ background: '#f87171', color: 'var(--text)', minWidth: '14px', textAlign: 'center' }}>
                         {newAlertCount}
@@ -598,9 +599,10 @@ export default function NewsPage() {
                         </div>
                         {!alert.acknowledged && (
                           <button onClick={() => acknowledgeAlert(alert.id)}
-                            className="shrink-0 text-[10px] px-2 py-1 rounded hover:opacity-80 mt-0.5"
-                            style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>
-                            ✓
+                            className="shrink-0 p-1 rounded hover:opacity-80 mt-0.5"
+                            style={{ background: 'var(--surface2)', color: 'var(--text3)' }}
+                            aria-label="Acknowledge alert">
+                            <Check size={12} aria-hidden="true" />
                           </button>
                         )}
                       </div>
@@ -619,7 +621,7 @@ export default function NewsPage() {
             <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
               <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
                 <div className="flex items-center gap-2">
-                  <span>📊</span>
+                  <BarChart3 size={14} style={{ color: '#a78bfa' }} aria-hidden="true" />
                   <span className="text-sm font-bold">Market Intelligence</span>
                   {(premarket?.brief_date || digest?.digest_date) && (
                     <span className="text-[10px] font-mono px-2 py-0.5 rounded-full" style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)' }}>
@@ -629,14 +631,16 @@ export default function NewsPage() {
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => runDigest('premarket')} disabled={digestLoading}
-                    className="text-[10px] font-mono px-2.5 py-1.5 rounded-lg disabled:opacity-40 hover:opacity-80"
-                    style={{ background: 'rgba(96,165,250,0.1)', color: '#60a5fa', border: '1px solid rgba(96,165,250,0.2)' }}>
-                    {digestLoading ? '...' : '☀ Pre-Market'}
+                    className="inline-flex items-center gap-1 text-[10px] font-mono px-2.5 py-1.5 rounded-lg disabled:opacity-40 hover:opacity-80"
+                    style={{ background: 'rgba(96,165,250,0.1)', color: '#60a5fa', border: '1px solid rgba(96,165,250,0.2)' }}
+                    aria-label={digestLoading ? 'Generating' : 'Generate pre-market brief'}>
+                    {digestLoading ? '...' : <><Sun size={11} aria-hidden="true" /> Pre-Market</>}
                   </button>
                   <button onClick={() => runDigest('digest')} disabled={digestLoading}
-                    className="text-[10px] font-mono px-2.5 py-1.5 rounded-lg disabled:opacity-40 hover:opacity-80"
-                    style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)' }}>
-                    {digestLoading ? '...' : '🌙 EOD Digest'}
+                    className="inline-flex items-center gap-1 text-[10px] font-mono px-2.5 py-1.5 rounded-lg disabled:opacity-40 hover:opacity-80"
+                    style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)' }}
+                    aria-label={digestLoading ? 'Generating' : 'Generate end-of-day digest'}>
+                    {digestLoading ? '...' : <><Moon size={11} aria-hidden="true" /> EOD Digest</>}
                   </button>
                 </div>
               </div>
@@ -645,7 +649,7 @@ export default function NewsPage() {
               {premarket && (
                 <div className="px-5 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
                   <div className="flex items-center gap-2 mb-2 flex-wrap">
-                    <span className="text-xs font-bold" style={{ color: '#60a5fa' }}>☀ Pre-Market</span>
+                    <span className="inline-flex items-center gap-1 text-xs font-bold" style={{ color: '#60a5fa' }}><Sun size={11} aria-hidden="true" /> Pre-Market</span>
                     <span className="text-[10px] px-2 py-0.5 rounded-full font-mono font-bold"
                       style={{ background: premarket.sentiment_score > 20 ? 'rgba(52,211,153,0.12)' : premarket.sentiment_score < -20 ? 'rgba(248,113,113,0.12)' : 'rgba(251,191,36,0.12)', color: premarket.sentiment_score > 20 ? '#34d399' : premarket.sentiment_score < -20 ? '#f87171' : '#fbbf24' }}>
                       {premarket.sentiment_label?.replace('_',' ')} {premarket.sentiment_score > 0 ? '+' : ''}{premarket.sentiment_score}
@@ -702,7 +706,7 @@ export default function NewsPage() {
               {digest && (
                 <div className="px-5 py-4">
                   <div className="flex items-center gap-2 mb-2 flex-wrap">
-                    <span className="text-xs font-bold" style={{ color: '#a78bfa' }}>🌙 EOD Digest</span>
+                    <span className="inline-flex items-center gap-1 text-xs font-bold" style={{ color: '#a78bfa' }}><Moon size={11} aria-hidden="true" /> EOD Digest</span>
                     <span className="text-[10px] px-2 py-0.5 rounded-full font-mono font-bold"
                       style={{ background: digest.sentiment_score > 20 ? 'rgba(52,211,153,0.12)' : digest.sentiment_score < -20 ? 'rgba(248,113,113,0.12)' : 'rgba(251,191,36,0.12)', color: digest.sentiment_score > 20 ? '#34d399' : digest.sentiment_score < -20 ? '#f87171' : '#fbbf24' }}>
                       {digest.sentiment_label?.replace('_',' ')} {digest.sentiment_score > 0 ? '+' : ''}{digest.sentiment_score}
@@ -715,7 +719,7 @@ export default function NewsPage() {
                   )}
                   {digest.overnight_risks?.length > 0 && (
                     <div className="space-y-1">
-                      {digest.overnight_risks.map((r: string) => <p key={r} className="text-[11px] text-white/45">⚠ {r}</p>)}
+                      {digest.overnight_risks.map((r: string) => <p key={r} className="text-[11px] text-white/45 flex items-center gap-1.5"><AlertTriangle size={10} style={{ color: '#fbbf24' }} aria-hidden="true" /> {r}</p>)}
                     </div>
                   )}
                   {digest.premarket_outlook && <p className="text-[11px] text-white/40 italic mt-1">{digest.premarket_outlook}</p>}
@@ -734,14 +738,15 @@ export default function NewsPage() {
             <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
               <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
                 <div className="flex items-center gap-2">
-                  <span>📡</span>
+                  <Radio size={14} style={{ color: '#fbbf24' }} aria-hidden="true" />
                   <span className="text-sm font-bold">Social & Political Signals</span>
                   <span className="text-[10px] text-white/30 font-mono">Trump · Elon · Fed · Buffett</span>
                 </div>
                 <button onClick={scanSocial} disabled={socialLoading}
-                  className="text-[10px] font-mono px-2.5 py-1.5 rounded-lg disabled:opacity-40 hover:opacity-80"
-                  style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.2)' }}>
-                  {socialLoading ? 'Scanning...' : '⚡ Scan Now'}
+                  className="inline-flex items-center gap-1 text-[10px] font-mono px-2.5 py-1.5 rounded-lg disabled:opacity-40 hover:opacity-80"
+                  style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.2)' }}
+                  aria-label={socialLoading ? 'Scanning for social signals' : 'Scan for social signals'}>
+                  {socialLoading ? 'Scanning...' : <><Zap size={11} aria-hidden="true" /> Scan Now</>}
                 </button>
               </div>
 
