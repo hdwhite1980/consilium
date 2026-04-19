@@ -114,7 +114,7 @@ export async function middleware(request: NextRequest) {
         user_id: user.id,
         session_token: sessionFingerprint,
       })
-    } else if (activeSession.session_token !== sessionFingerprint) {
+    } else if (activeSession!.session_token !== sessionFingerprint) {
       // Fingerprints differ — a DIFFERENT login session is now active for
       // this user. Two scenarios:
       //   a) User legitimately logged in on another device → this session
