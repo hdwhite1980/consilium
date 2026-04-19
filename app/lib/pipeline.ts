@@ -198,7 +198,6 @@ function detectOverrides(
   const analystBuy     = bundle.fundamentals?.analystBuy ?? 0
   const analystSell    = bundle.fundamentals?.analystSell ?? 0
   const insiderSignal  = bundle.fundamentals?.insiderSignal ?? 'neutral'
-  const currentPrice   = bundle.currentPrice ?? 0
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tech = bundle.technicals as any
   const priceChangePct = tech?.priceChangeTodayPct ?? tech?.priceChange1DPct ?? null
@@ -219,8 +218,8 @@ function detectOverrides(
       reasons.push(`Analyst consensus has turned bearish (${analystSell} sell vs ${analystBuy} buy) — reconcile with your chart thesis`)
     }
     // Strong insider signal (either direction)
-    if (insiderSignal === 'strong_buy' || insiderSignal === 'strong_sell') {
-      reasons.push(`Strong insider signal (${insiderSignal}) — insiders know something the chart may not show yet`)
+    if (insiderSignal === 'buying' || insiderSignal === 'selling') {
+      reasons.push(`Insider ${insiderSignal === 'buying' ? 'buying activity' : 'selling activity'} detected — insiders know something the chart may not show yet`)
     }
   }
 
