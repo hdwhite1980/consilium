@@ -309,11 +309,9 @@ export default function NewsPage() {
   useEffect(() => { load() }, [load])
 
   const handleSignOut = async () => {
-    await fetch('/api/auth/session', { method: 'DELETE' })
-    const supabase = createClient()
-    await supabase.auth.signOut()
-    router.push('/login')
-    router.refresh()
+    try { await (createClient()).auth.signOut({ scope: 'local' }) } catch {}
+    try { await fetch('/api/auth/session', { method: 'DELETE' }) } catch {}
+    window.location.href = '/login'router.refresh()
   }
 
   const handleAnalyze = (ticker: string) => {

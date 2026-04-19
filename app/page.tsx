@@ -385,12 +385,24 @@ function HomeInner() {
   }, [])
 
   const handleSignOut = async () => {
-    // Clear server session record first
-    await fetch('/api/auth/session', { method: 'DELETE' })
+    // Robust logout - never hangs, always navigates
     const supabase = createClient()
-    await supabase.auth.signOut()
-    router.push('/login')
-    router.refresh()
+
+    // Use scope:'local' to avoid the /logout?scope=global call which
+    // fails intermittently and leaves zombie state. Local logout clears
+    // browser state only and is sufficient for our needs.
+    try {
+      await supabase.auth.signOut({ scope: 'local' })
+    } catch { /* swallow - we're navigating anyway */ }
+
+    try {
+      await fetch('/api/auth/session', { method: 'DELETE' })
+    } catch { /* swallow - server cleanup is best-effort */ }
+
+    // Hard navigation (window.location) instead of router.push() to
+    // fully reset all React state, component trees, and cached data.
+    // This prevents the 'zombie dashboard' that made re-login hang.
+    window.location.href = '/login'
   }
   const abortRef  = useRef<AbortController | null>(null)
   const scroll    = useCallback(() => setTimeout(() => debateRef.current?.scrollTo({ top: 99999, behavior: 'smooth' }), 80), [])

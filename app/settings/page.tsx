@@ -155,11 +155,9 @@ export default function SettingsPage() {
   }
 
   const signOut = async () => {
-    await fetch('/api/auth/session', { method: 'DELETE' })
-    const supabase = createClient()
-    await supabase.auth.signOut()
-    router.push('/login')
-  }
+    try { await (createClient()).auth.signOut({ scope: 'local' }) } catch {}
+    try { await fetch('/api/auth/session', { method: 'DELETE' }) } catch {}
+    window.location.href = '/login'}
 
   const openBillingPortal = async () => {
     setBillingLoading(true)
