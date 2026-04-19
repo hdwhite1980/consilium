@@ -100,19 +100,38 @@ export function Tutorial({ config, onComplete, onSkip, autoStart = false }: Tuto
   const [step, setStep] = useState(0)
   const [pos, setPos] = useState<TooltipPos | null>(null)
   const [spotlightRect, setSpotlightRect] = useState<DOMRect | null>(null)
+  const [finishing, setFinishing] = useState(false)
   const tooltipRef = useRef<HTMLDivElement>(null)
 
   const currentStep = config.steps[step]
   const isLast = step === config.steps.length - 1
   const isFirst = step === 0
 
-  const saveProgress = useCallback((stepIdx: number, completed = false, skipped = false) => {
-    // Fire and forget — never block navigation on API call
+  // Save progress for step transitions (non-blocking, fire-and-forget)
+  const saveStep = useCallback((stepIdx: number) => {
     fetch('/api/tutorial', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tutorialId: config.id, step: stepIdx, completed, skipped }),
+      body: JSON.stringify({ tutorialId: config.id, step: stepIdx, completed: false, skipped: false }),
     }).catch(() => { /* non-critical */ })
+  }, [config.id])
+
+  // Save the terminal state (completed or skipped). AWAITED — we only
+  // tear down the UI after the server confirms the write, otherwise a
+  // refresh during the 50ms teardown window can re-trigger the tutorial.
+  const saveTerminal = useCallback(async (stepIdx: number, kind: 'completed' | 'skipped') => {
+    try {
+      await fetch('/api/tutorial', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tutorialId: config.id,
+          step: stepIdx,
+          completed: kind === 'completed',
+          skipped: kind === 'skipped',
+        }),
+      })
+    } catch { /* persistence failed — tutorial will replay next visit, acceptable */ }
   }, [config.id])
 
   const updatePosition = useCallback(() => {
@@ -152,17 +171,20 @@ export function Tutorial({ config, onComplete, onSkip, autoStart = false }: Tuto
     }
   }, [active, updatePosition])
 
-  const goNext = () => {
+  const goNext = async () => {
+    if (finishing) return
     if (isLast) {
-      saveProgress(step, true, false)
+      // Lock out double-clicks on Done and wait for the persistence
+      // confirmation BEFORE hiding the overlay + calling onComplete.
+      setFinishing(true)
+      await saveTerminal(step, 'completed')
       setActive(false)
       // Small delay ensures React removes the overlay DOM before onComplete fires
-      // preventing the dark spotlight shadow from persisting on screen
       setTimeout(() => onComplete?.(), 50)
     } else {
       const next = step + 1
       setStep(next)
-      saveProgress(next)
+      saveStep(next)
     }
   }
 
@@ -170,22 +192,36 @@ export function Tutorial({ config, onComplete, onSkip, autoStart = false }: Tuto
     if (!isFirst) setStep(step - 1)
   }
 
-  const skip = () => {
-    saveProgress(step, false, true)
+  const skip = async () => {
+    if (finishing) return
+    setFinishing(true)
+    await saveTerminal(step, 'skipped')
     setActive(false)
     setTimeout(() => onSkip?.(), 50)
   }
 
-  const restart = () => {
+  const restart = useCallback(() => {
     setStep(0)
+    setFinishing(false)
     setActive(true)
-  }
+  }, [])
+
+  // Sync `active` with autoStart prop. When parent remounts with autoStart=true
+  // (e.g. via the launcher), we pick it up here rather than relying only on
+  // useState's initial value.
+  useEffect(() => {
+    if (autoStart) {
+      setStep(0)
+      setFinishing(false)
+      setActive(true)
+    }
+  }, [autoStart])
 
   // Expose restart globally so the "Replay tutorial" button works
   useEffect(() => {
     (window as any)[`tutorial_${config.id}_restart`] = restart
     return () => { delete (window as any)[`tutorial_${config.id}_restart`] }
-  }, [config.id])
+  }, [config.id, restart])
 
   if (!active) return null
 
@@ -243,7 +279,9 @@ export function Tutorial({ config, onComplete, onSkip, autoStart = false }: Tuto
               <span className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
                 {step + 1} / {config.steps.length}
               </span>
-              <button onClick={skip} className="p-1 rounded-md hover:opacity-70 transition-opacity" style={{ color: 'var(--text3)' }}>
+              <button onClick={skip} disabled={finishing}
+                className="p-1 rounded-md hover:opacity-70 transition-opacity disabled:opacity-40"
+                style={{ color: 'var(--text3)' }}>
                 <X size={13} />
               </button>
             </div>
@@ -280,23 +318,23 @@ export function Tutorial({ config, onComplete, onSkip, autoStart = false }: Tuto
 
           {/* Footer */}
           <div className="flex items-center justify-between px-4 pb-4">
-            <button onClick={goPrev} disabled={isFirst}
+            <button onClick={goPrev} disabled={isFirst || finishing}
               className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg transition-all disabled:opacity-30 hover:opacity-70"
               style={{ color: 'var(--text2)', background: 'var(--surface2)' }}>
               <ChevronLeft size={13} /> Back
             </button>
 
-            <button onClick={skip}
-              className="text-[10px] px-2 py-1 rounded transition-all hover:opacity-70"
+            <button onClick={skip} disabled={finishing}
+              className="text-[10px] px-2 py-1 rounded transition-all hover:opacity-70 disabled:opacity-40"
               style={{ color: 'var(--text3)' }}>
               Skip tutorial
             </button>
 
-            <button onClick={goNext}
+            <button onClick={goNext} disabled={finishing}
               className="flex items-center gap-1.5 text-xs font-semibold px-4 py-1.5 rounded-lg t-text transition-all hover:opacity-90 active:scale-95 disabled:opacity-50"
               style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
               {isLast ? (
-                <><CheckCircle size={13} /> Done</>
+                <><CheckCircle size={13} /> {finishing ? 'Saving…' : 'Done'}</>
               ) : (
                 <>Next <ChevronRight size={13} /></>
               )}
@@ -345,7 +383,7 @@ export function TutorialLauncher({ tutorialId, label = 'Tutorial' }: { tutorialI
   )
 }
 
-// ── Tutorial step definitions ──────────────────────────────────
+// ── Tutorial step definitions ─────────────────────────────────────
 export const MAIN_TUTORIAL: TutorialConfig = {
   id: 'main',
   title: 'Welcome to Wali-OS',
@@ -354,14 +392,14 @@ export const MAIN_TUTORIAL: TutorialConfig = {
     {
       id: 'welcome',
       title: 'Welcome to Wali-OS',
-      content: 'Wali-OS runs multiple AI models against each other in a structured debate before giving you a recommendation. Not one AI\'s opinion — a council that argues both sides before reaching a verdict.',
+      content: "Wali-OS runs multiple AI models against each other in a structured debate before giving you a recommendation. Not one AI's opinion — a council that argues both sides before reaching a verdict.",
       position: 'center',
       tip: 'The debate approach catches blind spots that a single AI analysis would miss.',
     },
     {
       id: 'how-it-works',
       title: 'How the debate works',
-      content: 'The News Scout scans headlines and macro conditions. The Lead Analyst makes the initial call with a price target. The Devil\'s Advocate attacks the thesis with data. They each rebut each other in Round 2. Then the Judge — having read every argument — delivers the final verdict.',
+      content: "The News Scout scans headlines and macro conditions. The Lead Analyst makes the initial call with a price target. The Devil's Advocate attacks the thesis with data. They each rebut each other in Round 2. Then the Judge — having read every argument — delivers the final verdict.",
       position: 'center',
       tip: 'In Round 2, both sides can pull fresh live data mid-debate to back their arguments — earnings estimates, options flow, analyst targets.',
     },
@@ -384,16 +422,16 @@ export const MAIN_TUTORIAL: TutorialConfig = {
     {
       id: 'persona',
       title: 'Three analyst personalities',
-      content: '⚖ Balanced weights technicals and fundamentals equally. 📈 Technical follows price action — a death cross is bearish regardless of P/E. 📊 Fundamental prioritizes business quality — a 30% pullback in a great company is a buying opportunity.',
+      content: 'Balanced weights technicals and fundamentals equally. Technical follows price action — a death cross is bearish regardless of P/E. Fundamental prioritizes business quality — a 30% pullback in a great company is a buying opportunity.',
       target: '[data-tutorial="persona-selector"]',
       position: 'bottom',
-      action: 'Try the same stock under Technical and Fundamental — you\'ll often get different verdicts',
+      action: "Try the same stock under Technical and Fundamental — you'll often get different verdicts",
       tip: 'Both verdicts can be right for different timeframes. A stock can be technically BEARISH and fundamentally BULLISH at the same time.',
     },
     {
       id: 'analyze',
       title: 'Convene the Council',
-      content: 'Click Analyze and watch the debate stream in real time. Each stage appears as it completes — Lead Analyst → Devil\'s Advocate → Rebuttal → Counter → Verdict. The full debate takes 30-60 seconds.',
+      content: "Click Analyze and watch the debate stream in real time. Each stage appears as it completes — Lead Analyst, Devil's Advocate, Rebuttal, Counter, Verdict. The full debate takes 30-60 seconds.",
       target: '[data-tutorial="analyze-btn"]',
       position: 'bottom',
       action: 'Click Analyze now',
@@ -409,21 +447,21 @@ export const MAIN_TUTORIAL: TutorialConfig = {
     {
       id: 'debate-sections',
       title: 'Read the debate',
-      content: 'Each collapsible section is one debate stage. Expand Lead Analyst to see the initial thesis. Expand Devil\'s Advocate to see the challenges. The Rebuttal and Counter sections show Round 2 — where both sides fetch live data mid-debate to press their case.',
+      content: "Each collapsible section is one debate stage. Expand Lead Analyst to see the initial thesis. Expand Devil's Advocate to see the challenges. The Rebuttal and Counter sections show Round 2 — where both sides fetch live data mid-debate to press their case.",
       position: 'center',
       tip: 'What the Lead Analyst concedes in the Rebuttal matters most. If they give up their strongest point, the confidence score drops and the Judge notes it explicitly.',
     },
     {
       id: 'verdict',
       title: 'The Council Verdict',
-      content: 'The Judge has read every argument from both rounds before ruling. You get a signal, entry price, stop loss (ATR-derived), take profit, and time horizon. After an analysis, click "💰 Log trade" to track your P&L and get reinvestment ideas.',
+      content: 'The Judge has read every argument from both rounds before ruling. You get a signal, entry price, stop loss (ATR-derived), take profit, and time horizon. After an analysis, click "Log trade" to track your P&L and get reinvestment ideas.',
       position: 'center',
-      tip: 'A 45% confidence NEUTRAL verdict means signals genuinely conflict — size smaller or wait. That\'s the AI being honest, not a failure.',
+      tip: "A 45% confidence NEUTRAL verdict means signals genuinely conflict — size smaller or wait. That's the AI being honest, not a failure.",
     },
     {
       id: 'nav',
       title: 'The full platform',
-      content: '🔥 Invest tracks your journey from any starting balance — $5 to $1M — with fire milestones and stage-matched stock picks. 🌍 Macro ranks all 11 sectors daily. 💼 Portfolio gives a holistic view of your holdings. 💰 Reinvest tracks trades and deploys gains. ⚡ Compare runs the full debate on two stocks.',
+      content: 'Invest tracks your journey from any starting balance — $5 to $1M — with fire milestones and stage-matched stock picks. Macro ranks all 11 sectors daily. Portfolio gives a holistic view of your holdings. Reinvest tracks trades and deploys gains. Compare runs the full debate on two stocks.',
       position: 'center',
       tip: 'Start your day on Macro, identify the strongest sector, use Compare on the top two names, then log your trade in Reinvest.',
     },
@@ -432,7 +470,7 @@ export const MAIN_TUTORIAL: TutorialConfig = {
       title: 'The council is yours',
       content: 'You have a professional AI council arguing on your behalf before every trade. Run your first analysis — the debate speaks for itself.',
       position: 'center',
-      tip: 'Replay this tutorial anytime using the 📖 button in the navigation bar.',
+      tip: 'Replay this tutorial anytime using the book icon in the navigation bar.',
     },
   ],
 }
@@ -497,7 +535,7 @@ export const COMPARE_TUTORIAL: TutorialConfig = {
       title: 'Reading the Results',
       content: 'Side-by-side verdicts show entry, stop (ATR-derived), and target for each. The conviction bars show signal strength. The "if you can only pick one" section gives the council\'s definitive recommendation with a specific reason.',
       position: 'center',
-      tip: 'Use Compare when you\'re choosing between two names in the same sector — relative strength vs sector is particularly useful here since both use the same sector ETF baseline.',
+      tip: "Use Compare when you're choosing between two names in the same sector — relative strength vs sector is particularly useful here since both use the same sector ETF baseline.",
     },
   ],
 }
@@ -515,37 +553,37 @@ export const INVEST_TUTORIAL: TutorialConfig = {
       tip: 'This is separate from the Reinvestment Tracker — Invest is for building from scratch, Reinvest is for deploying existing gains.',
     },
     {
-      id: 'milestone',
-      title: 'Your fire milestone',
-      content: 'Six stages: Spark ($0–$10) → Ember ($10–$50) → Flame ($50–$200) → Blaze ($200–$1K) → Inferno ($1K–$10K) → Free ($10K+). Each stage unlocks better stocks and tighter strategies. The progress bar shows exactly how far you are from the next milestone.',
+      id: 'tier',
+      title: 'Your tier',
+      content: 'Five tiers: Buyer ($1–$50) → Builder ($50–$200) → Operator ($200–$1K) → Principal ($1K–$10K) → Sovereign ($10K+). Each tier unlocks better stocks and tighter strategies. Options trading unlocks at Operator. The progress bar shows exactly how far you are from the next tier.',
       position: 'center',
-      tip: 'The stage you\'re in determines what price range the council searches — at Spark it finds $1–$5 stocks, at Blaze it finds $10–$50 stocks, always sized so you can buy a meaningful number of shares.',
+      tip: "The tier determines what price range the council searches — at Buyer it finds $1–$5 stocks, at Operator it finds $10–$50 stocks, always sized so you can buy a meaningful number of shares.",
     },
     {
       id: 'ideas',
       title: 'Stage-matched picks',
-      content: 'The council reads today\'s macro sector performance and finds 5 stocks from the strongest sectors — priced and sized for your exact balance. At $5 it finds $1–3 stocks (2 shares). At $500 it finds $20–40 stocks (15 shares). Every pick has a specific catalyst, entry zone, stop loss, and target.',
+      content: "The council reads today's macro sector performance and finds 5 stocks from the strongest sectors — priced and sized for your exact balance. At $5 it finds $1–3 stocks (2 shares). At $500 it finds $20–40 stocks (15 shares). Every pick has a specific catalyst, entry zone, stop loss, and target.",
       position: 'center',
-      tip: 'The sector strip at the top of Ideas shows which sectors are BULLISH today. All 5 picks come from those sectors — you\'re always trading with the market, not against it.',
+      tip: "The sector strip at the top shows which sectors are BULLISH today. All 5 picks come from those sectors — you're always trading with the market, not against it.",
     },
     {
       id: 'log',
       title: 'Log a trade',
-      content: 'Click "Log this trade" on any idea to record it. Enter shares and entry price — the page will track live P&L automatically. When you close a trade, the council updates your milestone progress, win streak, and adjusts future picks to your new balance.',
+      content: "Tap any signal tile to open the order ticket. Enter shares and entry price — the page will track live P&L automatically. When you close a trade, the council updates your tier progress, win streak, and adjusts future picks to your new balance.",
       position: 'center',
       tip: 'Your first profitable close triggers a special moment. Every journey has a first win.',
     },
     {
       id: 'streak',
       title: 'Win streak and stats',
-      content: 'Your win streak, win rate, and "in play" P&L all update in real time. During market hours prices refresh every 5 minutes automatically. After market close you see the official closing prices. The total portfolio value always reflects your true position.',
+      content: 'Every closed winning trade extends your streak. The streak resets on a loss, but your total trades count and win rate keep accumulating across all trades. Consistency over time is what builds the streak.',
       position: 'center',
-      tip: 'Even if you lose a trade, your total trades count and win rate don\'t reset. Consistency over time is what builds the streak.',
+      tip: "Even if you lose a trade, your total trades count and win rate don't reset. Consistency over time is what builds the streak.",
     },
     {
       id: 'done',
       title: 'The journey is the point',
-      content: 'Most people never invest because they think they need more money first. The Invest page proves you don\'t. Start with what you have. The council finds appropriate stocks. Your milestone tracks your progress. Spark to Free is the journey — start yours.',
+      content: "Most people never invest because they think they need more money first. The Invest page proves you don't. Start with what you have. The council finds appropriate stocks. Your tier tracks your progress. Buyer to Sovereign is the journey — start yours.",
       position: 'center',
     },
   ],
