@@ -1,15 +1,18 @@
 // ═════════════════════════════════════════════════════════════
-// EarningsCalendar component
-// Displays market-wide earnings calendar grouped by date.
-// - User's portfolio holdings pinned to top of each day, starred + "YOURS" badge
-// - Each row has a bell toggle to subscribe for day-of email notifications
-// - Master toggle at top: "Auto-notify for all my holdings"
-// - Pagination for long ranges
+// EarningsCalendar — market-wide earnings calendar
+// Designed to match the Macro page's visual language:
+//   - var(--surface), var(--surface2), var(--border), var(--text3)
+//   - rounded-2xl containers with subtle borders
+//   - Hex accent colors (#34d399, #f87171, #60a5fa, #fbbf24, #a78bfa)
+//   - text-[10px] font-mono uppercase tracking-widest for subheaders
+//   - Portfolio holdings highlighted with star + "YOURS" badge, pinned to
+//     top of each day
 // ═════════════════════════════════════════════════════════════
 
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { Calendar, Bell, BellOff, Star, ChevronLeft, ChevronRight } from 'lucide-react'
 
 interface EarningsRow {
   ticker: string
@@ -43,13 +46,14 @@ function hourLabel(hour: string): string {
   if (hour === 'bmo') return 'Before Open'
   if (hour === 'amc') return 'After Close'
   if (hour === 'dmh') return 'During Market'
-  return hour || '—'
+  return '—'
 }
 
 function hourColor(hour: string): string {
-  if (hour === 'bmo') return 'text-blue-400'
-  if (hour === 'amc') return 'text-purple-400'
-  return 'text-gray-400'
+  if (hour === 'bmo') return '#60a5fa'
+  if (hour === 'amc') return '#a78bfa'
+  if (hour === 'dmh') return '#fbbf24'
+  return 'rgba(255,255,255,0.4)'
 }
 
 function formatDate(dateStr: string): string {
@@ -91,7 +95,6 @@ export default function EarningsCalendar() {
     loadCalendar()
   }, [loadCalendar])
 
-  // Reset to page 1 when range changes
   useEffect(() => { setPage(1) }, [range])
 
   async function toggleSubscription(ticker: string, currentlySubscribed: boolean) {
@@ -104,7 +107,6 @@ export default function EarningsCalendar() {
         body: JSON.stringify({ ticker }),
       })
       if (!res.ok) throw new Error(await res.text())
-      // Refresh calendar to reflect new subscription state
       await loadCalendar()
     } catch (e) {
       console.error('[earnings-calendar] toggle failed', e)
@@ -137,39 +139,44 @@ export default function EarningsCalendar() {
   }
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded">
-      <div className="px-4 py-3 border-b border-gray-800 flex flex-wrap gap-3 items-center justify-between">
-        <div>
-          <h2 className="font-semibold">Upcoming Earnings Calendar</h2>
-          <div className="text-xs text-gray-500 mt-0.5">
-            Market-wide earnings releases with EPS and revenue estimates
+    <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 border-b" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex items-center gap-2.5">
+          <Calendar size={16} style={{ color: '#60a5fa' }} />
+          <div>
+            <div className="text-sm font-bold text-white">Upcoming Earnings Calendar</div>
+            <div className="text-[10px] font-mono uppercase tracking-widest" style={{ color: 'var(--text3)' }}>
+              Market-wide · EPS + revenue estimates
+            </div>
           </div>
         </div>
-        <div className="flex gap-2">
-          <div className="flex bg-gray-950 rounded overflow-hidden text-sm">
+
+        <div className="flex gap-1.5 p-1 rounded-lg" style={{ background: 'var(--surface2)' }}>
+          {(['week', 'month'] as const).map(r => (
             <button
-              onClick={() => setRange('week')}
-              className={`px-3 py-1 ${range === 'week' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+              key={r}
+              onClick={() => setRange(r)}
+              className="px-3 py-1 text-[10px] font-mono uppercase tracking-widest rounded-md transition-colors"
+              style={{
+                background: range === r ? 'rgba(96,165,250,0.15)' : 'transparent',
+                color: range === r ? '#60a5fa' : 'var(--text3)',
+                border: range === r ? '1px solid rgba(96,165,250,0.3)' : '1px solid transparent',
+              }}
             >
-              1 Week
+              {r === 'week' ? '1 Week' : '1 Month'}
             </button>
-            <button
-              onClick={() => setRange('month')}
-              className={`px-3 py-1 ${range === 'month' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
-            >
-              1 Month
-            </button>
-          </div>
+          ))}
         </div>
       </div>
 
       {/* Master auto-portfolio toggle */}
       {data?.userContext.authenticated && (
-        <div className="px-4 py-3 border-b border-gray-800 bg-gray-950/30 flex items-center justify-between">
+        <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'var(--border)', background: 'rgba(96,165,250,0.04)' }}>
           <div>
-            <div className="text-sm font-medium">Auto-notify for my portfolio holdings</div>
-            <div className="text-xs text-gray-500">
-              Sends one email at 6am ET each day there&apos;s earnings for a ticker you hold
+            <div className="text-xs font-medium text-white">Auto-notify for my holdings</div>
+            <div className="text-[10px]" style={{ color: 'var(--text3)' }}>
+              Email at 6am ET on earnings days for tickers you hold or recently analyzed
             </div>
           </div>
           <label className="relative inline-flex items-center cursor-pointer">
@@ -179,97 +186,159 @@ export default function EarningsCalendar() {
               onChange={(e) => toggleAutoPortfolio(e.target.checked)}
               className="sr-only peer"
             />
-            <div className="w-11 h-6 bg-gray-700 rounded-full peer peer-checked:bg-blue-600 peer-checked:after:translate-x-full after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+            <div
+              className="w-10 h-5 rounded-full peer peer-checked:after:translate-x-5 after:absolute after:top-0.5 after:left-0.5 after:rounded-full after:h-4 after:w-4 after:transition-all"
+              style={{
+                background: data.userContext.autoPortfolioEnabled ? '#60a5fa' : 'var(--surface2)',
+              }}
+            >
+              <span className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full transition-transform" style={{
+                background: 'white',
+                transform: data.userContext.autoPortfolioEnabled ? 'translateX(20px)' : 'translateX(0)',
+              }} />
+            </div>
           </label>
         </div>
       )}
 
-      {loading && <div className="px-4 py-8 text-center text-gray-400">Loading calendar...</div>}
+      {loading && (
+        <div className="px-5 py-8 text-center" style={{ color: 'var(--text3)' }}>
+          <div className="inline-flex items-center gap-1.5">
+            {[0, 1, 2].map(i => (
+              <span
+                key={i}
+                className="w-1.5 h-1.5 rounded-full thinking-dot"
+                style={{ background: '#60a5fa', animationDelay: `${i * 0.15}s` }}
+              />
+            ))}
+          </div>
+          <div className="text-[10px] font-mono uppercase tracking-widest mt-2">Loading calendar</div>
+        </div>
+      )}
 
       {error && (
-        <div className="px-4 py-4 bg-red-900/30 border-t border-red-800 text-red-300 text-sm">
+        <div className="px-5 py-4 text-xs" style={{ background: 'rgba(248,113,113,0.08)', color: '#f87171', borderTop: '1px solid rgba(248,113,113,0.2)' }}>
           {error}
         </div>
       )}
 
       {!loading && data && data.earnings.length === 0 && (
-        <div className="px-4 py-8 text-center text-gray-500">
+        <div className="px-5 py-8 text-center text-xs" style={{ color: 'var(--text3)' }}>
           No earnings scheduled in this range.
         </div>
       )}
 
       {!loading && data && data.earnings.length > 0 && (
         <>
-          <div className="divide-y divide-gray-800">
+          <div className="divide-y" style={{ borderColor: 'rgba(255,255,255,0.04)' }}>
             {Array.from(grouped.entries()).map(([date, rows]) => (
               <div key={date}>
-                <div className="px-4 py-2 bg-gray-950/50 text-xs text-gray-400 font-medium">
-                  {formatDate(date)}
+                {/* Date header */}
+                <div
+                  className="px-5 py-2 text-[10px] font-mono uppercase tracking-widest"
+                  style={{ background: 'var(--surface2)', color: 'var(--text3)' }}
+                >
+                  {formatDate(date)} · {rows.length} report{rows.length === 1 ? '' : 's'}
                 </div>
-                <table className="w-full text-sm">
-                  <tbody className="divide-y divide-gray-800/50">
-                    {rows.map((r) => (
-                      <tr key={`${r.date}-${r.ticker}`} className={r.isYours ? 'bg-blue-950/20 hover:bg-blue-950/40' : 'hover:bg-gray-950/50'}>
-                        <td className="px-4 py-2 w-8">
-                          {r.isYours && <span className="text-yellow-400" title="You hold this">★</span>}
-                        </td>
-                        <td className="px-2 py-2 font-mono font-semibold">
-                          {r.ticker}
-                          {r.isYours && (
-                            <span className="ml-2 text-[10px] bg-blue-600 text-white rounded px-1.5 py-0.5 font-sans font-normal">
-                              YOURS
-                            </span>
+
+                {/* Earnings rows for this date */}
+                <div className="divide-y" style={{ borderColor: 'rgba(255,255,255,0.04)' }}>
+                  {rows.map((r) => (
+                    <div
+                      key={`${r.date}-${r.ticker}`}
+                      className="flex items-center gap-3 px-5 py-2.5 text-sm hover:opacity-80 transition-opacity"
+                      style={{
+                        background: r.isYours ? 'rgba(251,191,36,0.06)' : 'transparent',
+                      }}
+                    >
+                      {/* Star */}
+                      <div className="w-4 flex-shrink-0">
+                        {r.isYours && <Star size={12} fill="#fbbf24" style={{ color: '#fbbf24' }} />}
+                      </div>
+
+                      {/* Ticker + YOURS badge */}
+                      <div className="flex items-center gap-1.5 w-24 flex-shrink-0">
+                        <span className="font-mono font-bold text-white">{r.ticker}</span>
+                        {r.isYours && (
+                          <span
+                            className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded"
+                            style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}
+                          >
+                            YOURS
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Time-of-day */}
+                      <div
+                        className="text-[10px] font-mono uppercase tracking-widest w-28 flex-shrink-0"
+                        style={{ color: hourColor(r.hour) }}
+                      >
+                        {hourLabel(r.hour)}
+                      </div>
+
+                      {/* EPS + Rev estimates */}
+                      <div className="flex gap-4 flex-1 text-right">
+                        <div className="flex-1">
+                          <span className="text-[10px] font-mono uppercase tracking-widest mr-1.5" style={{ color: 'var(--text3)' }}>EPS</span>
+                          <span className="font-mono text-white/80">
+                            {r.epsEstimate !== null ? '$' + r.epsEstimate.toFixed(2) : '—'}
+                          </span>
+                        </div>
+                        <div className="flex-1">
+                          <span className="text-[10px] font-mono uppercase tracking-widest mr-1.5" style={{ color: 'var(--text3)' }}>REV</span>
+                          <span className="font-mono text-white/80">{formatRevenue(r.revenueEstimate)}</span>
+                        </div>
+                      </div>
+
+                      {/* Bell toggle */}
+                      {data.userContext.authenticated && (
+                        <button
+                          onClick={() => toggleSubscription(r.ticker, r.isSubscribed)}
+                          disabled={togglingTicker === r.ticker}
+                          className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-lg transition-colors disabled:opacity-50"
+                          style={{
+                            background: r.isSubscribed ? 'rgba(96,165,250,0.15)' : 'transparent',
+                            border: `1px solid ${r.isSubscribed ? 'rgba(96,165,250,0.3)' : 'rgba(255,255,255,0.08)'}`,
+                          }}
+                          title={r.isSubscribed ? 'Unsubscribe from earnings alert' : 'Get email alert on earnings day'}
+                        >
+                          {r.isSubscribed ? (
+                            <Bell size={12} style={{ color: '#60a5fa' }} />
+                          ) : (
+                            <BellOff size={12} style={{ color: 'var(--text3)' }} />
                           )}
-                        </td>
-                        <td className={`px-2 py-2 text-xs ${hourColor(r.hour)}`}>{hourLabel(r.hour)}</td>
-                        <td className="px-2 py-2 text-right text-xs">
-                          <span className="text-gray-500">EPS:</span>{' '}
-                          {r.epsEstimate !== null ? '$' + r.epsEstimate.toFixed(2) : '—'}
-                        </td>
-                        <td className="px-2 py-2 text-right text-xs">
-                          <span className="text-gray-500">Rev:</span>{' '}
-                          {formatRevenue(r.revenueEstimate)}
-                        </td>
-                        <td className="px-2 py-2 text-right w-10">
-                          {data.userContext.authenticated && (
-                            <button
-                              onClick={() => toggleSubscription(r.ticker, r.isSubscribed)}
-                              disabled={togglingTicker === r.ticker}
-                              className="text-lg hover:scale-110 transition-transform disabled:opacity-50"
-                              title={r.isSubscribed ? 'Unsubscribe from notifications' : 'Get notified on earnings day'}
-                            >
-                              {r.isSubscribed ? '🔔' : '🔕'}
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
           </div>
 
           {/* Pagination */}
           {data.totalPages > 1 && (
-            <div className="px-4 py-3 border-t border-gray-800 flex items-center justify-between text-sm">
-              <div className="text-gray-500">
+            <div className="flex items-center justify-between px-5 py-3 border-t text-xs" style={{ borderColor: 'var(--border)' }}>
+              <div className="text-[10px] font-mono uppercase tracking-widest" style={{ color: 'var(--text3)' }}>
                 Page {data.page} of {data.totalPages} · {data.totalCount} total
               </div>
               <div className="flex gap-2">
                 <button
                   onClick={() => setPage(p => Math.max(1, p - 1))}
                   disabled={page === 1}
-                  className="px-3 py-1 bg-gray-800 rounded disabled:opacity-50 hover:bg-gray-700"
+                  className="flex items-center gap-1 px-3 py-1 rounded-lg text-[10px] font-mono uppercase tracking-widest disabled:opacity-40"
+                  style={{ background: 'var(--surface2)', color: 'var(--text3)', border: '1px solid var(--border)' }}
                 >
-                  ← Prev
+                  <ChevronLeft size={10} /> Prev
                 </button>
                 <button
                   onClick={() => setPage(p => Math.min(data.totalPages, p + 1))}
                   disabled={page === data.totalPages}
-                  className="px-3 py-1 bg-gray-800 rounded disabled:opacity-50 hover:bg-gray-700"
+                  className="flex items-center gap-1 px-3 py-1 rounded-lg text-[10px] font-mono uppercase tracking-widest disabled:opacity-40"
+                  style={{ background: 'var(--surface2)', color: 'var(--text3)', border: '1px solid var(--border)' }}
                 >
-                  Next →
+                  Next <ChevronRight size={10} />
                 </button>
               </div>
             </div>
@@ -277,9 +346,9 @@ export default function EarningsCalendar() {
         </>
       )}
 
-      {!data?.userContext.authenticated && (
-        <div className="px-4 py-3 border-t border-gray-800 bg-gray-950/30 text-xs text-gray-500">
-          Sign in to star your portfolio holdings and enable earnings notifications.
+      {!data?.userContext.authenticated && !loading && (
+        <div className="px-5 py-3 border-t text-[10px] font-mono uppercase tracking-widest" style={{ borderColor: 'var(--border)', color: 'var(--text3)' }}>
+          Sign in to star your holdings and enable earnings notifications
         </div>
       )}
     </div>
