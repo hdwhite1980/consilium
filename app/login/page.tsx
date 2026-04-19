@@ -65,7 +65,7 @@ function LoginPageInner() {
 
       // Check if MFA is required
       if (data.session === null) {
-        // No session yet â€” MFA required
+        // No session yet - MFA required
         const { data: factors } = await supabase.auth.mfa.listFactors()
         const totp = factors?.totp?.find(f => f.status === 'verified')
         if (totp) {
@@ -160,7 +160,7 @@ function LoginPageInner() {
         {/* Reset sent confirmation */}
         {resetSent ? (
           <div className="text-center space-y-4">
-            <div className="text-4xl">ðŸ“§</div>
+            <div className="text-4xl"></div>
             <p className="text-sm text-white/70">Password reset email sent. Check your inbox.</p>
             <button onClick={() => { setMode('login'); setResetSent(false) }}
               className="text-sm text-white/40 hover:text-white/70 underline transition-colors">
@@ -204,7 +204,7 @@ function LoginPageInner() {
                     type={showPw ? 'text' : 'password'}
                     value={password}
                     onChange={e => setPassword(e.target.value)}
-                    placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
+                    placeholder="********"
                     required
                     autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
                     minLength={6}
@@ -277,7 +277,7 @@ function LoginPageInner() {
               ) : (
                 <button type="button" onClick={() => { setMode('login'); setError(null) }}
                   className="text-xs text-white/30 hover:text-white/60 transition-colors">
-                  â† Back to login
+                  &larr; Back to login
                 </button>
               )}
             </div>
@@ -290,7 +290,7 @@ function LoginPageInner() {
           className="text-[11px] font-mono text-white/30 hover:text-white/60 transition-colors underline">
           View pricing
         </a>
-        <span className="text-white/15 text-xs">Â·</span>
+        <span className="text-white/15 text-xs">&middot;</span>
         <p className="text-[10px] font-mono text-white/15">
           Not financial advice
         </p>
