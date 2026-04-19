@@ -649,159 +649,35 @@ function HomeInner() {
          ─────────────────────────────────────────────────────────── */}
       <nav className="border-b shrink-0" style={{ background: surf, borderColor: brd }} aria-label="Primary navigation">
 
-        {/* ── Row 1: brand + analysis + user cluster ── */}
-        <div className="flex items-center gap-2 px-3 py-2 flex-wrap">
+        {/* ── Row 1a: brand (left) + user cluster (right) — always on its own row ── */}
+        <div className="flex items-center gap-2 px-3 py-2">
 
-          {/* Logo — home link */}
+          {/* Logo — home link. Text always visible now (no more hidden sm:block) */}
           <button
             type="button"
             onClick={() => router.push('/')}
-            className="flex items-center gap-2 shrink-0 mr-1 rounded-lg focus:outline focus:outline-2 focus:outline-offset-2"
+            className="flex items-center gap-2 shrink-0 rounded-lg focus:outline focus:outline-2 focus:outline-offset-2"
             style={{ outlineColor: '#a78bfa' }}
             aria-label="Wali-OS home">
             <WaliLogo size="xs" noLink />
-            <span className="text-sm font-bold tracking-tight hidden sm:block" style={{ color: txt }}>WALI-OS</span>
+            <span className="text-sm font-bold tracking-tight" style={{ color: txt }}>WALI-OS</span>
           </button>
 
-          {/* ── Analysis controls ── */}
-          <div className="flex items-center gap-1.5 flex-1 min-w-0 flex-wrap" role="group" aria-label="Analysis controls">
-
-            {/* Ticker with proper label */}
-            <div className="flex flex-col">
-              <label htmlFor="ticker-input" className="sr-only">Stock or crypto ticker symbol</label>
-              <input
-                id="ticker-input"
-                type="text"
-                inputMode="text"
-                autoCapitalize="characters"
-                autoComplete="off"
-                spellCheck={false}
-                value={ticker}
-                onChange={e => setTicker(e.target.value.toUpperCase().replace(/[^A-Z/]/g, ''))}
-                onKeyDown={e => { if (e.key === 'Enter' && !running) { setTicker(t => t.replace(/\//g, '')); setTimeout(run, 0) } }}
-                placeholder="AAPL · BTC · EUR/USD"
-                maxLength={7}
-                data-tutorial="ticker-input"
-                aria-label="Ticker symbol (e.g. AAPL, BTC, or EUR/USD)"
-                className="w-24 sm:w-32 rounded-lg px-2.5 py-1.5 text-sm font-mono font-bold tracking-widest border transition-colors focus:outline focus:outline-2 focus:outline-offset-1"
-                style={{ background: inputBg, borderColor: brd2, color: txt, outlineColor: '#a78bfa' }} />
-            </div>
-
-            {/* Timeframe */}
-            <div className="flex gap-0.5" role="radiogroup" aria-label="Timeframe" data-tutorial="timeframe-selector">
-              {([
-                { tf: '1D', label: '1D', title: 'Intraday — 15-min bars, same-day to next session targets' },
-                { tf: '1W', label: '1W', title: 'Swing trade — hourly bars, 3-10 day targets' },
-                { tf: '1M', label: '1M', title: 'Position trade — daily bars, 3-6 week targets' },
-                { tf: '3M', label: '3M', title: 'Investment — daily bars, 6-13 week targets' },
-              ] as { tf: TF; label: string; title: string }[]).map(({ tf: t, label, title }) => (
-                <button
-                  key={t}
-                  type="button"
-                  role="radio"
-                  aria-checked={tf === t}
-                  aria-label={`${label} timeframe — ${title}`}
-                  onClick={() => setTf(t)}
-                  title={title}
-                  className="px-2 py-1.5 rounded-md text-xs font-mono border transition-all focus:outline focus:outline-2 focus:outline-offset-1"
-                  style={{
-                    background: tf === t ? 'rgba(167,139,250,0.15)' : inputBg,
-                    borderColor: tf === t ? '#a78bfa' : brd,
-                    color: tf === t ? '#a78bfa' : txt2,
-                    outlineColor: '#a78bfa',
-                  }}>{label}</button>
-              ))}
-            </div>
-
-            {/* Persona */}
-            <div className="flex items-center gap-0.5 rounded-lg p-0.5" role="radiogroup" aria-label="Analyst persona" data-tutorial="persona-selector" style={{ background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)', border: `1px solid ${brd}` }}>
-              {(Object.entries(PERSONAS) as [Persona, typeof PERSONAS[Persona]][]).map(([key, p]) => (
-                <button
-                  key={key}
-                  type="button"
-                  role="radio"
-                  aria-checked={persona === key}
-                  aria-label={`${p.label} analyst — ${p.desc}`}
-                  onClick={() => setPersona(key)}
-                  title={p.desc}
-                  className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-mono transition-all focus:outline focus:outline-2 focus:outline-offset-1"
-                  style={{
-                    background: persona === key ? `${p.color}18` : 'transparent',
-                    color: persona === key ? p.color : txt2,
-                    border: persona === key ? `1px solid ${p.color}35` : '1px solid transparent',
-                    outlineColor: p.color,
-                  }}>
-                  <span aria-hidden="true">{p.icon}</span>
-                  <span className="hidden lg:inline">{p.label}</span>
-                </button>
-              ))}
-            </div>
-
-            {/* Why is this moving? — shows when price has moved >2% */}
-            {md?.currentPrice && md?.technicals?.priceChange1D && Math.abs(md.technicals.priceChange1D) >= 2 && (
-              <button
-                type="button"
-                onClick={async () => {
-                  const pct = md.technicals?.priceChange1D || 0
-                  setWhyMoving({ loading: true, open: true })
-                  const res = await fetch('/api/why-moving', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ticker, currentPrice: md?.currentPrice, changePercent: pct }),
-                  })
-                  if (!res.body) return
-                  const reader = res.body.getReader()
-                  const decoder = new TextDecoder()
-                  while (true) {
-                    const { done, value } = await reader.read()
-                    if (done) break
-                    const text = decoder.decode(value)
-                    for (const line of text.split('\n')) {
-                      if (!line.startsWith('data: ')) continue
-                      try {
-                        const evt = JSON.parse(line.slice(6))
-                        if (evt.catalyst) setWhyMoving(p => ({ ...p, catalyst: evt.catalyst }))
-                        if (evt.verdict) setWhyMoving(p => ({ ...p, verdict: evt.verdict, loading: false }))
-                      } catch { /* skip */ }
-                    }
-                  }
-                }}
-                disabled={whyMoving.loading}
-                aria-label={whyMoving.loading ? 'Analyzing price movement' : `Explain why ${ticker} is moving`}
-                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40 focus:outline focus:outline-2 focus:outline-offset-1"
-                style={{ background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24', outlineColor: '#fbbf24' }}>
-                {whyMoving.loading ? <Hourglass size={11} aria-hidden="true" /> : <Zap size={11} aria-hidden="true" />}
-                <span>{whyMoving.loading ? 'Analyzing…' : `Why is ${ticker} moving?`}</span>
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={run}
-              disabled={running}
-              data-tutorial="analyze-btn"
-              aria-label={running ? 'Analyzing — please wait' : `Analyze ${ticker}`}
-              className="px-3 sm:px-4 py-1.5 rounded-lg text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95 disabled:opacity-40 shrink-0 focus:outline focus:outline-2 focus:outline-offset-2"
-              style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', outlineColor: '#a78bfa' }}>
-              {running ? <span aria-hidden="true">…</span> : 'Analyze'}
-            </button>
-          </div>
-
-          {/* ── User cluster — locked to right, always visible ── */}
+          {/* ── User cluster — locked to right ── */}
           <div className="flex items-center gap-1.5 ml-auto shrink-0" role="group" aria-label="Account and settings">
 
             {/* Portfolio Alerts — mounted globally so polling runs everywhere */}
             <PortfolioAlerts isDark={isDark} />
 
-            {/* Theme toggle */}
+            {/* Theme toggle — bigger tap target on mobile */}
             <button
               type="button"
               onClick={toggleTheme}
               aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
               title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-              className="p-1.5 rounded-lg transition-all hover:opacity-80 focus:outline focus:outline-2 focus:outline-offset-1"
+              className="p-2 sm:p-1.5 rounded-lg transition-all hover:opacity-80 focus:outline focus:outline-2 focus:outline-offset-1"
               style={{ background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)', color: txt2, border: `1px solid ${brd}`, outlineColor: '#a78bfa' }}>
-              {isDark ? <Sun size={13} aria-hidden="true" /> : <Moon size={13} aria-hidden="true" />}
+              {isDark ? <Sun size={14} aria-hidden="true" /> : <Moon size={14} aria-hidden="true" />}
             </button>
 
             {/* Status dot */}
@@ -848,26 +724,150 @@ function HomeInner() {
                   onClick={handleSignOut}
                   aria-label="Sign out"
                   title="Sign out"
-                  className="flex items-center gap-1 text-[10px] font-mono px-2 py-1 rounded-md transition-all hover:opacity-80 focus:outline focus:outline-2 focus:outline-offset-1"
+                  className="flex items-center gap-1 text-[10px] font-mono px-2 py-1.5 sm:py-1 rounded-md transition-all hover:opacity-80 focus:outline focus:outline-2 focus:outline-offset-1"
                   style={{ background: 'rgba(248,113,113,0.1)', color: '#fca5a5', border: '1px solid rgba(248,113,113,0.3)', outlineColor: '#f87171' }}>
-                  <LogOut size={10} aria-hidden="true" />
+                  <LogOut size={11} aria-hidden="true" />
                   <span className="hidden sm:inline">Sign out</span>
                 </button>
               </div>
             )}
 
-            {/* Mobile menu toggle */}
+            {/* Mobile menu toggle — bigger tap area */}
             <button
               type="button"
               onClick={() => setNavOpen(!navOpen)}
               aria-label={navOpen ? 'Close navigation menu' : 'Open navigation menu'}
               aria-expanded={navOpen}
               aria-controls="mobile-nav-drawer"
-              className="flex xl:hidden p-1.5 rounded-lg transition-all focus:outline focus:outline-2 focus:outline-offset-1"
+              className="flex xl:hidden p-2 sm:p-1.5 rounded-lg transition-all focus:outline focus:outline-2 focus:outline-offset-1"
               style={{ background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)', color: txt2, border: `1px solid ${brd}`, outlineColor: '#a78bfa' }}>
-              {navOpen ? <X size={14} aria-hidden="true" /> : <Menu size={14} aria-hidden="true" />}
+              {navOpen ? <X size={15} aria-hidden="true" /> : <Menu size={15} aria-hidden="true" />}
             </button>
           </div>
+        </div>
+
+        {/* ── Row 1b: analysis controls (ticker + timeframe + persona + analyze) ── */}
+        <div className="flex items-center gap-1.5 px-3 pb-2 pt-0 flex-wrap" role="group" aria-label="Analysis controls">
+
+            {/* Ticker with proper label */}
+            <div className="flex flex-col">
+              <label htmlFor="ticker-input" className="sr-only">Stock or crypto ticker symbol</label>
+              <input
+                id="ticker-input"
+                type="text"
+                inputMode="text"
+                autoCapitalize="characters"
+                autoComplete="off"
+                spellCheck={false}
+                value={ticker}
+                onChange={e => setTicker(e.target.value.toUpperCase().replace(/[^A-Z/]/g, ''))}
+                onKeyDown={e => { if (e.key === 'Enter' && !running) { setTicker(t => t.replace(/\//g, '')); setTimeout(run, 0) } }}
+                placeholder="AAPL · BTC · EUR/USD"
+                maxLength={7}
+                data-tutorial="ticker-input"
+                aria-label="Ticker symbol (e.g. AAPL, BTC, or EUR/USD)"
+                className="w-24 sm:w-32 rounded-lg px-2.5 py-2 sm:py-1.5 text-sm font-mono font-bold tracking-widest border transition-colors focus:outline focus:outline-2 focus:outline-offset-1"
+                style={{ background: inputBg, borderColor: brd2, color: txt, outlineColor: '#a78bfa' }} />
+            </div>
+
+            {/* Timeframe */}
+            <div className="flex gap-0.5" role="radiogroup" aria-label="Timeframe" data-tutorial="timeframe-selector">
+              {([
+                { tf: '1D', label: '1D', title: 'Intraday — 15-min bars, same-day to next session targets' },
+                { tf: '1W', label: '1W', title: 'Swing trade — hourly bars, 3-10 day targets' },
+                { tf: '1M', label: '1M', title: 'Position trade — daily bars, 3-6 week targets' },
+                { tf: '3M', label: '3M', title: 'Investment — daily bars, 6-13 week targets' },
+              ] as { tf: TF; label: string; title: string }[]).map(({ tf: t, label, title }) => (
+                <button
+                  key={t}
+                  type="button"
+                  role="radio"
+                  aria-checked={tf === t}
+                  aria-label={`${label} timeframe — ${title}`}
+                  onClick={() => setTf(t)}
+                  title={title}
+                  className="px-2.5 py-2 sm:py-1.5 rounded-md text-xs font-mono border transition-all focus:outline focus:outline-2 focus:outline-offset-1"
+                  style={{
+                    background: tf === t ? 'rgba(167,139,250,0.15)' : inputBg,
+                    borderColor: tf === t ? '#a78bfa' : brd,
+                    color: tf === t ? '#a78bfa' : txt2,
+                    outlineColor: '#a78bfa',
+                  }}>{label}</button>
+              ))}
+            </div>
+
+            {/* Persona — label always visible now, no more hidden lg:inline */}
+            <div className="flex items-center gap-0.5 rounded-lg p-0.5" role="radiogroup" aria-label="Analyst persona" data-tutorial="persona-selector" style={{ background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)', border: `1px solid ${brd}` }}>
+              {(Object.entries(PERSONAS) as [Persona, typeof PERSONAS[Persona]][]).map(([key, p]) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="radio"
+                  aria-checked={persona === key}
+                  aria-label={`${p.label} analyst — ${p.desc}`}
+                  onClick={() => setPersona(key)}
+                  title={p.desc}
+                  className="flex items-center gap-1 px-2 py-1.5 sm:py-1 rounded-md text-[11px] font-mono transition-all focus:outline focus:outline-2 focus:outline-offset-1"
+                  style={{
+                    background: persona === key ? `${p.color}18` : 'transparent',
+                    color: persona === key ? p.color : txt2,
+                    border: persona === key ? `1px solid ${p.color}35` : '1px solid transparent',
+                    outlineColor: p.color,
+                  }}>
+                  <span aria-hidden="true">{p.icon}</span>
+                  <span>{p.label}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* Why is this moving? — shows when price has moved >2% */}
+            {md?.currentPrice && md?.technicals?.priceChange1D && Math.abs(md.technicals.priceChange1D) >= 2 && (
+              <button
+                type="button"
+                onClick={async () => {
+                  const pct = md.technicals?.priceChange1D || 0
+                  setWhyMoving({ loading: true, open: true })
+                  const res = await fetch('/api/why-moving', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ticker, currentPrice: md?.currentPrice, changePercent: pct }),
+                  })
+                  if (!res.body) return
+                  const reader = res.body.getReader()
+                  const decoder = new TextDecoder()
+                  while (true) {
+                    const { done, value } = await reader.read()
+                    if (done) break
+                    const text = decoder.decode(value)
+                    for (const line of text.split('\n')) {
+                      if (!line.startsWith('data: ')) continue
+                      try {
+                        const evt = JSON.parse(line.slice(6))
+                        if (evt.catalyst) setWhyMoving(p => ({ ...p, catalyst: evt.catalyst }))
+                        if (evt.verdict) setWhyMoving(p => ({ ...p, verdict: evt.verdict, loading: false }))
+                      } catch { /* skip */ }
+                    }
+                  }
+                }}
+                disabled={whyMoving.loading}
+                aria-label={whyMoving.loading ? 'Analyzing price movement' : `Explain why ${ticker} is moving`}
+                className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40 focus:outline focus:outline-2 focus:outline-offset-1"
+                style={{ background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24', outlineColor: '#fbbf24' }}>
+                {whyMoving.loading ? <Hourglass size={11} aria-hidden="true" /> : <Zap size={11} aria-hidden="true" />}
+                <span>{whyMoving.loading ? 'Analyzing…' : `Why is ${ticker} moving?`}</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={run}
+              disabled={running}
+              data-tutorial="analyze-btn"
+              aria-label={running ? 'Analyzing — please wait' : `Analyze ${ticker}`}
+              className="ml-auto sm:ml-0 px-4 py-2 sm:py-1.5 rounded-lg text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95 disabled:opacity-40 shrink-0 focus:outline focus:outline-2 focus:outline-offset-2"
+              style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', outlineColor: '#a78bfa' }}>
+              {running ? <span aria-hidden="true">…</span> : 'Analyze'}
+            </button>
         </div>
 
         {/* ── Row 2 (xl+): desktop nav links inline ── */}
