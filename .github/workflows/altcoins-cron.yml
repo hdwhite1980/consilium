@@ -1,0 +1,50 @@
+name: Altcoin Tracker Refresh
+
+# Runs daily at 13:00 UTC (= 9am ET during DST, 8am ET during standard time)
+# Fetches fresh listings from CoinGecko, enriches with Grok X buzz data,
+# writes to altcoins_cache.
+#
+# The endpoint returns 202 immediately; the actual refresh runs in the
+# background on Railway and takes ~3-5 minutes for 50 Grok enrichments.
+
+on:
+  schedule:
+    - cron: '0 13 * * *'   # daily, every day (not just weekdays — crypto runs 24/7)
+  workflow_dispatch:  # allows manual trigger from GitHub Actions UI
+
+jobs:
+  refresh-altcoins:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger altcoin refresh
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET not configured in GitHub secrets"
+            exit 1
+          fi
+          
+          echo "Triggering altcoin refresh at $(date -u)"
+          
+          response=$(curl -sS -w "\n__HTTP_STATUS:%{http_code}__" \
+            --max-time 30 \
+            -X POST "https://wali-os.com/api/altcoins/refresh" \
+            -H "x-cron-secret: $CRON_SECRET" \
+            -H "Content-Type: application/json")
+          
+          body=$(echo "$response" | sed 's/__HTTP_STATUS:[0-9]*__$//')
+          status=$(echo "$response" | grep -o '__HTTP_STATUS:[0-9]*__' | grep -o '[0-9]*')
+          
+          echo "HTTP Status: $status"
+          echo "Response body:"
+          echo "$body"
+          
+          if [ "$status" != "200" ] && [ "$status" != "202" ]; then
+            echo "::error::Altcoin refresh trigger failed with status $status"
+            exit 1
+          fi
+          
+          echo "✓ Altcoin refresh triggered successfully"
+          echo "::notice::Check Supabase altcoins_cache in ~5 min (Grok enrichment is slow)"
