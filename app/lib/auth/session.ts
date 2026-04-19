@@ -26,7 +26,9 @@ export async function registerSession(userId: string, deviceHint: string): Promi
       logged_in_at: new Date().toISOString(),
       last_seen_at: new Date().toISOString(),
     }, { onConflict: 'user_id' })
-  console.log('[session] registered device', deviceId.slice(0, 8) + '...', 'for user', userId.slice(0, 8) + '...', error ? 'ERROR: ' + error.message : 'OK')
+  if (error && process.env.NODE_ENV !== 'production') {
+    console.error('[session] registerSession failed:', error.message)
+  }
   return deviceId
 }
 
@@ -35,10 +37,7 @@ export async function registerSession(userId: string, deviceHint: string): Promi
 // A mismatch means the user logged in from another device, displacing
 // this one - we should bounce them to login with ?error=session_displaced.
 export async function validateDeviceId(userId: string, deviceId: string | undefined): Promise<boolean> {
-  if (!deviceId) {
-    console.log('[session] validateDeviceId: no cookie for user', userId.slice(0, 8) + '...')
-    return false
-  }
+  if (!deviceId) return false
   const admin = getAdminClient()
   const { data, error } = await admin
     .from('active_sessions')
@@ -46,18 +45,13 @@ export async function validateDeviceId(userId: string, deviceId: string | undefi
     .eq('user_id', userId)
     .maybeSingle()
   if (error) {
-    console.log('[session] validateDeviceId ERROR:', error.message)
+    if (process.env.NODE_ENV !== 'production') {
+      console.error('[session] validateDeviceId query failed:', error.message)
+    }
     return false
   }
-  if (!data) {
-    console.log('[session] validateDeviceId: no DB row for user', userId.slice(0, 8) + '...')
-    return false
-  }
-  const matches = data.device_id === deviceId
-  console.log('[session] validateDeviceId:', matches ? 'MATCH' : 'MISMATCH',
-    '- cookie:', deviceId.slice(0, 8) + '...',
-    '- db:', (data.device_id as string).slice(0, 8) + '...')
-  return matches
+  if (!data) return false
+  return data.device_id === deviceId
 }
 
 // Called on logout - removes the session record
