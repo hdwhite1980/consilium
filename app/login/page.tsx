@@ -82,7 +82,7 @@ function LoginPageInner() {
         await fetch('/api/auth/session', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionToken }),
+          body: JSON.stringify({ sessionToken, accessToken: data.session.access_token }),
         })
       }
 
@@ -125,7 +125,7 @@ function LoginPageInner() {
       await fetch('/api/auth/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionToken }),
+        body: JSON.stringify({ sessionToken, accessToken: sessionData.session.access_token }),
       })
     }
     router.push(redirect)
