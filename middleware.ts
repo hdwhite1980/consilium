@@ -28,6 +28,18 @@ export async function middleware(request: NextRequest) {
   const alwaysPublic = ['/login', '/auth/callback', '/subscribe', '/signup', '/confirm', '/privacy', '/terms', '/disclaimer']
   if (alwaysPublic.some(p => pathname.startsWith(p))) return supabaseResponse
 
+  // ── RSC prefetch bypass ─────────────────────────────────────
+  // Next.js fires RSC prefetch requests (with _rsc query param and/or
+  // RSC header) that race with the main navigation. When the main nav
+  // and the prefetch both call getSession() in parallel, Supabase's
+  // refresh token rotation invalidates whichever request arrives second,
+  // causing a false auth error that bounces the user to /login.
+  // Skip middleware auth entirely for RSC prefetches - the main nav
+  // will handle auth correctly on its own.
+  if (request.nextUrl.searchParams.has('_rsc') || request.headers.get('rsc') === '1' || request.headers.get('next-router-prefetch') === '1') {
+    return supabaseResponse
+  }
+
   // Removed feature
   if (pathname.startsWith('/training')) {
     return NextResponse.redirect(new URL('/', request.url))
