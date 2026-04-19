@@ -232,24 +232,23 @@ export async function POST(req: NextRequest) {
   }
 
   // ══════════════════════════════════════════════════════════
-  // ACTION: open_trade — log a new position
+  // ACTION: open_trade — log a new position (stock OR option)
+  //
+  // Stock trades use: ticker, shares, entry_price
+  // Option trades use: ticker (underlying), option_type, strike, expiry,
+  //                    contracts, entry_premium
+  //   - shares is derived (contracts * 100) for consistent P/L math
+  //   - entry_price is stored as entry_premium for option rows
   // ══════════════════════════════════════════════════════════
   if (type === 'open_trade') {
     const ticker = typeof body.ticker === 'string' ? body.ticker.toUpperCase().trim() : ''
-    const shares = Number(body.shares)
-    const entry_price = Number(body.entry_price)
-
     if (!ticker || !/^[A-Z0-9.\-]{1,10}$/.test(ticker)) {
       return NextResponse.json({ ok: false, error: 'Invalid ticker' }, { status: 400 })
     }
-    if (!Number.isFinite(shares) || shares <= 0) {
-      return NextResponse.json({ ok: false, error: 'shares must be a positive number' }, { status: 400 })
-    }
-    if (!Number.isFinite(entry_price) || entry_price <= 0) {
-      return NextResponse.json({ ok: false, error: 'entry_price must be a positive number' }, { status: 400 })
-    }
 
-    // Optional fields
+    const position_type = (body.position_type === 'option') ? 'option' : 'stock'
+
+    // Optional common fields
     const council_signal = typeof body.council_signal === 'string' ? body.council_signal : null
     const confidenceRaw = body.confidence
     const confidence = typeof confidenceRaw === 'number' && Number.isFinite(confidenceRaw)
@@ -259,18 +258,67 @@ export async function POST(req: NextRequest) {
       ? body.notes.trim().slice(0, 2000)
       : null
 
+    let insertRow: Record<string, unknown> = {
+      user_id: user.id,
+      ticker,
+      council_signal,
+      confidence,
+      notes,
+      position_type,
+      opened_at: new Date().toISOString(),
+    }
+
+    if (position_type === 'stock') {
+      const shares = Number(body.shares)
+      const entry_price = Number(body.entry_price)
+      if (!Number.isFinite(shares) || shares <= 0) {
+        return NextResponse.json({ ok: false, error: 'shares must be a positive number' }, { status: 400 })
+      }
+      if (!Number.isFinite(entry_price) || entry_price <= 0) {
+        return NextResponse.json({ ok: false, error: 'entry_price must be a positive number' }, { status: 400 })
+      }
+      insertRow.shares = shares
+      insertRow.entry_price = entry_price
+    } else {
+      // Option trade validation
+      const option_type = body.option_type === 'put' ? 'put' : body.option_type === 'call' ? 'call' : null
+      const strike = Number(body.strike)
+      const expiry = typeof body.expiry === 'string' ? body.expiry : null
+      const contracts = Number(body.contracts ?? 1)
+      const entry_premium = Number(body.entry_premium)
+      const underlying = typeof body.underlying === 'string' ? body.underlying.toUpperCase() : ticker
+
+      if (!option_type) {
+        return NextResponse.json({ ok: false, error: 'option_type must be call or put' }, { status: 400 })
+      }
+      if (!Number.isFinite(strike) || strike <= 0) {
+        return NextResponse.json({ ok: false, error: 'strike must be a positive number' }, { status: 400 })
+      }
+      if (!expiry || !/^\d{4}-\d{2}-\d{2}$/.test(expiry)) {
+        return NextResponse.json({ ok: false, error: 'expiry must be YYYY-MM-DD' }, { status: 400 })
+      }
+      if (!Number.isFinite(contracts) || contracts <= 0) {
+        return NextResponse.json({ ok: false, error: 'contracts must be a positive number' }, { status: 400 })
+      }
+      if (!Number.isFinite(entry_premium) || entry_premium <= 0) {
+        return NextResponse.json({ ok: false, error: 'entry_premium must be a positive number' }, { status: 400 })
+      }
+
+      insertRow.option_type = option_type
+      insertRow.strike = strike
+      insertRow.expiry = expiry
+      insertRow.contracts = contracts
+      insertRow.entry_premium = entry_premium
+      insertRow.underlying = underlying
+      // Store shares = contracts * 100 so existing P/L queries still work
+      insertRow.shares = contracts * 100
+      // Store entry_price = entry_premium so stock-centric views stay consistent
+      insertRow.entry_price = entry_premium
+    }
+
     const { data: inserted, error } = await admin
       .from('invest_trades')
-      .insert({
-        user_id: user.id,
-        ticker,
-        shares,
-        entry_price,
-        council_signal,
-        confidence,
-        notes,
-        opened_at: new Date().toISOString(),
-      })
+      .insert(insertRow)
       .select()
       .single()
 
@@ -283,22 +331,25 @@ export async function POST(req: NextRequest) {
 
   // ══════════════════════════════════════════════════════════
   // ACTION: close_trade — set exit_price, update streaks
-  // Frontend expects { isWin: boolean } in the response so it
-  // can show the "first win" celebration animation.
+  //
+  // Stock trades: body has { id, exit_price }
+  // Option trades: body has { id, exit_premium } — the actual sell
+  //   price per share of premium. We store this in BOTH exit_price
+  //   (so existing P/L math keeps working — exit_price and entry_price
+  //   are both per-share premium for options) AND exit_premium.
+  //
+  // Frontend expects { isWin, postmortemPending } in the response.
+  // isWin is used for the first-win celebration animation.
+  // postmortemPending signals the UI to poll /api/invest/analyze-trade
+  // for the grade + analysis.
   // ══════════════════════════════════════════════════════════
   if (type === 'close_trade') {
     const id = typeof body.id === 'string' ? body.id : null
-    const exit_price = Number(body.exit_price)
-
     if (!id) {
       return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 })
     }
-    if (!Number.isFinite(exit_price) || exit_price <= 0) {
-      return NextResponse.json({ ok: false, error: 'exit_price must be a positive number' }, { status: 400 })
-    }
 
-    // Fetch the trade first to (a) verify it belongs to this user,
-    // (b) determine isWin, (c) prevent double-close.
+    // Fetch first to verify ownership + detect stock vs option
     const { data: trade, error: fetchErr } = await admin
       .from('invest_trades')
       .select('*')
@@ -313,15 +364,31 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'Trade already closed' }, { status: 409 })
     }
 
+    const isOption = trade.position_type === 'option'
+    const exit_price = isOption ? Number(body.exit_premium) : Number(body.exit_price)
+    const exit_premium = isOption ? Number(body.exit_premium) : null
+
+    if (!Number.isFinite(exit_price) || exit_price <= 0) {
+      return NextResponse.json(
+        { ok: false, error: isOption ? 'exit_premium must be a positive number' : 'exit_price must be a positive number' },
+        { status: 400 }
+      )
+    }
+
     const isWin = exit_price > trade.entry_price
 
     // Update the trade
+    const updateRow: Record<string, unknown> = {
+      exit_price,
+      exit_date: new Date().toISOString(),
+    }
+    if (isOption && exit_premium !== null) {
+      updateRow.exit_premium = exit_premium
+    }
+
     const { error: updateErr } = await admin
       .from('invest_trades')
-      .update({
-        exit_price,
-        exit_date: new Date().toISOString(),
-      })
+      .update(updateRow)
       .eq('id', id)
       .eq('user_id', user.id)
 
@@ -353,7 +420,25 @@ export async function POST(req: NextRequest) {
         .eq('user_id', user.id)
     }
 
-    return NextResponse.json({ ok: true, isWin })
+    // Fire-and-forget post-mortem generation. We don't await — the client
+    // will poll /api/invest/analyze-trade?tradeId={id} to fetch once ready.
+    // Errors in this background request are logged but don't block close.
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL
+    if (appUrl) {
+      // Forward the user's auth cookie so the downstream route authenticates
+      // as the same user. We don't await this.
+      const cookieHeader = req.headers.get('cookie') ?? ''
+      fetch(`${appUrl}/api/invest/analyze-trade`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          cookie: cookieHeader,
+        },
+        body: JSON.stringify({ tradeId: id }),
+      }).catch(err => console.error('[close_trade] postmortem fire-and-forget failed:', err))
+    }
+
+    return NextResponse.json({ ok: true, isWin, postmortemPending: true })
   }
 
   // ── Unknown action ────────────────────────────────────────

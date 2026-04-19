@@ -23,9 +23,36 @@ interface Trade {
   confidence: number | null
   notes: string | null
   opened_at: string
+  // Options fields (nullable for stock trades)
+  position_type?: 'stock' | 'option'
+  option_type?: 'call' | 'put' | null
+  strike?: number | null
+  expiry?: string | null
+  contracts?: number | null
+  entry_premium?: number | null
+  exit_premium?: number | null
+  underlying?: string | null
+  // Enriched client-side
   currentPrice?: number | null
   pnl?: number | null
   pnlPct?: number | null
+}
+
+interface Postmortem {
+  id?: string
+  trade_id: string
+  grade: string
+  process_score: number
+  outcome: 'win' | 'loss' | 'breakeven'
+  analysis: {
+    whatWorked: string[]
+    whatMissed: string[]
+    ruleReferences: Array<{ lessonId: string; lessonTitle: string; reason: string }>
+    nextTimeTip: string
+    honestSummary: string
+  }
+  tier_at_trade?: string | null
+  generated_at?: string
 }
 
 interface Journey {
@@ -86,6 +113,19 @@ interface Idea {
   risk?: string
   timeframe?: string
   volumeNote?: string
+  // Option-idea fields (present only for Operator+ option setups)
+  positionType?: 'stock' | 'option'
+  underlying?: string
+  underlyingPrice?: number
+  optionType?: 'call' | 'put'
+  strike?: number
+  expiry?: string
+  dte?: number
+  estimatedPremium?: number
+  delta?: number
+  cost?: number
+  breakeven?: number
+  maxLoss?: number
 }
 
 interface FloorData {
@@ -127,6 +167,20 @@ const isMarketOpen = () => {
   const mins = ny.getHours() * 60 + ny.getMinutes()
   return mins >= 9 * 60 + 30 && mins < 16 * 60
 }
+const getDTE = (expiry: string | null | undefined): number => {
+  if (!expiry) return 0
+  try {
+    const exp = new Date(expiry + 'T21:00:00Z')
+    const diff = exp.getTime() - Date.now()
+    return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)))
+  } catch { return 0 }
+}
+
+const gradeToClass = (grade: string): string => {
+  const letter = grade.charAt(0).toLowerCase()
+  return `grade-${letter}`
+}
+
 const nowETShort = () => {
   const now = new Date()
   return now.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true }) + ' ET'
@@ -248,21 +302,58 @@ function OrderTicket({ prefill, cashRemaining, onClose, onSave }: {
   prefill?: Partial<Idea>
   cashRemaining: number
   onClose: () => void
-  onSave: (data: { ticker: string; shares: number; entry_price: number; council_signal?: string; confidence?: number; notes?: string }) => Promise<void>
+  onSave: (data: {
+    ticker: string
+    shares: number
+    entry_price: number
+    council_signal?: string
+    confidence?: number
+    notes?: string
+    // Option-trade fields — only supplied when position_type === 'option'
+    position_type?: 'stock' | 'option'
+    option_type?: 'call' | 'put'
+    strike?: number
+    expiry?: string
+    contracts?: number
+    entry_premium?: number
+    underlying?: string
+  }) => Promise<void>
 }) {
-  const [ticker, setTicker] = useState(prefill?.ticker ?? '')
+  // Detect if this is an option-mode ticket by presence of option fields in prefill.
+  // When the user opens a manual blank ticket, we default to stock; they can toggle.
+  const isOptionPrefill = prefill?.positionType === 'option'
+  const [mode, setMode] = useState<'stock' | 'option'>(isOptionPrefill ? 'option' : 'stock')
+
+  // Stock-mode state
+  const [ticker, setTicker] = useState(prefill?.ticker ?? prefill?.underlying ?? '')
   const [shares, setShares] = useState(prefill?.suggestedShares?.toString() ?? '')
   const [price, setPrice] = useState(prefill?.livePrice?.toString() ?? prefill?.price?.toString() ?? '')
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
   const [fetchingPrice, setFetchingPrice] = useState(false)
 
+  // Option-mode state
+  const [optionType, setOptionType] = useState<'call' | 'put'>(prefill?.optionType ?? 'call')
+  const [strike, setStrike] = useState(prefill?.strike?.toString() ?? '')
+  const [expiry, setExpiry] = useState(prefill?.expiry ?? '')
+  const [contracts, setContracts] = useState(prefill?.suggestedShares?.toString() ?? '1')
+  const [premium, setPremium] = useState(prefill?.estimatedPremium?.toString() ?? '')
+
   const sharesNum = parseFloat(shares) || 0
   const priceNum = parseFloat(price) || 0
-  const cost = sharesNum * priceNum
+  const strikeNum = parseFloat(strike) || 0
+  const contractsNum = parseInt(contracts) || 0
+  const premiumNum = parseFloat(premium) || 0
+
+  const cost = mode === 'stock'
+    ? sharesNum * priceNum
+    : contractsNum * premiumNum * 100
   const cashAfter = cashRemaining - cost
   const overBudget = cost > cashRemaining
-  const valid = ticker.length >= 1 && sharesNum > 0 && priceNum > 0
+
+  const valid = mode === 'stock'
+    ? ticker.length >= 1 && sharesNum > 0 && priceNum > 0
+    : ticker.length >= 1 && strikeNum > 0 && expiry.length > 0 && contractsNum > 0 && premiumNum > 0
 
   const lookupPrice = useCallback(async () => {
     if (!ticker) return
@@ -288,19 +379,42 @@ function OrderTicket({ prefill, cashRemaining, onClose, onSave }: {
 
         <div className="fl-ticket-body">
           <h2 className="fl-ticket-title">
-            {prefill?.ticker ? <>Take the {prefill.ticker} setup</> : <>New position</>}
+            {prefill?.ticker ? (
+              mode === 'option'
+                ? <>Take the {prefill.ticker} {prefill.optionType?.toUpperCase()} setup</>
+                : <>Take the {prefill.ticker} setup</>
+            ) : <>New position</>}
           </h2>
           {prefill?.rationale && <p className="fl-ticket-sub">{prefill.rationale}</p>}
 
+          {/* Stock/Option toggle — only shown for blank (manual) tickets */}
+          {!prefill?.ticker && (
+            <div className="fl-field">
+              <label>Position type</label>
+              <div className="fl-mode-toggle">
+                <button type="button"
+                  className={mode === 'stock' ? 'active' : ''}
+                  onClick={() => setMode('stock')}>
+                  Stock
+                </button>
+                <button type="button"
+                  className={mode === 'option' ? 'active' : ''}
+                  onClick={() => setMode('option')}>
+                  Option
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="fl-field">
-            <label>Ticker</label>
+            <label>{mode === 'option' ? 'Underlying ticker' : 'Ticker'}</label>
             <div className="fl-field-row">
               <input type="text" value={ticker}
                 onChange={e => setTicker(e.target.value.toUpperCase())}
-                onBlur={() => { if (!prefill && ticker) lookupPrice() }}
-                placeholder="e.g. PLTR" maxLength={6}
+                onBlur={() => { if (!prefill && ticker && mode === 'stock') lookupPrice() }}
+                placeholder={mode === 'option' ? 'e.g. AAPL' : 'e.g. PLTR'} maxLength={6}
                 disabled={!!prefill?.ticker} className="fl-ticker-input" />
-              {!prefill?.ticker && (
+              {!prefill?.ticker && mode === 'stock' && (
                 <button className="fl-inline-btn" onClick={lookupPrice} disabled={!ticker || fetchingPrice}>
                   {fetchingPrice ? '…' : 'Fetch bid'}
                 </button>
@@ -308,28 +422,106 @@ function OrderTicket({ prefill, cashRemaining, onClose, onSave }: {
             </div>
           </div>
 
-          <div className="fl-field-pair">
-            <div className="fl-field">
-              <label>Shares</label>
-              <input type="number" value={shares} onChange={e => setShares(e.target.value)}
-                placeholder="0" min="0" step="1" inputMode="numeric" />
+          {/* STOCK MODE FIELDS */}
+          {mode === 'stock' && (
+            <div className="fl-field-pair">
+              <div className="fl-field">
+                <label>Shares</label>
+                <input type="number" value={shares} onChange={e => setShares(e.target.value)}
+                  placeholder="0" min="0" step="1" inputMode="numeric" />
+              </div>
+              <div className="fl-field">
+                <label>Entry price</label>
+                <input type="number" value={price} onChange={e => setPrice(e.target.value)}
+                  placeholder="0.00" min="0" step="0.01" inputMode="decimal" />
+              </div>
             </div>
-            <div className="fl-field">
-              <label>Entry price</label>
-              <input type="number" value={price} onChange={e => setPrice(e.target.value)}
-                placeholder="0.00" min="0" step="0.01" inputMode="decimal" />
-            </div>
-          </div>
+          )}
+
+          {/* OPTION MODE FIELDS */}
+          {mode === 'option' && (
+            <>
+              <div className="fl-field">
+                <label>Call or put</label>
+                <div className="fl-mode-toggle">
+                  <button type="button"
+                    className={optionType === 'call' ? 'active call' : ''}
+                    disabled={!!prefill?.optionType}
+                    onClick={() => setOptionType('call')}>
+                    CALL
+                  </button>
+                  <button type="button"
+                    className={optionType === 'put' ? 'active put' : ''}
+                    disabled={!!prefill?.optionType}
+                    onClick={() => setOptionType('put')}>
+                    PUT
+                  </button>
+                </div>
+              </div>
+
+              <div className="fl-field-pair">
+                <div className="fl-field">
+                  <label>Strike</label>
+                  <input type="number" value={strike}
+                    onChange={e => setStrike(e.target.value)}
+                    disabled={!!prefill?.strike}
+                    placeholder="0" min="0" step="0.5" inputMode="decimal" />
+                </div>
+                <div className="fl-field">
+                  <label>Expiry</label>
+                  <input type="date" value={expiry}
+                    onChange={e => setExpiry(e.target.value)}
+                    disabled={!!prefill?.expiry} />
+                </div>
+              </div>
+
+              <div className="fl-field-pair">
+                <div className="fl-field">
+                  <label>Contracts</label>
+                  <input type="number" value={contracts}
+                    onChange={e => setContracts(e.target.value)}
+                    placeholder="1" min="1" step="1" inputMode="numeric" />
+                </div>
+                <div className="fl-field">
+                  <label>Premium / share</label>
+                  <input type="number" value={premium}
+                    onChange={e => setPremium(e.target.value)}
+                    placeholder="0.00" min="0" step="0.05" inputMode="decimal" />
+                </div>
+              </div>
+            </>
+          )}
 
           <div className="fl-math-preview">
-            <div className="fl-math-row"><span>Position size</span><span className="mono">{fmt$(cost)}</span></div>
+            <div className="fl-math-row">
+              <span>{mode === 'option' ? 'Contract cost' : 'Position size'}</span>
+              <span className="mono">{fmt$(cost)}</span>
+            </div>
+            {mode === 'option' && contractsNum > 1 && (
+              <div className="fl-math-row sub">
+                <span>{contractsNum} contracts × $100 × ${premium || '0.00'}</span>
+                <span className="mono">{fmt$(cost)}</span>
+              </div>
+            )}
             <div className="fl-math-row"><span>Cash available</span><span className="mono">{fmt$(cashRemaining)}</span></div>
             <div className="fl-math-row strong">
               <span>Cash after</span>
               <span className="mono" style={{ color: overBudget ? '#dc2626' : '#10b981' }}>{fmt$(cashAfter)}</span>
             </div>
             {overBudget && (
-              <div className="fl-math-warning">Over budget by {fmt$(Math.abs(cashAfter))}. Reduce shares or entry.</div>
+              <div className="fl-math-warning">Over budget by {fmt$(Math.abs(cashAfter))}. Reduce {mode === 'option' ? 'contracts or premium' : 'shares or entry'}.</div>
+            )}
+            {mode === 'option' && prefill?.breakeven && (
+              <div className="fl-math-row sub">
+                <span>Break-even at expiry</span>
+                <span className="mono">{fmt$(prefill.breakeven)}</span>
+              </div>
+            )}
+            {mode === 'option' && prefill?.maxLoss && (
+              <div className="fl-math-row sub">
+                <span>Max loss</span>
+                <span className="mono" style={{ color: '#dc2626' }}>{fmt$(-prefill.maxLoss)}</span>
+              </div>
             )}
           </div>
 
@@ -347,14 +539,34 @@ function OrderTicket({ prefill, cashRemaining, onClose, onSave }: {
               if (!valid || overBudget) return
               setSaving(true)
               try {
-                await onSave({
-                  ticker: ticker.toUpperCase(),
-                  shares: sharesNum,
-                  entry_price: priceNum,
-                  council_signal: prefill?.signal,
-                  confidence: prefill?.confidence,
-                  notes: notes || undefined,
-                })
+                if (mode === 'option') {
+                  await onSave({
+                    ticker: ticker.toUpperCase(),
+                    underlying: ticker.toUpperCase(),
+                    position_type: 'option',
+                    option_type: optionType,
+                    strike: strikeNum,
+                    expiry,
+                    contracts: contractsNum,
+                    entry_premium: premiumNum,
+                    // For server compatibility: shares derived, entry_price = premium
+                    shares: contractsNum * 100,
+                    entry_price: premiumNum,
+                    council_signal: prefill?.signal,
+                    confidence: prefill?.confidence,
+                    notes: notes || undefined,
+                  })
+                } else {
+                  await onSave({
+                    ticker: ticker.toUpperCase(),
+                    position_type: 'stock',
+                    shares: sharesNum,
+                    entry_price: priceNum,
+                    council_signal: prefill?.signal,
+                    confidence: prefill?.confidence,
+                    notes: notes || undefined,
+                  })
+                }
               } finally { setSaving(false) }
             }}>
             {saving ? 'Submitting…' : 'Submit order →'}
@@ -392,12 +604,22 @@ function MarkToMarket({ trade, onClose, onSave }: {
           <button className="fl-close-btn" onClick={onClose} aria-label="Close"><X size={16} /></button>
         </div>
         <div className="fl-ticket-body">
-          <h2 className="fl-ticket-title">Close position at market.</h2>
+          <h2 className="fl-ticket-title">
+            {trade.position_type === 'option' ? 'Close contract at market.' : 'Close position at market.'}
+          </h2>
           <p className="fl-ticket-sub">
-            Held: <span className="mono">{trade.shares}</span> shares @ <span className="mono">{fmt$(trade.entry_price)}</span>. What was your fill?
+            {trade.position_type === 'option' ? (
+              <>
+                Held: <span className="mono">{trade.contracts ?? 1}</span> {trade.option_type?.toUpperCase()} contract{(trade.contracts ?? 1) > 1 ? 's' : ''} @ <span className="mono">{fmt$(trade.entry_premium ?? trade.entry_price)}</span>/share. What premium did you sell for?
+              </>
+            ) : (
+              <>
+                Held: <span className="mono">{trade.shares}</span> shares @ <span className="mono">{fmt$(trade.entry_price)}</span>. What was your fill?
+              </>
+            )}
           </p>
           <div className="fl-field">
-            <label>Exit price</label>
+            <label>{trade.position_type === 'option' ? 'Exit premium / share' : 'Exit price'}</label>
             <input type="number" value={exitPrice} onChange={e => setExitPrice(e.target.value)}
               placeholder="0.00" min="0" step="0.01" autoFocus inputMode="decimal" />
           </div>
@@ -405,7 +627,10 @@ function MarkToMarket({ trade, onClose, onSave }: {
             <div className={`fl-pnl-preview ${isWin ? 'win' : 'loss'}`}>
               <div className="fl-pnl-label mono">Realized P&L</div>
               <div className="fl-pnl-big mono">{pnl >= 0 ? '+' : ''}{fmt$(pnl)}</div>
-              <div className="fl-pnl-sub mono">{fmtPct(pnlPct)} · {isWin ? 'profit' : 'loss'}</div>
+              <div className="fl-pnl-sub mono">
+                {fmtPct(pnlPct)}
+                {trade.position_type === 'option' ? ' on premium' : ''} · {isWin ? 'profit' : 'loss'}
+              </div>
             </div>
           )}
         </div>
@@ -573,6 +798,16 @@ function FloorInner() {
   const [ctxLesson, setCtxLesson] = useState<InvestLesson | null>(null)
   const [completedIds, setCompletedIds] = useState<Set<string>>(new Set())
 
+  // Options ideas (Operator+ only — empty array at lower tiers)
+  const [optionIdeas, setOptionIdeas] = useState<Idea[]>([])
+
+  // Post-mortem cache — keyed by trade_id
+  const [postmortems, setPostmortems] = useState<Record<string, Postmortem>>({})
+  const [expandedPostmortem, setExpandedPostmortem] = useState<string | null>(null)
+
+  // Tracks trades awaiting post-mortem generation. UI polls while this set is non-empty.
+  const [pendingPostmortems, setPendingPostmortems] = useState<Set<string>>(new Set())
+
   const didCheckIntro = useRef(false)
 
   useEffect(() => {
@@ -607,6 +842,60 @@ function FloorInner() {
     const interval = setInterval(() => { if (isMarketOpen()) loadData() }, 5 * 60 * 1000)
     return () => clearInterval(interval)
   }, [loadData])
+
+  // Load cached post-mortems for all closed trades when data refreshes.
+  useEffect(() => {
+    if (!data?.closedTrades || data.closedTrades.length === 0) return
+    // Only fetch for trades we don't already have cached locally
+    const missing = data.closedTrades
+      .filter(t => !postmortems[t.id])
+      .slice(0, 10) // cap request count — we show at most ~5 at a time anyway
+
+    if (missing.length === 0) return
+
+    Promise.all(missing.map(async (t) => {
+      try {
+        const res = await fetch(`/api/invest/analyze-trade?tradeId=${t.id}`)
+        const body = await res.json()
+        if (body.postmortem) return { id: t.id, pm: body.postmortem as Postmortem }
+      } catch { /* ignore */ }
+      return null
+    })).then(results => {
+      const updates: Record<string, Postmortem> = {}
+      for (const r of results) if (r) updates[r.id] = r.pm
+      if (Object.keys(updates).length > 0) {
+        setPostmortems(prev => ({ ...prev, ...updates }))
+      }
+    })
+  }, [data?.closedTrades, postmortems])
+
+  // Poll for pending post-mortems every 3s. Drops them from `pending` once
+  // we receive the analysis, so the loop terminates naturally.
+  useEffect(() => {
+    if (pendingPostmortems.size === 0) return
+    const interval = setInterval(async () => {
+      const pending = Array.from(pendingPostmortems)
+      const results = await Promise.all(pending.map(async (tradeId) => {
+        try {
+          const res = await fetch(`/api/invest/analyze-trade?tradeId=${tradeId}`)
+          const body = await res.json()
+          if (body.postmortem) return { tradeId, pm: body.postmortem as Postmortem }
+        } catch { /* ignore */ }
+        return null
+      }))
+      const received: Record<string, Postmortem> = {}
+      for (const r of results) if (r) received[r.tradeId] = r.pm
+      if (Object.keys(received).length > 0) {
+        setPostmortems(prev => ({ ...prev, ...received }))
+        setPendingPostmortems(prev => {
+          const next = new Set(prev)
+          for (const id of Object.keys(received)) next.delete(id)
+          return next
+        })
+      }
+    }, 3000)
+    return () => clearInterval(interval)
+  }, [pendingPostmortems])
 
   const { pendingTrigger, dismissTrigger } = useContextualLessons({
     tier: data?.tier.name ?? 'Buyer',
@@ -649,6 +938,7 @@ function FloorInner() {
       })
       const body = await res.json()
       setIdeas(body.ideas ?? [])
+      setOptionIdeas(body.options ?? [])
       setPulledAt(new Date())
     } catch { /* ignore */ }
     setLoadingIdeas(false)
@@ -657,7 +947,21 @@ function FloorInner() {
   const openTicketFromSignal = (idea: Idea) => { setTicketPrefill(idea); setTicketOpen(true) }
   const openTicketBlank = () => { setTicketPrefill(undefined); setTicketOpen(true) }
 
-  const submitOrder = async (payload: { ticker: string; shares: number; entry_price: number; council_signal?: string; confidence?: number; notes?: string }) => {
+  const submitOrder = async (payload: {
+    ticker: string
+    shares: number
+    entry_price: number
+    council_signal?: string
+    confidence?: number
+    notes?: string
+    position_type?: 'stock' | 'option'
+    option_type?: 'call' | 'put'
+    strike?: number
+    expiry?: string
+    contracts?: number
+    entry_premium?: number
+    underlying?: string
+  }) => {
     await fetch('/api/invest', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'open_trade', ...payload }),
@@ -666,18 +970,30 @@ function FloorInner() {
     await loadData()
   }
 
-  const closePosition = async (exitPrice: number) => {
+  const closePosition = async (exitValue: number) => {
     if (!closeTarget) return
+    const isOption = closeTarget.position_type === 'option'
+    const closedTradeId = closeTarget.id
     const res = await fetch('/api/invest', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'close_trade', id: closeTarget.id, exit_price: exitPrice }),
+      body: JSON.stringify({
+        type: 'close_trade',
+        id: closedTradeId,
+        // Server reads exit_premium for options, exit_price for stocks
+        ...(isOption ? { exit_premium: exitValue } : { exit_price: exitValue }),
+      }),
     })
     const body = await res.json()
-    const pnl = (exitPrice - closeTarget.entry_price) * closeTarget.shares
+    const pnl = (exitValue - closeTarget.entry_price) * closeTarget.shares
     const isFirstWin = body.isWin && !data?.stats.firstWinAt
     setCloseTarget(null)
     await loadData()
     if (isFirstWin) setFirstWinAmount(pnl)
+
+    // Mark this trade as awaiting post-mortem. Polling effect below picks it up.
+    if (body.postmortemPending || body.ok) {
+      setPendingPostmortems(prev => new Set(prev).add(closedTradeId))
+    }
   }
 
   const setStartBalance = async (balance: number) => {
@@ -828,33 +1144,78 @@ function FloorInner() {
                 <Activity size={20} style={{ color: '#d4a857' }} />
                 <p>Council scanning the tape…</p>
               </div>
-            ) : ideas.length === 0 ? (
+            ) : ideas.length === 0 && optionIdeas.length === 0 ? (
               <div className="fl-signals-empty">
                 <p>No setups queued. Pull new signals to see today's screen.</p>
               </div>
             ) : (
-              <div className="fl-signals-grid">
-                {ideas.map((idea, i) => {
-                  const price = idea.livePrice ?? idea.price
-                  return (
-                    <div key={`${idea.ticker}-${i}`} className="fl-signal-tile"
-                      onClick={() => openTicketFromSignal(idea)}
-                      style={{ animationDelay: `${i * 0.06}s` }}>
-                      <div className="fl-signal-top">
-                        <span className="fl-signal-sym">{idea.ticker}</span>
-                        <span className="fl-signal-px mono">{fmt$(price)}</span>
+              <>
+                <div className="fl-signals-grid">
+                  {ideas.map((idea, i) => {
+                    const price = idea.livePrice ?? idea.price
+                    return (
+                      <div key={`stock-${idea.ticker}-${i}`} className="fl-signal-tile"
+                        onClick={() => openTicketFromSignal(idea)}
+                        style={{ animationDelay: `${i * 0.06}s` }}>
+                        <div className="fl-signal-top">
+                          <span className="fl-signal-sym">{idea.ticker}</span>
+                          <span className="fl-signal-px mono">{fmt$(price)}</span>
+                        </div>
+                        {idea.catalyst && <div className="fl-signal-catalyst">{idea.catalyst}</div>}
+                        <div className="fl-signal-meta">
+                          <span className="mono">{idea.suggestedShares} sh</span>
+                          <span className="fl-signal-conf mono">
+                            {idea.signal?.toLowerCase() ?? 'bull'} · {idea.confidence ?? 0}%
+                          </span>
+                        </div>
                       </div>
-                      {idea.catalyst && <div className="fl-signal-catalyst">{idea.catalyst}</div>}
-                      <div className="fl-signal-meta">
-                        <span className="mono">{idea.suggestedShares} sh</span>
-                        <span className="fl-signal-conf mono">
-                          {idea.signal?.toLowerCase() ?? 'bull'} · {idea.confidence ?? 0}%
-                        </span>
-                      </div>
+                    )
+                  })}
+                </div>
+
+                {tier.name !== 'Buyer' && tier.name !== 'Builder' && optionIdeas.length > 0 && (
+                  <div className="fl-options-section">
+                    <div className="fl-options-header">
+                      <span className="fl-eyebrow">options desk &middot; operator unlock</span>
+                      <h3>Leveraged setups</h3>
                     </div>
-                  )
-                })}
-              </div>
+                    <div className="fl-options-grid">
+                      {optionIdeas.map((opt, i) => {
+                        const dte = opt.dte ?? getDTE(opt.expiry)
+                        const isCall = opt.optionType === 'call'
+                        return (
+                          <div key={`opt-${opt.underlying}-${opt.strike}-${i}`}
+                            className={`fl-option-tile ${isCall ? 'call' : 'put'}`}
+                            onClick={() => openTicketFromSignal(opt)}
+                            style={{ animationDelay: `${i * 0.08}s` }}>
+                            <div className="fl-signal-top">
+                              <span className="fl-signal-sym">
+                                {opt.underlying ?? opt.ticker}
+                                <span className={`fl-option-badge ${isCall ? 'call' : 'put'}`}>
+                                  {isCall ? 'CALL' : 'PUT'}
+                                </span>
+                              </span>
+                              <span className="fl-signal-px mono">{fmt$(opt.estimatedPremium ?? 0)}/sh</span>
+                            </div>
+                            <div className="fl-option-strike-row mono">
+                              <span>${opt.strike} strike</span>
+                              <span>&middot;</span>
+                              <span>{dte}d</span>
+                            </div>
+                            {opt.catalyst && <div className="fl-signal-catalyst">{opt.catalyst}</div>}
+                            <div className="fl-signal-meta">
+                              <span className="mono">{fmt$(opt.cost ?? ((opt.estimatedPremium ?? 0) * 100))} / contract</span>
+                              <span className="fl-signal-conf mono">
+                                {opt.confidence ?? 0}%
+                              </span>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </main>
@@ -876,25 +1237,160 @@ function FloorInner() {
               ) : (
                 openTrades.map(t => {
                   const isUp = (t.pnl ?? 0) >= 0
+                  const isOption = t.position_type === 'option'
+                  const dte = isOption ? getDTE(t.expiry) : null
+                  const dteUrgent = dte !== null && dte <= 7
+                  const isCall = t.option_type === 'call'
                   return (
                     <button key={t.id} className="fl-position-row"
                       style={{ ['--pc' as string]: isUp ? '#10b981' : '#dc2626' }}
                       onClick={() => setCloseTarget(t)}>
                       <div className="fl-position-pulse" />
                       <div className="fl-position-row1">
-                        <span className="fl-position-sym">{t.ticker}</span>
+                        <span className="fl-position-sym">
+                          {t.underlying ?? t.ticker}
+                          {isOption && (
+                            <span className={`fl-position-option-badge ${isCall ? 'call' : 'put'}`}>
+                              {isCall ? 'C' : 'P'}${t.strike}
+                            </span>
+                          )}
+                        </span>
                         <span className={`fl-position-pnl mono ${isUp ? 'up' : 'dn'}`}>
                           {t.pnlPct != null ? fmtPct(t.pnlPct) : '—'}
                         </span>
                       </div>
                       <div className="fl-position-row2 mono">
-                        <span>{t.shares} sh @ {fmt$(t.entry_price)}</span>
-                        <span>{t.currentPrice != null ? fmt$(t.currentPrice) : 'live…'}</span>
+                        {isOption ? (
+                          <>
+                            <span>{t.contracts ?? 1}× @ {fmt$(t.entry_premium ?? t.entry_price)}</span>
+                            <span className={`fl-dte-pill ${dteUrgent ? 'urgent' : ''}`}>
+                              {dte}d
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <span>{t.shares} sh @ {fmt$(t.entry_price)}</span>
+                            <span>{t.currentPrice != null ? fmt$(t.currentPrice) : 'live…'}</span>
+                          </>
+                        )}
                       </div>
                     </button>
                   )
                 })
               )}
+            </div>
+          )}
+
+          {(mobileView === 'portfolio' || mobileView === 'positions') && data.closedTrades.length > 0 && (
+            <div className="fl-right-section">
+              <div className="fl-eyebrow">closed &middot; reviewed</div>
+              <h3>Recent reviews</h3>
+              {data.closedTrades.slice(0, 5).map(t => {
+                const pm = postmortems[t.id]
+                const pending = pendingPostmortems.has(t.id)
+                const isUp = t.exit_price != null && t.exit_price > t.entry_price
+                const pnlDollar = t.exit_price != null ? (t.exit_price - t.entry_price) * t.shares : 0
+                const pnlPct = t.exit_price != null ? ((t.exit_price - t.entry_price) / t.entry_price) * 100 : 0
+                const isOption = t.position_type === 'option'
+                const expanded = expandedPostmortem === t.id
+
+                return (
+                  <div key={`closed-${t.id}`} className={`fl-postmortem-card ${expanded ? 'expanded' : ''}`}>
+                    <button
+                      className="fl-postmortem-head"
+                      onClick={() => setExpandedPostmortem(expanded ? null : t.id)}>
+                      <div className="fl-postmortem-top">
+                        <span className="fl-position-sym">
+                          {t.underlying ?? t.ticker}
+                          {isOption && (
+                            <span className={`fl-position-option-badge ${t.option_type === 'call' ? 'call' : 'put'}`}>
+                              {t.option_type === 'call' ? 'C' : 'P'}${t.strike}
+                            </span>
+                          )}
+                        </span>
+                        {pm ? (
+                          <span className={`fl-grade-badge ${gradeToClass(pm.grade)}`}>
+                            {pm.grade}
+                          </span>
+                        ) : pending ? (
+                          <span className="fl-grade-badge pending">reviewing…</span>
+                        ) : (
+                          <span className="fl-grade-badge pending">—</span>
+                        )}
+                      </div>
+                      <div className="fl-postmortem-meta mono">
+                        <span className={isUp ? 'up' : 'dn'}>
+                          {pnlDollar >= 0 ? '+' : ''}{fmt$(pnlDollar)}
+                        </span>
+                        <span className={isUp ? 'up' : 'dn'}>
+                          {fmtPct(pnlPct)}
+                        </span>
+                        {pm && (
+                          <span className="fl-postmortem-score">
+                            process {pm.process_score}/100
+                          </span>
+                        )}
+                      </div>
+                    </button>
+
+                    {expanded && pm && (
+                      <div className="fl-postmortem-body">
+                        {pm.analysis.honestSummary && (
+                          <p className="fl-postmortem-summary">{pm.analysis.honestSummary}</p>
+                        )}
+                        {pm.analysis.whatWorked.length > 0 && (
+                          <div className="fl-postmortem-block">
+                            <div className="fl-postmortem-block-label worked">What worked</div>
+                            <ul>
+                              {pm.analysis.whatWorked.map((w, i) => <li key={`w${i}`}>{w}</li>)}
+                            </ul>
+                          </div>
+                        )}
+                        {pm.analysis.whatMissed.length > 0 && (
+                          <div className="fl-postmortem-block">
+                            <div className="fl-postmortem-block-label missed">What was missed</div>
+                            <ul>
+                              {pm.analysis.whatMissed.map((w, i) => <li key={`m${i}`}>{w}</li>)}
+                            </ul>
+                          </div>
+                        )}
+                        {pm.analysis.ruleReferences.length > 0 && (
+                          <div className="fl-postmortem-block">
+                            <div className="fl-postmortem-block-label rules">Lesson references</div>
+                            <ul>
+                              {pm.analysis.ruleReferences.map((r, i) => (
+                                <li key={`r${i}`}>
+                                  <button className="fl-postmortem-lesson-link"
+                                    onClick={(e) => { e.stopPropagation(); openLessonById(r.lessonId) }}>
+                                    {r.lessonTitle}
+                                  </button>
+                                  {' — '}{r.reason}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {pm.analysis.nextTimeTip && (
+                          <div className="fl-postmortem-tip">
+                            <span className="fl-postmortem-tip-label">Next time</span>
+                            <span>{pm.analysis.nextTimeTip}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {expanded && !pm && (
+                      <div className="fl-postmortem-body">
+                        <p className="fl-postmortem-pending-msg">
+                          {pending
+                            ? 'Generating review — typically takes 5–15 seconds.'
+                            : 'Post-mortem not yet generated. Close another trade or refresh.'}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
 
@@ -1786,6 +2282,344 @@ function FloorStyles() {
         letter-spacing: 0.2em; text-transform: uppercase;
         cursor: pointer; font-weight: 600;
       }
+
+      /* ══════════════════════════════════════════════════════
+         OPTIONS + POST-MORTEM STYLES
+         Added for Operator-tier options feature + trade reviews.
+         ══════════════════════════════════════════════════════ */
+
+      /* Stock/Option mode toggle on the order ticket */
+      .fl-mode-toggle {
+        display: flex;
+        gap: 6px;
+        background: rgba(15, 23, 42, 0.6);
+        padding: 3px;
+        border-radius: 8px;
+        border: 1px solid rgba(148, 163, 184, 0.1);
+      }
+      .fl-mode-toggle button {
+        flex: 1;
+        padding: 8px 12px;
+        font-size: 12px;
+        font-weight: 500;
+        letter-spacing: 0.04em;
+        background: transparent;
+        color: rgba(148, 163, 184, 0.7);
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+      .fl-mode-toggle button:hover:not(:disabled):not(.active) {
+        color: #f5f5f5;
+        background: rgba(148, 163, 184, 0.05);
+      }
+      .fl-mode-toggle button.active {
+        background: rgba(212, 168, 87, 0.15);
+        color: #d4a857;
+        box-shadow: 0 0 0 1px rgba(212, 168, 87, 0.4);
+      }
+      .fl-mode-toggle button.active.call {
+        background: rgba(16, 185, 129, 0.15);
+        color: #34d399;
+        box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.4);
+      }
+      .fl-mode-toggle button.active.put {
+        background: rgba(220, 38, 38, 0.15);
+        color: #f87171;
+        box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.4);
+      }
+      .fl-mode-toggle button:disabled {
+        cursor: not-allowed;
+        opacity: 0.6;
+      }
+
+      /* Options signals section below the stock grid */
+      .fl-options-section {
+        margin-top: 28px;
+        padding-top: 20px;
+        border-top: 1px solid rgba(99, 102, 241, 0.15);
+      }
+      .fl-options-header {
+        margin-bottom: 14px;
+      }
+      .fl-options-header .fl-eyebrow {
+        color: rgba(99, 102, 241, 0.85);
+      }
+      .fl-options-header h3 {
+        margin: 2px 0 0;
+        font-size: 14px;
+        font-weight: 500;
+        color: #f5f5f5;
+        letter-spacing: -0.01em;
+      }
+      .fl-options-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+        gap: 10px;
+      }
+      .fl-option-tile {
+        padding: 11px 12px;
+        border-radius: 10px;
+        background: rgba(15, 23, 42, 0.4);
+        border: 1px solid rgba(99, 102, 241, 0.2);
+        cursor: pointer;
+        transition: all 0.2s ease;
+        animation: flSignalIn 0.4s ease both;
+      }
+      .fl-option-tile.call {
+        border-color: rgba(16, 185, 129, 0.25);
+        background: linear-gradient(180deg, rgba(16, 185, 129, 0.06), rgba(15, 23, 42, 0.4));
+      }
+      .fl-option-tile.put {
+        border-color: rgba(220, 38, 38, 0.25);
+        background: linear-gradient(180deg, rgba(220, 38, 38, 0.06), rgba(15, 23, 42, 0.4));
+      }
+      .fl-option-tile:hover {
+        transform: translateY(-1px);
+        border-color: rgba(212, 168, 87, 0.4);
+      }
+      .fl-option-tile.call:hover { border-color: rgba(16, 185, 129, 0.5); }
+      .fl-option-tile.put:hover { border-color: rgba(220, 38, 38, 0.5); }
+
+      .fl-option-badge {
+        display: inline-block;
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        padding: 2px 6px;
+        margin-left: 6px;
+        border-radius: 3px;
+        vertical-align: middle;
+      }
+      .fl-option-badge.call {
+        background: rgba(16, 185, 129, 0.2);
+        color: #34d399;
+      }
+      .fl-option-badge.put {
+        background: rgba(220, 38, 38, 0.2);
+        color: #f87171;
+      }
+      .fl-option-strike-row {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        font-size: 11px;
+        color: rgba(148, 163, 184, 0.75);
+        margin: 4px 0 6px;
+      }
+
+      /* Inline option badge on a position row */
+      .fl-position-option-badge {
+        display: inline-block;
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        padding: 2px 5px;
+        margin-left: 6px;
+        border-radius: 3px;
+        font-family: ui-monospace, Menlo, monospace;
+        vertical-align: middle;
+      }
+      .fl-position-option-badge.call {
+        background: rgba(16, 185, 129, 0.15);
+        color: #34d399;
+        border: 1px solid rgba(16, 185, 129, 0.3);
+      }
+      .fl-position-option-badge.put {
+        background: rgba(220, 38, 38, 0.15);
+        color: #f87171;
+        border: 1px solid rgba(220, 38, 38, 0.3);
+      }
+
+      /* DTE pill on option position row */
+      .fl-dte-pill {
+        display: inline-block;
+        padding: 2px 7px;
+        border-radius: 9px;
+        font-size: 10px;
+        font-weight: 500;
+        background: rgba(148, 163, 184, 0.12);
+        color: rgba(148, 163, 184, 0.9);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+      }
+      .fl-dte-pill.urgent {
+        background: rgba(220, 38, 38, 0.15);
+        color: #f87171;
+        border-color: rgba(220, 38, 38, 0.4);
+      }
+
+      /* Math preview sub-rows (for option-mode) */
+      .fl-math-row.sub {
+        font-size: 11px;
+        color: rgba(148, 163, 184, 0.7);
+      }
+
+      /* ══ POST-MORTEM CARDS ══ */
+      .fl-postmortem-card {
+        margin-bottom: 10px;
+        border-radius: 10px;
+        background: rgba(15, 23, 42, 0.3);
+        border: 1px solid rgba(148, 163, 184, 0.12);
+        overflow: hidden;
+        transition: border-color 0.2s ease;
+      }
+      .fl-postmortem-card.expanded {
+        border-color: rgba(212, 168, 87, 0.35);
+      }
+
+      .fl-postmortem-head {
+        display: block;
+        width: 100%;
+        padding: 11px 13px;
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        text-align: left;
+        transition: background 0.15s ease;
+      }
+      .fl-postmortem-head:hover {
+        background: rgba(148, 163, 184, 0.04);
+      }
+      .fl-postmortem-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 4px;
+      }
+      .fl-postmortem-meta {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 11px;
+      }
+      .fl-postmortem-meta .up { color: #34d399; }
+      .fl-postmortem-meta .dn { color: #f87171; }
+      .fl-postmortem-score {
+        color: rgba(148, 163, 184, 0.6);
+        margin-left: auto;
+        font-size: 10px;
+      }
+
+      /* Grade badge styling — A green, B amber, C gray, D orange, F red */
+      .fl-grade-badge {
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 4px 10px;
+        border-radius: 6px;
+        letter-spacing: 0.02em;
+      }
+      .fl-grade-badge.grade-a {
+        background: rgba(16, 185, 129, 0.18);
+        color: #34d399;
+        border: 1px solid rgba(16, 185, 129, 0.4);
+      }
+      .fl-grade-badge.grade-b {
+        background: rgba(212, 168, 87, 0.18);
+        color: #d4a857;
+        border: 1px solid rgba(212, 168, 87, 0.4);
+      }
+      .fl-grade-badge.grade-c {
+        background: rgba(148, 163, 184, 0.12);
+        color: rgba(203, 213, 225, 0.95);
+        border: 1px solid rgba(148, 163, 184, 0.3);
+      }
+      .fl-grade-badge.grade-d {
+        background: rgba(251, 146, 60, 0.15);
+        color: #fb923c;
+        border: 1px solid rgba(251, 146, 60, 0.4);
+      }
+      .fl-grade-badge.grade-f {
+        background: rgba(220, 38, 38, 0.18);
+        color: #f87171;
+        border: 1px solid rgba(220, 38, 38, 0.4);
+      }
+      .fl-grade-badge.pending {
+        background: rgba(148, 163, 184, 0.08);
+        color: rgba(148, 163, 184, 0.6);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        font-size: 10px;
+        font-weight: 400;
+      }
+
+      /* Expanded post-mortem body */
+      .fl-postmortem-body {
+        padding: 4px 13px 13px;
+        border-top: 1px solid rgba(148, 163, 184, 0.08);
+      }
+      .fl-postmortem-summary {
+        margin: 10px 0 12px;
+        font-size: 12px;
+        line-height: 1.5;
+        color: rgba(203, 213, 225, 0.85);
+        font-style: italic;
+      }
+      .fl-postmortem-block {
+        margin-bottom: 10px;
+      }
+      .fl-postmortem-block-label {
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-bottom: 4px;
+      }
+      .fl-postmortem-block-label.worked { color: #34d399; }
+      .fl-postmortem-block-label.missed { color: #f87171; }
+      .fl-postmortem-block-label.rules { color: #d4a857; }
+      .fl-postmortem-block ul {
+        margin: 0;
+        padding-left: 18px;
+        font-size: 12px;
+        line-height: 1.5;
+        color: rgba(203, 213, 225, 0.85);
+      }
+      .fl-postmortem-block ul li {
+        margin-bottom: 4px;
+      }
+      .fl-postmortem-lesson-link {
+        background: none;
+        border: none;
+        padding: 0;
+        margin: 0;
+        color: #d4a857;
+        cursor: pointer;
+        font: inherit;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+      .fl-postmortem-lesson-link:hover {
+        color: #fbbf24;
+      }
+
+      .fl-postmortem-tip {
+        display: flex;
+        gap: 8px;
+        padding: 10px 12px;
+        margin-top: 8px;
+        background: rgba(212, 168, 87, 0.08);
+        border: 1px solid rgba(212, 168, 87, 0.25);
+        border-radius: 8px;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+      .fl-postmortem-tip-label {
+        font-weight: 600;
+        font-size: 10px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: #d4a857;
+        white-space: nowrap;
+        padding-top: 1px;
+      }
+      .fl-postmortem-pending-msg {
+        margin: 10px 0;
+        font-size: 12px;
+        color: rgba(148, 163, 184, 0.7);
+        font-style: italic;
+      }
+
     `}</style>
   )
 }
