@@ -262,26 +262,40 @@ export async function runMarketDigest(digestDate?: string): Promise<{ id: string
 
   console.log(`[digest] Starting end-of-day digest for ${targetDate}`)
 
-  // Check if already exists
+  // Check if already exists (don't early-return — upsert will just replace)
   const { data: existing } = await admin
     .from('market_digests')
     .select('id')
     .eq('digest_date', targetDate)
     .maybeSingle()
+  if (existing) console.log(`[digest] Existing digest for ${targetDate} will be replaced`)
 
-  // Fetch all data in parallel
-  console.log('[digest] Fetching market data, news, DB context...')
-  // Scan social signals first (writes to DB), then read context
-  console.log('[digest] Scanning social signals...')
-  await scanSocialSignals().catch(e => console.error('[digest] Social scan error:', e))
+  // Fetch all data in parallel with a 60-second timeout.
+  // Social scan used to run SERIALLY before this block — now it's in the Promise.all
+  // so a slow social provider doesn't add 30s of pure latency.
+  console.log('[digest] Fetching market data, news, DB context, social signals in parallel...')
+  const fetchStart = Date.now()
 
-  const [marketData, topMovers, newsHeadlines, dbContext, socialContext] = await Promise.all([
-    fetchMarketData(),
-    fetchTopMovers(),
-    fetchDayNews(),
-    fetchDBContext(),
-    getLatestSocialContext().catch(() => ''),
+  const withTimeout = <T>(p: Promise<T>, ms: number, label: string, fallback: T): Promise<T> =>
+    Promise.race([
+      p,
+      new Promise<T>((resolve) => setTimeout(() => {
+        console.warn(`[digest] ${label} timed out after ${ms}ms, using fallback`)
+        resolve(fallback)
+      }, ms))
+    ])
+
+  const [marketData, topMovers, newsHeadlines, dbContext, socialContext, _socialScan] = await Promise.all([
+    withTimeout(fetchMarketData(),          15000, 'fetchMarketData',      ''),
+    withTimeout(fetchTopMovers(),           15000, 'fetchTopMovers',       ''),
+    withTimeout(fetchDayNews(),             10000, 'fetchDayNews',         ''),
+    withTimeout(fetchDBContext(),           10000, 'fetchDBContext',       ''),
+    withTimeout(getLatestSocialContext().catch(() => ''), 5000, 'socialContext', ''),
+    // Social scan runs in parallel now. We don't use its return value; it writes to DB.
+    withTimeout(scanSocialSignals().catch(e => { console.error('[digest] Social scan error:', e); return null }), 30000, 'scanSocialSignals', null),
   ])
+
+  console.log(`[digest] Fetch phase completed in ${Date.now() - fetchStart}ms`)
 
   // Build the full context for Claude
   const sections = [
@@ -294,6 +308,7 @@ export async function runMarketDigest(digestDate?: string): Promise<{ id: string
   ].filter(Boolean).join('\n\n---\n\n')
 
   console.log(`[digest] Context assembled (${sections.length} chars), running Claude analysis...`)
+  const analyzeStart = Date.now()
 
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -357,14 +372,21 @@ CRITICAL for JSON values:
 - tickers_to_watch must be actual stock tickers
 Be specific with numbers. Reference actual tickers and percentages. This analysis will be read by AI models, not humans, so precision and completeness matter more than readability.`
 
-  const msg = await anthropic.messages.create({
+  const claudePromise = anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 6000,
     messages: [{ role: 'user', content: prompt }],
   })
+  const claudeTimeoutMs = 120000  // 2 minutes hard ceiling
+  const msg = await Promise.race([
+    claudePromise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Claude digest call timed out after ${claudeTimeoutMs}ms`)), claudeTimeoutMs)
+    ),
+  ])
 
   const fullText = (msg.content.find((b: any) => b.type === 'text') as any)?.text || ''
-  console.log(`[digest] Analysis complete (${fullText.length} chars)`)
+  console.log(`[digest] Analysis complete (${fullText.length} chars) in ${Date.now() - analyzeStart}ms`)
 
   // Parse JSON from analysis
   let structuredData: any = {}
@@ -492,11 +514,18 @@ End with JSON:
 
 CRITICAL: All string values must be human-readable sentences or proper names, never underscore_slugs.`
 
-  const msg = await anthropic.messages.create({
+  const claudePromise = anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 3000,
     messages: [{ role: 'user', content: prompt }],
   })
+  const claudeTimeoutMs = 90000  // 1.5 min hard ceiling for premarket
+  const msg = await Promise.race([
+    claudePromise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Claude premarket call timed out after ${claudeTimeoutMs}ms`)), claudeTimeoutMs)
+    ),
+  ])
 
   const briefText = (msg.content.find((b: any) => b.type === 'text') as any)?.text || ''
 

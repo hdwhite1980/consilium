@@ -3,6 +3,10 @@ name: Market Digest Pre-Market
 # Runs the pre-market brief every weekday at 10:00 UTC
 # (= 6am ET during DST, 5am ET during standard time).
 # This gives early-morning users a fresh brief before market open.
+#
+# The endpoint returns 202 Accepted immediately and runs the brief
+# generation in the background on Railway. We accept both 200 and 202
+# as success here.
 
 on:
   schedule:
@@ -12,7 +16,7 @@ on:
 jobs:
   run-premarket-brief:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - name: Trigger pre-market brief
         env:
@@ -26,7 +30,7 @@ jobs:
           echo "Triggering pre-market brief at $(date -u)"
           
           response=$(curl -sS -w "\n__HTTP_STATUS:%{http_code}__" \
-            --max-time 300 \
+            --max-time 30 \
             -X POST "https://wali-os.com/api/market-digest?type=premarket" \
             -H "x-cron-secret: $CRON_SECRET" \
             -H "Content-Type: application/json")
@@ -38,9 +42,10 @@ jobs:
           echo "Response body:"
           echo "$body"
           
-          if [ "$status" != "200" ]; then
-            echo "::error::Pre-market brief failed with status $status"
+          if [ "$status" != "200" ] && [ "$status" != "202" ]; then
+            echo "::error::Pre-market brief trigger failed with status $status"
             exit 1
           fi
           
-          echo "✓ Pre-market brief completed successfully"
+          echo "✓ Pre-market brief triggered successfully (background job started)"
+          echo "::notice::Check Supabase premarket_sentiment table in ~2 min to verify completion"

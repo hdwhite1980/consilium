@@ -4,6 +4,10 @@ name: Market Digest EOD
 # (= 5:30pm ET during DST, 4:30pm ET during standard time).
 # The 21:30 UTC time is chosen so it's always *after* US market close
 # regardless of DST, and far enough after to allow real close data to settle.
+#
+# The endpoint returns 202 Accepted immediately and runs the ~90 second
+# digest generation in the background on Railway. We accept both 200 and
+# 202 as success here.
 
 on:
   schedule:
@@ -13,7 +17,7 @@ on:
 jobs:
   run-eod-digest:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - name: Trigger EOD digest
         env:
@@ -27,7 +31,7 @@ jobs:
           echo "Triggering EOD digest at $(date -u)"
           
           response=$(curl -sS -w "\n__HTTP_STATUS:%{http_code}__" \
-            --max-time 300 \
+            --max-time 30 \
             -X POST "https://wali-os.com/api/market-digest" \
             -H "x-cron-secret: $CRON_SECRET" \
             -H "Content-Type: application/json")
@@ -39,9 +43,11 @@ jobs:
           echo "Response body:"
           echo "$body"
           
-          if [ "$status" != "200" ]; then
-            echo "::error::EOD digest failed with status $status"
+          # Accept both 200 (completed inline, unlikely) and 202 (processing in background)
+          if [ "$status" != "200" ] && [ "$status" != "202" ]; then
+            echo "::error::EOD digest trigger failed with status $status"
             exit 1
           fi
           
-          echo "✓ EOD digest completed successfully"
+          echo "✓ EOD digest triggered successfully (background job started)"
+          echo "::notice::Check Supabase market_digests table in ~2 min to verify completion"
