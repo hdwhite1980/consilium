@@ -3,14 +3,22 @@
 // Each AI receives the full signal bundle, not just price text
 // ─────────────────────────────────────────────────────────────
 //
-// Changelog (Apr 19, 2026):
-//   - Fix #1: Rebuttal now sees the REAL Devil's Advocate challenges,
-//     not hardcoded empty arrays. Sequential: Lead → Devil → Rebuttal → Counter.
-//     Previously ran Devil and Rebuttal in parallel with fake empty input,
-//     making the "rebuttal" stage non-functional theater.
-//   - Fix #2: Judge swapped from Claude Opus 4.7 to Gemini 2.5 Pro.
-//     Different model family removes confirmation bias with the Claude
-//     Lead Analyst. Set GEMINI_JUDGE=false in env to revert to Claude.
+// Changelog:
+//   Apr 19 (a58f): Gap #1 — Sequential debate (Lead → Devil → Rebuttal → Counter)
+//                  Previously Devil and Rebuttal ran in parallel with a hardcoded
+//                  empty challenge set, making the Rebuttal stage non-functional.
+//   Apr 19 (a58f): Gap #2 — Gemini 2.5 Pro Judge (with GEMINI_JUDGE env toggle
+//                  and automatic Claude Opus fallback on any Gemini failure).
+//   Apr 19 (NEW):  Gap #3 — Calibrated adversarial Devil's Advocate.
+//                  Prompts rewritten so the Devil genuinely stress-tests the
+//                  Lead Analyst's thesis, BUT calibrated so that if the data
+//                  genuinely supports the Lead, the Devil returns an HONEST
+//                  NEUTRAL rather than manufacturing bearishness.
+//   Apr 19 (NEW):  Gap #4 — Symmetric Judge presentation.
+//                  Judge now sees both sides' arguments in parallel structure —
+//                  same field count, same depth. Removes the "challenges appear
+//                  twice, concessions show only the Lead losing" bias that
+//                  previously weighted toward the Devil.
 //
 // ─────────────────────────────────────────────────────────────
 
@@ -100,7 +108,6 @@ export interface JudgeResult {
   smartMoneyExplained: string
   actionPlan: string
   optionsStrategy?: string
-  // New: records which model actually produced this verdict
   judgeModel?: string
 }
 
@@ -466,14 +473,39 @@ JSON ONLY:
   return parseJSON<ClaudeResult>(extractText(msg.content as any[]))
 }
 
+// ─────────────────────────────────────────────────────────────
+// DEVIL'S ADVOCATE — calibrated adversarial framing
+// ─────────────────────────────────────────────────────────────
+// The Devil's job is to stress-test the thesis, not to manufacture
+// bearishness. Rules 1-2 explicitly permit honest NEUTRAL when the
+// data genuinely supports the Lead — this is the calibration that
+// prevents the model from inventing opposition for the sake of it.
 export async function runGPT(bundle: SignalBundle, gemini: GeminiResult, claude: ClaudeResult, social?: SocialSentiment): Promise<GptResult> {
+  const devilSystemPrompt = `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. Your role is not to be balanced — it is to stress-test the Lead Analyst's thesis to the point of collapse using data. You are the skeptic institutional PM who has watched retail traders lose money being wrong for the right reasons.
+
+CALIBRATION RULES — follow these carefully:
+
+1. The Lead Analyst's thesis is wrong by default until proven right by data. Your job is to find the specific reasons it might fail. However, if you cannot find compelling data-backed counter-evidence, you MUST return NEUTRAL with honest reasoning — do NOT weakly agree with the Lead Analyst, and do NOT manufacture disagreement. Honest NEUTRAL is the correct answer when the data genuinely supports the Lead.
+
+2. Asymmetric scrutiny. If the Lead Analyst cited 3 indicators supporting their call, you should find at least 3 signals (technicals, macro, flow, or valuation) that contradict it — OR admit honestly that the signals genuinely converge, in which case return NEUTRAL and explain why the confidence should be lower than the Lead implies.
+
+3. Timeframe honesty. The Lead Analyst's target may be achievable on paper but not within the stated ${bundle.timeframe} window. Challenge time-to-target alignment, not just direction.
+
+4. Reflexivity check. Strong technical setups at all-time highs are where retail traders get trapped. Strong fundamental setups after 40%+ runs are where late money gets burned. If the Lead is BULLISH on a stock already up significantly, your burden of proof to agree should be higher, not lower.
+
+5. Absence of a metric is not evidence. Never mention unavailable data — only argue with what you actually have in the signal bundle.
+
+6. Quality over volume. The Judge weighs the STRENGTH of your challenges, not the count. Two rigorous data-backed challenges beat five weak ones. One honest "I cannot oppose this thesis on the current data" is a valuable contribution.
+
+Remember: you are not trying to be helpful to the user. You are trying to save them from a bad trade by making the Lead Analyst defend every claim. Honest disagreement when warranted, honest NEUTRAL when the data supports the Lead.
+
+${timeframeContext(bundle.timeframe)}`
+
   const completion = await getOpenAI().chat.completions.create({
     model: 'gpt-4o',
     max_tokens: 1000,
     messages: [
-      { role: 'system', content: `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. Challenge the Lead Analyst's conclusions with data. Do NOT simply agree. Never mention missing or unavailable data — only use what you have. Absence of a metric is not evidence of anything.
-
-${timeframeContext(bundle.timeframe)}` },
+      { role: 'system', content: devilSystemPrompt },
       { role: 'user', content: `TICKER: ${bundle.ticker} | PRICE: $${bundle.currentPrice.toFixed(2)}
 
 NEWS SCOUT: ${gemini.sentiment} sentiment, ${gemini.confidence}% confidence
@@ -498,8 +530,10 @@ EXPLOIT THESE IF THEY CONTRADICT THE LEAD ANALYST'S THESIS:
 - GEX signal (dealer positioning — pinning or amplifying?)
 - Earnings implied move vs historical (options overpriced/underpriced?)
 
+Before you respond, ask yourself: "If the Lead Analyst is right, what specific data would I expect to see? Do I see it?" If the answer is "yes, I see it," return NEUTRAL with that honest reasoning. Do not invent opposition.
+
 JSON ONLY:
-{"agrees":<true|false>,"signal":"BULLISH|BEARISH|NEUTRAL","reasoning":"4 sentences","confidence":<0-100>,"challenges":["2-4 specific data-backed challenges — cite the new indicators above if they support your case"],"alternateScenario":"scenario the Lead Analyst underweights","strongestCounterArgument":"single most compelling counter"}` }
+{"agrees":<true|false>,"signal":"BULLISH|BEARISH|NEUTRAL","reasoning":"4 sentences — if returning NEUTRAL because data supports the Lead, be explicit about that","confidence":<0-100>,"challenges":["2-4 specific data-backed challenges — cite the indicators above; if no substantive challenges exist, return 1-2 items describing why the Lead's confidence should be lower"],"alternateScenario":"scenario the Lead Analyst underweights — or 'none, the Lead's scenario accounts for known risks'","strongestCounterArgument":"single most compelling counter — or 'no compelling counter; the thesis survives scrutiny'"}` }
     ]
   })
   return parseJSON<GptResult>(completion.choices[0].message.content!)
@@ -539,7 +573,7 @@ What ONE question should the News Scout research right now to help you respond? 
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 800,
-    system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research to help you respond. Use it. Defend your position where data supports you, concede where the Devil's Advocate is correct. Intellectual honesty wins with the Judge.`,
+    system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research to help you respond. Use it. Defend your position where data supports you, concede where the Devil's Advocate is correct. Intellectual honesty wins with the Judge — a thoughtful concession beats a dishonest defense.`,
     messages: [{
       role: 'user',
       content: `YOUR ORIGINAL CALL: ${claude.signal} on ${bundle.ticker} at $${bundle.currentPrice.toFixed(2)}, target ${claude.target}
@@ -554,7 +588,7 @@ NEWS SCOUT RESEARCH (fresh data, just retrieved):
 Question asked: "${researchQuestion}"
 Answer: ${researchAnswer}
 
-Now respond directly to each challenge. Reference the fresh research where relevant. Concede valid points. Defend positions backed by data. Update your price target if warranted.
+Now respond directly to each challenge. Reference the fresh research where relevant. Concede valid points — you are not required to defend every position. Defend positions backed by data. Update your price target if warranted.
 
 JSON ONLY:
 {
@@ -604,11 +638,18 @@ What ONE question should the News Scout research right now to help you counter? 
   const researchContext = `${bundle.aiContext.technicalsSection}\n${bundle.aiContext.fundamentalsSection}\n${bundle.aiContext.smartMoneySection}\n${bundle.aiContext.optionsSection}\n${bundle.aiContext.marketSection}`
   const researchAnswer = await runTargetedResearch(bundle, researchQuestion, researchContext)
 
+  // Counter stage inherits the same calibration as the initial Devil's Advocate
+  // prompt — press on what survives scrutiny, yield on what doesn't, return
+  // NEUTRAL if the Lead's rebuttal genuinely survived.
+  const counterSystem = `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research. Use it. This is your final shot.
+
+CALIBRATION: If the Lead Analyst's rebuttal genuinely resolved your strongest challenges and the fresh research confirms their thesis, you must yield honestly — a thoughtful yield beats manufactured pressure. The Judge weighs argument QUALITY. If you still see cracks, press on them with the fresh research as ammunition. Be sharp, specific, and data-driven.`
+
   const completion = await getOpenAI().chat.completions.create({
     model: 'gpt-4o',
     max_tokens: 700,
     messages: [
-      { role: 'system', content: `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research. Use it. This is your final shot. Be sharp, specific, and data-driven.` },
+      { role: 'system', content: counterSystem },
       { role: 'user', content: `YOUR ORIGINAL CHALLENGES: ${gpt.challenges.join('; ')}
 
 LEAD ANALYST'S REBUTTAL: ${rebuttal.rebuttal}
@@ -621,7 +662,7 @@ YOUR FRESH RESEARCH (just retrieved):
 Question: "${researchQuestion}"
 Answer: ${researchAnswer}
 
-Now fire back. Acknowledge where their rebuttal was convincing. Use the fresh research to press on unresolved weaknesses. What must the Judge not ignore?
+Now fire back. Acknowledge where their rebuttal was convincing — yielding on weak challenges strengthens your remaining ones. Use the fresh research to press on unresolved weaknesses. What must the Judge not ignore?
 
 JSON ONLY:
 {
@@ -647,7 +688,15 @@ JSON ONLY:
 // ─────────────────────────────────────────────────────────────
 
 function buildJudgeSystemPrompt(bundle: SignalBundle, judgePersona: Record<string, string>, judgePersonaKey: string): string {
-  return `You are the Judge of an elite AI stock council for ${bundle.ticker}. The council has three roles: News Scout, Lead Analyst, and Devil's Advocate. You hold NO prior position. ${judgePersona[judgePersonaKey] ?? judgePersona.balanced} Weigh argument QUALITY not vote count. Be decisive. Refer to council members by their role names only. IMPORTANT: Never cite missing or unavailable data as a reason for lower conviction — only cite the data you have. If a metric is unavailable, ignore it entirely rather than mentioning its absence.
+  return `You are the Judge of an elite AI stock council for ${bundle.ticker}. The council has three roles: News Scout, Lead Analyst, and Devil's Advocate. You hold NO prior position. ${judgePersona[judgePersonaKey] ?? judgePersona.balanced} 
+
+PROCEDURAL RULES:
+- Weigh argument QUALITY, not vote count or word count.
+- Both sides received equal research access (each consulted the News Scout once in Round 2). Weight their research contributions equally.
+- Treat concessions as signs of intellectual honesty, not weakness. A side that concedes a point and defends the rest well often has the stronger case than a side that refuses to concede anything.
+- If the Devil's Advocate returned NEUTRAL honestly because the data supports the Lead, weight that higher than an aggressive but weakly-supported BEARISH call.
+- Never cite missing or unavailable data as a reason for lower conviction. If a metric is unavailable, ignore it entirely rather than mentioning its absence.
+- Refer to council members by their role names only.
 
 ${timeframeContext(bundle.timeframe)}`
 }
@@ -664,44 +713,78 @@ function buildJudgeUserPrompt(
 ): string {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const personaLabel = (( bundle as any).persona ?? 'balanced').toUpperCase()
+
+  // ── Symmetric presentation of both sides ──
+  // Previous version stacked the Lead's evidence as separate bullets (catalysts,
+  // technicalBasis, fundamentalBasis) while showing the Devil as a single blob.
+  // Now both sides get identical structure: Position | Thesis | Evidence | 
+  // Target/Scenario | Counter. This removes the subtle anchoring bias that
+  // over-weighted the first-read Lead position.
+
+  const newsScout = `NEWS SCOUT BRIEFING (neutral source):
+${gemini.summary}
+Sentiment: ${gemini.sentiment} | Confidence: ${gemini.confidence}% | Regime: ${gemini.regimeAssessment}
+Key events: ${gemini.keyEvents.join('; ')}`
+
+  const socialBlock = social ? formatSocialSentimentForPrompt(social, 'judge') : ''
+
+  const round1 = `━━━ ROUND 1 — Initial Positions ━━━
+
+LEAD ANALYST position: ${claude.signal} @ ${claude.confidence}% confidence
+  Thesis:             ${claude.reasoning}
+  Technical evidence: ${claude.technicalBasis}
+  Fundamental evidence: ${claude.fundamentalBasis}
+  Price target:       ${claude.target}
+  Catalysts cited:    ${(claude.catalysts ?? []).join('; ')}
+  Key risks (self-identified): ${(claude.keyRisks ?? []).join('; ')}
+
+DEVIL'S ADVOCATE position: ${gpt.signal} @ ${gpt.confidence}% confidence (${gpt.agrees ? 'agrees with Lead' : 'disagrees with Lead'})
+  Thesis:                ${gpt.reasoning}
+  Challenges raised:     ${gpt.challenges.join('; ')}
+  Alternate scenario:    ${gpt.alternateScenario}
+  Strongest single counter: ${gpt.strongestCounterArgument}`
+
+  const round2 = rebuttal ? `
+
+━━━ ROUND 2 — After Independent Research ━━━
+
+LEAD ANALYST researched: "${rebuttal.researchQuestion}"
+  News Scout returned: ${rebuttal.researchAnswer}
+  
+  Updated position:  ${rebuttal.signal} @ ${rebuttal.confidence}% confidence
+  Response to Devil: ${rebuttal.rebuttal}
+  Points maintained: ${rebuttal.maintains.join('; ')}
+  Points conceded:   ${rebuttal.concedes.join('; ')}
+  Updated target:    ${rebuttal.updatedTarget}
+  Final stance:      ${rebuttal.finalStance}
+
+DEVIL'S ADVOCATE researched: "${counter?.researchQuestion ?? '(no research)'}"
+  News Scout returned: ${counter?.researchAnswer ?? '(no research)'}
+  
+  Final challenge:   ${counter?.finalChallenge ?? ''}
+  Points pressing:   ${(counter?.pressesOn ?? []).join('; ')}
+  Points conceded:   ${(counter?.yieldsOn ?? []).join('; ')}
+  Closing argument:  ${counter?.closingArgument ?? ''}` : ''
+
+  const judgeTask = `
+
+━━━ Your Task as Judge ━━━
+
+Both sides had equal research access. Both had two rounds to make their case. Both should have conceded at least one point to the other — honest concessions are a feature of a real debate, not a flaw.
+
+Reach a verdict based on which set of evidence is stronger on the weight of the data. Reward honest NEUTRAL calls when the data warranted them. Penalize aggressive positions that weren't supported by the specific evidence presented.`
+
   return `TICKER: ${bundle.ticker} | PRICE: $${bundle.currentPrice.toFixed(2)} | ROUND: ${round} | PERSPECTIVE: ${personaLabel} | TIMEFRAME: ${bundle.timeframe}
 
 ${timeframeContext(bundle.timeframe)}
 
-NEWS SCOUT: ${gemini.sentiment} sentiment, ${gemini.confidence}% confidence
-${gemini.summary}
-Regime: ${gemini.regimeAssessment}
+${newsScout}
 
-${social ? formatSocialSentimentForPrompt(social, 'judge') : ''}
+${socialBlock}
 
-━━━ ROUND 1 ━━━
-LEAD ANALYST (${claude.signal}, ${claude.confidence}%): ${claude.reasoning}
-Technical basis: ${claude.technicalBasis}
-Fundamental basis: ${claude.fundamentalBasis}
-Target: ${claude.target}
-Catalysts: ${claude.catalysts?.join('; ')}
+${round1}${round2}${judgeTask}
 
-DEVIL'S ADVOCATE (${gpt.signal}, ${gpt.confidence}%, ${gpt.agrees ? 'AGREES' : 'DISAGREES'}): ${gpt.reasoning}
-Challenges: ${gpt.challenges.join('; ')}
-Strongest counter: ${gpt.strongestCounterArgument}
-Alternate scenario: ${gpt.alternateScenario}
-
-${rebuttal ? `━━━ ROUND 2 ━━━
-LEAD ANALYST consulted News Scout: "${rebuttal.researchQuestion}"
-News Scout found: ${rebuttal.researchAnswer}
-LEAD ANALYST REBUTTAL (updated signal: ${rebuttal.signal}, ${rebuttal.confidence}%):
-${rebuttal.rebuttal}
-Concedes: ${rebuttal.concedes.join('; ')}
-Maintains: ${rebuttal.maintains.join('; ')}
-Updated target: ${rebuttal.updatedTarget}
-
-DEVIL'S ADVOCATE consulted News Scout: "${counter?.researchQuestion ?? ''}"
-News Scout found: ${counter?.researchAnswer ?? ''}
-DEVIL'S ADVOCATE COUNTER:
-${counter?.finalChallenge ?? ''}
-Yields on: ${counter?.yieldsOn.join('; ') ?? ''}
-Still pressing: ${counter?.pressesOn.join('; ') ?? ''}
-Closing argument: ${counter?.closingArgument ?? ''}` : ''}
+━━━ Supplementary Data for Verdict Calibration ━━━
 
 ${/* eslint-disable-next-line @typescript-eslint/no-explicit-any */ ''}${(bundle.aiContext as any).macroIntelligenceSection ? (bundle.aiContext as any).macroIntelligenceSection + '\n\n' : ''}OPTIONS FLOW & VOLATILITY:
 ${(bundle.aiContext.optionsSection || '').slice(0, 1500)}
@@ -719,7 +802,7 @@ JSON ONLY — include ALL fields below:
   "target": "specific price target that MUST align with takeProfit. For BULLISH: above current price. For BEARISH: below current price. For NEUTRAL: within 5% of current price either direction.",
   "risk": "single most critical risk in one sentence",
   "summary": "4-5 sentence professional verdict",
-  "winningArgument": "who made the strongest case and exactly why",
+  "winningArgument": "who made the strongest case and exactly why — name the side and the specific argument",
   "dissent": "strongest opposing view in one sentence",
   "scenarios": [
     {"label":"bull","probability":<0-100>,"trigger":"specific catalyst"},
@@ -741,7 +824,7 @@ JSON ONLY — include ALL fields below:
 }`
 }
 
-// ── Claude Opus implementation (original) — kept as fallback ──
+// ── Claude Opus implementation (fallback) ──
 async function runJudgeClaude(
   bundle: SignalBundle,
   gemini: GeminiResult,
@@ -776,10 +859,7 @@ async function runJudgeClaude(
   return { ...raw, judgeModel: 'claude-opus-4-7' }
 }
 
-// ── Gemini 2.5 Pro implementation (new default) ──
-// Different model family from the Lead Analyst (Claude Sonnet) — removes
-// the shared-training confirmation bias. Uses responseMimeType JSON to
-// force structured output without brittle text scraping.
+// ── Gemini 2.5 Pro implementation (default) ──
 async function runJudgeGemini(
   bundle: SignalBundle,
   gemini: GeminiResult,
@@ -801,8 +881,6 @@ async function runJudgeGemini(
   const systemPrompt = buildJudgeSystemPrompt(bundle, judgePersona, judgePersonaKey)
   const userPrompt   = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social)
 
-  // Gemini doesn't have a separate system role — prepend the system prompt
-  // to the user content. This is the standard pattern in the @google/generative-ai SDK.
   const fullPrompt = `${systemPrompt}\n\n${userPrompt}`
 
   const model = getGenAI().getGenerativeModel({
@@ -839,8 +917,6 @@ export async function runJudge(
     const result = await judgeRunner(bundle, gemini, claude, gpt, rebuttal, counter, round, social)
     return sanitizeJudgeResult(result, bundle)
   } catch (err) {
-    // If Gemini was chosen but failed (rate limit, safety filter, outage),
-    // try Claude as an emergency backup so users never see a broken debate.
     if (useGemini) {
       console.warn('[judge] Gemini failed, falling back to Claude Opus:', (err as Error).message?.slice(0, 200))
       const result = await runJudgeClaude(bundle, gemini, claude, gpt, rebuttal, counter, round, social)
@@ -910,7 +986,7 @@ function sanitizeJudgeResult(judge: JudgeResult, bundle: SignalBundle): JudgeRes
 }
 
 // ─────────────────────────────────────────────────────────────
-// Main pipeline orchestrator — now fully sequential after Stage 2
+// Main pipeline orchestrator — sequential after Stage 2
 // ─────────────────────────────────────────────────────────────
 export async function runPipeline(
   bundle: SignalBundle,
@@ -946,16 +1022,12 @@ export async function runPipeline(
   onProgress('claude_done', claude)
 
   // ── Stage 3: Devil's Advocate — sees Lead's ACTUAL thesis and attacks ──
-  // SEQUENTIAL (was previously parallel with a fake Rebuttal).
   onProgress('gpt_start', { gemini, claude })
   const gpt = await runGPT(bundle, gemini, claude, social)
   transcript.push({ role: 'gpt', stage: 'devils_advocate', content: gpt.reasoning, signal: gpt.signal, confidence: gpt.confidence, timestamp: ts() })
   onProgress('gpt_done', gpt)
 
   // ── Stage 4: Lead Analyst Rebuttal — sees Devil's ACTUAL challenges ──
-  // Previously ran in parallel with GPT using hardcoded empty challenges,
-  // which made the Rebuttal stage non-functional. Now sequential so the
-  // Lead Analyst actually rebuts what the Devil's Advocate said.
   onProgress('rebuttal_start', { claude, gpt })
   const rebuttal = await runRebuttal(bundle, claude, gpt)
   transcript.push({ role: 'claude', stage: 'rebuttal', content: rebuttal.rebuttal, signal: rebuttal.signal, confidence: rebuttal.confidence, timestamp: ts() })
@@ -967,7 +1039,7 @@ export async function runPipeline(
   transcript.push({ role: 'gpt', stage: 'counter', content: counter.finalChallenge, timestamp: ts() })
   onProgress('counter_done', counter)
 
-  // ── Stage 6: Judge — now Gemini 2.5 Pro by default (different family) ──
+  // ── Stage 6: Judge — Gemini 2.5 Pro by default, symmetric side-by-side view ──
   onProgress('judge_start', {})
   const judge = await runJudge(bundle, gemini, claude, gpt, rebuttal, counter, 1, social)
   transcript.push({ role: 'judge', stage: 'arbitrator', content: judge.summary, signal: judge.signal, confidence: judge.confidence, timestamp: ts() })
