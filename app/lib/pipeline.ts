@@ -2,6 +2,17 @@
 // AI Pipeline v2 — All 5 phases integrated
 // Each AI receives the full signal bundle, not just price text
 // ─────────────────────────────────────────────────────────────
+//
+// Changelog (Apr 19, 2026):
+//   - Fix #1: Rebuttal now sees the REAL Devil's Advocate challenges,
+//     not hardcoded empty arrays. Sequential: Lead → Devil → Rebuttal → Counter.
+//     Previously ran Devil and Rebuttal in parallel with fake empty input,
+//     making the "rebuttal" stage non-functional theater.
+//   - Fix #2: Judge swapped from Claude Opus 4.7 to Gemini 2.5 Pro.
+//     Different model family removes confirmation bias with the Claude
+//     Lead Analyst. Set GEMINI_JUDGE=false in env to revert to Claude.
+//
+// ─────────────────────────────────────────────────────────────
 
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
@@ -50,22 +61,22 @@ export interface GptResult {
 export interface RebuttalResult {
   signal: Signal
   confidence: number
-  researchQuestion: string   // what the Lead Analyst asked Gemini to verify
-  researchAnswer: string     // what Gemini found
-  rebuttal: string           // Lead Analyst's direct response to Devil's Advocate
-  concedes: string[]         // points the Lead Analyst admits are valid
-  maintains: string[]        // points the Lead Analyst doubles down on
-  updatedTarget: string      // target price after considering challenges
-  finalStance: string        // one sentence summary of maintained position
+  researchQuestion: string
+  researchAnswer: string
+  rebuttal: string
+  concedes: string[]
+  maintains: string[]
+  updatedTarget: string
+  finalStance: string
 }
 
 export interface CounterResult {
-  researchQuestion: string   // what the Devil's Advocate asked Gemini to verify
-  researchAnswer: string     // what Gemini found
-  finalChallenge: string     // Devil's Advocate's final shot after rebuttal
-  yieldsOn: string[]         // points Devil's Advocate now accepts
-  pressesOn: string[]        // points Devil's Advocate still presses
-  closingArgument: string    // one sentence closing
+  researchQuestion: string
+  researchAnswer: string
+  finalChallenge: string
+  yieldsOn: string[]
+  pressesOn: string[]
+  closingArgument: string
 }
 
 export interface JudgeResult {
@@ -79,7 +90,6 @@ export interface JudgeResult {
   scenarios: Array<{ label: string; probability: number; trigger: string }>
   invalidationTrigger: string
   rounds: number
-  // New fields
   entryPrice: string
   stopLoss: string
   takeProfit: string
@@ -90,6 +100,8 @@ export interface JudgeResult {
   smartMoneyExplained: string
   actionPlan: string
   optionsStrategy?: string
+  // New: records which model actually produced this verdict
+  judgeModel?: string
 }
 
 export interface PipelineResult {
@@ -151,10 +163,7 @@ NOTE: Minor technical noise is acceptable in a strong fundamental thesis. What m
 }
 
 function repairJSON(raw: string): string {
-  // Remove control characters that break JSON parsing
   let s = raw.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
-  // Escape literal newlines/tabs that appear inside JSON string values
-  // Walk char by char to find string boundaries safely
   let result = ''
   let inString = false
   let escaped = false
@@ -175,7 +184,7 @@ function repairJSON(raw: string): string {
 
 function parseJSON<T>(text: string): T {
   if (!text || typeof text !== 'string') throw new Error('No JSON in response — empty or non-string input')
-  const clean = text.replace(/\`\`\`json|\`\`\`/g, '').trim()
+  const clean = text.replace(/```json|```/g, '').trim()
   const start = clean.indexOf('{')
   const end = clean.lastIndexOf('}')
   if (start === -1 || end === -1) {
@@ -183,11 +192,9 @@ function parseJSON<T>(text: string): T {
     throw new Error('No JSON in response')
   }
   const slice = clean.slice(start, end + 1)
-  // First try: direct parse
   try {
     return JSON.parse(slice) as T
   } catch {
-    // Second try: repair and retry
     try {
       const repaired = repairJSON(slice)
       return JSON.parse(repaired) as T
@@ -198,7 +205,6 @@ function parseJSON<T>(text: string): T {
   }
 }
 
-// ── Safe text extraction from Anthropic response (handles thinking blocks) ──
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function extractText(content: any[]): string {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -214,7 +220,6 @@ export async function runTargetedResearch(
   context: string
 ): Promise<string> {
 
-  // ── Classify what kind of data the question needs ──
   const q = question.toLowerCase()
   const needsNews        = q.includes('news') || q.includes('recent') || q.includes('latest') || q.includes('announced') || q.includes('report') || q.includes('catalyst')
   const needsFundamentals = q.includes('earnings') || q.includes('revenue') || q.includes('pe ') || q.includes('p/e') || q.includes('margin') || q.includes('eps') || q.includes('guidance') || q.includes('analyst') || q.includes('upgrade') || q.includes('downgrade') || q.includes('target')
@@ -222,10 +227,8 @@ export async function runTargetedResearch(
   const needsTechnicals  = q.includes('support') || q.includes('resistance') || q.includes('rsi') || q.includes('macd') || q.includes('volume') || q.includes('moving average') || q.includes('trend') || q.includes('vwap') || q.includes('breakout') || q.includes('breakdown')
   const needsMacro       = q.includes('vix') || q.includes('fed') || q.includes('rate') || q.includes('market') || q.includes('sector') || q.includes('spy') || q.includes('inflation') || q.includes('macro')
 
-  // ── Fetch additional live data the bundle may not have ──
   const liveDataParts: string[] = []
 
-  // Fresh Finnhub quote for price-sensitive questions
   if (needsTechnicals || needsFundamentals) {
     try {
       const key = process.env.FINNHUB_API_KEY
@@ -247,7 +250,6 @@ export async function runTargetedResearch(
     } catch { /* non-critical */ }
   }
 
-  // Fresh analyst recommendations and price targets
   if (needsFundamentals) {
     try {
       const key = process.env.FINNHUB_API_KEY
@@ -275,7 +277,6 @@ export async function runTargetedResearch(
     } catch { /* non-critical */ }
   }
 
-  // Fresh options data
   if (needsOptions) {
     try {
       const tradierKey = process.env.TRADIER_API_KEY
@@ -314,7 +315,6 @@ export async function runTargetedResearch(
     } catch { /* non-critical */ }
   }
 
-  // Fresh VIX and macro
   if (needsMacro) {
     try {
       const key = process.env.FINNHUB_API_KEY
@@ -339,7 +339,6 @@ export async function runTargetedResearch(
     ? `\nFRESH LIVE DATA (just fetched):\n${liveDataParts.join('\n')}`
     : ''
 
-  // ── Build full context for Gemini ──
   const sections: string[] = []
   if (needsNews || !needsTechnicals) sections.push(bundle.aiContext.newsSection)
   if (needsTechnicals) sections.push(bundle.aiContext.technicalsSection)
@@ -347,7 +346,6 @@ export async function runTargetedResearch(
   if (needsOptions) sections.push(bundle.aiContext.optionsSection)
   if (needsMacro) sections.push(bundle.aiContext.marketSection)
   if (needsOptions || needsTechnicals) sections.push(bundle.aiContext.smartMoneySection)
-  // Always include context passed by caller
   if (context && !sections.some(s => s === context)) sections.push(context)
 
   const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro']
@@ -374,7 +372,6 @@ Answer in 2-4 sentences using the freshest data available, prioritizing the LIVE
 }
 
 export async function runGemini(bundle: SignalBundle): Promise<GeminiResult> {
-  // Try primary model, fall back if unavailable
   const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro']
   let lastError: Error | null = null
   for (const modelName of GEMINI_MODELS) {
@@ -386,7 +383,6 @@ export async function runGemini(bundle: SignalBundle): Promise<GeminiResult> {
         '1M': 'FOCUS on THIS MONTH — upcoming earnings date, recent upgrades/downgrades, sector rotation.',
         '3M': 'FOCUS on NEXT QUARTER — earnings trajectory, macro tailwinds/headwinds, institutional positioning.',
       }
-      // Truncate inputs to avoid token overflow — Stage 1 only needs news + market
       const newsInput = (bundle.aiContext.newsSection || '').slice(0, 6000)
       const marketInput = (bundle.aiContext.marketSection || '').slice(0, 2000)
 
@@ -407,7 +403,6 @@ Respond JSON ONLY (no fences):
       lastError = e as Error
       const msg = (e as Error).message ?? ''
       const isLastModel = modelName === GEMINI_MODELS[GEMINI_MODELS.length - 1]
-      // Always try next model unless it's the last one
       if (isLastModel) throw e
       console.warn(`News Scout model ${modelName} failed (${msg.slice(0,60)}), trying next...`)
     }
@@ -426,6 +421,7 @@ export async function runClaude(bundle: SignalBundle, gemini: GeminiResult, soci
         fundamental: 'You are a value-focused analyst. Earnings growth, analyst consensus, and valuation vs historical averages drive your call. Technicals are short-term noise. A 30% drawdown in a high-quality business with strong fundamentals is an opportunity, not a sell signal.',
       }
       const pn: Record<string, string> = { balanced: 'Balanced', technical: 'Technical Trader', fundamental: 'Fundamental Analyst' }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const p = (( bundle as any).persona ?? 'balanced') as string
       const isForexPair = bundle.ticker.length === 6 && /^[A-Z]{6}$/.test(bundle.ticker) && ['USD','EUR','GBP','JPY','AUD','CAD','NZD','CHF','SEK','NOK','DKK','SGD','HKD','MXN','ZAR','TRY'].some(c => bundle.ticker.startsWith(c) || bundle.ticker.endsWith(c))
       const assetContext = isForexPair
@@ -459,13 +455,14 @@ ${bundle.aiContext.optionsSection}
 
 ${bundle.aiContext.convictionSection}
 
-${(bundle.aiContext as any).macroIntelligenceSection ? (bundle.aiContext as any).macroIntelligenceSection + '\n\n' : ''}REQUIRED: Your technicalBasis MUST reference at least 2 of these if present in the data above: Ichimoku cloud position, ATR-derived stop/target levels, Williams %R, CCI, ROC momentum direction, relative strength vs sector. These are high-signal indicators — ignoring them weakens your case.
+${/* eslint-disable-next-line @typescript-eslint/no-explicit-any */ ''}${(bundle.aiContext as any).macroIntelligenceSection ? (bundle.aiContext as any).macroIntelligenceSection + '\n\n' : ''}REQUIRED: Your technicalBasis MUST reference at least 2 of these if present in the data above: Ichimoku cloud position, ATR-derived stop/target levels, Williams %R, CCI, ROC momentum direction, relative strength vs sector. These are high-signal indicators — ignoring them weakens your case.
 PATTERNS: If the data includes a candle pattern, chart pattern, gap, or trend structure (higher highs/lower lows), you MUST cite it by name. Patterns provide the most actionable signals — a Double Bottom with neckline break is more predictive than any single indicator. Include the pattern name, what it means, and how it affects your price target.
 
 JSON ONLY:
 {"signal":"BULLISH|BEARISH|NEUTRAL","reasoning":"4-5 sentences integrating all signals including new indicators","target":"price target e.g. $195","confidence":<0-100>,"technicalBasis":"2-3 sentences — must cite Ichimoku, ATR, or relative strength if available","fundamentalBasis":"2 sentences","catalysts":["2-3 catalysts"],"keyRisks":["2-3 risks"]}`
     }]
   })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return parseJSON<ClaudeResult>(extractText(msg.content as any[]))
 }
 
@@ -516,7 +513,6 @@ export async function runRebuttal(
 ): Promise<RebuttalResult> {
 
   // ── Step 1: Lead Analyst identifies the single most important data gap ──
-  // Ask Claude what it needs Gemini to verify before rebutting
   const researchAsk = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 150,
@@ -532,6 +528,7 @@ STRONGEST COUNTER: ${gpt.strongestCounterArgument}
 What ONE question should the News Scout research right now to help you respond? Reply with just the question, nothing else.`
     }]
   })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const researchQuestion = extractText(researchAsk.content as any[]).trim()
 
   // ── Step 2: Gemini runs the targeted research ──
@@ -573,8 +570,8 @@ JSON ONLY:
 }`
     }]
   })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const raw = parseJSON<RebuttalResult>(extractText(msg.content as any[]))
-  // Ensure research fields are always populated
   return {
     ...raw,
     researchQuestion,
@@ -589,7 +586,6 @@ export async function runCounter(
   rebuttal: RebuttalResult
 ): Promise<CounterResult> {
 
-  // ── Step 1: Devil's Advocate identifies what Gemini should verify ──
   const researchAsk = await getOpenAI().chat.completions.create({
     model: 'gpt-4o',
     max_tokens: 150,
@@ -605,11 +601,9 @@ What ONE question should the News Scout research right now to help you counter? 
   })
   const researchQuestion = researchAsk.choices[0].message.content?.trim() ?? ''
 
-  // ── Step 2: Gemini runs the targeted research ──
   const researchContext = `${bundle.aiContext.technicalsSection}\n${bundle.aiContext.fundamentalsSection}\n${bundle.aiContext.smartMoneySection}\n${bundle.aiContext.optionsSection}\n${bundle.aiContext.marketSection}`
   const researchAnswer = await runTargetedResearch(bundle, researchQuestion, researchContext)
 
-  // ── Step 3: Devil's Advocate fires back with fresh research ──
   const completion = await getOpenAI().chat.completions.create({
     model: 'gpt-4o',
     max_tokens: 700,
@@ -648,31 +642,29 @@ JSON ONLY:
   }
 }
 
-export async function runJudge(
+// ─────────────────────────────────────────────────────────────
+// JUDGE — split into two implementations with env toggle
+// ─────────────────────────────────────────────────────────────
+
+function buildJudgeSystemPrompt(bundle: SignalBundle, judgePersona: Record<string, string>, judgePersonaKey: string): string {
+  return `You are the Judge of an elite AI stock council for ${bundle.ticker}. The council has three roles: News Scout, Lead Analyst, and Devil's Advocate. You hold NO prior position. ${judgePersona[judgePersonaKey] ?? judgePersona.balanced} Weigh argument QUALITY not vote count. Be decisive. Refer to council members by their role names only. IMPORTANT: Never cite missing or unavailable data as a reason for lower conviction — only cite the data you have. If a metric is unavailable, ignore it entirely rather than mentioning its absence.
+
+${timeframeContext(bundle.timeframe)}`
+}
+
+function buildJudgeUserPrompt(
   bundle: SignalBundle,
   gemini: GeminiResult,
   claude: ClaudeResult,
   gpt: GptResult,
-  rebuttal?: RebuttalResult,
-  counter?: CounterResult,
-  round = 1,
-  social?: SocialSentiment
-): Promise<JudgeResult> {
-  const judgePersona: Record<string, string> = {
-    balanced:    'Weigh technical and fundamental arguments equally. Higher quality evidence wins regardless of type.',
-    technical:   'Give more weight to technical arguments — price action, chart patterns, and momentum signals. A stock in a clear downtrend requires exceptionally strong fundamental evidence to override the chart.',
-    fundamental: 'Give more weight to fundamental arguments — earnings quality, valuation vs history, and analyst consensus. Technical signals are short-term noise. A fundamentally strong business trading at a discount to its historical valuation is a buy even in a downtrend.',
-  }
-  const judgePersonaKey = (( bundle as any).persona ?? 'balanced') as string
-  const msg = await getAnthropic().messages.create({
-    model: 'claude-opus-4-7',
-    max_tokens: 4000,
-    system: `You are the Judge of an elite AI stock council for ${bundle.ticker}. The council has three roles: News Scout, Lead Analyst, and Devil's Advocate. You hold NO prior position. ${judgePersona[judgePersonaKey] ?? judgePersona.balanced} Weigh argument QUALITY not vote count. Be decisive. Refer to council members by their role names only. IMPORTANT: Never cite missing or unavailable data as a reason for lower conviction — only cite the data you have. If a metric is unavailable, ignore it entirely rather than mentioning its absence.
-
-${timeframeContext(bundle.timeframe)}`,
-    messages: [{
-      role: 'user',
-      content: `TICKER: ${bundle.ticker} | PRICE: $${bundle.currentPrice.toFixed(2)} | ROUND: ${round} | PERSPECTIVE: ${(( bundle as any).persona ?? 'balanced').toUpperCase()} | TIMEFRAME: ${bundle.timeframe}
+  rebuttal: RebuttalResult | undefined,
+  counter: CounterResult | undefined,
+  round: number,
+  social: SocialSentiment | undefined,
+): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const personaLabel = (( bundle as any).persona ?? 'balanced').toUpperCase()
+  return `TICKER: ${bundle.ticker} | PRICE: $${bundle.currentPrice.toFixed(2)} | ROUND: ${round} | PERSPECTIVE: ${personaLabel} | TIMEFRAME: ${bundle.timeframe}
 
 ${timeframeContext(bundle.timeframe)}
 
@@ -711,7 +703,7 @@ Yields on: ${counter?.yieldsOn.join('; ') ?? ''}
 Still pressing: ${counter?.pressesOn.join('; ') ?? ''}
 Closing argument: ${counter?.closingArgument ?? ''}` : ''}
 
-${(bundle.aiContext as any).macroIntelligenceSection ? (bundle.aiContext as any).macroIntelligenceSection + '\n\n' : ''}OPTIONS FLOW & VOLATILITY:
+${/* eslint-disable-next-line @typescript-eslint/no-explicit-any */ ''}${(bundle.aiContext as any).macroIntelligenceSection ? (bundle.aiContext as any).macroIntelligenceSection + '\n\n' : ''}OPTIONS FLOW & VOLATILITY:
 ${(bundle.aiContext.optionsSection || '').slice(0, 1500)}
 
 KEY TECHNICAL CONTEXT (for stop/target calibration):
@@ -747,23 +739,125 @@ JSON ONLY — include ALL fields below:
   "actionPlan": "Give a clear, specific, step-by-step action plan in plain English. Reference the ATR-derived stop and target levels specifically. What should someone actually DO — buy, sell, wait, set an alert? Be specific about price levels. 4-5 sentences.",
   "optionsStrategy": "Based on the verdict, options flow, IV conditions, and GEX signal — what is the single best options approach right now? One paragraph. If earnings are near, address whether the implied move makes options expensive or cheap. Cover whether to buy or sell options, what type of strategy fits, and why. Write for someone who understands options basics."
 }`
-    }]
+}
+
+// ── Claude Opus implementation (original) — kept as fallback ──
+async function runJudgeClaude(
+  bundle: SignalBundle,
+  gemini: GeminiResult,
+  claude: ClaudeResult,
+  gpt: GptResult,
+  rebuttal: RebuttalResult | undefined,
+  counter: CounterResult | undefined,
+  round: number,
+  social: SocialSentiment | undefined,
+): Promise<JudgeResult> {
+  const judgePersona: Record<string, string> = {
+    balanced:    'Weigh technical and fundamental arguments equally. Higher quality evidence wins regardless of type.',
+    technical:   'Give more weight to technical arguments — price action, chart patterns, and momentum signals. A stock in a clear downtrend requires exceptionally strong fundamental evidence to override the chart.',
+    fundamental: 'Give more weight to fundamental arguments — earnings quality, valuation vs history, and analyst consensus. Technical signals are short-term noise. A fundamentally strong business trading at a discount to its historical valuation is a buy even in a downtrend.',
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const judgePersonaKey = (( bundle as any).persona ?? 'balanced') as string
+
+  const systemPrompt = buildJudgeSystemPrompt(bundle, judgePersona, judgePersonaKey)
+  const userPrompt   = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social)
+
+  const msg = await getAnthropic().messages.create({
+    model: 'claude-opus-4-7',
+    max_tokens: 4000,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userPrompt }]
   })
-  // Opus 4.7 may return thinking blocks before the text block — find the text block explicitly
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const textBlock = msg.content.find((b: any) => b.type === 'text') as { type: 'text'; text: string } | undefined
   if (!textBlock) throw new Error('No text content in Judge response')
   const raw = parseJSON<JudgeResult>(textBlock.text)
-  return sanitizeJudgeResult(raw, bundle)
+  return { ...raw, judgeModel: 'claude-opus-4-7' }
 }
 
-// ── Extract first dollar price from a string ────────────────
+// ── Gemini 2.5 Pro implementation (new default) ──
+// Different model family from the Lead Analyst (Claude Sonnet) — removes
+// the shared-training confirmation bias. Uses responseMimeType JSON to
+// force structured output without brittle text scraping.
+async function runJudgeGemini(
+  bundle: SignalBundle,
+  gemini: GeminiResult,
+  claude: ClaudeResult,
+  gpt: GptResult,
+  rebuttal: RebuttalResult | undefined,
+  counter: CounterResult | undefined,
+  round: number,
+  social: SocialSentiment | undefined,
+): Promise<JudgeResult> {
+  const judgePersona: Record<string, string> = {
+    balanced:    'Weigh technical and fundamental arguments equally. Higher quality evidence wins regardless of type.',
+    technical:   'Give more weight to technical arguments — price action, chart patterns, and momentum signals. A stock in a clear downtrend requires exceptionally strong fundamental evidence to override the chart.',
+    fundamental: 'Give more weight to fundamental arguments — earnings quality, valuation vs history, and analyst consensus. Technical signals are short-term noise. A fundamentally strong business trading at a discount to its historical valuation is a buy even in a downtrend.',
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const judgePersonaKey = (( bundle as any).persona ?? 'balanced') as string
+
+  const systemPrompt = buildJudgeSystemPrompt(bundle, judgePersona, judgePersonaKey)
+  const userPrompt   = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social)
+
+  // Gemini doesn't have a separate system role — prepend the system prompt
+  // to the user content. This is the standard pattern in the @google/generative-ai SDK.
+  const fullPrompt = `${systemPrompt}\n\n${userPrompt}`
+
+  const model = getGenAI().getGenerativeModel({
+    model: 'gemini-2.5-pro',
+    generationConfig: {
+      temperature: 0.2,
+      maxOutputTokens: 4096,
+      responseMimeType: 'application/json',
+    },
+  })
+
+  const result = await model.generateContent(fullPrompt)
+  const text = result.response.text()
+  const raw = parseJSON<JudgeResult>(text)
+  return { ...raw, judgeModel: 'gemini-2.5-pro' }
+}
+
+// Public entry point — picks implementation based on env toggle.
+// Default: Gemini. Set GEMINI_JUDGE=false to revert to Claude Opus.
+export async function runJudge(
+  bundle: SignalBundle,
+  gemini: GeminiResult,
+  claude: ClaudeResult,
+  gpt: GptResult,
+  rebuttal?: RebuttalResult,
+  counter?: CounterResult,
+  round = 1,
+  social?: SocialSentiment
+): Promise<JudgeResult> {
+  const useGemini = process.env.GEMINI_JUDGE !== 'false'
+  const judgeRunner = useGemini ? runJudgeGemini : runJudgeClaude
+
+  try {
+    const result = await judgeRunner(bundle, gemini, claude, gpt, rebuttal, counter, round, social)
+    return sanitizeJudgeResult(result, bundle)
+  } catch (err) {
+    // If Gemini was chosen but failed (rate limit, safety filter, outage),
+    // try Claude as an emergency backup so users never see a broken debate.
+    if (useGemini) {
+      console.warn('[judge] Gemini failed, falling back to Claude Opus:', (err as Error).message?.slice(0, 200))
+      const result = await runJudgeClaude(bundle, gemini, claude, gpt, rebuttal, counter, round, social)
+      return sanitizeJudgeResult({ ...result, judgeModel: 'claude-opus-4-7-fallback' }, bundle)
+    }
+    throw err
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Stop/target sanity fix — the AI sometimes gets direction wrong
+// ─────────────────────────────────────────────────────────────
 function extractPrice(s: string): number | null {
   const m = s?.match(/\$(\d{1,6}(?:\.\d{1,2})?)/)
   return m ? parseFloat(m[1]) : null
 }
 
-// ── Fix inverted stop/target — the AI sometimes gets direction wrong ─
 function sanitizeJudgeResult(judge: JudgeResult, bundle: SignalBundle): JudgeResult {
   const currentPrice = bundle.technicals?.currentPrice ?? 0
   if (!currentPrice) return judge
@@ -774,20 +868,17 @@ function sanitizeJudgeResult(judge: JudgeResult, bundle: SignalBundle): JudgeRes
   const tp     = extractPrice(judge.takeProfit)
   const atr    = bundle.technicals?.atr14 ?? 0
 
-  // For BULLISH: stop MUST be below entry, takeProfit MUST be above entry
   if (signal === 'BULLISH') {
     let fixedStop   = judge.stopLoss
     let fixedTarget = judge.takeProfit
 
     if (stop !== null && stop >= entry) {
-      // Stop is above or at entry — fix it using ATR
       const corrected = (atr > 0 ? entry - atr * 2 : entry * 0.93).toFixed(2)
       fixedStop = `$${corrected} — 2× ATR below entry (auto-corrected)`
       console.warn(`[pipeline] BULLISH stop ${stop} was >= entry ${entry} — corrected to ${corrected}`)
     }
 
     if (tp !== null && tp <= entry) {
-      // Target is below or at entry — fix it using ATR
       const corrected = (atr > 0 ? entry + atr * 3 : entry * 1.08).toFixed(2)
       fixedTarget = `$${corrected} first target (auto-corrected), extended target at resistance`
       console.warn(`[pipeline] BULLISH target ${tp} was <= entry ${entry} — corrected to ${corrected}`)
@@ -796,7 +887,6 @@ function sanitizeJudgeResult(judge: JudgeResult, bundle: SignalBundle): JudgeRes
     return { ...judge, stopLoss: fixedStop, takeProfit: fixedTarget }
   }
 
-  // For BEARISH: stop MUST be above entry, takeProfit MUST be below entry
   if (signal === 'BEARISH') {
     let fixedStop   = judge.stopLoss
     let fixedTarget = judge.takeProfit
@@ -819,13 +909,16 @@ function sanitizeJudgeResult(judge: JudgeResult, bundle: SignalBundle): JudgeRes
   return judge
 }
 
+// ─────────────────────────────────────────────────────────────
+// Main pipeline orchestrator — now fully sequential after Stage 2
+// ─────────────────────────────────────────────────────────────
 export async function runPipeline(
   bundle: SignalBundle,
   onProgress: (event: string, data: unknown) => void
 ): Promise<PipelineResult> {
   const transcript: TranscriptMessage[] = []
 
-  // ── Stage 1: News Scout + Social Scout (parallel) ────────
+  // ── Stage 1: News Scout + Social Scout (parallel — they're independent) ──
   onProgress('gemini_start', {})
   onProgress('grok_start', {})
   const [gemini, social] = await Promise.all([
@@ -846,32 +939,35 @@ export async function runPipeline(
     bundle = { ...bundle, aiContext: { ...bundle.aiContext, macroIntelligenceSection: macroContext } as any }
   }
 
-  // ── Stage 2: Lead Analyst ────────────────────────────────
+  // ── Stage 2: Lead Analyst ─────────────────────────────────
   onProgress('claude_start', { gemini })
   const claude = await runClaude(bundle, gemini, social)
   transcript.push({ role: 'claude', stage: 'lead_analyst', content: claude.reasoning, signal: claude.signal, confidence: claude.confidence, timestamp: ts() })
   onProgress('claude_done', claude)
 
-  // ── Stages 3+4: Devil's Advocate & Rebuttal in parallel ─
-  // Both only need the Lead Analyst output — run simultaneously to save ~10-15s
+  // ── Stage 3: Devil's Advocate — sees Lead's ACTUAL thesis and attacks ──
+  // SEQUENTIAL (was previously parallel with a fake Rebuttal).
   onProgress('gpt_start', { gemini, claude })
-  onProgress('rebuttal_start', { claude })
-  const [gpt, rebuttal] = await Promise.all([
-    runGPT(bundle, gemini, claude, social),
-    runRebuttal(bundle, claude, { reasoning: '', signal: claude.signal, confidence: claude.confidence, agrees: true, challenges: [], alternateScenario: '', strongestCounterArgument: '' }),
-  ])
+  const gpt = await runGPT(bundle, gemini, claude, social)
   transcript.push({ role: 'gpt', stage: 'devils_advocate', content: gpt.reasoning, signal: gpt.signal, confidence: gpt.confidence, timestamp: ts() })
-  transcript.push({ role: 'claude', stage: 'rebuttal', content: rebuttal.rebuttal, signal: rebuttal.signal, confidence: rebuttal.confidence, timestamp: ts() })
   onProgress('gpt_done', gpt)
+
+  // ── Stage 4: Lead Analyst Rebuttal — sees Devil's ACTUAL challenges ──
+  // Previously ran in parallel with GPT using hardcoded empty challenges,
+  // which made the Rebuttal stage non-functional. Now sequential so the
+  // Lead Analyst actually rebuts what the Devil's Advocate said.
+  onProgress('rebuttal_start', { claude, gpt })
+  const rebuttal = await runRebuttal(bundle, claude, gpt)
+  transcript.push({ role: 'claude', stage: 'rebuttal', content: rebuttal.rebuttal, signal: rebuttal.signal, confidence: rebuttal.confidence, timestamp: ts() })
   onProgress('rebuttal_done', rebuttal)
 
-  // ── Stage 5: Devil's Advocate Counter ────────────────────
+  // ── Stage 5: Devil's Advocate Counter — sees the rebuttal, final shot ──
   onProgress('counter_start', { gpt, rebuttal })
   const counter = await runCounter(bundle, gpt, rebuttal)
   transcript.push({ role: 'gpt', stage: 'counter', content: counter.finalChallenge, timestamp: ts() })
   onProgress('counter_done', counter)
 
-  // ── Stage 6: Council Verdict ─────────────────────────────
+  // ── Stage 6: Judge — now Gemini 2.5 Pro by default (different family) ──
   onProgress('judge_start', {})
   const judge = await runJudge(bundle, gemini, claude, gpt, rebuttal, counter, 1, social)
   transcript.push({ role: 'judge', stage: 'arbitrator', content: judge.summary, signal: judge.signal, confidence: judge.confidence, timestamp: ts() })
