@@ -85,7 +85,7 @@ function LoginPageInner() {
           const r = await fetch('/api/auth/session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sessionToken, accessToken: data.session.access_token }),
+            body: JSON.stringify({ sessionToken, accessToken: data.session.access_token, refreshToken: data.session.refresh_token }),
           })
           console.log('[login] POST /api/auth/session returned', r.status)
           const body = await r.text()
@@ -137,7 +137,7 @@ function LoginPageInner() {
       await fetch('/api/auth/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionToken, accessToken: sessionData.session.access_token }),
+        body: JSON.stringify({ sessionToken, accessToken: sessionData.session.access_token, refreshToken: sessionData.session.refresh_token }),
       })
     }
     router.push(redirect)

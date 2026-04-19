@@ -24,7 +24,11 @@ export async function GET(req: NextRequest) {
 // that haven't been updated to pass accessToken.
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}))
-  const { sessionToken, accessToken } = body as { sessionToken?: string; accessToken?: string }
+  const { sessionToken, accessToken, refreshToken } = body as {
+    sessionToken?: string
+    accessToken?: string
+    refreshToken?: string
+  }
 
   if (!sessionToken) {
     return NextResponse.json({ error: 'sessionToken required' }, { status: 400 })
@@ -44,6 +48,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid access token' }, { status: 401 })
     }
     userId = data.user.id
+
+    // CRITICAL: establish the server-side session cookies so the next
+    // request from the browser sees us as logged in. Without this, the
+    // browser navigates to / and middleware sees no session and bounces
+    // us back to /login.
+    if (refreshToken) {
+      const supabase = await createClient()
+      await supabase.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      })
+    }
   } else {
     // Legacy cookie-based path (for callers that don't pass accessToken)
     const supabase = await createClient()
