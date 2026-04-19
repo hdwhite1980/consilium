@@ -49,16 +49,36 @@ export async function POST(req: NextRequest) {
     }
     userId = data.user.id
 
-    // CRITICAL: establish the server-side session cookies so the next
-    // request from the browser sees us as logged in. Without this, the
-    // browser navigates to / and middleware sees no session and bounces
-    // us back to /login.
+    // CRITICAL: write the session cookies manually on the response.
+    // Using supabase.auth.setSession() through the cookie wrapper keeps
+    // failing silently because the server.ts cookie setAll catches and
+    // ignores all errors. We write them directly here.
     if (refreshToken) {
-      const supabase = await createClient()
-      await supabase.auth.setSession({
-        access_token: accessToken,
-        refresh_token: refreshToken,
-      })
+      const projectRef = process.env.NEXT_PUBLIC_SUPABASE_URL!
+        .match(/https:\/\/([^.]+)\.supabase\.co/)?.[1]
+      if (projectRef) {
+        const cookieName = `sb-${projectRef}-auth-token`
+        const cookieValue = 'base64-' + Buffer.from(JSON.stringify({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+          expires_at: Math.floor(Date.now() / 1000) + 3600,
+          expires_in: 3600,
+          token_type: 'bearer',
+          user: data.user,
+        })).toString('base64')
+        const res = NextResponse.json({ ok: true, deviceHint: getDeviceHint(req.headers.get('user-agent') || '') })
+        res.cookies.set(cookieName, cookieValue, {
+          path: '/',
+          maxAge: 60 * 60 * 24 * 7,
+          httpOnly: false,
+          sameSite: 'lax',
+          secure: true,
+        })
+        const userAgent = req.headers.get('user-agent') || ''
+        const deviceHint = getDeviceHint(userAgent)
+        await registerSession(userId, sessionToken, deviceHint)
+        return res
+      }
     }
   } else {
     // Legacy cookie-based path (for callers that don't pass accessToken)
