@@ -17,7 +17,7 @@ function getAdminClient() {
 export async function registerSession(userId: string, deviceHint: string): Promise<string> {
   const admin = getAdminClient()
   const deviceId = crypto.randomUUID()
-  await admin
+  const { error } = await admin
     .from('active_sessions')
     .upsert({
       user_id: userId,
@@ -26,6 +26,7 @@ export async function registerSession(userId: string, deviceHint: string): Promi
       logged_in_at: new Date().toISOString(),
       last_seen_at: new Date().toISOString(),
     }, { onConflict: 'user_id' })
+  console.log('[session] registered device', deviceId.slice(0, 8) + '...', 'for user', userId.slice(0, 8) + '...', error ? 'ERROR: ' + error.message : 'OK')
   return deviceId
 }
 
@@ -34,15 +35,29 @@ export async function registerSession(userId: string, deviceHint: string): Promi
 // A mismatch means the user logged in from another device, displacing
 // this one - we should bounce them to login with ?error=session_displaced.
 export async function validateDeviceId(userId: string, deviceId: string | undefined): Promise<boolean> {
-  if (!deviceId) return false
+  if (!deviceId) {
+    console.log('[session] validateDeviceId: no cookie for user', userId.slice(0, 8) + '...')
+    return false
+  }
   const admin = getAdminClient()
-  const { data } = await admin
+  const { data, error } = await admin
     .from('active_sessions')
     .select('device_id')
     .eq('user_id', userId)
     .maybeSingle()
-  if (!data) return false
-  return data.device_id === deviceId
+  if (error) {
+    console.log('[session] validateDeviceId ERROR:', error.message)
+    return false
+  }
+  if (!data) {
+    console.log('[session] validateDeviceId: no DB row for user', userId.slice(0, 8) + '...')
+    return false
+  }
+  const matches = data.device_id === deviceId
+  console.log('[session] validateDeviceId:', matches ? 'MATCH' : 'MISMATCH',
+    '- cookie:', deviceId.slice(0, 8) + '...',
+    '- db:', (data.device_id as string).slice(0, 8) + '...')
+  return matches
 }
 
 // Called on logout - removes the session record

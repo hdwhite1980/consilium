@@ -107,6 +107,10 @@ export async function middleware(request: NextRequest) {
   const deviceIdCookie = request.cookies.get('wali_device_id')?.value
   const deviceValid = await validateDeviceId(user.id, deviceIdCookie)
   if (!deviceValid) {
+    // Diagnostic: log what we saw when the check failed
+    console.log('[middleware] device displaced on', pathname,
+      '- cookie:', deviceIdCookie ? deviceIdCookie.slice(0, 8) + '...' : 'MISSING',
+      '- user:', user.id.slice(0, 8) + '...')
     const loginUrl = new URL('/login', request.url)
     loginUrl.searchParams.set('error', 'session_displaced')
     const response = NextResponse.redirect(loginUrl)
