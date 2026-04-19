@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowLeft, RefreshCw, TrendingUp, TrendingDown, Minus, Globe, BarChart2, DollarSign, Shield } from 'lucide-react'
+import EarningsCalendar from '@/app/components/EarningsCalendar'
 
 interface SectorData {
   etf: string; name: string; emoji: string
@@ -281,6 +282,9 @@ export default function MacroDashboard() {
               </div>
             ))}
           </div>
+
+          {/* Earnings Calendar */}
+          <EarningsCalendar />
 
           {/* Compare CTA */}
           <div className="rounded-2xl p-5 border text-center" style={{ background: 'rgba(167,139,250,0.05)', borderColor: 'rgba(167,139,250,0.2)' }}>
