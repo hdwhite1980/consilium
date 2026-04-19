@@ -405,7 +405,7 @@ function HomeInner() {
     // Cache-busting navigation: unique timestamp forces Next.js router to
     // discard any cached '/' -> '/login' redirect from the logged-out state.
     // Without this, re-login fetches the stale redirect and hangs.
-    window.location.replace('/login?t=' + Date.now())
+    window.location.replace('/login')
   }
   const abortRef  = useRef<AbortController | null>(null)
   const scroll    = useCallback(() => setTimeout(() => debateRef.current?.scrollTo({ top: 99999, behavior: 'smooth' }), 80), [])

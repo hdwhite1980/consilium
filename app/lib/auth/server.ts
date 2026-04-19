@@ -14,7 +14,13 @@ export async function createClient() {
             cookiesToSet.forEach(({ name, value, options }) =>
               cookieStore.set(name, value, options)
             )
-          } catch { /* Server component — ignore */ }
+          } catch (e) {
+            // Expected in Server Components (cookies() is read-only there).
+            // In dev, log so we catch unexpected failures during debugging.
+            if (process.env.NODE_ENV !== 'production') {
+              console.warn('[auth/server] cookie set failed:', (e as Error).message)
+            }
+          }
         },
       },
     }

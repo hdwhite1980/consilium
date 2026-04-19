@@ -76,67 +76,43 @@ function LoginPageInner() {
         }
       }
 
-      console.log('[login] signInWithPassword OK, has session:', !!data.session)
-      // Register this device as the only active session
-      if (data.session?.access_token) {
+      // Register device session + write auth cookies server-side
+      if (data.session?.access_token && data.session?.refresh_token) {
         const sessionToken = data.session.access_token.slice(-32)
-        console.log('[login] POST /api/auth/session starting')
         try {
-          const r = await fetch('/api/auth/session', {
+          await fetch('/api/auth/session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sessionToken, accessToken: data.session.access_token, refreshToken: data.session.refresh_token }),
+            body: JSON.stringify({
+              sessionToken,
+              accessToken: data.session.access_token,
+              refreshToken: data.session.refresh_token,
+            }),
           })
-          console.log('[login] POST /api/auth/session returned', r.status)
-          const body = await r.text()
-          console.log('[login] response body:', body.slice(0, 200))
-        } catch (e) {
-          console.error('[login] POST /api/auth/session threw:', e)
+        } catch {
+          // Session registration is best-effort - user can still log in
         }
-      } else {
-        console.warn('[login] NO access_token on session - this is why we hang')
-      }
-      // CRITICAL: wait for the cookie to actually be in the browser cookie jar
-      // before hard-navigating. signInWithPassword and /api/auth/session both
-      // write cookies asynchronously, and if we navigate before they commit,
-      // the next request arrives with no cookies and middleware bounces to /login.
-      // Verify the auth cookie made it to the jar, then confirm via a real
-      // GET request that Supabase accepts it. This proves the cookie is
-      // actually live in the request-attachment pool (not just in document.cookie)
-      // before we hard-navigate. Chrome queues cookie writes asynchronously -
-      // document.cookie returning immediately does not guarantee the next
-      // request will include the cookie.
-      const projectRef = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').match(/https:\/\/([^.]+)\.supabase\.co/)?.[1]
-      const cookieName = projectRef ? `sb-${projectRef}-auth-token` : 'sb-'
-      const hasCookie = () => document.cookie.split(';').some(c => c.trim().startsWith(cookieName))
-
-      // Wait for document.cookie to show it (typically <10ms)
-      const cookieStart = Date.now()
-      while (!hasCookie() && Date.now() - cookieStart < 2000) {
-        await new Promise(r => setTimeout(r, 20))
       }
 
-      // Then verify server-side reads it via the same-origin API.
-      // If GET /api/auth/session returns status != 'unauthenticated',
-      // the cookie is actually attached to outgoing requests.
-      const verifyStart = Date.now()
+      // Verify cookie is actually attached to outgoing requests before navigating.
+      // Chrome queues cookie writes asynchronously, so document.cookie returning
+      // does not guarantee the next request includes it. We confirm via a real
+      // same-origin GET before hard-navigating to avoid middleware bouncing us.
       let verified = false
-      for (let i = 0; i < 30; i++) {
+      for (let i = 0; i < 5; i++) {
         try {
           const check = await fetch('/api/auth/session', { credentials: 'include' })
           const body = await check.json()
-          if (body.status !== 'unauthenticated' && (body.hasAccess !== false || body.tier)) {
+          if (body.status !== 'unauthenticated') {
             verified = true
             break
           }
         } catch {}
         await new Promise(r => setTimeout(r, 100))
       }
-      console.log('[login] cookie ready', Date.now() - cookieStart, 'ms, server-verified', verified, 'after', Date.now() - verifyStart, 'ms - navigating to', redirect)
 
-      // Hard navigation - router.push races with cookie commit and sometimes
-      // lands on a cached logged-out response. window.location.replace forces
-      // a fresh full-page load where cookies are guaranteed to be attached.
+      // Hard navigation - router.push races with cookie commit. window.location.replace
+      // forces a fresh full-page load with cookies guaranteed attached.
       window.location.replace(redirect)
       return
 
