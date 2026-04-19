@@ -76,15 +76,27 @@ function LoginPageInner() {
         }
       }
 
+      console.log('[login] signInWithPassword OK, has session:', !!data.session)
       // Register this device as the only active session
       if (data.session?.access_token) {
         const sessionToken = data.session.access_token.slice(-32)
-        await fetch('/api/auth/session', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionToken, accessToken: data.session.access_token }),
-        })
+        console.log('[login] POST /api/auth/session starting')
+        try {
+          const r = await fetch('/api/auth/session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionToken, accessToken: data.session.access_token }),
+          })
+          console.log('[login] POST /api/auth/session returned', r.status)
+          const body = await r.text()
+          console.log('[login] response body:', body.slice(0, 200))
+        } catch (e) {
+          console.error('[login] POST /api/auth/session threw:', e)
+        }
+      } else {
+        console.warn('[login] NO access_token on session - this is why we hang')
       }
+      console.log('[login] about to navigate to', redirect)
 
       router.push(redirect)
       router.refresh()
