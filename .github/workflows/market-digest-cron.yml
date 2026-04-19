@@ -1,0 +1,47 @@
+name: Market Digest EOD
+
+# Runs the end-of-day market digest every weekday at 21:30 UTC
+# (= 5:30pm ET during DST, 4:30pm ET during standard time).
+# The 21:30 UTC time is chosen so it's always *after* US market close
+# regardless of DST, and far enough after to allow real close data to settle.
+
+on:
+  schedule:
+    - cron: '30 21 * * 1-5'
+  workflow_dispatch:  # allows manual trigger from GitHub Actions UI
+
+jobs:
+  run-eod-digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Trigger EOD digest
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET not configured in GitHub secrets"
+            exit 1
+          fi
+          
+          echo "Triggering EOD digest at $(date -u)"
+          
+          response=$(curl -sS -w "\n__HTTP_STATUS:%{http_code}__" \
+            --max-time 300 \
+            -X POST "https://wali-os.com/api/market-digest" \
+            -H "x-cron-secret: $CRON_SECRET" \
+            -H "Content-Type: application/json")
+          
+          body=$(echo "$response" | sed 's/__HTTP_STATUS:[0-9]*__$//')
+          status=$(echo "$response" | grep -o '__HTTP_STATUS:[0-9]*__' | grep -o '[0-9]*')
+          
+          echo "HTTP Status: $status"
+          echo "Response body:"
+          echo "$body"
+          
+          if [ "$status" != "200" ]; then
+            echo "::error::EOD digest failed with status $status"
+            exit 1
+          fi
+          
+          echo "✓ EOD digest completed successfully"

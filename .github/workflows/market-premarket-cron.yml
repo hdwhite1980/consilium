@@ -1,0 +1,46 @@
+name: Market Digest Pre-Market
+
+# Runs the pre-market brief every weekday at 10:00 UTC
+# (= 6am ET during DST, 5am ET during standard time).
+# This gives early-morning users a fresh brief before market open.
+
+on:
+  schedule:
+    - cron: '0 10 * * 1-5'
+  workflow_dispatch:  # allows manual trigger from GitHub Actions UI
+
+jobs:
+  run-premarket-brief:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Trigger pre-market brief
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET not configured in GitHub secrets"
+            exit 1
+          fi
+          
+          echo "Triggering pre-market brief at $(date -u)"
+          
+          response=$(curl -sS -w "\n__HTTP_STATUS:%{http_code}__" \
+            --max-time 300 \
+            -X POST "https://wali-os.com/api/market-digest?type=premarket" \
+            -H "x-cron-secret: $CRON_SECRET" \
+            -H "Content-Type: application/json")
+          
+          body=$(echo "$response" | sed 's/__HTTP_STATUS:[0-9]*__$//')
+          status=$(echo "$response" | grep -o '__HTTP_STATUS:[0-9]*__' | grep -o '[0-9]*')
+          
+          echo "HTTP Status: $status"
+          echo "Response body:"
+          echo "$body"
+          
+          if [ "$status" != "200" ]; then
+            echo "::error::Pre-market brief failed with status $status"
+            exit 1
+          fi
+          
+          echo "✓ Pre-market brief completed successfully"
