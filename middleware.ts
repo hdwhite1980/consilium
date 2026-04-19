@@ -66,6 +66,7 @@ export async function middleware(request: NextRequest) {
 
   // Not logged in → login
   if (!user || !session) {
+    console.log('[middleware] REDIRECT to login from', pathname, '- user:', !!user, 'session:', !!session, 'cookies:', request.cookies.getAll().map(c => c.name).filter(n => n.startsWith('sb-')).join(','))
     const loginUrl = new URL('/login', request.url)
     loginUrl.searchParams.set('redirect', pathname)
     return NextResponse.redirect(loginUrl)
