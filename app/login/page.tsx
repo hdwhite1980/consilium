@@ -134,8 +134,11 @@ function LoginPageInner() {
       }
       console.log('[login] cookie ready', Date.now() - cookieStart, 'ms, server-verified', verified, 'after', Date.now() - verifyStart, 'ms - navigating to', redirect)
 
-      router.push(redirect)
-      router.refresh()
+      // Hard navigation - router.push races with cookie commit and sometimes
+      // lands on a cached logged-out response. window.location.replace forces
+      // a fresh full-page load where cookies are guaranteed to be attached.
+      window.location.replace(redirect)
+      return
 
     } catch (err: unknown) {
       const msg = (err as Error).message || 'Something went wrong'
@@ -176,8 +179,7 @@ function LoginPageInner() {
         body: JSON.stringify({ sessionToken, accessToken: sessionData.session.access_token, refreshToken: sessionData.session.refresh_token }),
       })
     }
-    router.push(redirect)
-    router.refresh()
+    window.location.replace(redirect)
   }
 
   return (
