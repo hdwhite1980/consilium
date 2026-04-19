@@ -3,12 +3,14 @@
 import { useState, useEffect, useCallback, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
-  ArrowLeft, BarChart2, Plus, Trash2, RefreshCw, TrendingUp, TrendingDown,
-  Minus, AlertTriangle, Calendar, DollarSign, BookOpen, Check, X, Clock,
-  Star, Repeat2, ChevronDown, ChevronUp
+  ArrowLeft, Plus, Trash2, RefreshCw, TrendingUp, TrendingDown,
+  Minus, AlertTriangle, Calendar, DollarSign, Check, X, Clock,
+  Star, Repeat2, ChevronDown, ChevronRight, Activity, Briefcase,
+  BookOpen, RotateCw, Stethoscope, ArrowUpDown, ArrowUp, ArrowDown,
+  Zap, Flame, PieChart, Target
 } from 'lucide-react'
 
-// ── Types ──────────────────────────────────────────────────────────────────────
+// -- Types ----------------------------------------
 
 interface Position {
   id: string; ticker: string; shares: number; avg_cost: number | null
@@ -84,33 +86,37 @@ interface ReinvestTrade {
   currentPrice?: number | null; pnl?: number | null; pnlPct?: number | null
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// -- Constants ----------------------------------------
 
-const SIG_COLOR: Record<string, string> = { BULLISH: '#34d399', BEARISH: '#f87171', NEUTRAL: '#fbbf24' }
-const SEV_COLOR: Record<string, string> = { high: '#f87171', medium: '#fbbf24', low: '#94a3b8' }
-const RISK_COLOR: Record<string, string> = { low: '#34d399', medium: '#fbbf24', high: '#f87171' }
+const UP = '#34d399'
+const DN = '#f87171'
+const FLAT = '#fbbf24'
+const ACCENT = '#a78bfa'
+
+const SIG_COLOR: Record<string, string> = { BULLISH: UP, BEARISH: DN, NEUTRAL: FLAT }
+const SEV_COLOR: Record<string, string> = { high: DN, medium: FLAT, low: '#94a3b8' }
+const VERDICT_COLOR: Record<string, string> = { EXIT: DN, WATCH: FLAT, HOLD: UP, ADD: '#60a5fa' }
+const VERDICT_BG: Record<string, string> = { EXIT: 'rgba(248,113,113,0.08)', WATCH: 'rgba(251,191,36,0.06)', HOLD: 'rgba(52,211,153,0.05)', ADD: 'rgba(96,165,250,0.06)' }
+
 const fmt = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-const fmtK = (n: number) => Math.abs(n) >= 1000 ? `$${(n/1000).toFixed(1)}k` : `$${fmt(n)}`
-const pct = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
-const gradeColor = (g: string) => ({ A: '#34d399', B: '#60a5fa', C: '#fbbf24', D: '#f97316', F: '#f87171' }[g] || '#94a3b8')
-
-function Section({ title, icon, color, children, defaultOpen = true }: { title: string; icon: React.ReactNode; color: string; children: React.ReactNode; defaultOpen?: boolean }) {
-  const [open, setOpen] = useState(defaultOpen)
-  return (
-    <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-      <button onClick={() => setOpen(!open)} className="w-full flex items-center gap-2 px-5 py-3.5 border-b" style={{ borderColor: 'var(--border)' }}>
-        <span style={{ color }}>{icon}</span>
-        <span className="text-xs font-bold uppercase tracking-wider" style={{ color }}>{title}</span>
-        <span className="ml-auto" style={{ color: 'var(--text3)' }}>{open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}</span>
-      </button>
-      {open && <div className="px-5 py-4">{children}</div>}
-    </div>
-  )
+const fmtCompact = (n: number) => {
+  const abs = Math.abs(n)
+  if (abs >= 1_000_000) return `${n < 0 ? '-' : ''}$${(abs/1_000_000).toFixed(2)}M`
+  if (abs >= 10_000) return `${n < 0 ? '-' : ''}$${(abs/1000).toFixed(1)}k`
+  return `${n < 0 ? '-' : ''}$${fmt(abs)}`
+}
+const pct = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`
+const gradeColor = (g: string) => ({ A: UP, B: '#60a5fa', C: FLAT, D: '#f97316', F: DN }[g] || '#94a3b8')
+const pnlColor = (n: number | null | undefined) => {
+  if (n == null || n === 0) return 'var(--text3)'
+  return n > 0 ? UP : DN
 }
 
-// ── Main component ─────────────────────────────────────────────────────────────
+// -- Main component ----------------------------------------
 
 type Tab = 'holdings' | 'dividends' | 'reinvest' | 'journal'
+type SortKey = 'ticker' | 'value' | 'day' | 'pnl' | 'alloc' | 'signal'
+type SortDir = 'asc' | 'desc'
 
 function PortfolioInner() {
   const router = useRouter()
@@ -118,7 +124,7 @@ function PortfolioInner() {
   const initialTab = (searchParams.get('tab') as Tab) || 'holdings'
   const [tab, setTab] = useState<Tab>(initialTab)
 
-  // ── Holdings state
+  // -- Holdings state
   const [positions, setPositions] = useState<Position[]>([])
   const [positionData, setPositionData] = useState<PositionData[]>([])
   const [metrics, setMetrics] = useState<PortfolioMetrics | null>(null)
@@ -140,10 +146,12 @@ function PortfolioInner() {
   const [checking, setChecking] = useState(false)
   const [checkedAt, setCheckedAt] = useState<string | null>(null)
   const [checkTicker, setCheckTicker] = useState<string | null>(null)
-  const [addPremium, setAddPremium] = useState('')
   const [addLoading, setAddLoading] = useState(false)
+  const [expandedRow, setExpandedRow] = useState<string | null>(null)
+  const [sortKey, setSortKey] = useState<SortKey>('value')
+  const [sortDir, setSortDir] = useState<SortDir>('desc')
 
-  // ── Journal state
+  // -- Journal state
   const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([])
   const [journalStats, setJournalStats] = useState<JournalStats>({ winRate: null, avgPnl: null, totalTrades: 0 })
   const [loadingJournal, setLoadingJournal] = useState(false)
@@ -160,7 +168,7 @@ function PortfolioInner() {
   const [jNotes, setJNotes] = useState('')
   const [resolveData, setResolveData] = useState({ exit_price: '', exit_premium: '', outcome: 'win', notes: '' })
 
-  // ── Dividend state
+  // -- Dividend state
   const [dividends, setDividends] = useState<Dividend[]>([])
   const [divSchedule, setDivSchedule] = useState<DividendSchedule[]>([])
   const [loadingDividends, setLoadingDividends] = useState(false)
@@ -175,7 +183,7 @@ function PortfolioInner() {
   const [divReinvestPrice, setDivReinvestPrice] = useState('')
   const [savingDiv, setSavingDiv] = useState(false)
 
-  // ── Reinvest state
+  // -- Reinvest state
   const [reinvestTrades, setReinvestTrades] = useState<ReinvestTrade[]>([])
   const [loadingReinvest, setLoadingReinvest] = useState(false)
   const [showAddReinvest, setShowAddReinvest] = useState(false)
@@ -185,7 +193,7 @@ function PortfolioInner() {
   const [rNotes, setRNotes] = useState('')
   const [savingReinvest, setSavingReinvest] = useState(false)
 
-  // ── Holdings loading ───────────────────────────────────────────────────────
+  // -- Holdings loading ----------------------------------------
 
   const loadCachedAnalysis = useCallback(async (pos: typeof positions) => {
     if (!pos.length) return
@@ -271,7 +279,7 @@ function PortfolioInner() {
     }
     await fetch('/api/portfolio/positions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     setAddTicker(''); setAddShares(''); setAddCost(''); setAddStrike(''); setAddExpiry('')
-    setAddContracts('1'); setAddPremium(''); setShowAdd(false); setAddLoading(false)
+    setAddContracts('1'); setShowAdd(false); setAddLoading(false)
     await loadPositions()
   }
 
@@ -304,7 +312,7 @@ function PortfolioInner() {
     setPositionData(prev => prev.filter(p => p.ticker !== ticker))
   }
 
-  // ── Journal loading ────────────────────────────────────────────────────────
+  // -- Journal loading ----------------------------------------
 
   const loadJournal = useCallback(async () => {
     setLoadingJournal(true)
@@ -363,9 +371,9 @@ function PortfolioInner() {
     await loadJournal()
   }
 
-  const outcomeIcon = (o: string) => o === 'win' ? <Check size={12} style={{ color: '#34d399' }} /> : o === 'loss' ? <X size={12} style={{ color: '#f87171' }} /> : <Clock size={12} style={{ color: '#fbbf24' }} />
+  const outcomeIcon = (o: string) => o === 'win' ? <Check size={12} style={{ color: UP }} /> : o === 'loss' ? <X size={12} style={{ color: DN }} /> : <Clock size={12} style={{ color: FLAT }} />
 
-  // ── Dividend loading ───────────────────────────────────────────────────────
+  // -- Dividend loading ----------------------------------------
 
   const loadDividends = useCallback(async () => {
     setLoadingDividends(true)
@@ -413,7 +421,7 @@ function PortfolioInner() {
     await loadDividends()
   }
 
-  // ── Reinvest loading ───────────────────────────────────────────────────────
+  // -- Reinvest loading ----------------------------------------
 
   const loadReinvest = useCallback(async () => {
     setLoadingReinvest(true)
@@ -422,7 +430,6 @@ function PortfolioInner() {
       if (res.ok) {
         const data = await res.json()
         const trades: ReinvestTrade[] = data.trades || data || []
-        // Enrich with current prices
         const enriched = await Promise.all(trades.map(async (t) => {
           try {
             const q = await fetch(`/api/ticker?ticker=${t.ticker}`)
@@ -430,8 +437,8 @@ function PortfolioInner() {
             const cpRaw = qd?.quote?.c || null
             const cp = cpRaw !== null ? parseFloat(cpRaw) : null
             const pnl = cp && t.shares ? (cp - t.entry_price) * t.shares : null
-            const pnlPct = t.entry_price > 0 && cp ? ((cp - t.entry_price) / t.entry_price * 100) : null
-            return { ...t, currentPrice: cp, pnl, pnlPct }
+            const pPct = t.entry_price > 0 && cp ? ((cp - t.entry_price) / t.entry_price * 100) : null
+            return { ...t, currentPrice: cp, pnl, pnlPct: pPct }
           } catch { return t }
         }))
         setReinvestTrades(enriched)
@@ -458,7 +465,7 @@ function PortfolioInner() {
     await loadReinvest()
   }
 
-  // ── Load on tab change ─────────────────────────────────────────────────────
+  // -- Load on tab change ----------------------------------------
 
   useEffect(() => { loadPositions() }, [loadPositions])
 
@@ -468,244 +475,237 @@ function PortfolioInner() {
     if (tab === 'reinvest' && reinvestTrades.length === 0) loadReinvest()
   }, [tab]) // eslint-disable-line
 
+  // -- Derived metrics ----------------------------------------
+
   const totalValue = positionData.reduce((s, p) => s + p.marketValue, 0)
+  const totalGainLoss = positionData.reduce((s, p) => s + (p.gainLoss ?? 0), 0)
+  const totalCostBasis = positionData.reduce((s, p) => {
+    if (p.avg_cost == null) return s
+    return s + (p.avg_cost * p.shares)
+  }, 0)
+  const totalGainLossPct = totalCostBasis > 0 ? (totalGainLoss / totalCostBasis) * 100 : 0
+  const dayChangeDollar = positionData.reduce((s, p) => {
+    const prev = p.currentPrice / (1 + (p.priceChange1D / 100))
+    return s + ((p.currentPrice - prev) * p.shares)
+  }, 0)
+  const dayChangePct = totalValue > 0 && (totalValue - dayChangeDollar) > 0
+    ? (dayChangeDollar / (totalValue - dayChangeDollar)) * 100
+    : 0
   const totalDividends = dividends.reduce((s, d) => s + d.total_received, 0)
   const reinvestedDividends = dividends.filter(d => d.reinvested).reduce((s, d) => s + d.total_received, 0)
   const openReinvestTrades = reinvestTrades.filter(t => !t.exit_price)
   const realizedReinvestPnL = reinvestTrades.filter(t => t.exit_price).reduce((s, t) => { const p = t.exit_price ? (t.exit_price - t.entry_price) * t.shares : 0; return s + p }, 0)
 
-  // ── Tab bar ────────────────────────────────────────────────────────────────
+  const stockCount = positions.filter(p => p.position_type === 'stock').length
+  const optionCount = positions.filter(p => p.position_type === 'option').length
 
-  const TABS: Array<{ id: Tab; label: string; icon: string }> = [
-    { id: 'holdings', label: 'Holdings', icon: '💼' },
-    { id: 'dividends', label: 'Dividends', icon: '💵' },
-    { id: 'reinvest', label: 'Reinvest', icon: '🔄' },
-    { id: 'journal', label: 'Journal', icon: '📒' },
+  // Sorted positions for table
+  const sortedPositions = [...positions].sort((a, b) => {
+    const aData = positionData.find(p => p.ticker === a.ticker)
+    const bData = positionData.find(p => p.ticker === b.ticker)
+    const mul = sortDir === 'asc' ? 1 : -1
+    switch (sortKey) {
+      case 'ticker': return a.ticker.localeCompare(b.ticker) * mul
+      case 'value': return ((aData?.marketValue ?? 0) - (bData?.marketValue ?? 0)) * mul
+      case 'day':   return ((aData?.priceChange1D ?? 0) - (bData?.priceChange1D ?? 0)) * mul
+      case 'pnl':   return ((aData?.gainLossPct ?? 0) - (bData?.gainLossPct ?? 0)) * mul
+      case 'alloc': return ((aData?.marketValue ?? 0) - (bData?.marketValue ?? 0)) * mul
+      case 'signal': {
+        const order: Record<string, number> = { BULLISH: 2, NEUTRAL: 1, BEARISH: 0 }
+        return ((order[aData?.signal ?? ''] ?? -1) - (order[bData?.signal ?? ''] ?? -1)) * mul
+      }
+      default: return 0
+    }
+  })
+
+  const toggleSort = (k: SortKey) => {
+    if (sortKey === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortKey(k); setSortDir('desc') }
+  }
+
+  const SortHeader = ({ k, label, align = 'right' }: { k: SortKey; label: string; align?: 'left' | 'right' }) => (
+    <button onClick={() => toggleSort(k)}
+      className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider transition-colors hover:opacity-80 w-full"
+      style={{
+        justifyContent: align === 'right' ? 'flex-end' : 'flex-start',
+        color: sortKey === k ? ACCENT : 'var(--text3)',
+      }}>
+      <span>{label}</span>
+      {sortKey === k
+        ? (sortDir === 'asc' ? <ArrowUp size={10} /> : <ArrowDown size={10} />)
+        : <ArrowUpDown size={10} style={{ opacity: 0.3 }} />}
+    </button>
+  )
+
+  const TABS: Array<{ id: Tab; label: string; icon: React.ReactNode }> = [
+    { id: 'holdings',  label: 'Holdings',  icon: <Briefcase size={13} /> },
+    { id: 'dividends', label: 'Dividends', icon: <DollarSign size={13} /> },
+    { id: 'reinvest',  label: 'Reinvest',  icon: <RotateCw size={13} /> },
+    { id: 'journal',   label: 'Journal',   icon: <BookOpen size={13} /> },
   ]
-
-  const VERDICT_COLOR: Record<string, string> = { EXIT: '#f87171', WATCH: '#fbbf24', HOLD: '#34d399', ADD: '#60a5fa' }
-  const VERDICT_BG: Record<string, string> = { EXIT: 'rgba(248,113,113,0.1)', WATCH: 'rgba(251,191,36,0.08)', HOLD: 'rgba(52,211,153,0.06)', ADD: 'rgba(96,165,250,0.08)' }
 
   return (
     <div className="flex flex-col min-h-screen" style={{ background: 'var(--bg)', color: 'var(--text)' }}>
 
-      {/* Header */}
-      <header className="flex items-center gap-3 px-4 py-3 border-b sticky top-0 z-10"
+      {/* -- Header ---------------------------------------- */}
+      <header className="flex items-center gap-3 px-6 py-3 border-b sticky top-0 z-20"
         style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-        <button onClick={() => router.push('/')} className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/70">
-          <ArrowLeft size={13} /> Back
+        <button onClick={() => router.push('/')}
+          className="flex items-center gap-1.5 text-xs hover:opacity-80 transition-opacity"
+          style={{ color: 'var(--text3)' }}
+          aria-label="Back to dashboard">
+          <ArrowLeft size={13} /> <span className="hidden sm:inline">Back</span>
         </button>
         <div className="w-px h-4" style={{ background: 'var(--border)' }} />
-        <BarChart2 size={14} style={{ color: '#a78bfa' }} />
+        <Briefcase size={14} style={{ color: ACCENT }} />
         <span className="text-sm font-bold">Portfolio</span>
         {positions.length > 0 && (
           <span className="text-[10px] font-mono px-2 py-0.5 rounded-full"
-            style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)' }}>
-            {positions.length} positions
+            style={{ background: 'rgba(167,139,250,0.12)', color: ACCENT, border: '1px solid rgba(167,139,250,0.2)' }}>
+            {positions.length} {positions.length === 1 ? 'position' : 'positions'}
           </span>
         )}
-        {totalValue > 0 && (
-          <span className="text-[10px] font-mono text-white/40">{fmtK(totalValue)}</span>
-        )}
-        {/* Holdings tab actions */}
-        {tab === 'holdings' && (
-          <div className="ml-auto flex items-center gap-2">
-            <button onClick={() => setShowAdd(!showAdd)}
-              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
-              style={{ background: 'rgba(167,139,250,0.15)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.25)' }}>
-              <Plus size={12} /> Add
-            </button>
-            {positions.length > 0 && (
-              <>
-                {cachedAge !== null && !analyzing && (
-                  <span className="text-[10px] hidden sm:block" style={{ color: 'var(--text3)' }}>
-                    {cachedAge === 0 ? 'just analyzed' : `${cachedAge < 60 ? `${cachedAge}m` : `${Math.round(cachedAge/60)}h`} old`}
-                  </span>
-                )}
-                <button onClick={() => runHealthCheck()} disabled={checking || positions.length === 0}
-                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40"
-                  style={{ background: 'rgba(248,113,113,0.12)', color: '#f87171', border: '1px solid rgba(248,113,113,0.25)' }}>
-                  {checking && !checkTicker ? <div className="w-3 h-3 rounded-full border border-t-red-400 border-red-200/30 animate-spin" /> : '🩺'}
-                  {checking && !checkTicker ? 'Checking...' : 'Check'}
-                </button>
-                <button onClick={() => runAnalysis(true)} disabled={analyzing}
-                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40"
-                  style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', color: 'var(--text)' }}>
-                  <RefreshCw size={12} className={analyzing ? 'animate-spin' : ''} />
-                  {analyzing ? 'Analyzing...' : cachedAge !== null ? '↻ Re-analyze' : 'Analyze'}
-                </button>
-              </>
-            )}
-          </div>
-        )}
-        {tab === 'dividends' && (
-          <button onClick={() => setShowLogDiv(true)} className="ml-auto flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
-            style={{ background: 'rgba(52,211,153,0.15)', color: '#34d399', border: '1px solid rgba(52,211,153,0.25)' }}>
-            <Plus size={12} /> Log dividend
+
+        {/* Tab-specific action buttons */}
+        <div className="ml-auto flex items-center gap-2">
+          {tab === 'holdings' && positions.length > 0 && (
+            <>
+              {cachedAge !== null && !analyzing && (
+                <span className="text-[10px] hidden md:inline" style={{ color: 'var(--text3)' }}>
+                  {cachedAge === 0 ? 'just analyzed' : `${cachedAge < 60 ? `${cachedAge}m` : `${Math.round(cachedAge/60)}h`} old`}
+                </span>
+              )}
+              <button onClick={() => runHealthCheck()} disabled={checking || positions.length === 0}
+                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40"
+                style={{ background: 'rgba(248,113,113,0.1)', color: DN, border: '1px solid rgba(248,113,113,0.22)' }}
+                aria-label="Run health check on all positions">
+                {checking && !checkTicker ? (
+                  <div className="w-3 h-3 rounded-full border border-t-transparent animate-spin" style={{ borderColor: DN, borderTopColor: 'transparent' }} />
+                ) : <Stethoscope size={12} />}
+                <span>{checking && !checkTicker ? 'Checking...' : 'Check'}</span>
+              </button>
+              <button onClick={() => runAnalysis(true)} disabled={analyzing}
+                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40"
+                style={{ background: 'rgba(167,139,250,0.15)', color: ACCENT, border: '1px solid rgba(167,139,250,0.28)' }}
+                aria-label={analyzing ? 'Analyzing portfolio' : 'Run portfolio analysis'}>
+                <RefreshCw size={12} className={analyzing ? 'animate-spin' : ''} />
+                <span>{analyzing ? 'Analyzing...' : cachedAge !== null ? 'Re-analyze' : 'Analyze'}</span>
+              </button>
+            </>
+          )}
+          <button onClick={() => {
+            if (tab === 'holdings') setShowAdd(true)
+            else if (tab === 'dividends') setShowLogDiv(true)
+            else if (tab === 'reinvest') setShowAddReinvest(true)
+            else if (tab === 'journal') setShowAddJournal(true)
+          }}
+            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
+            style={{ background: ACCENT, color: '#0a0d12' }}
+            aria-label={tab === 'holdings' ? 'Add position' : tab === 'dividends' ? 'Log dividend' : tab === 'reinvest' ? 'Add trade' : 'Log journal entry'}>
+            <Plus size={12} />
+            <span>
+              {tab === 'holdings' ? 'Add position' : tab === 'dividends' ? 'Log dividend' : tab === 'reinvest' ? 'Add trade' : 'Log trade'}
+            </span>
           </button>
-        )}
-        {tab === 'reinvest' && (
-          <button onClick={() => setShowAddReinvest(true)} className="ml-auto flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
-            style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)' }}>
-            <Plus size={12} /> Add trade
-          </button>
-        )}
+        </div>
       </header>
 
-      {/* Tab bar */}
-      <div className="flex border-b px-4 gap-1 sticky top-[49px] z-10"
+      {/* -- Hero strip (only for Holdings tab) ------------------------------- */}
+      {tab === 'holdings' && positions.length > 0 && (
+        <div className="border-b px-6 py-5" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+            <div>
+              <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: 'var(--text3)' }}>
+                Portfolio value
+              </div>
+              <div className="text-2xl md:text-3xl font-bold font-mono tabular-nums" style={{ color: 'var(--text)' }}>
+                ${fmt(totalValue)}
+              </div>
+              {cachedAge !== null && (
+                <div className="text-[10px] font-mono mt-1" style={{ color: 'var(--text3)' }}>
+                  <Clock size={9} className="inline mr-1" style={{ verticalAlign: 'middle' }} />
+                  {cachedAge === 0 ? 'Live' : `as of ${cachedAge < 60 ? `${cachedAge}m` : `${Math.round(cachedAge/60)}h`} ago`}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: 'var(--text3)' }}>
+                Day change
+              </div>
+              <div className="text-2xl md:text-3xl font-bold font-mono tabular-nums" style={{ color: pnlColor(dayChangeDollar) }}>
+                {dayChangeDollar >= 0 ? '+' : ''}${fmt(Math.abs(dayChangeDollar))}
+              </div>
+              <div className="text-xs font-mono mt-1 flex items-center gap-1" style={{ color: pnlColor(dayChangeDollar) }}>
+                {dayChangeDollar >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+                {pct(dayChangePct)} today
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: 'var(--text3)' }}>
+                Total P/L
+              </div>
+              <div className="text-2xl md:text-3xl font-bold font-mono tabular-nums" style={{ color: pnlColor(totalGainLoss) }}>
+                {totalGainLoss >= 0 ? '+' : ''}${fmt(Math.abs(totalGainLoss))}
+              </div>
+              <div className="text-xs font-mono mt-1 flex items-center gap-1" style={{ color: pnlColor(totalGainLoss) }}>
+                {totalGainLoss >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+                {pct(totalGainLossPct)} all time
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: 'var(--text3)' }}>
+                Positions
+              </div>
+              <div className="text-2xl md:text-3xl font-bold font-mono tabular-nums" style={{ color: 'var(--text)' }}>
+                {positions.length}
+              </div>
+              <div className="text-xs font-mono mt-1" style={{ color: 'var(--text3)' }}>
+                {stockCount} stock{stockCount !== 1 ? 's' : ''} · {optionCount} option{optionCount !== 1 ? 's' : ''}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* -- Tab bar ---------------------------------------- */}
+      <div className="flex border-b px-6 gap-1 sticky top-[49px] z-10"
         style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
         {TABS.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
-            className="flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold transition-all border-b-2"
+            className="flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold transition-all border-b-2 hover:opacity-90"
             style={{
-              borderColor: tab === t.id ? '#a78bfa' : 'transparent',
-              color: tab === t.id ? '#a78bfa' : 'rgba(255,255,255,0.35)',
-            }}>
-            <span>{t.icon}</span> {t.label}
+              borderColor: tab === t.id ? ACCENT : 'transparent',
+              color: tab === t.id ? ACCENT : 'var(--text3)',
+            }}
+            aria-current={tab === t.id ? 'page' : undefined}>
+            {t.icon} {t.label}
           </button>
         ))}
       </div>
 
-      {/* Content */}
+      {/* -- Content ---------------------------------------- */}
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-4xl mx-auto px-4 py-5 space-y-4">
+        <div className="max-w-[1400px] mx-auto px-6 py-5">
 
-          {/* ── HOLDINGS TAB ──────────────────────────────────────────────── */}
+          {/* -- HOLDINGS TAB ---------------------------------------- */}
           {tab === 'holdings' && (
             <>
-              {/* Add position form */}
-              {showAdd && (
-                <div className="rounded-2xl border p-5 space-y-4" style={{ background: 'var(--surface)', borderColor: 'rgba(167,139,250,0.25)' }}>
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-bold text-white">Add position</h3>
-                    <div className="flex rounded-lg overflow-hidden border" style={{ borderColor: 'var(--border)' }}>
-                      {(['stock','option'] as const).map(t => (
-                        <button key={t} onClick={() => setAddType(t)}
-                          className="px-3 py-1.5 text-xs font-semibold transition-all"
-                          style={{ background: addType === t ? 'rgba(167,139,250,0.2)' : 'transparent', color: addType === t ? '#a78bfa' : 'rgba(255,255,255,0.4)' }}>
-                          {t === 'stock' ? '📈 Stock' : '⚡ Option'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Ticker — always shown */}
-                  <div>
-                    <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">
-                      {addType === 'option' ? 'Underlying ticker' : 'Ticker'}
-                    </label>
-                    <input value={addTicker} onChange={e => setAddTicker(e.target.value.toUpperCase())}
-                      placeholder={addType === 'option' ? 'NVDA' : 'AAPL'} maxLength={6}
-                      className="w-full rounded-xl px-3 py-2.5 text-sm font-mono font-bold outline-none border"
-                      style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                  </div>
-
-                  {addType === 'stock' ? (
-                    /* ── Stock fields ── */
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Shares</label>
-                        <input value={addShares} onChange={e => setAddShares(e.target.value)} placeholder="100" type="number" min="0"
-                          className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                          style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Avg cost per share ($)</label>
-                        <input value={addCost} onChange={e => setAddCost(e.target.value)} placeholder="0.00" type="number" min="0"
-                          className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                          style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                      </div>
-                    </div>
-                  ) : (
-                    /* ── Option fields ── */
-                    <div className="space-y-3">
-                      {/* Call / Put */}
-                      <div>
-                        <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Type</label>
-                        <div className="grid grid-cols-2 gap-2">
-                          {(['call','put'] as const).map(ot => (
-                            <button key={ot} onClick={() => setAddOptionType(ot)}
-                              className="py-2 rounded-xl text-xs font-bold transition-all"
-                              style={{
-                                background: addOptionType === ot
-                                  ? (ot === 'call' ? 'rgba(52,211,153,0.15)' : 'rgba(248,113,113,0.15)')
-                                  : 'rgba(255,255,255,0.04)',
-                                color: addOptionType === ot
-                                  ? (ot === 'call' ? '#34d399' : '#f87171')
-                                  : 'rgba(255,255,255,0.35)',
-                                border: `1px solid ${addOptionType === ot ? (ot === 'call' ? 'rgba(52,211,153,0.3)' : 'rgba(248,113,113,0.3)') : 'rgba(255,255,255,0.08)'}`,
-                              }}>
-                              {ot.toUpperCase()}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      {/* Strike + Expiry */}
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Strike price ($)</label>
-                          <input value={addStrike} onChange={e => setAddStrike(e.target.value)} placeholder="195" type="number" min="0"
-                            className="w-full rounded-xl px-3 py-2.5 text-sm font-mono outline-none border"
-                            style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Expiry date</label>
-                          <input value={addExpiry} onChange={e => setAddExpiry(e.target.value)} type="date"
-                            className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                            style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                        </div>
-                      </div>
-                      {/* Contracts + Premium */}
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Contracts</label>
-                          <input value={addContracts} onChange={e => setAddContracts(e.target.value)} placeholder="1" type="number" min="1"
-                            className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                            style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Entry premium / share ($)</label>
-                          <input value={addCost} onChange={e => setAddCost(e.target.value)} placeholder="2.50" type="number" min="0" step="0.01"
-                            className="w-full rounded-xl px-3 py-2.5 text-sm font-mono outline-none border"
-                            style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                        </div>
-                      </div>
-                      {/* Total cost preview */}
-                      {addCost && addContracts && (
-                        <div className="flex items-center justify-between rounded-lg px-3 py-2"
-                          style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)' }}>
-                          <span className="text-[10px] text-white/40">Total cost</span>
-                          <span className="text-sm font-bold font-mono" style={{ color: '#a78bfa' }}>
-                            ${(parseFloat(addCost) * parseInt(addContracts) * 100).toFixed(2)}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="flex gap-2">
-                    <button onClick={addPosition}
-                      disabled={addLoading || !addTicker || (addType === 'stock' ? !addShares : !addStrike || !addExpiry)}
-                      className="flex-1 py-2 rounded-xl text-sm font-semibold text-white transition-all hover:opacity-90 disabled:opacity-40"
-                      style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
-                      {addLoading ? 'Adding...' : `Add ${addType === 'option' ? `${addOptionType.toUpperCase()} option` : 'position'}`}
-                    </button>
-                    <button onClick={() => setShowAdd(false)} className="px-4 py-2 rounded-xl text-sm transition-all hover:opacity-80"
-                      style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>Cancel</button>
-                  </div>
-                </div>
-              )}
-
-              {/* Health Check Results */}
+              {/* Health check results */}
               {checks.length > 0 && (
-                <div className="space-y-2 mt-1">
+                <div className="space-y-2 mb-5">
                   <div className="flex items-center justify-between px-1">
-                    <span className="text-[10px] font-mono uppercase tracking-widest text-white/25">🩺 Position Health</span>
-                    {checkedAt && <span className="text-[9px] text-white/20">{new Date(checkedAt).toLocaleTimeString()}</span>}
+                    <div className="flex items-center gap-1.5">
+                      <Stethoscope size={12} style={{ color: 'var(--text3)' }} />
+                      <span className="text-[10px] font-mono uppercase tracking-widest" style={{ color: 'var(--text3)' }}>Position health</span>
+                    </div>
+                    {checkedAt && <span className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>{new Date(checkedAt).toLocaleTimeString()}</span>}
                   </div>
                   {checks.map(c => (
-                    <div key={c.ticker} className="rounded-xl overflow-hidden" style={{ background: VERDICT_BG[c.verdict], border: `1px solid ${VERDICT_COLOR[c.verdict]}22` }}>
+                    <div key={c.ticker} className="rounded-xl overflow-hidden"
+                      style={{ background: VERDICT_BG[c.verdict], border: `1px solid ${VERDICT_COLOR[c.verdict]}22` }}>
                       <div className="flex items-center gap-2.5 px-3 py-2.5">
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg min-w-[40px] text-center font-mono"
                           style={{ background: `${VERDICT_COLOR[c.verdict]}18`, color: VERDICT_COLOR[c.verdict] }}>
@@ -716,30 +716,30 @@ function PortfolioInner() {
                             <span className="font-bold font-mono text-sm">{c.ticker}</span>
                             {c.optionType && (
                               <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
-                                style={{ background: c.optionType === 'call' ? 'rgba(52,211,153,0.12)' : 'rgba(248,113,113,0.12)', color: c.optionType === 'call' ? '#34d399' : '#f87171' }}>
+                                style={{ background: c.optionType === 'call' ? 'rgba(52,211,153,0.12)' : 'rgba(248,113,113,0.12)', color: c.optionType === 'call' ? UP : DN }}>
                                 {c.optionType.toUpperCase()} ${c.strike} {c.expiry?.slice(5)}
                               </span>
                             )}
-                            <span className="text-[10px] font-mono" style={{ color: c.underlyingChange1D >= 0 ? '#34d399' : '#f87171' }}>
+                            <span className="text-[10px] font-mono" style={{ color: c.underlyingChange1D >= 0 ? UP : DN }}>
                               ${c.underlyingPrice} ({c.underlyingChange1D >= 0 ? '+' : ''}{c.underlyingChange1D}%)
                             </span>
                             {c.position_type === 'option' && c.optionPnlPct !== null && (
-                              <span className="text-[10px] font-mono font-bold" style={{ color: c.optionPnlPct >= 0 ? '#34d399' : '#f87171' }}>
+                              <span className="text-[10px] font-mono font-bold" style={{ color: c.optionPnlPct >= 0 ? UP : DN }}>
                                 {c.optionPnlPct >= 0 ? '+' : ''}{c.optionPnlPct}% premium
                               </span>
                             )}
                             {c.position_type === 'stock' && c.pnlPct !== null && (
-                              <span className="text-[10px] font-mono font-bold" style={{ color: c.pnlPct >= 0 ? '#34d399' : '#f87171' }}>
-                                {c.pnlPct >= 0 ? '+' : ''}{c.pnlPct}% P&L
+                              <span className="text-[10px] font-mono font-bold" style={{ color: c.pnlPct >= 0 ? UP : DN }}>
+                                {c.pnlPct >= 0 ? '+' : ''}{c.pnlPct}% P/L
                               </span>
                             )}
                           </div>
-                          <p className="text-[10px] text-white/45 mt-0.5 leading-relaxed">{c.reason}</p>
+                          <p className="text-[11px] mt-0.5 leading-relaxed" style={{ color: 'var(--text2)' }}>{c.reason}</p>
                           {/* Options Greeks row */}
                           {c.position_type === 'option' && (c.delta !== null || c.theta !== null || c.impliedVolatility !== null) && (
                             <div className="flex gap-2 mt-1 flex-wrap">
                               {c.currentPremium !== null && (
-                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa' }}>
+                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'rgba(167,139,250,0.1)', color: ACCENT }}>
                                   ${c.currentPremium}
                                 </span>
                               )}
@@ -749,18 +749,18 @@ function PortfolioInner() {
                                 </span>
                               )}
                               {c.theta !== null && (
-                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'rgba(248,113,113,0.08)', color: '#f87171' }}>
+                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'rgba(248,113,113,0.08)', color: DN }}>
                                   θ {c.theta}/d
                                 </span>
                               )}
                               {c.impliedVolatility !== null && (
-                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.08)', color: '#fbbf24' }}>
+                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.08)', color: FLAT }}>
                                   IV {(c.impliedVolatility*100).toFixed(0)}%
                                 </span>
                               )}
                               {c.daysToExpiry !== null && (
                                 <span className="text-[9px] font-mono px-1.5 py-0.5 rounded"
-                                  style={{ background: c.timeDecayUrgent ? 'rgba(248,113,113,0.12)' : 'rgba(255,255,255,0.05)', color: c.timeDecayUrgent ? '#f87171' : 'rgba(255,255,255,0.35)' }}>
+                                  style={{ background: c.timeDecayUrgent ? 'rgba(248,113,113,0.12)' : 'var(--surface2)', color: c.timeDecayUrgent ? DN : 'var(--text3)' }}>
                                   {c.daysToExpiry}d left
                                 </span>
                               )}
@@ -773,24 +773,23 @@ function PortfolioInner() {
                         </div>
                         <button onClick={() => runHealthCheck(c.ticker)} disabled={checkTicker === c.ticker}
                           className="shrink-0 p-1.5 rounded-lg hover:opacity-80 disabled:opacity-30 transition-opacity"
-                          style={{ color: 'var(--text3)' }}>
+                          style={{ color: 'var(--text3)' }}
+                          aria-label={`Re-check ${c.ticker}`}>
                           {checkTicker === c.ticker
-                            ? <div className="w-3 h-3 rounded-full border border-t-white/60 border-white/20 animate-spin" />
+                            ? <div className="w-3 h-3 rounded-full border border-t-transparent animate-spin" style={{ borderColor: 'var(--text3)', borderTopColor: 'transparent' }} />
                             : <RefreshCw size={12} />}
                         </button>
                       </div>
-                      {/* Action */}
                       <div className="px-3 pb-2">
                         <p className="text-[10px] font-semibold" style={{ color: VERDICT_COLOR[c.verdict] }}>
                           → {c.action}
                         </p>
                       </div>
-                      {/* Flags */}
                       {c.flags.length > 0 && (
                         <div className="px-3 pb-2.5 flex flex-wrap gap-1">
                           {c.flags.map(f => (
                             <span key={f} className="text-[9px] px-1.5 py-0.5 rounded-full font-mono"
-                              style={{ background: 'var(--surface2)', color: 'var(--text3)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                              style={{ background: 'var(--surface2)', color: 'var(--text3)', border: '1px solid var(--border)' }}>
                               {f}
                             </span>
                           ))}
@@ -803,388 +802,511 @@ function PortfolioInner() {
 
               {/* Empty state */}
               {!loadingHoldings && positions.length === 0 && (
-                <div className="flex flex-col items-center justify-center py-20 gap-4 text-center">
-                  <div className="text-5xl opacity-40">💼</div>
-                  <div className="text-lg font-bold text-white/70">No positions yet</div>
-                  <p className="text-sm text-white/40 max-w-sm">Add your holdings to get AI portfolio analysis — concentration risk, earnings events, and rebalancing suggestions.</p>
-                  <button onClick={() => setShowAdd(true)} className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-white mt-2"
-                    style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
+                <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
+                  <div className="p-4 rounded-full" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                    <Briefcase size={32} style={{ color: 'var(--text3)' }} />
+                  </div>
+                  <div className="text-lg font-bold" style={{ color: 'var(--text)' }}>No positions yet</div>
+                  <p className="text-sm max-w-sm" style={{ color: 'var(--text2)' }}>
+                    Add your holdings to get AI portfolio analysis — concentration risk, earnings events, and rebalancing suggestions.
+                  </p>
+                  <button onClick={() => setShowAdd(true)}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold mt-2 transition-all hover:opacity-90"
+                    style={{ background: ACCENT, color: '#0a0d12' }}
+                    aria-label="Add your first position">
                     <Plus size={14} /> Add your first position
                   </button>
                 </div>
               )}
 
-              {/* Positions list */}
+              {/* Analyzing spinner */}
+              {analyzing && (
+                <div className="flex items-center gap-3 px-5 py-4 rounded-xl mb-4"
+                  style={{ background: 'rgba(167,139,250,0.05)', border: '1px solid rgba(167,139,250,0.18)' }}>
+                  <div className="flex gap-1">{[0,1,2].map(i => <span key={i} className="w-1.5 h-1.5 rounded-full thinking-dot" style={{ background: ACCENT, animationDelay: `${i*0.15}s` }} />)}</div>
+                  <span className="text-sm font-mono" style={{ color: 'var(--text2)' }}>{statusMsg}</span>
+                </div>
+              )}
+
+              {/* Main layout: positions table + right rail */}
               {positions.length > 0 && (
-                <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                  <div className="px-5 py-3 border-b flex items-center justify-between" style={{ borderColor: 'var(--border)' }}>
-                    <span className="text-xs font-bold text-white/60 uppercase tracking-wider">Holdings</span>
-                    {totalValue > 0 && <span className="text-xs font-mono text-white/40">Total: {fmtK(totalValue)}</span>}
-                  </div>
-                  <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
-                    {positions.map(pos => {
-                      const data = positionData.find(p => p.ticker === pos.ticker)
-                      const signalColor = data ? SIG_COLOR[data.signal] : 'rgba(255,255,255,0.3)'
-                      const isOption = pos.position_type === 'option'
-                      const daysToExpiry = pos.expiry ? Math.ceil((new Date(pos.expiry).getTime() - Date.now()) / 86400000) : null
-                      const expiryUrgent = daysToExpiry !== null && daysToExpiry <= 7
-                      const expiryExpired = daysToExpiry !== null && daysToExpiry < 0
-                      return (
-                        <div key={pos.id} className="flex items-center gap-3 px-5 py-3.5"
-                          style={{ borderLeft: isOption ? `2px solid ${pos.option_type === 'call' ? 'rgba(52,211,153,0.4)' : 'rgba(248,113,113,0.4)'}` : 'none' }}>
-                          <div className="flex-1 min-w-0">
-                            {/* Row 1: ticker + badges */}
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-mono font-bold text-sm">{pos.ticker}</span>
+                <div className="grid grid-cols-1 xl:grid-cols-[1fr_320px] gap-5">
 
-                              {isOption ? (
-                                /* Option badge */
-                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded"
-                                  style={{ background: pos.option_type === 'call' ? 'rgba(52,211,153,0.12)' : 'rgba(248,113,113,0.12)', color: pos.option_type === 'call' ? '#34d399' : '#f87171' }}>
-                                  {pos.option_type?.toUpperCase()} ${pos.strike}
-                                </span>
-                              ) : (
-                                /* Stock: shares count */
-                                <span className="text-xs text-white/40">{pos.shares} shares</span>
-                              )}
+                  {/* -- Positions table ------------------------------------ */}
+                  <div className="rounded-xl border overflow-hidden"
+                    style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+                    {/* Column headers */}
+                    <div className="grid items-center gap-3 px-4 py-2.5 border-b text-[10px] font-mono uppercase tracking-wider"
+                      style={{
+                        borderColor: 'var(--border)',
+                        gridTemplateColumns: 'minmax(130px,1.4fr) 80px 1fr 1fr 1fr 1fr 0.9fr 70px',
+                        color: 'var(--text3)',
+                      }}>
+                      <SortHeader k="ticker" label="Ticker" align="left" />
+                      <div className="text-right">Qty</div>
+                      <div className="text-right">Current</div>
+                      <SortHeader k="day" label="Day" />
+                      <div className="text-right">Value</div>
+                      <SortHeader k="pnl" label="P/L" />
+                      <SortHeader k="signal" label="Signal" />
+                      <div />
+                    </div>
 
-                              {isOption && (
-                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded"
-                                  style={{ background: expiryExpired ? 'rgba(248,113,113,0.15)' : expiryUrgent ? 'rgba(239,68,68,0.15)' : 'rgba(255,255,255,0.06)', color: expiryExpired ? '#f87171' : expiryUrgent ? '#ef4444' : 'rgba(255,255,255,0.4)' }}>
-                                  {expiryExpired ? 'EXPIRED' : `${daysToExpiry}d · ${pos.expiry}`}
-                                </span>
-                              )}
+                    {/* Rows */}
+                    <div>
+                      {sortedPositions.map((pos, idx) => {
+                        const data = positionData.find(p => p.ticker === pos.ticker)
+                        const isOption = pos.position_type === 'option'
+                        const daysToExpiry = pos.expiry ? Math.ceil((new Date(pos.expiry).getTime() - Date.now()) / 86400000) : null
+                        const expiryUrgent = daysToExpiry !== null && daysToExpiry <= 7
+                        const expiryExpired = daysToExpiry !== null && daysToExpiry < 0
+                        const signalC = data ? SIG_COLOR[data.signal] : 'var(--text3)'
+                        const isExpanded = expandedRow === pos.id
+                        const alloc = totalValue > 0 && data ? (data.marketValue / totalValue) * 100 : 0
 
-                              {!isOption && pos.avg_cost && (
-                                <span className="text-[10px] text-white/30">@ ${pos.avg_cost.toFixed(2)}</span>
-                              )}
-                              {data && !isOption && <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: `${signalColor}15`, color: signalColor }}>{data.signal}</span>}
-                              {data?.daysToEarnings != null && data.daysToEarnings <= 14 && (
-                                <span className="text-[10px] font-mono" style={{ color: '#fbbf24' }}>⚡ earnings {data.daysToEarnings}d</span>
-                              )}
-                            </div>
+                        return (
+                          <div key={pos.id} style={{ borderTop: idx === 0 ? 'none' : '1px solid var(--border)' }}>
+                            {/* Main row */}
+                            <button
+                              onClick={() => setExpandedRow(isExpanded ? null : pos.id)}
+                              className="grid items-center gap-3 px-4 py-3 w-full text-left hover:bg-white/[0.02] transition-colors"
+                              style={{
+                                gridTemplateColumns: 'minmax(130px,1.4fr) 80px 1fr 1fr 1fr 1fr 0.9fr 70px',
+                                borderLeft: isOption
+                                  ? `3px solid ${pos.option_type === 'call' ? 'rgba(52,211,153,0.5)' : 'rgba(248,113,113,0.5)'}`
+                                  : '3px solid transparent',
+                              }}
+                              aria-expanded={isExpanded}
+                              aria-label={`${pos.ticker} — tap to ${isExpanded ? 'collapse' : 'expand'}`}>
+                              {/* Ticker column */}
+                              <div className="flex items-center gap-2 min-w-0">
+                                <ChevronRight size={12}
+                                  style={{
+                                    color: 'var(--text3)',
+                                    transform: isExpanded ? 'rotate(90deg)' : 'none',
+                                    transition: 'transform 0.15s',
+                                  }} />
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-mono font-bold text-sm">{pos.ticker}</span>
+                                    {isOption && (
+                                      <span className="text-[9px] font-bold px-1 py-0.5 rounded font-mono"
+                                        style={{
+                                          background: pos.option_type === 'call' ? 'rgba(52,211,153,0.12)' : 'rgba(248,113,113,0.12)',
+                                          color: pos.option_type === 'call' ? UP : DN,
+                                        }}>
+                                        {pos.option_type?.toUpperCase()} {pos.strike}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {isOption ? (
+                                    <div className="text-[10px] font-mono mt-0.5" style={{ color: expiryExpired ? DN : expiryUrgent ? DN : 'var(--text3)' }}>
+                                      {expiryExpired ? 'Expired' : `${daysToExpiry}d · ${pos.expiry}`}
+                                    </div>
+                                  ) : (
+                                    pos.avg_cost && (
+                                      <div className="text-[10px] font-mono mt-0.5" style={{ color: 'var(--text3)' }}>
+                                        @ ${pos.avg_cost.toFixed(2)}
+                                      </div>
+                                    )
+                                  )}
+                                </div>
+                              </div>
 
-                            {/* Row 2: price / option details */}
-                            {isOption ? (
-                              <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                                <span className="text-[10px] text-white/40">{pos.contracts || 1} contract{(pos.contracts || 1) > 1 ? 's' : ''}</span>
-                                {pos.entry_premium && (
-                                  <span className="text-[10px] font-mono text-white/40">entry ${pos.entry_premium.toFixed(2)}/sh · cost ${(pos.entry_premium * (pos.contracts || 1) * 100).toFixed(0)}</span>
+                              {/* Qty */}
+                              <div className="text-right font-mono text-xs tabular-nums" style={{ color: 'var(--text2)' }}>
+                                {isOption
+                                  ? `${pos.contracts || 1}x`
+                                  : pos.shares % 1 === 0 ? pos.shares.toString() : pos.shares.toFixed(4)}
+                              </div>
+
+                              {/* Current price */}
+                              <div className="text-right font-mono text-xs tabular-nums" style={{ color: 'var(--text)' }}>
+                                {data ? `$${fmt(data.currentPrice)}` : <span style={{ color: 'var(--text3)' }}>—</span>}
+                              </div>
+
+                              {/* Day change */}
+                              <div className="text-right font-mono text-xs tabular-nums" style={{ color: data ? pnlColor(data.priceChange1D) : 'var(--text3)' }}>
+                                {data ? pct(data.priceChange1D) : '—'}
+                              </div>
+
+                              {/* Market value */}
+                              <div className="text-right font-mono text-xs tabular-nums" style={{ color: 'var(--text)' }}>
+                                {data ? `$${fmt(data.marketValue)}` : <span style={{ color: 'var(--text3)' }}>—</span>}
+                              </div>
+
+                              {/* P/L % */}
+                              <div className="text-right font-mono text-xs tabular-nums"
+                                style={{ color: data && data.gainLossPct !== null ? pnlColor(data.gainLossPct) : 'var(--text3)' }}>
+                                {data?.gainLossPct !== null && data?.gainLossPct !== undefined ? pct(data.gainLossPct) : '—'}
+                              </div>
+
+                              {/* Signal */}
+                              <div className="text-right">
+                                {data?.signal ? (
+                                  <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded"
+                                    style={{ background: `${signalC}18`, color: signalC }}>
+                                    {data.signal.slice(0, 4)}
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px]" style={{ color: 'var(--text3)' }}>—</span>
                                 )}
-                                {data && (
-                                  <span className="text-[10px] font-mono" style={{ color: data.priceChange1D >= 0 ? '#34d399' : '#f87171' }}>
-                                    underlying ${fmt(data.currentPrice)} ({pct(data.priceChange1D)})
+                              </div>
+
+                              {/* Action column */}
+                              <div className="flex justify-end gap-1">
+                                {data?.daysToEarnings != null && data.daysToEarnings <= 14 && (
+                                  <span className="text-[9px] font-mono px-1 py-0.5 rounded"
+                                    style={{ background: 'rgba(251,191,36,0.1)', color: FLAT }}
+                                    title={`Earnings in ${data.daysToEarnings} days`}>
+                                    E{data.daysToEarnings}
                                   </span>
                                 )}
                               </div>
-                            ) : (
-                              data && (
-                                <div className="flex items-center gap-3 mt-0.5">
-                                  <span className="text-xs font-mono text-white/60">${fmt(data.currentPrice)}</span>
-                                  <span className="text-[10px] font-mono" style={{ color: data.priceChange1D >= 0 ? '#34d399' : '#f87171' }}>{pct(data.priceChange1D)} today</span>
-                                  <span className="text-[10px] text-white/40">{fmtK(data.marketValue)}</span>
-                                  {data.gainLossPct !== null && <span className="text-[10px] font-mono" style={{ color: data.gainLossPct >= 0 ? '#34d399' : '#f87171' }}>{pct(data.gainLossPct)} P&L</span>}
+                            </button>
+
+                            {/* Expanded row */}
+                            {isExpanded && (
+                              <div className="px-4 pb-4 pt-1 border-t" style={{ borderColor: 'var(--border)', background: 'var(--surface2)' }}>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 py-3">
+                                  {/* Allocation */}
+                                  <div>
+                                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>Allocation</div>
+                                    <div className="text-sm font-bold font-mono" style={{ color: 'var(--text)' }}>
+                                      {alloc.toFixed(1)}%
+                                    </div>
+                                    <div className="h-1 rounded-full mt-1.5 overflow-hidden" style={{ background: 'var(--border)' }}>
+                                      <div className="h-full rounded-full"
+                                        style={{ width: `${Math.min(alloc, 100)}%`, background: alloc > 25 ? FLAT : ACCENT }} />
+                                    </div>
+                                  </div>
+                                  {/* Sector */}
+                                  {data?.sector && (
+                                    <div>
+                                      <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>Sector</div>
+                                      <div className="text-sm font-semibold" style={{ color: 'var(--text)' }}>{data.sector}</div>
+                                    </div>
+                                  )}
+                                  {/* Analyst target */}
+                                  {data?.analystTarget && (
+                                    <div>
+                                      <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>Analyst target</div>
+                                      <div className="text-sm font-bold font-mono" style={{ color: 'var(--text)' }}>
+                                        ${fmt(data.analystTarget)}
+                                      </div>
+                                      <div className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>{data.analystConsensus}</div>
+                                    </div>
+                                  )}
+                                  {/* RSI */}
+                                  {data?.rsi !== null && data?.rsi !== undefined && (
+                                    <div>
+                                      <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>RSI</div>
+                                      <div className="text-sm font-bold font-mono"
+                                        style={{ color: data.rsi > 70 ? DN : data.rsi < 30 ? UP : 'var(--text)' }}>
+                                        {data.rsi.toFixed(0)}
+                                      </div>
+                                      <div className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
+                                        {data.rsi > 70 ? 'overbought' : data.rsi < 30 ? 'oversold' : 'neutral'}
+                                      </div>
+                                    </div>
+                                  )}
+                                  {/* Option specifics */}
+                                  {isOption && pos.entry_premium && (
+                                    <div>
+                                      <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>Entry premium</div>
+                                      <div className="text-sm font-bold font-mono" style={{ color: 'var(--text)' }}>
+                                        ${pos.entry_premium.toFixed(2)}
+                                      </div>
+                                      <div className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
+                                        ${((pos.entry_premium || 0) * (pos.contracts || 1) * 100).toFixed(0)} cost
+                                      </div>
+                                    </div>
+                                  )}
+                                  {/* Earnings */}
+                                  {data?.daysToEarnings != null && data.daysToEarnings <= 30 && (
+                                    <div>
+                                      <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>Next earnings</div>
+                                      <div className="text-sm font-bold font-mono" style={{ color: FLAT }}>
+                                        {data.daysToEarnings}d
+                                      </div>
+                                      {data.earningsDate && (
+                                        <div className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>{data.earningsDate}</div>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
-                              )
+
+                                {/* Action row */}
+                                <div className="flex items-center gap-2 pt-2 border-t" style={{ borderColor: 'var(--border)' }}>
+                                  <button onClick={(e) => { e.stopPropagation(); router.push(`/?ticker=${pos.ticker}`) }}
+                                    className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
+                                    style={{ background: 'rgba(167,139,250,0.1)', color: ACCENT, border: '1px solid rgba(167,139,250,0.22)' }}>
+                                    <Activity size={12} /> Analyze
+                                  </button>
+                                  <button onClick={(e) => { e.stopPropagation(); runHealthCheck(pos.ticker) }}
+                                    disabled={checkTicker === pos.ticker}
+                                    className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40"
+                                    style={{ background: 'rgba(248,113,113,0.08)', color: DN, border: '1px solid rgba(248,113,113,0.22)' }}>
+                                    <Stethoscope size={12} /> {checkTicker === pos.ticker ? 'Checking...' : 'Check'}
+                                  </button>
+                                  <div className="ml-auto">
+                                    <button onClick={(e) => { e.stopPropagation(); removePosition(pos.ticker) }}
+                                      className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
+                                      style={{ background: 'var(--surface)', color: 'var(--text3)', border: '1px solid var(--border)' }}
+                                      aria-label={`Remove ${pos.ticker} from portfolio`}>
+                                      <Trash2 size={12} /> Remove
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
                             )}
                           </div>
-
-                          <div className="flex items-center gap-2">
-                            <button onClick={() => router.push(`/?ticker=${pos.ticker}`)}
-                              className="text-[10px] font-mono px-2 py-1 rounded-lg transition-all hover:opacity-80"
-                              style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)' }}>
-                              Analyze
-                            </button>
-                            <button onClick={() => removePosition(pos.ticker)} className="p-1.5 rounded-lg hover:opacity-80" style={{ background: 'rgba(248,113,113,0.08)', color: '#f87171' }}>
-                              <Trash2 size={12} />
-                            </button>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Analyzing spinner */}
-              {analyzing && (
-                <div className="flex items-center gap-3 px-5 py-4 rounded-2xl"
-                  style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.2)' }}>
-                  <div className="flex gap-1">{[0,1,2].map(i => <span key={i} className="w-1.5 h-1.5 rounded-full thinking-dot" style={{ background: '#a78bfa', animationDelay: `${i*0.15}s` }} />)}</div>
-                  <span className="text-sm text-white/60 font-mono">{statusMsg}</span>
-                </div>
-              )}
-
-              {/* Analysis results */}
-              {metrics && analysis && (
-                <>
-                  <div className="rounded-2xl p-5 border-2"
-                    style={{ background: `${SIG_COLOR[analysis.overallSignal]}05`, borderColor: `${SIG_COLOR[analysis.overallSignal]}30` }}>
-                    <div className="flex items-start justify-between gap-4 mb-3">
-                      <div>
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-sm font-bold" style={{ color: SIG_COLOR[analysis.overallSignal] }}>
-                            {analysis.overallSignal === 'BULLISH' ? <TrendingUp size={16} className="inline mr-1" /> : analysis.overallSignal === 'BEARISH' ? <TrendingDown size={16} className="inline mr-1" /> : <Minus size={16} className="inline mr-1" />}
-                            {analysis.overallSignal}
-                          </span>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full" style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>{analysis.overallConviction} conviction</span>
-                        </div>
-                        <h2 className="text-base font-bold text-white leading-snug">{analysis.headline}</h2>
-                      </div>
-                      <div className="text-center shrink-0">
-                        <div className="text-3xl font-bold font-mono" style={{ color: analysis.portfolioScore >= 60 ? '#34d399' : analysis.portfolioScore >= 40 ? '#fbbf24' : '#f87171' }}>{analysis.portfolioScore}</div>
-                        <div className="text-[10px] font-mono text-white/30">score /100</div>
-                      </div>
+                        )
+                      })}
                     </div>
-                    <p className="text-sm text-white/70 leading-relaxed">{analysis.summary}</p>
                   </div>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    {[
-                      { label: 'Portfolio Value', val: fmtK(metrics.totalValue), color: 'var(--text)' },
-                      { label: 'Total P&L', val: `${metrics.totalGainLoss >= 0 ? '+' : ''}${fmtK(Math.abs(metrics.totalGainLoss))} (${pct(metrics.totalGainLossPct)})`, color: metrics.totalGainLoss >= 0 ? '#34d399' : '#f87171' },
-                      { label: 'Signals', val: `${metrics.signals.BULLISH}B · ${metrics.signals.NEUTRAL}N · ${metrics.signals.BEARISH}Be`, color: 'var(--text)' },
-                      { label: 'Earnings 30d', val: `${metrics.upcomingEarnings.length} positions`, color: metrics.upcomingEarnings.length > 0 ? '#fbbf24' : '#34d399' },
-                    ].map(m => (
-                      <div key={m.label} className="rounded-xl p-3.5 border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)' }}>
-                        <div className="text-[10px] font-mono text-white/30 mb-1">{m.label}</div>
-                        <div className="text-sm font-bold font-mono" style={{ color: m.color }}>{m.val}</div>
-                      </div>
-                    ))}
-                  </div>
+                  {/* -- Right rail ---------------------------------------- */}
+                  <aside className="space-y-4">
 
-                  {analysis.topRisks.length > 0 && (
-                    <Section title="Top Risks" icon={<AlertTriangle size={14} />} color="#f87171">
-                      <div className="space-y-2.5">
-                        {analysis.topRisks.map((r, i) => (
-                          <div key={i} className="flex items-start gap-3">
-                            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0 mt-0.5" style={{ background: `${SEV_COLOR[r.severity]}15`, color: SEV_COLOR[r.severity] }}>{r.severity}</span>
-                            <div>
-                              <p className="text-sm text-white/70">{r.risk}</p>
-                              <div className="flex gap-1 mt-1">{r.tickers.map(t => <span key={t} className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>{t}</span>)}</div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </Section>
-                  )}
-
-                  {analysis.opportunities.length > 0 && (
-                    <Section title="Opportunities" icon={<TrendingUp size={14} />} color="#34d399">
-                      <div className="space-y-2.5">
-                        {analysis.opportunities.map((o, i) => (
-                          <div key={i} className="flex items-start gap-3">
-                            <span style={{ color: '#34d399' }}>▶</span>
-                            <div>
-                              <p className="text-sm text-white/70">{o.opportunity}</p>
-                              <div className="flex gap-1 mt-1">{o.tickers.map(t => <span key={t} className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399' }}>{t}</span>)}</div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </Section>
-                  )}
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <Section title="Sector Concentration" icon={<BarChart2 size={14} />} color="#a78bfa">
-                      <div className="space-y-2 mb-3">
-                        {metrics.sectorConcentration.slice(0, 5).map(s => (
-                          <div key={s.sector}>
-                            <div className="flex justify-between text-xs mb-1">
-                              <span className="text-white/60">{s.sector}</span>
-                              <span className="font-mono text-white/80">{s.pct.toFixed(1)}%</span>
-                            </div>
-                            <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--surface2)' }}>
-                              <div className="h-full rounded-full" style={{ width: `${s.pct}%`, background: s.pct > 40 ? '#f87171' : s.pct > 25 ? '#fbbf24' : '#a78bfa' }} />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                      <p className="text-xs text-white/50 leading-relaxed">{analysis.sectorAnalysis}</p>
-                    </Section>
-                    <Section title="Earnings Watch" icon={<Calendar size={14} />} color="#fbbf24">
-                      {metrics.upcomingEarnings.length === 0 ? <p className="text-sm text-white/40">No earnings in the next 30 days</p> : (
-                        <div className="space-y-2 mb-3">
-                          {metrics.upcomingEarnings.map(p => (
-                            <div key={p.ticker} className="flex items-center justify-between">
-                              <span className="font-mono font-bold text-sm">{p.ticker}</span>
-                              <span className="text-xs font-mono" style={{ color: (p.daysToEarnings ?? 99) <= 7 ? '#f87171' : '#fbbf24' }}>{p.earningsDate} ({p.daysToEarnings}d)</span>
+                    {/* Signals summary */}
+                    {metrics && (
+                      <div className="rounded-xl border p-4" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+                        <div className="flex items-center gap-1.5 mb-3">
+                          <Activity size={12} style={{ color: 'var(--text3)' }} />
+                          <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: 'var(--text3)' }}>Signals</span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          {[
+                            { label: 'Bull', count: metrics.signals.BULLISH, color: UP },
+                            { label: 'Neutral', count: metrics.signals.NEUTRAL, color: FLAT },
+                            { label: 'Bear', count: metrics.signals.BEARISH, color: DN },
+                          ].map(s => (
+                            <div key={s.label}
+                              className="rounded-lg py-2 text-center"
+                              style={{ background: `${s.color}10`, border: `1px solid ${s.color}22` }}>
+                              <div className="text-lg font-bold font-mono" style={{ color: s.color }}>{s.count}</div>
+                              <div className="text-[9px] font-mono uppercase" style={{ color: s.color }}>{s.label}</div>
                             </div>
                           ))}
                         </div>
-                      )}
-                      <p className="text-xs text-white/50 leading-relaxed">{analysis.earningsWatch}</p>
-                    </Section>
-                  </div>
+                      </div>
+                    )}
 
-                  <Section title="Action Plan" icon={<DollarSign size={14} />} color="#34d399">
-                    <p className="text-sm text-white/70 leading-relaxed mb-3">{analysis.actionPlan}</p>
-                    <div className="rounded-xl p-3.5" style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)' }}>
-                      <div className="text-[10px] font-mono uppercase tracking-widest text-white/30 mb-1.5">Rebalancing suggestions</div>
-                      <p className="text-xs text-white/60 leading-relaxed">{analysis.rebalancingSuggestions}</p>
-                    </div>
-                  </Section>
-                  <p className="text-[10px] text-white/15 text-center pb-4">Portfolio analysis is for informational purposes only. Not financial advice.</p>
-                </>
+                    {/* Sector concentration */}
+                    {metrics && metrics.sectorConcentration.length > 0 && (
+                      <div className="rounded-xl border p-4" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+                        <div className="flex items-center gap-1.5 mb-3">
+                          <PieChart size={12} style={{ color: 'var(--text3)' }} />
+                          <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: 'var(--text3)' }}>Sector concentration</span>
+                        </div>
+                        <div className="space-y-2.5">
+                          {metrics.sectorConcentration.slice(0, 5).map(s => (
+                            <div key={s.sector}>
+                              <div className="flex justify-between text-xs mb-1">
+                                <span style={{ color: 'var(--text2)' }}>{s.sector}</span>
+                                <span className="font-mono tabular-nums" style={{ color: 'var(--text)' }}>{s.pct.toFixed(1)}%</span>
+                              </div>
+                              <div className="h-1 rounded-full overflow-hidden" style={{ background: 'var(--surface2)' }}>
+                                <div className="h-full rounded-full"
+                                  style={{ width: `${s.pct}%`, background: s.pct > 40 ? DN : s.pct > 25 ? FLAT : ACCENT }} />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Upcoming earnings */}
+                    {metrics && metrics.upcomingEarnings.length > 0 && (
+                      <div className="rounded-xl border p-4" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+                        <div className="flex items-center gap-1.5 mb-3">
+                          <Calendar size={12} style={{ color: 'var(--text3)' }} />
+                          <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: 'var(--text3)' }}>Upcoming earnings</span>
+                        </div>
+                        <div className="space-y-1.5">
+                          {metrics.upcomingEarnings.slice(0, 6).map(p => (
+                            <button key={p.ticker}
+                              onClick={() => router.push(`/?ticker=${p.ticker}`)}
+                              className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-left transition-all hover:opacity-80"
+                              style={{ background: 'var(--surface2)' }}>
+                              <span className="font-mono font-bold text-xs">{p.ticker}</span>
+                              <span className="text-[10px] font-mono tabular-nums"
+                                style={{ color: (p.daysToEarnings ?? 99) <= 7 ? DN : FLAT }}>
+                                {p.earningsDate} ({p.daysToEarnings}d)
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* AI portfolio take */}
+                    {analysis && (
+                      <div className="rounded-xl border p-4"
+                        style={{ background: 'var(--surface)', borderColor: `${SIG_COLOR[analysis.overallSignal]}33` }}>
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-1.5">
+                            <Zap size={12} style={{ color: SIG_COLOR[analysis.overallSignal] }} />
+                            <span className="text-[10px] font-mono uppercase tracking-wider font-bold" style={{ color: SIG_COLOR[analysis.overallSignal] }}>
+                              {analysis.overallSignal}
+                            </span>
+                          </div>
+                          <div className="text-xl font-bold font-mono"
+                            style={{ color: analysis.portfolioScore >= 60 ? UP : analysis.portfolioScore >= 40 ? FLAT : DN }}>
+                            {analysis.portfolioScore}
+                          </div>
+                        </div>
+                        <h3 className="text-sm font-bold leading-snug mb-2" style={{ color: 'var(--text)' }}>{analysis.headline}</h3>
+                        <p className="text-xs leading-relaxed mb-3" style={{ color: 'var(--text2)' }}>{analysis.summary}</p>
+
+                        {analysis.topRisks.length > 0 && (
+                          <div className="mb-3 pb-3 border-b" style={{ borderColor: 'var(--border)' }}>
+                            <div className="flex items-center gap-1 mb-1.5">
+                              <AlertTriangle size={10} style={{ color: DN }} />
+                              <span className="text-[9px] font-mono uppercase tracking-wider font-semibold" style={{ color: DN }}>Top risk</span>
+                            </div>
+                            <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{analysis.topRisks[0].risk}</p>
+                            <div className="flex gap-1 mt-1.5 flex-wrap">
+                              {analysis.topRisks[0].tickers.map(t => (
+                                <span key={t} className="text-[9px] font-mono px-1 py-0.5 rounded"
+                                  style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>
+                                  {t}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {analysis.opportunities.length > 0 && (
+                          <div className="mb-3 pb-3 border-b" style={{ borderColor: 'var(--border)' }}>
+                            <div className="flex items-center gap-1 mb-1.5">
+                              <Target size={10} style={{ color: UP }} />
+                              <span className="text-[9px] font-mono uppercase tracking-wider font-semibold" style={{ color: UP }}>Opportunity</span>
+                            </div>
+                            <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{analysis.opportunities[0].opportunity}</p>
+                            <div className="flex gap-1 mt-1.5 flex-wrap">
+                              {analysis.opportunities[0].tickers.map(t => (
+                                <span key={t} className="text-[9px] font-mono px-1 py-0.5 rounded"
+                                  style={{ background: 'rgba(52,211,153,0.1)', color: UP }}>
+                                  {t}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {analysis.actionPlan && (
+                          <div>
+                            <div className="flex items-center gap-1 mb-1.5">
+                              <Flame size={10} style={{ color: ACCENT }} />
+                              <span className="text-[9px] font-mono uppercase tracking-wider font-semibold" style={{ color: ACCENT }}>Action plan</span>
+                            </div>
+                            <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{analysis.actionPlan}</p>
+                          </div>
+                        )}
+
+                        <p className="text-[9px] mt-3" style={{ color: 'var(--text3)' }}>
+                          For informational purposes only. Not financial advice.
+                        </p>
+                      </div>
+                    )}
+                  </aside>
+                </div>
               )}
             </>
           )}
 
-          {/* ── DIVIDENDS TAB ─────────────────────────────────────────────── */}
+          {/* -- DIVIDENDS TAB ---------------------------------------- */}
           {tab === 'dividends' && (
-            <>
-              {/* Stats row */}
-              <div className="grid grid-cols-3 gap-3">
+            <div className="space-y-4">
+              {/* Summary strip */}
+              <div className="grid grid-cols-3 gap-4">
                 {[
-                  { label: 'Total Received', val: `$${totalDividends.toFixed(2)}`, color: '#34d399' },
-                  { label: 'Reinvested', val: `$${reinvestedDividends.toFixed(2)}`, color: '#a78bfa' },
-                  { label: 'Cash Kept', val: `$${(totalDividends - reinvestedDividends).toFixed(2)}`, color: '#fbbf24' },
+                  { label: 'Total received', val: `$${totalDividends.toFixed(2)}`, color: UP },
+                  { label: 'Reinvested', val: `$${reinvestedDividends.toFixed(2)}`, color: ACCENT },
+                  { label: 'Cash kept', val: `$${(totalDividends - reinvestedDividends).toFixed(2)}`, color: FLAT },
                 ].map(s => (
-                  <div key={s.label} className="rounded-xl p-3 border" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                    <div className="text-[10px] font-mono text-white/30 mb-1">{s.label}</div>
-                    <div className="text-sm font-bold font-mono" style={{ color: s.color }}>{s.val}</div>
+                  <div key={s.label} className="rounded-xl border p-4"
+                    style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1.5" style={{ color: 'var(--text3)' }}>{s.label}</div>
+                    <div className="text-2xl font-bold font-mono tabular-nums" style={{ color: s.color }}>{s.val}</div>
                   </div>
                 ))}
               </div>
 
-              {/* Upcoming dividends from portfolio */}
+              {/* Upcoming dividends */}
               {divSchedule.length > 0 && (
-                <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                  <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
-                    <span className="text-xs font-bold text-white/60 uppercase tracking-wider">📅 Upcoming Dividends</span>
+                <div className="rounded-xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+                  <div className="flex items-center gap-1.5 px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+                    <Calendar size={12} style={{ color: 'var(--text3)' }} />
+                    <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: 'var(--text3)' }}>Upcoming dividends</span>
                   </div>
-                  <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
+                  <div>
                     {divSchedule.slice(0, 10).map((d, i) => (
-                      <div key={i} className="flex items-center gap-3 px-4 py-3">
-                        <span className="font-mono font-bold text-sm">{d.ticker}</span>
-                        <span className="text-xs text-white/50">Ex: {d.ex_date}</span>
-                        {d.pay_date && <span className="text-xs text-white/40">Pay: {d.pay_date}</span>}
-                        {d.amount && <span className="text-xs font-mono" style={{ color: '#34d399' }}>${d.amount.toFixed(4)}/share</span>}
-                        {d.frequency && <span className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa' }}>{d.frequency}</span>}
+                      <div key={i} className="flex items-center gap-4 px-4 py-2.5"
+                        style={{ borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
+                        <span className="font-mono font-bold text-sm w-16">{d.ticker}</span>
+                        <span className="text-xs" style={{ color: 'var(--text2)' }}>Ex: {d.ex_date}</span>
+                        {d.pay_date && <span className="text-xs" style={{ color: 'var(--text3)' }}>Pay: {d.pay_date}</span>}
+                        {d.amount && <span className="text-xs font-mono tabular-nums" style={{ color: UP }}>${d.amount.toFixed(4)}/sh</span>}
+                        {d.frequency && <span className="text-[10px] px-1.5 py-0.5 rounded font-mono"
+                          style={{ background: 'rgba(167,139,250,0.1)', color: ACCENT }}>{d.frequency}</span>}
                       </div>
                     ))}
                   </div>
                 </div>
               )}
 
-              {/* Log dividend form */}
-              {showLogDiv && (
-                <div className="rounded-2xl border p-5" style={{ background: 'var(--surface)', borderColor: 'rgba(52,211,153,0.25)' }}>
-                  <h3 className="text-sm font-bold text-white mb-4">Log dividend received</h3>
-                  <div className="grid grid-cols-2 gap-3 mb-3">
-                    <div>
-                      <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Ticker</label>
-                      <input value={divTicker} onChange={e => setDivTicker(e.target.value.toUpperCase())} placeholder="AAPL"
-                        className="w-full rounded-xl px-3 py-2.5 text-sm font-mono font-bold outline-none border"
-                        style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Amount per share ($)</label>
-                      <input value={divAmount} onChange={e => setDivAmount(e.target.value)} placeholder="0.24" type="number" step="0.0001"
-                        className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                        style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Shares held</label>
-                      <input value={divShares} onChange={e => setDivShares(e.target.value)} placeholder="100" type="number"
-                        className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                        style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Ex-dividend date</label>
-                      <input value={divExDate} onChange={e => setDivExDate(e.target.value)} type="date"
-                        className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                        style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Pay date (optional)</label>
-                      <input value={divPayDate} onChange={e => setDivPayDate(e.target.value)} type="date"
-                        className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                        style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                    </div>
-                    <div className="flex items-end">
-                      {divAmount && divShares && (
-                        <div className="rounded-xl p-3 w-full" style={{ background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.2)' }}>
-                          <div className="text-[10px] text-white/40">Total received</div>
-                          <div className="text-sm font-bold font-mono" style={{ color: '#34d399' }}>
-                            ${(parseFloat(divAmount || '0') * parseFloat(divShares || '0')).toFixed(2)}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  {/* Reinvestment toggle */}
-                  <div className="flex items-center gap-3 mb-3 p-3 rounded-xl" style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)' }}>
-                    <button onClick={() => setDivReinvested(!divReinvested)}
-                      className="flex items-center gap-2 text-sm font-semibold transition-all"
-                      style={{ color: divReinvested ? '#a78bfa' : 'rgba(255,255,255,0.4)' }}>
-                      <Repeat2 size={14} />
-                      {divReinvested ? 'Reinvested ✓' : 'Reinvest this dividend?'}
-                    </button>
-                  </div>
-                  {divReinvested && (
-                    <div className="grid grid-cols-2 gap-3 mb-3">
-                      <div>
-                        <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Shares purchased</label>
-                        <input value={divReinvestShares} onChange={e => setDivReinvestShares(e.target.value)} placeholder="1.2" type="number" step="0.0001"
-                          className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                          style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Price paid per share</label>
-                        <input value={divReinvestPrice} onChange={e => setDivReinvestPrice(e.target.value)} placeholder="185.00" type="number"
-                          className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                          style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                      </div>
-                    </div>
-                  )}
-                  <div className="flex gap-2">
-                    <button onClick={saveDiv} disabled={savingDiv || !divTicker || !divAmount || !divShares || !divExDate}
-                      className="px-4 py-2 rounded-xl text-sm font-semibold text-white disabled:opacity-40"
-                      style={{ background: 'linear-gradient(135deg,#059669,#065f46)' }}>
-                      {savingDiv ? 'Saving...' : 'Save dividend'}
-                    </button>
-                    <button onClick={() => setShowLogDiv(false)} className="px-4 py-2 rounded-xl text-sm"
-                      style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>Cancel</button>
-                  </div>
-                </div>
-              )}
-
-              {/* Dividend history */}
-              {loadingDividends && <div className="text-center py-10 text-white/30 text-sm">Loading dividends...</div>}
-              {!loadingDividends && dividends.length === 0 && !showLogDiv && (
+              {/* Empty state */}
+              {loadingDividends && <div className="text-center py-10 text-sm" style={{ color: 'var(--text3)' }}>Loading dividends...</div>}
+              {!loadingDividends && dividends.length === 0 && (
                 <div className="flex flex-col items-center py-16 gap-3 text-center">
-                  <div className="text-4xl opacity-40">💵</div>
-                  <div className="text-base font-bold text-white/60">No dividends logged yet</div>
-                  <p className="text-sm text-white/35 max-w-xs">Track dividends you receive and whether you reinvested them. Wali-OS will fetch upcoming dividend dates for your portfolio automatically.</p>
-                  <button onClick={() => setShowLogDiv(true)} className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-white mt-1"
-                    style={{ background: 'linear-gradient(135deg,#059669,#065f46)' }}>
+                  <div className="p-4 rounded-full" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                    <DollarSign size={28} style={{ color: 'var(--text3)' }} />
+                  </div>
+                  <div className="text-base font-bold" style={{ color: 'var(--text2)' }}>No dividends logged yet</div>
+                  <p className="text-sm max-w-sm" style={{ color: 'var(--text3)' }}>
+                    Track dividends you receive and whether you reinvested them. Wali-OS fetches upcoming dividend dates for your portfolio automatically.
+                  </p>
+                  <button onClick={() => setShowLogDiv(true)}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold mt-2 transition-all hover:opacity-90"
+                    style={{ background: UP, color: '#0a0d12' }}
+                    aria-label="Log first dividend">
                     <Plus size={13} /> Log first dividend
                   </button>
                 </div>
               )}
+
+              {/* Dividend history */}
               {dividends.length > 0 && (
-                <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                  <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
-                    <span className="text-xs font-bold text-white/60 uppercase tracking-wider">Dividend History</span>
+                <div className="rounded-xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+                  <div className="flex items-center gap-1.5 px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+                    <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: 'var(--text3)' }}>Dividend history</span>
                   </div>
-                  <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
-                    {dividends.map(d => (
-                      <div key={d.id} className="flex items-center gap-3 px-4 py-3">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-mono font-bold text-sm">{d.ticker}</span>
-                            <span className="text-xs text-white/40">{d.ex_date}</span>
-                            <span className="text-xs font-mono" style={{ color: '#34d399' }}>${d.total_received.toFixed(2)}</span>
-                            <span className="text-[10px] text-white/30">(${d.amount_per_share.toFixed(4)}/sh × {d.shares_held} shares)</span>
-                            {d.reinvested && (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-bold" style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>
-                                DRIP {d.reinvest_shares ? `+${d.reinvest_shares} shares` : ''}
-                              </span>
-                            )}
-                          </div>
+                  <div>
+                    {dividends.map((d, i) => (
+                      <div key={d.id} className="flex items-center gap-3 px-4 py-3"
+                        style={{ borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
+                        <div className="flex-1 flex items-center gap-3 flex-wrap">
+                          <span className="font-mono font-bold text-sm">{d.ticker}</span>
+                          <span className="text-xs" style={{ color: 'var(--text3)' }}>{d.ex_date}</span>
+                          <span className="text-xs font-mono tabular-nums" style={{ color: UP }}>${d.total_received.toFixed(2)}</span>
+                          <span className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
+                            ${d.amount_per_share.toFixed(4)}/sh × {d.shares_held}
+                          </span>
+                          {d.reinvested && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-bold"
+                              style={{ background: 'rgba(167,139,250,0.12)', color: ACCENT }}>
+                              <Repeat2 size={9} className="inline mr-0.5" style={{ verticalAlign: 'middle' }} />
+                              DRIP {d.reinvest_shares ? `+${d.reinvest_shares}` : ''}
+                            </span>
+                          )}
                         </div>
-                        <button onClick={() => deleteDiv(d.id)} className="p-1.5 rounded-lg hover:opacity-80" style={{ color: 'rgba(248,113,113,0.4)' }}>
+                        <button onClick={() => deleteDiv(d.id)}
+                          className="p-1.5 rounded-lg hover:opacity-80"
+                          style={{ color: DN }}
+                          aria-label={`Delete ${d.ticker} dividend record`}>
                           <Trash2 size={12} />
                         </button>
                       </div>
@@ -1192,43 +1314,46 @@ function PortfolioInner() {
                   </div>
                 </div>
               )}
-            </>
+            </div>
           )}
 
-          {/* ── REINVEST TAB ──────────────────────────────────────────────── */}
+          {/* -- REINVEST TAB ---------------------------------------- */}
           {tab === 'reinvest' && (
-            <>
-              {/* Stats */}
-              <div className="grid grid-cols-3 gap-3">
+            <div className="space-y-4">
+              {/* Summary strip */}
+              <div className="grid grid-cols-3 gap-4">
                 {[
-                  { label: 'Open Trades', val: `${openReinvestTrades.length}`, color: '#a78bfa' },
-                  { label: 'Realized P&L', val: `${realizedReinvestPnL >= 0 ? '+' : ''}$${realizedReinvestPnL.toFixed(2)}`, color: realizedReinvestPnL >= 0 ? '#34d399' : '#f87171' },
-                  { label: 'Dividend Capital', val: `$${reinvestedDividends.toFixed(2)}`, color: '#fbbf24' },
+                  { label: 'Open trades', val: `${openReinvestTrades.length}`, color: ACCENT },
+                  { label: 'Realized P/L', val: `${realizedReinvestPnL >= 0 ? '+' : ''}$${realizedReinvestPnL.toFixed(2)}`, color: pnlColor(realizedReinvestPnL) },
+                  { label: 'Dividend capital', val: `$${reinvestedDividends.toFixed(2)}`, color: FLAT },
                 ].map(s => (
-                  <div key={s.label} className="rounded-xl p-3 border" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                    <div className="text-[10px] font-mono text-white/30 mb-1">{s.label}</div>
-                    <div className="text-sm font-bold font-mono" style={{ color: s.color }}>{s.val}</div>
+                  <div key={s.label} className="rounded-xl border p-4"
+                    style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1.5" style={{ color: 'var(--text3)' }}>{s.label}</div>
+                    <div className="text-2xl font-bold font-mono tabular-nums" style={{ color: s.color }}>{s.val}</div>
                   </div>
                 ))}
               </div>
 
-              {/* Portfolio sync chips — quick-add from holdings */}
+              {/* Quick-add from holdings */}
               {positions.length > 0 && (
-                <div className="rounded-xl p-3 border" style={{ background: 'rgba(251,191,36,0.04)', borderColor: 'rgba(251,191,36,0.15)' }}>
-                  <div className="text-[10px] font-mono text-white/25 uppercase tracking-wider mb-2">Your holdings — tap to prefill</div>
+                <div className="rounded-xl border p-4"
+                  style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+                  <div className="text-[10px] font-mono uppercase tracking-wider mb-2" style={{ color: 'var(--text3)' }}>Your holdings — tap to prefill</div>
                   <div className="flex flex-wrap gap-1.5">
                     {positions.map(p => {
                       const alreadyTracked = reinvestTrades.some(t => t.ticker === p.ticker && !t.exit_price)
                       return (
                         <button key={p.ticker}
                           onClick={() => { setRTicker(p.ticker); setShowAddReinvest(true) }}
-                          className="px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold transition-all"
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold transition-all hover:opacity-80"
                           style={{
-                            background: alreadyTracked ? 'rgba(52,211,153,0.1)' : 'rgba(255,255,255,0.06)',
-                            color: alreadyTracked ? '#34d399' : 'rgba(255,255,255,0.5)',
-                            border: `1px solid ${alreadyTracked ? 'rgba(52,211,153,0.2)' : 'rgba(255,255,255,0.08)'}`,
+                            background: alreadyTracked ? 'rgba(52,211,153,0.1)' : 'var(--surface2)',
+                            color: alreadyTracked ? UP : 'var(--text2)',
+                            border: `1px solid ${alreadyTracked ? 'rgba(52,211,153,0.22)' : 'var(--border)'}`,
                           }}>
-                          {alreadyTracked ? '✓ ' : ''}{p.ticker}
+                          {alreadyTracked && <Check size={9} />}
+                          {p.ticker}
                         </button>
                       )
                     })}
@@ -1236,87 +1361,59 @@ function PortfolioInner() {
                 </div>
               )}
 
-              {/* Add reinvest trade form */}
-              {showAddReinvest && (
-                <div className="rounded-2xl border p-5" style={{ background: 'var(--surface)', borderColor: 'rgba(251,191,36,0.25)' }}>
-                  <h3 className="text-sm font-bold mb-4">Log reinvestment trade</h3>
-                  <div className="grid grid-cols-3 gap-3 mb-3">
-                    <div>
-                      <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Ticker</label>
-                      <input value={rTicker} onChange={e => setRTicker(e.target.value.toUpperCase())} placeholder="NVDA"
-                        className="w-full rounded-xl px-3 py-2.5 text-sm font-mono font-bold outline-none border"
-                        style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Shares</label>
-                      <input value={rShares} onChange={e => setRShares(e.target.value)} placeholder="5" type="number"
-                        className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                        style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Entry price</label>
-                      <input value={rEntry} onChange={e => setREntry(e.target.value)} placeholder="185.00" type="number"
-                        className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                        style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                    </div>
+              {loadingReinvest && <div className="text-center py-10 text-sm" style={{ color: 'var(--text3)' }}>Loading...</div>}
+
+              {!loadingReinvest && reinvestTrades.length === 0 && (
+                <div className="flex flex-col items-center py-16 gap-3 text-center">
+                  <div className="p-4 rounded-full" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                    <RotateCw size={28} style={{ color: 'var(--text3)' }} />
                   </div>
-                  <div className="mb-3">
-                    <label className="text-[10px] font-mono text-white/40 uppercase tracking-wider block mb-1.5">Notes (optional)</label>
-                    <input value={rNotes} onChange={e => setRNotes(e.target.value)} placeholder="e.g. AAPL dividend reinvestment"
-                      className="w-full rounded-xl px-3 py-2.5 text-sm outline-none border"
-                      style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                  </div>
-                  <div className="flex gap-2">
-                    <button onClick={addReinvestTrade} disabled={savingReinvest || !rTicker || !rShares || !rEntry}
-                      className="px-4 py-2 rounded-xl text-sm font-semibold text-white disabled:opacity-40"
-                      style={{ background: 'linear-gradient(135deg,#b45309,#92400e)' }}>
-                      {savingReinvest ? 'Saving...' : 'Add trade'}
-                    </button>
-                    <button onClick={() => setShowAddReinvest(false)} className="px-4 py-2 rounded-xl text-sm"
-                      style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>Cancel</button>
-                  </div>
+                  <div className="text-base font-bold" style={{ color: 'var(--text2)' }}>No reinvestment trades yet</div>
+                  <p className="text-sm max-w-sm" style={{ color: 'var(--text3)' }}>
+                    Log trades you make using dividend income. Track how your reinvestment capital performs separately from your main portfolio.
+                  </p>
                 </div>
               )}
 
-              {loadingReinvest && <div className="text-center py-10 text-white/30 text-sm">Loading...</div>}
-              {!loadingReinvest && reinvestTrades.length === 0 && (
-                <div className="flex flex-col items-center py-16 gap-3 text-center">
-                  <div className="text-4xl opacity-40">🔄</div>
-                  <div className="text-base font-bold text-white/60">No reinvestment trades yet</div>
-                  <p className="text-sm text-white/35 max-w-xs">Log trades you make using dividend income. Track how your reinvestment capital is performing separately from your main portfolio.</p>
-                </div>
-              )}
               {reinvestTrades.length > 0 && (
-                <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                  <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
-                    {reinvestTrades.map(t => {
+                <div className="rounded-xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+                  <div>
+                    {reinvestTrades.map((t, i) => {
                       const isOpen = !t.exit_price
-                      const pnlColor = (t.pnl ?? 0) >= 0 ? '#34d399' : '#f87171'
                       return (
-                        <div key={t.id} className="flex items-center gap-3 px-4 py-3.5">
+                        <div key={t.id} className="flex items-center gap-3 px-4 py-3"
+                          style={{ borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
                           <div className="flex-1">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-mono font-bold text-sm">{t.ticker}</span>
-                              <span className="text-xs text-white/40">{t.shares} shares @ ${t.entry_price.toFixed(2)}</span>
+                              <span className="text-xs font-mono" style={{ color: 'var(--text3)' }}>
+                                {t.shares} @ ${t.entry_price.toFixed(2)}
+                              </span>
                               {isOpen ? (
-                                <span className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399' }}>OPEN</span>
+                                <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded"
+                                  style={{ background: 'rgba(52,211,153,0.1)', color: UP }}>OPEN</span>
                               ) : (
-                                <span className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>CLOSED</span>
+                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded"
+                                  style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>CLOSED</span>
                               )}
                             </div>
                             <div className="flex items-center gap-3 mt-0.5">
-                              {t.currentPrice && <span className="text-xs font-mono text-white/50">${t.currentPrice.toFixed(2)}</span>}
-                              {t.pnl != null && <span className="text-[10px] font-mono" style={{ color: pnlColor }}>{t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}</span>}
-                              {t.pnlPct != null && <span className="text-[10px] font-mono" style={{ color: pnlColor }}>{t.pnlPct >= 0 ? '+' : ''}{t.pnlPct.toFixed(1)}%</span>}
-                              {t.notes && <span className="text-[10px] text-white/30 truncate max-w-[120px]">{t.notes}</span>}
+                              {t.currentPrice && <span className="text-xs font-mono tabular-nums" style={{ color: 'var(--text2)' }}>${t.currentPrice.toFixed(2)}</span>}
+                              {t.pnl != null && <span className="text-[11px] font-mono tabular-nums" style={{ color: pnlColor(t.pnl) }}>{t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}</span>}
+                              {t.pnlPct != null && <span className="text-[11px] font-mono tabular-nums" style={{ color: pnlColor(t.pnlPct) }}>{t.pnlPct >= 0 ? '+' : ''}{t.pnlPct.toFixed(2)}%</span>}
+                              {t.notes && <span className="text-[10px] truncate max-w-[180px]" style={{ color: 'var(--text3)' }}>{t.notes}</span>}
                             </div>
                           </div>
-                          <div className="flex gap-2">
+                          <div className="flex gap-1.5">
                             <button onClick={() => router.push(`/?ticker=${t.ticker}`)}
-                              className="text-[10px] font-mono px-2 py-1 rounded-lg" style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)' }}>
-                              Analyze
+                              className="flex items-center gap-1 text-[10px] font-mono px-2 py-1 rounded-lg transition-all hover:opacity-80"
+                              style={{ background: 'rgba(167,139,250,0.1)', color: ACCENT, border: '1px solid rgba(167,139,250,0.22)' }}>
+                              <Activity size={10} /> Analyze
                             </button>
-                            <button onClick={() => deleteReinvestTrade(t.id)} className="p-1.5 rounded-lg hover:opacity-80" style={{ color: 'rgba(248,113,113,0.4)' }}>
+                            <button onClick={() => deleteReinvestTrade(t.id)}
+                              className="p-1.5 rounded-lg hover:opacity-80"
+                              style={{ color: DN }}
+                              aria-label={`Delete ${t.ticker} trade`}>
                               <Trash2 size={12} />
                             </button>
                           </div>
@@ -1326,122 +1423,31 @@ function PortfolioInner() {
                   </div>
                 </div>
               )}
-            </>
+            </div>
           )}
 
-          {/* ── JOURNAL TAB ───────────────────────────────────────────────── */}
+          {/* -- JOURNAL TAB ---------------------------------------- */}
           {tab === 'journal' && (
-            <>
-              {/* Stats */}
-              {journalStats.totalTrades > 0 && (
-                <div className="grid grid-cols-3 gap-3">
-                  {[
-                    { label: 'Win Rate', val: journalStats.winRate != null ? `${journalStats.winRate.toFixed(0)}%` : '—', color: (journalStats.winRate ?? 0) >= 50 ? '#34d399' : '#f87171' },
-                    { label: 'Avg P&L', val: journalStats.avgPnl != null ? `${journalStats.avgPnl >= 0 ? '+' : ''}${journalStats.avgPnl.toFixed(1)}%` : '—', color: (journalStats.avgPnl ?? 0) >= 0 ? '#34d399' : '#f87171' },
-                    { label: 'Total Trades', val: `${journalStats.totalTrades}`, color: 'var(--text)' },
-                  ].map(s => (
-                    <div key={s.label} className="rounded-xl p-3 border" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                      <div className="text-[10px] font-mono text-white/30 mb-1">{s.label}</div>
-                      <div className="text-sm font-bold font-mono" style={{ color: s.color }}>{s.val}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
+            <div className="space-y-4">
+              {/* Summary strip */}
+              <div className="grid grid-cols-3 gap-4">
+                {[
+                  { label: 'Win rate', val: journalStats.winRate != null ? `${journalStats.winRate.toFixed(0)}%` : '—', color: journalStats.winRate != null && journalStats.winRate >= 50 ? UP : DN },
+                  { label: 'Avg P/L', val: journalStats.avgPnl != null ? `${journalStats.avgPnl >= 0 ? '+' : ''}${journalStats.avgPnl.toFixed(1)}%` : '—', color: journalStats.avgPnl != null ? pnlColor(journalStats.avgPnl) : 'var(--text3)' },
+                  { label: 'Total trades', val: `${journalStats.totalTrades}`, color: 'var(--text)' },
+                ].map(s => (
+                  <div key={s.label} className="rounded-xl border p-4"
+                    style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1.5" style={{ color: 'var(--text3)' }}>{s.label}</div>
+                    <div className="text-2xl font-bold font-mono tabular-nums" style={{ color: s.color }}>{s.val}</div>
+                  </div>
+                ))}
+              </div>
 
-              {/* Manual add journal entry */}
-              <button onClick={() => setShowAddJournal(!showAddJournal)}
-                className="w-full py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5"
-                style={{ background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)', color: '#a78bfa' }}>
-                <Plus size={13} /> Log Trade Manually
-              </button>
-
-              {showAddJournal && (
-                <div className="rounded-2xl p-4 space-y-3" style={{ background: 'var(--surface)', border: '1px solid rgba(255,255,255,0.08)' }}>
-                  <div className="text-xs font-semibold text-white/50">Log a trade manually</div>
-                  {/* Stock vs Option */}
-                  <div className="grid grid-cols-2 gap-2">
-                    {(['stock','option'] as const).map(t => (
-                      <button key={t} onClick={() => setJType(t)}
-                        className="py-1.5 rounded-lg text-xs font-semibold"
-                        style={{ background: jType === t ? 'rgba(167,139,250,0.15)' : 'rgba(255,255,255,0.04)', color: jType === t ? '#a78bfa' : 'rgba(255,255,255,0.4)', border: `1px solid ${jType === t ? 'rgba(167,139,250,0.3)' : 'rgba(255,255,255,0.08)'}` }}>
-                        {t === 'stock' ? '📈 Stock' : '⚡ Option'}
-                      </button>
-                    ))}
-                  </div>
-                  {/* Ticker + Signal */}
-                  <div className="grid grid-cols-2 gap-2">
-                    <input value={jTicker} onChange={e => setJTicker(e.target.value.toUpperCase())} placeholder="Ticker"
-                      className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                    <select value={jSignal} onChange={e => setJSignal(e.target.value as any)}
-                      className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }}>
-                      <option value="BULLISH">BULLISH</option>
-                      <option value="BEARISH">BEARISH</option>
-                      <option value="NEUTRAL">NEUTRAL</option>
-                    </select>
-                  </div>
-                  {/* Options-specific fields */}
-                  {jType === 'option' && (
-                    <div className="space-y-2">
-                      <div className="grid grid-cols-2 gap-2">
-                        {(['call','put'] as const).map(ot => (
-                          <button key={ot} onClick={() => setJOptionType(ot)}
-                            className="py-1.5 rounded-lg text-xs font-bold"
-                            style={{ background: jOptionType === ot ? (ot === 'call' ? 'rgba(52,211,153,0.15)' : 'rgba(248,113,113,0.15)') : 'rgba(255,255,255,0.04)', color: jOptionType === ot ? (ot === 'call' ? '#34d399' : '#f87171') : 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.08)' }}>
-                            {ot.toUpperCase()}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="grid grid-cols-3 gap-2">
-                        <input value={jStrike} onChange={e => setJStrike(e.target.value)} placeholder="Strike $" type="number"
-                          className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                        <input value={jExpiry} onChange={e => setJExpiry(e.target.value)} placeholder="Expiry" type="date"
-                          className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                        <input value={jContracts} onChange={e => setJContracts(e.target.value)} placeholder="Contracts" type="number"
-                          className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                      </div>
-                      <input value={jPremium} onChange={e => setJPremium(e.target.value)} placeholder="Entry premium per share ($)" type="number"
-                        className="w-full rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                      {jPremium && jContracts && (
-                        <div className="text-[10px] text-white/40 text-center">
-                          Total cost: <span style={{ color: '#a78bfa' }}>${(parseFloat(jPremium) * parseInt(jContracts) * 100).toFixed(2)}</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {/* Stock-specific fields */}
-                  {jType === 'stock' && (
-                    <div className="grid grid-cols-3 gap-2">
-                      <input value={jEntryPrice} onChange={e => setJEntryPrice(e.target.value)} placeholder="Entry $" type="number"
-                        className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                      <input value={jStop} onChange={e => setJStop(e.target.value)} placeholder="Stop $" type="number"
-                        className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                      <input value={jTarget} onChange={e => setJTarget(e.target.value)} placeholder="Target $" type="number"
-                        className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                    </div>
-                  )}
-                  {/* Timeframe + notes */}
-                  <div className="grid grid-cols-2 gap-2">
-                    <select value={jTimeframe} onChange={e => setJTimeframe(e.target.value)}
-                      className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }}>
-                      <option value="1D">1D</option><option value="1W">1W</option>
-                      <option value="1M">1M</option><option value="3M">3M</option>
-                    </select>
-                    <input value={jNotes} onChange={e => setJNotes(e.target.value)} placeholder="Notes (optional)"
-                      className="rounded-xl px-3 py-2 text-sm outline-none border" style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                  </div>
-                  <div className="flex gap-2">
-                    <button onClick={addJournalEntry}
-                      className="flex-1 py-2 rounded-xl text-xs font-bold"
-                      style={{ background: 'rgba(167,139,250,0.2)', color: '#a78bfa' }}>Log Trade</button>
-                    <button onClick={() => setShowAddJournal(false)} className="px-4 py-2 rounded-xl text-xs text-white/40">Cancel</button>
-                  </div>
-                </div>
-              )}
-
-              {/* Portfolio sync chips — shows which holdings have journal entries */}
+              {/* Journal coverage chips */}
               {!loadingJournal && positions.length > 0 && (
-                <div className="rounded-xl p-3 border" style={{ background: 'rgba(167,139,250,0.04)', borderColor: 'rgba(167,139,250,0.15)' }}>
-                  <div className="text-[10px] font-mono text-white/25 uppercase tracking-wider mb-2">Holdings — journal coverage</div>
+                <div className="rounded-xl border p-4" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+                  <div className="text-[10px] font-mono uppercase tracking-wider mb-2" style={{ color: 'var(--text3)' }}>Journal coverage</div>
                   <div className="flex flex-wrap gap-1.5">
                     {positions.map(p => {
                       const hasEntry = journalEntries.some(e => e.ticker === p.ticker)
@@ -1449,173 +1455,643 @@ function PortfolioInner() {
                       return (
                         <button key={p.ticker}
                           onClick={() => router.push(`/?ticker=${p.ticker}`)}
-                          className="px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold transition-all"
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold transition-all hover:opacity-80"
                           style={{
-                            background: openEntry ? 'rgba(251,191,36,0.1)' : hasEntry ? 'rgba(52,211,153,0.1)' : 'rgba(255,255,255,0.06)',
-                            color: openEntry ? '#fbbf24' : hasEntry ? '#34d399' : 'rgba(255,255,255,0.4)',
-                            border: `1px solid ${openEntry ? 'rgba(251,191,36,0.2)' : hasEntry ? 'rgba(52,211,153,0.2)' : 'rgba(255,255,255,0.08)'}`,
+                            background: openEntry ? 'rgba(251,191,36,0.1)' : hasEntry ? 'rgba(52,211,153,0.1)' : 'var(--surface2)',
+                            color: openEntry ? FLAT : hasEntry ? UP : 'var(--text2)',
+                            border: `1px solid ${openEntry ? 'rgba(251,191,36,0.22)' : hasEntry ? 'rgba(52,211,153,0.22)' : 'var(--border)'}`,
                           }}
                           title={openEntry ? 'Open trade' : hasEntry ? 'Has journal entries' : 'No journal entry — analyze to add'}>
-                          {openEntry ? '⏳ ' : hasEntry ? '✓ ' : ''}{p.ticker}
+                          {openEntry ? <Clock size={9} /> : hasEntry ? <Check size={9} /> : null}
+                          {p.ticker}
                         </button>
                       )
                     })}
                   </div>
-                  <div className="text-[9px] text-white/20 mt-1.5">✓ journaled • ⏳ open trade • gray = not yet tracked</div>
+                  <div className="text-[9px] mt-2" style={{ color: 'var(--text3)' }}>journaled · open trade · not yet tracked</div>
                 </div>
               )}
 
-              {loadingJournal && <div className="text-center py-10 text-white/30 text-sm">Loading journal...</div>}
+              {loadingJournal && <div className="text-center py-10 text-sm" style={{ color: 'var(--text3)' }}>Loading journal...</div>}
+
               {!loadingJournal && journalEntries.length === 0 && (
                 <div className="flex flex-col items-center py-16 gap-3 text-center">
-                  <div className="text-4xl opacity-40">📒</div>
-                  <div className="text-base font-bold text-white/60">No journal entries yet</div>
-                  <p className="text-sm text-white/35 max-w-xs">After running a council analysis, tap the verdict dropdown and select "Log to Journal" to track your trades here.</p>
+                  <div className="p-4 rounded-full" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                    <BookOpen size={28} style={{ color: 'var(--text3)' }} />
+                  </div>
+                  <div className="text-base font-bold" style={{ color: 'var(--text2)' }}>No journal entries yet</div>
+                  <p className="text-sm max-w-sm" style={{ color: 'var(--text3)' }}>
+                    After running a council analysis, tap the verdict dropdown and select &quot;Log to Journal&quot; to track your trades here.
+                  </p>
                 </div>
               )}
 
-              {journalEntries.map(entry => {
-                const isOpen = entry.outcome === 'pending'
-                const isExpanded = expandedEntry === entry.id
-                const signalColor = SIG_COLOR[entry.signal] || '#94a3b8'
-                return (
-                  <div key={entry.id} className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                    <div className="flex items-center gap-3 px-4 py-3 cursor-pointer"
-                      onClick={() => setExpandedEntry(isExpanded ? null : entry.id)}>
-                      <div className="flex items-center gap-1.5">
-                        {outcomeIcon(entry.outcome)}
-                        <span className="font-bold font-mono text-sm">{entry.ticker}</span>
-                        {entry.position_type === 'option' && entry.option_type && (
-                          <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
-                            style={{ background: entry.option_type === 'call' ? 'rgba(52,211,153,0.12)' : 'rgba(248,113,113,0.12)', color: entry.option_type === 'call' ? '#34d399' : '#f87171' }}>
-                            {entry.option_type.toUpperCase()} ${entry.strike} {entry.expiry?.slice(0,10)}
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: `${signalColor}15`, color: signalColor }}>{entry.signal}</span>
-                      {entry.pnl_percent != null && (
-                        <span className="text-xs font-mono" style={{ color: entry.pnl_percent >= 0 ? '#34d399' : '#f87171' }}>
-                          {entry.pnl_percent >= 0 ? '+' : ''}{entry.pnl_percent.toFixed(1)}%
-                        </span>
-                      )}
-                      <div className="ml-auto flex items-center gap-2">
-                        {entry.postmortem?.council_grade && (
-                          <span className="text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center text-[10px]"
-                            style={{ background: `${gradeColor(entry.postmortem.council_grade)}20`, color: gradeColor(entry.postmortem.council_grade) }}>
-                            {entry.postmortem.council_grade}
-                          </span>
-                        )}
-                        <span className="text-[10px] text-white/25 font-mono">{entry.timeframe}</span>
-                        <button onClick={e => { e.stopPropagation(); handleDeleteJournal(entry.id) }}
-                          className="p-1 rounded-lg hover:opacity-80" style={{ color: 'rgba(248,113,113,0.4)' }}>
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-                    </div>
-
-                    {isExpanded && (
-                      <div className="px-4 pb-4 space-y-3 border-t" style={{ borderColor: 'var(--border)' }}>
-                        <div className="grid grid-cols-3 gap-2 pt-3">
-                          {(entry.position_type === 'option' ? [
-                            { label: 'Premium', val: entry.entry_premium ? `$${entry.entry_premium.toFixed(2)}/sh` : '—' },
-                            { label: 'Contracts', val: entry.contracts ? `${entry.contracts}x` : '1x' },
-                            { label: 'Total Cost', val: entry.entry_premium && entry.contracts ? `$${(entry.entry_premium * entry.contracts * 100).toFixed(0)}` : '—' },
-                          ] : [
-                            { label: 'Entry', val: entry.entry_price ? `$${entry.entry_price.toFixed(2)}` : '—' },
-                            { label: 'Stop', val: entry.stop_loss ? `$${entry.stop_loss.toFixed(2)}` : '—' },
-                            { label: 'Target', val: entry.take_profit ? `$${entry.take_profit.toFixed(2)}` : '—' },
-                          ]).map(f => (
-                            <div key={f.label} className="rounded-lg p-2.5" style={{ background: 'var(--surface2)' }}>
-                              <div className="text-[10px] text-white/30 mb-0.5">{f.label}</div>
-                              <div className="text-sm font-mono font-bold">{f.val}</div>
-                            </div>
-                          ))}
-                        </div>
-
-                        {entry.notes && <p className="text-xs text-white/50 leading-relaxed">{entry.notes}</p>}
-
-                        {entry.postmortem && (
-                          <div className="rounded-xl p-3 space-y-2" style={{ background: 'var(--surface2)' }}>
-                            <div className="flex items-center gap-2">
-                              <Star size={11} style={{ color: gradeColor(entry.postmortem.council_grade) }} />
-                              <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: gradeColor(entry.postmortem.council_grade) }}>
-                                Grade {entry.postmortem.council_grade} — Post-mortem
+              {journalEntries.length > 0 && (
+                <div className="rounded-xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+                  {journalEntries.map((entry, i) => {
+                    const isOpen = entry.outcome === 'pending'
+                    const isExpanded = expandedEntry === entry.id
+                    const signalC = SIG_COLOR[entry.signal] || '#94a3b8'
+                    return (
+                      <div key={entry.id} style={{ borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
+                        <button
+                          onClick={() => setExpandedEntry(isExpanded ? null : entry.id)}
+                          className="flex items-center gap-3 px-4 py-3 w-full text-left hover:bg-white/[0.02] transition-colors">
+                          <ChevronRight size={12}
+                            style={{
+                              color: 'var(--text3)',
+                              transform: isExpanded ? 'rotate(90deg)' : 'none',
+                              transition: 'transform 0.15s',
+                            }} />
+                          <div className="flex items-center gap-1.5">
+                            {outcomeIcon(entry.outcome)}
+                            <span className="font-bold font-mono text-sm">{entry.ticker}</span>
+                            {entry.position_type === 'option' && entry.option_type && (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
+                                style={{ background: entry.option_type === 'call' ? 'rgba(52,211,153,0.12)' : 'rgba(248,113,113,0.12)', color: entry.option_type === 'call' ? UP : DN }}>
+                                {entry.option_type.toUpperCase()} ${entry.strike} {entry.expiry?.slice(0,10)}
                               </span>
-                            </div>
-                            {[
-                              { label: 'What worked', val: entry.postmortem.what_worked },
-                              { label: 'What missed', val: entry.postmortem.what_missed },
-                              { label: 'Key lesson', val: entry.postmortem.key_lesson },
-                            ].map(f => (
-                              <div key={f.label}>
-                                <div className="text-[9px] font-mono uppercase text-white/25 mb-0.5">{f.label}</div>
-                                <p className="text-xs text-white/60 leading-relaxed">{f.val}</p>
-                              </div>
-                            ))}
+                            )}
                           </div>
-                        )}
+                          <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded"
+                            style={{ background: `${signalC}15`, color: signalC }}>{entry.signal}</span>
+                          {entry.pnl_percent != null && (
+                            <span className="text-xs font-mono tabular-nums" style={{ color: pnlColor(entry.pnl_percent) }}>
+                              {entry.pnl_percent >= 0 ? '+' : ''}{entry.pnl_percent.toFixed(1)}%
+                            </span>
+                          )}
+                          <div className="ml-auto flex items-center gap-2">
+                            {entry.postmortem?.council_grade && (
+                              <span className="text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center text-[10px]"
+                                style={{ background: `${gradeColor(entry.postmortem.council_grade)}20`, color: gradeColor(entry.postmortem.council_grade) }}>
+                                {entry.postmortem.council_grade}
+                              </span>
+                            )}
+                            <span className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>{entry.timeframe}</span>
+                            <span
+                              onClick={e => { e.stopPropagation(); handleDeleteJournal(entry.id) }}
+                              className="p-1 rounded-lg hover:opacity-80 cursor-pointer"
+                              style={{ color: DN }}
+                              role="button"
+                              aria-label={`Delete ${entry.ticker} journal entry`}>
+                              <Trash2 size={13} />
+                            </span>
+                          </div>
+                        </button>
 
-                        {isOpen && (
-                          <div className="rounded-xl p-3 space-y-3" style={{ background: 'rgba(52,211,153,0.05)', border: '1px solid rgba(52,211,153,0.15)' }}>
-                            <p className="text-xs font-semibold" style={{ color: '#34d399' }}>Resolve trade</p>
-                            <div className="grid grid-cols-2 gap-3">
-                              <div>
-                                <label className="text-[10px] text-white/30 block mb-1">
-                                  {entry.position_type === 'option' ? 'Exit premium/share ($)' : 'Exit price ($)'}
-                                </label>
-                                {entry.position_type === 'option' ? (
-                                  <input value={resolveData.exit_premium} onChange={e => setResolveData(d => ({ ...d, exit_premium: e.target.value }))}
-                                    placeholder="e.g. 4.50" type="number"
-                                    className="w-full rounded-lg px-3 py-2 text-sm outline-none border"
-                                    style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                                ) : (
-                                  <input value={resolveData.exit_price} onChange={e => setResolveData(d => ({ ...d, exit_price: e.target.value }))}
-                                    placeholder="$0.00" type="number"
-                                    className="w-full rounded-lg px-3 py-2 text-sm outline-none border"
-                                    style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                                )}
-                                {entry.position_type === 'option' && resolveData.exit_premium && entry.entry_premium && (
-                                  <div className="text-[9px] mt-1" style={{ color: parseFloat(resolveData.exit_premium) >= entry.entry_premium ? '#34d399' : '#f87171' }}>
-                                    {((parseFloat(resolveData.exit_premium) - entry.entry_premium) / entry.entry_premium * 100).toFixed(1)}% on premium
-                                  </div>
-                                )}
-                              </div>
-                              <div>
-                                <label className="text-[10px] text-white/30 block mb-1">Outcome</label>
-                                <select value={resolveData.outcome} onChange={e => setResolveData(d => ({ ...d, outcome: e.target.value }))}
-                                  className="w-full rounded-lg px-3 py-2 text-sm outline-none border"
-                                  style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }}>
-                                  <option value="win">Win ✓</option>
-                                  <option value="loss">Loss ✗</option>
-                                  <option value="breakeven">Breakeven</option>
-                                </select>
-                              </div>
+                        {isExpanded && (
+                          <div className="px-4 pb-4 space-y-3 border-t" style={{ borderColor: 'var(--border)', background: 'var(--surface2)' }}>
+                            <div className="grid grid-cols-3 gap-2 pt-3">
+                              {(entry.position_type === 'option' ? [
+                                { label: 'Premium', val: entry.entry_premium ? `$${entry.entry_premium.toFixed(2)}/sh` : '—' },
+                                { label: 'Contracts', val: entry.contracts ? `${entry.contracts}x` : '1x' },
+                                { label: 'Total cost', val: entry.entry_premium && entry.contracts ? `$${(entry.entry_premium * entry.contracts * 100).toFixed(0)}` : '—' },
+                              ] : [
+                                { label: 'Entry', val: entry.entry_price ? `$${entry.entry_price.toFixed(2)}` : '—' },
+                                { label: 'Stop', val: entry.stop_loss ? `$${entry.stop_loss.toFixed(2)}` : '—' },
+                                { label: 'Target', val: entry.take_profit ? `$${entry.take_profit.toFixed(2)}` : '—' },
+                              ]).map(f => (
+                                <div key={f.label} className="rounded-lg p-2.5"
+                                  style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                                  <div className="text-[10px] font-mono uppercase tracking-wider mb-0.5" style={{ color: 'var(--text3)' }}>{f.label}</div>
+                                  <div className="text-sm font-mono font-bold tabular-nums" style={{ color: 'var(--text)' }}>{f.val}</div>
+                                </div>
+                              ))}
                             </div>
-                            <input value={resolveData.notes} onChange={e => setResolveData(d => ({ ...d, notes: e.target.value }))}
-                              placeholder="What happened? (optional)"
-                              className="w-full rounded-lg px-3 py-2 text-sm outline-none border"
-                              style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                            <button onClick={() => handleResolve(entry.id)} disabled={!!resolving || !resolveData.exit_price}
-                              className="w-full py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-40"
-                              style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
-                              {resolving === entry.id ? 'Generating post-mortem...' : 'Resolve trade + generate post-mortem'}
-                            </button>
+
+                            {entry.notes && <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{entry.notes}</p>}
+
+                            {entry.postmortem && (
+                              <div className="rounded-lg p-3 space-y-2"
+                                style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                                <div className="flex items-center gap-2">
+                                  <Star size={11} style={{ color: gradeColor(entry.postmortem.council_grade) }} />
+                                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: gradeColor(entry.postmortem.council_grade) }}>
+                                    Grade {entry.postmortem.council_grade} · post-mortem
+                                  </span>
+                                </div>
+                                {[
+                                  { label: 'What worked', val: entry.postmortem.what_worked },
+                                  { label: 'What missed', val: entry.postmortem.what_missed },
+                                  { label: 'Key lesson', val: entry.postmortem.key_lesson },
+                                ].map(f => (
+                                  <div key={f.label}>
+                                    <div className="text-[9px] font-mono uppercase tracking-wider mb-0.5" style={{ color: 'var(--text3)' }}>{f.label}</div>
+                                    <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{f.val}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            {isOpen && (
+                              <div className="rounded-lg p-3 space-y-3"
+                                style={{ background: 'rgba(52,211,153,0.04)', border: '1px solid rgba(52,211,153,0.18)' }}>
+                                <p className="text-xs font-semibold" style={{ color: UP }}>Resolve trade</p>
+                                <div className="grid grid-cols-2 gap-3">
+                                  <div>
+                                    <label className="text-[10px] font-mono uppercase tracking-wider block mb-1" style={{ color: 'var(--text3)' }}>
+                                      {entry.position_type === 'option' ? 'Exit premium/share ($)' : 'Exit price ($)'}
+                                    </label>
+                                    {entry.position_type === 'option' ? (
+                                      <input value={resolveData.exit_premium} onChange={e => setResolveData(d => ({ ...d, exit_premium: e.target.value }))}
+                                        placeholder="e.g. 4.50" type="number"
+                                        className="w-full rounded-lg px-3 py-2 text-sm outline-none border font-mono"
+                                        style={{ background: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                                    ) : (
+                                      <input value={resolveData.exit_price} onChange={e => setResolveData(d => ({ ...d, exit_price: e.target.value }))}
+                                        placeholder="0.00" type="number"
+                                        className="w-full rounded-lg px-3 py-2 text-sm outline-none border font-mono"
+                                        style={{ background: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                                    )}
+                                    {entry.position_type === 'option' && resolveData.exit_premium && entry.entry_premium && (
+                                      <div className="text-[9px] mt-1 font-mono"
+                                        style={{ color: parseFloat(resolveData.exit_premium) >= entry.entry_premium ? UP : DN }}>
+                                        {((parseFloat(resolveData.exit_premium) - entry.entry_premium) / entry.entry_premium * 100).toFixed(1)}% on premium
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div>
+                                    <label className="text-[10px] font-mono uppercase tracking-wider block mb-1" style={{ color: 'var(--text3)' }}>Outcome</label>
+                                    <select value={resolveData.outcome} onChange={e => setResolveData(d => ({ ...d, outcome: e.target.value }))}
+                                      className="w-full rounded-lg px-3 py-2 text-sm outline-none border"
+                                      style={{ background: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }}>
+                                      <option value="win">Win</option>
+                                      <option value="loss">Loss</option>
+                                      <option value="breakeven">Breakeven</option>
+                                    </select>
+                                  </div>
+                                </div>
+                                <input value={resolveData.notes} onChange={e => setResolveData(d => ({ ...d, notes: e.target.value }))}
+                                  placeholder="What happened? (optional)"
+                                  className="w-full rounded-lg px-3 py-2 text-sm outline-none border"
+                                  style={{ background: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                                <button onClick={() => handleResolve(entry.id)}
+                                  disabled={!!resolving || (entry.position_type === 'option' ? !resolveData.exit_premium : !resolveData.exit_price)}
+                                  className="w-full py-2 rounded-lg text-sm font-semibold transition-all hover:opacity-90 disabled:opacity-40"
+                                  style={{ background: ACCENT, color: '#0a0d12' }}>
+                                  {resolving === entry.id ? 'Generating post-mortem...' : 'Resolve trade + generate post-mortem'}
+                                </button>
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
-                    )}
-                  </div>
-                )
-              })}
-            </>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           )}
 
         </div>
       </div>
+
+      {/* ----------------------------------------
+          DRAWERS — modal-style overlays that slide from the right
+          ==================================================== */}
+
+      {/* Add position drawer */}
+      {showAdd && (
+        <Drawer title="Add position" onClose={() => setShowAdd(false)}>
+          <div className="space-y-4">
+            {/* Type toggle */}
+            <div className="flex rounded-lg overflow-hidden border" style={{ borderColor: 'var(--border)' }}>
+              {(['stock','option'] as const).map(t => (
+                <button key={t} onClick={() => setAddType(t)}
+                  className="flex-1 px-3 py-2 text-xs font-semibold transition-all"
+                  style={{
+                    background: addType === t ? 'rgba(167,139,250,0.15)' : 'transparent',
+                    color: addType === t ? ACCENT : 'var(--text3)',
+                  }}>
+                  {t === 'stock' ? 'Stock' : 'Option'}
+                </button>
+              ))}
+            </div>
+
+            {/* Ticker */}
+            <FormField label={addType === 'option' ? 'Underlying ticker' : 'Ticker'}>
+              <input value={addTicker} onChange={e => setAddTicker(e.target.value.toUpperCase())}
+                placeholder={addType === 'option' ? 'NVDA' : 'AAPL'} maxLength={6}
+                className="w-full rounded-lg px-3 py-2.5 text-sm font-mono font-bold outline-none border"
+                style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+            </FormField>
+
+            {addType === 'stock' ? (
+              <div className="grid grid-cols-2 gap-3">
+                <FormField label="Shares">
+                  <input value={addShares} onChange={e => setAddShares(e.target.value)} placeholder="100" type="number" min="0"
+                    className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
+                    style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                </FormField>
+                <FormField label="Avg cost/share ($)">
+                  <input value={addCost} onChange={e => setAddCost(e.target.value)} placeholder="0.00" type="number" min="0"
+                    className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
+                    style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                </FormField>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <FormField label="Type">
+                  <div className="grid grid-cols-2 gap-2">
+                    {(['call','put'] as const).map(ot => (
+                      <button key={ot} onClick={() => setAddOptionType(ot)}
+                        className="py-2 rounded-lg text-xs font-bold transition-all"
+                        style={{
+                          background: addOptionType === ot
+                            ? (ot === 'call' ? 'rgba(52,211,153,0.15)' : 'rgba(248,113,113,0.15)')
+                            : 'var(--surface2)',
+                          color: addOptionType === ot ? (ot === 'call' ? UP : DN) : 'var(--text3)',
+                          border: `1px solid ${addOptionType === ot ? (ot === 'call' ? 'rgba(52,211,153,0.3)' : 'rgba(248,113,113,0.3)') : 'var(--border)'}`,
+                        }}>
+                        {ot.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                </FormField>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField label="Strike ($)">
+                    <input value={addStrike} onChange={e => setAddStrike(e.target.value)} placeholder="195" type="number" min="0"
+                      className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
+                      style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                  </FormField>
+                  <FormField label="Expiry">
+                    <input value={addExpiry} onChange={e => setAddExpiry(e.target.value)} type="date"
+                      className="w-full rounded-lg px-3 py-2.5 text-sm outline-none border"
+                      style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                  </FormField>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField label="Contracts">
+                    <input value={addContracts} onChange={e => setAddContracts(e.target.value)} placeholder="1" type="number" min="1"
+                      className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
+                      style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                  </FormField>
+                  <FormField label="Entry premium/share ($)">
+                    <input value={addCost} onChange={e => setAddCost(e.target.value)} placeholder="2.50" type="number" min="0" step="0.01"
+                      className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
+                      style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                  </FormField>
+                </div>
+                {addCost && addContracts && (
+                  <div className="flex items-center justify-between rounded-lg px-3 py-2"
+                    style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.18)' }}>
+                    <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: 'var(--text3)' }}>Total cost</span>
+                    <span className="text-sm font-bold font-mono tabular-nums" style={{ color: ACCENT }}>
+                      ${(parseFloat(addCost) * parseInt(addContracts) * 100).toFixed(2)}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-2">
+              <button onClick={addPosition}
+                disabled={addLoading || !addTicker || (addType === 'stock' ? !addShares : !addStrike || !addExpiry)}
+                className="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all hover:opacity-90 disabled:opacity-40"
+                style={{ background: ACCENT, color: '#0a0d12' }}>
+                {addLoading ? 'Adding...' : `Add ${addType === 'option' ? `${addOptionType.toUpperCase()} option` : 'position'}`}
+              </button>
+              <button onClick={() => setShowAdd(false)}
+                className="px-4 py-2.5 rounded-lg text-sm transition-all hover:opacity-80"
+                style={{ background: 'var(--surface2)', color: 'var(--text2)', border: '1px solid var(--border)' }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </Drawer>
+      )}
+
+      {/* Log dividend drawer */}
+      {showLogDiv && (
+        <Drawer title="Log dividend" onClose={() => setShowLogDiv(false)}>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <FormField label="Ticker">
+                <input value={divTicker} onChange={e => setDivTicker(e.target.value.toUpperCase())} placeholder="AAPL"
+                  className="w-full rounded-lg px-3 py-2.5 text-sm font-mono font-bold outline-none border"
+                  style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+              </FormField>
+              <FormField label="Amount/share ($)">
+                <input value={divAmount} onChange={e => setDivAmount(e.target.value)} placeholder="0.24" type="number" step="0.0001"
+                  className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
+                  style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+              </FormField>
+              <FormField label="Shares held">
+                <input value={divShares} onChange={e => setDivShares(e.target.value)} placeholder="100" type="number"
+                  className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
+                  style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+              </FormField>
+              <FormField label="Ex-date">
+                <input value={divExDate} onChange={e => setDivExDate(e.target.value)} type="date"
+                  className="w-full rounded-lg px-3 py-2.5 text-sm outline-none border"
+                  style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+              </FormField>
+              <FormField label="Pay date (opt.)">
+                <input value={divPayDate} onChange={e => setDivPayDate(e.target.value)} type="date"
+                  className="w-full rounded-lg px-3 py-2.5 text-sm outline-none border"
+                  style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+              </FormField>
+            </div>
+
+            {divAmount && divShares && (
+              <div className="flex items-center justify-between rounded-lg px-3 py-2"
+                style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.18)' }}>
+                <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: 'var(--text3)' }}>Total received</span>
+                <span className="text-sm font-bold font-mono tabular-nums" style={{ color: UP }}>
+                  ${(parseFloat(divAmount || '0') * parseFloat(divShares || '0')).toFixed(2)}
+                </span>
+              </div>
+            )}
+
+            {/* Reinvestment toggle */}
+            <button onClick={() => setDivReinvested(!divReinvested)}
+              className="w-full flex items-center gap-2 text-sm font-semibold px-3 py-2.5 rounded-lg transition-all"
+              style={{
+                background: divReinvested ? 'rgba(167,139,250,0.1)' : 'var(--surface2)',
+                color: divReinvested ? ACCENT : 'var(--text2)',
+                border: `1px solid ${divReinvested ? 'rgba(167,139,250,0.28)' : 'var(--border)'}`,
+              }}>
+              <Repeat2 size={14} />
+              {divReinvested ? 'Reinvesting' : 'Reinvest this dividend?'}
+              {divReinvested && <Check size={12} className="ml-auto" />}
+            </button>
+
+            {divReinvested && (
+              <div className="grid grid-cols-2 gap-3">
+                <FormField label="Shares purchased">
+                  <input value={divReinvestShares} onChange={e => setDivReinvestShares(e.target.value)} placeholder="1.2" type="number" step="0.0001"
+                    className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
+                    style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                </FormField>
+                <FormField label="Price paid/share">
+                  <input value={divReinvestPrice} onChange={e => setDivReinvestPrice(e.target.value)} placeholder="185.00" type="number"
+                    className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
+                    style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                </FormField>
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-2">
+              <button onClick={saveDiv} disabled={savingDiv || !divTicker || !divAmount || !divShares || !divExDate}
+                className="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all hover:opacity-90 disabled:opacity-40"
+                style={{ background: UP, color: '#0a0d12' }}>
+                {savingDiv ? 'Saving...' : 'Save dividend'}
+              </button>
+              <button onClick={() => setShowLogDiv(false)}
+                className="px-4 py-2.5 rounded-lg text-sm transition-all hover:opacity-80"
+                style={{ background: 'var(--surface2)', color: 'var(--text2)', border: '1px solid var(--border)' }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </Drawer>
+      )}
+
+      {/* Add reinvest trade drawer */}
+      {showAddReinvest && (
+        <Drawer title="Log reinvestment trade" onClose={() => setShowAddReinvest(false)}>
+          <div className="space-y-3">
+            <div className="grid grid-cols-3 gap-3">
+              <FormField label="Ticker">
+                <input value={rTicker} onChange={e => setRTicker(e.target.value.toUpperCase())} placeholder="NVDA"
+                  className="w-full rounded-lg px-3 py-2.5 text-sm font-mono font-bold outline-none border"
+                  style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+              </FormField>
+              <FormField label="Shares">
+                <input value={rShares} onChange={e => setRShares(e.target.value)} placeholder="5" type="number"
+                  className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
+                  style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+              </FormField>
+              <FormField label="Entry $">
+                <input value={rEntry} onChange={e => setREntry(e.target.value)} placeholder="185.00" type="number"
+                  className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
+                  style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+              </FormField>
+            </div>
+            <FormField label="Notes (optional)">
+              <input value={rNotes} onChange={e => setRNotes(e.target.value)} placeholder="e.g. AAPL dividend reinvestment"
+                className="w-full rounded-lg px-3 py-2.5 text-sm outline-none border"
+                style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+            </FormField>
+
+            <div className="flex gap-2 pt-2">
+              <button onClick={addReinvestTrade} disabled={savingReinvest || !rTicker || !rShares || !rEntry}
+                className="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all hover:opacity-90 disabled:opacity-40"
+                style={{ background: FLAT, color: '#0a0d12' }}>
+                {savingReinvest ? 'Saving...' : 'Add trade'}
+              </button>
+              <button onClick={() => setShowAddReinvest(false)}
+                className="px-4 py-2.5 rounded-lg text-sm transition-all hover:opacity-80"
+                style={{ background: 'var(--surface2)', color: 'var(--text2)', border: '1px solid var(--border)' }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </Drawer>
+      )}
+
+      {/* Add journal entry drawer */}
+      {showAddJournal && (
+        <Drawer title="Log trade" onClose={() => setShowAddJournal(false)}>
+          <div className="space-y-3">
+            <div className="flex rounded-lg overflow-hidden border" style={{ borderColor: 'var(--border)' }}>
+              {(['stock','option'] as const).map(t => (
+                <button key={t} onClick={() => setJType(t)}
+                  className="flex-1 py-2 text-xs font-semibold transition-all"
+                  style={{
+                    background: jType === t ? 'rgba(167,139,250,0.15)' : 'transparent',
+                    color: jType === t ? ACCENT : 'var(--text3)',
+                  }}>
+                  {t === 'stock' ? 'Stock' : 'Option'}
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <FormField label="Ticker">
+                <input value={jTicker} onChange={e => setJTicker(e.target.value.toUpperCase())} placeholder="AAPL"
+                  className="w-full rounded-lg px-3 py-2.5 text-sm font-mono font-bold outline-none border"
+                  style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+              </FormField>
+              <FormField label="Signal">
+                <select value={jSignal} onChange={e => setJSignal(e.target.value as 'BULLISH' | 'BEARISH' | 'NEUTRAL')}
+                  className="w-full rounded-lg px-3 py-2.5 text-sm outline-none border"
+                  style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }}>
+                  <option value="BULLISH">Bullish</option>
+                  <option value="BEARISH">Bearish</option>
+                  <option value="NEUTRAL">Neutral</option>
+                </select>
+              </FormField>
+            </div>
+
+            {jType === 'option' && (
+              <>
+                <FormField label="Option type">
+                  <div className="grid grid-cols-2 gap-2">
+                    {(['call','put'] as const).map(ot => (
+                      <button key={ot} onClick={() => setJOptionType(ot)}
+                        className="py-2 rounded-lg text-xs font-bold transition-all"
+                        style={{
+                          background: jOptionType === ot
+                            ? (ot === 'call' ? 'rgba(52,211,153,0.15)' : 'rgba(248,113,113,0.15)')
+                            : 'var(--surface2)',
+                          color: jOptionType === ot ? (ot === 'call' ? UP : DN) : 'var(--text3)',
+                          border: `1px solid ${jOptionType === ot ? (ot === 'call' ? 'rgba(52,211,153,0.3)' : 'rgba(248,113,113,0.3)') : 'var(--border)'}`,
+                        }}>
+                        {ot.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                </FormField>
+                <div className="grid grid-cols-3 gap-3">
+                  <FormField label="Strike">
+                    <input value={jStrike} onChange={e => setJStrike(e.target.value)} placeholder="$" type="number"
+                      className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
+                      style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                  </FormField>
+                  <FormField label="Expiry">
+                    <input value={jExpiry} onChange={e => setJExpiry(e.target.value)} type="date"
+                      className="w-full rounded-lg px-3 py-2.5 text-sm outline-none border"
+                      style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                  </FormField>
+                  <FormField label="Contracts">
+                    <input value={jContracts} onChange={e => setJContracts(e.target.value)} placeholder="1" type="number"
+                      className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
+                      style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                  </FormField>
+                </div>
+                <FormField label="Entry premium/share ($)">
+                  <input value={jPremium} onChange={e => setJPremium(e.target.value)} placeholder="2.50" type="number"
+                    className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
+                    style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                </FormField>
+                {jPremium && jContracts && (
+                  <div className="flex items-center justify-between rounded-lg px-3 py-2"
+                    style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.18)' }}>
+                    <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: 'var(--text3)' }}>Total cost</span>
+                    <span className="text-sm font-bold font-mono tabular-nums" style={{ color: ACCENT }}>
+                      ${(parseFloat(jPremium) * parseInt(jContracts) * 100).toFixed(2)}
+                    </span>
+                  </div>
+                )}
+              </>
+            )}
+
+            {jType === 'stock' && (
+              <div className="grid grid-cols-3 gap-3">
+                <FormField label="Entry">
+                  <input value={jEntryPrice} onChange={e => setJEntryPrice(e.target.value)} placeholder="$" type="number"
+                    className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
+                    style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                </FormField>
+                <FormField label="Stop">
+                  <input value={jStop} onChange={e => setJStop(e.target.value)} placeholder="$" type="number"
+                    className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
+                    style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                </FormField>
+                <FormField label="Target">
+                  <input value={jTarget} onChange={e => setJTarget(e.target.value)} placeholder="$" type="number"
+                    className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
+                    style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                </FormField>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <FormField label="Timeframe">
+                <select value={jTimeframe} onChange={e => setJTimeframe(e.target.value)}
+                  className="w-full rounded-lg px-3 py-2.5 text-sm outline-none border"
+                  style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }}>
+                  <option value="1D">1D</option><option value="1W">1W</option>
+                  <option value="1M">1M</option><option value="3M">3M</option>
+                </select>
+              </FormField>
+              <FormField label="Notes (opt.)">
+                <input value={jNotes} onChange={e => setJNotes(e.target.value)} placeholder="Thesis..."
+                  className="w-full rounded-lg px-3 py-2.5 text-sm outline-none border"
+                  style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+              </FormField>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button onClick={addJournalEntry}
+                disabled={!jTicker}
+                className="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all hover:opacity-90 disabled:opacity-40"
+                style={{ background: ACCENT, color: '#0a0d12' }}>
+                Log trade
+              </button>
+              <button onClick={() => setShowAddJournal(false)}
+                className="px-4 py-2.5 rounded-lg text-sm transition-all hover:opacity-80"
+                style={{ background: 'var(--surface2)', color: 'var(--text2)', border: '1px solid var(--border)' }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </Drawer>
+      )}
     </div>
   )
 }
 
+// -- Helper components ----------------------------------------
+
+function FormField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="text-[10px] font-mono uppercase tracking-wider block mb-1.5" style={{ color: 'var(--text3)' }}>
+        {label}
+      </label>
+      {children}
+    </div>
+  )
+}
+
+function Drawer({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        onClick={onClose}
+        className="fixed inset-0 z-30"
+        style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(2px)' }}
+        aria-hidden="true" />
+      {/* Drawer panel */}
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="drawer-title"
+        className="fixed right-0 top-0 bottom-0 z-40 w-full sm:w-[480px] overflow-y-auto animate-slide-in-right"
+        style={{ background: 'var(--surface)', borderLeft: '1px solid var(--border)' }}>
+        <div className="flex items-center justify-between px-5 py-4 border-b sticky top-0"
+          style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+          <h3 id="drawer-title" className="text-sm font-bold" style={{ color: 'var(--text)' }}>{title}</h3>
+          <button onClick={onClose}
+            className="p-1.5 rounded-lg transition-all hover:opacity-80"
+            style={{ color: 'var(--text3)' }}
+            aria-label="Close">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="p-5">
+          {children}
+        </div>
+      </div>
+    </>
+  )
+}
+
 export default function PortfolioPage() {
-  return <Suspense fallback={<div style={{ background: 'var(--bg)', minHeight: '100vh' }} />}><PortfolioInner /></Suspense>
+  return (
+    <Suspense fallback={<div style={{ background: 'var(--bg)', minHeight: '100vh' }} />}>
+      <PortfolioInner />
+    </Suspense>
+  )
 }
