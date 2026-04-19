@@ -76,6 +76,14 @@ export async function middleware(request: NextRequest) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 
+  // DISABLED: single-session enforcement had a race condition that kept
+  // bouncing fresh logins to /login?error=session_displaced. Every attempt
+  // to fix it (access_token slice, then refresh_token slice, then grace
+  // windows) left edge cases. Disabling wholesale until we redesign this
+  // with a stable server-side device fingerprint (user-agent + IP hash).
+  // The app is fully functional without it - users can be logged in on
+  // multiple devices simultaneously, which is fine for a consumer SaaS.
+  if (false) {
   // ── Single session enforcement ───────────────────────────────
   // Policy: last-login-wins, keyed on refresh_token (NOT access_token).
   //
@@ -161,6 +169,7 @@ export async function middleware(request: NextRequest) {
           .eq('user_id', user.id)
       }
     }
+  }
   }
 
   // ── Disclaimer ───────────────────────────────────────────────
