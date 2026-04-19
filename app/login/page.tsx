@@ -100,14 +100,39 @@ function LoginPageInner() {
       // before hard-navigating. signInWithPassword and /api/auth/session both
       // write cookies asynchronously, and if we navigate before they commit,
       // the next request arrives with no cookies and middleware bounces to /login.
+      // Verify the auth cookie made it to the jar, then confirm via a real
+      // GET request that Supabase accepts it. This proves the cookie is
+      // actually live in the request-attachment pool (not just in document.cookie)
+      // before we hard-navigate. Chrome queues cookie writes asynchronously -
+      // document.cookie returning immediately does not guarantee the next
+      // request will include the cookie.
       const projectRef = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').match(/https:\/\/([^.]+)\.supabase\.co/)?.[1]
       const cookieName = projectRef ? `sb-${projectRef}-auth-token` : 'sb-'
       const hasCookie = () => document.cookie.split(';').some(c => c.trim().startsWith(cookieName))
-      const start = Date.now()
-      while (!hasCookie() && Date.now() - start < 2000) {
-        await new Promise(r => setTimeout(r, 50))
+
+      // Wait for document.cookie to show it (typically <10ms)
+      const cookieStart = Date.now()
+      while (!hasCookie() && Date.now() - cookieStart < 2000) {
+        await new Promise(r => setTimeout(r, 20))
       }
-      console.log('[login] cookie ready after', Date.now() - start, 'ms - navigating to', redirect)
+
+      // Then verify server-side reads it via the same-origin API.
+      // If GET /api/auth/session returns status != 'unauthenticated',
+      // the cookie is actually attached to outgoing requests.
+      const verifyStart = Date.now()
+      let verified = false
+      for (let i = 0; i < 30; i++) {
+        try {
+          const check = await fetch('/api/auth/session', { credentials: 'include' })
+          const body = await check.json()
+          if (body.status !== 'unauthenticated' && (body.hasAccess !== false || body.tier)) {
+            verified = true
+            break
+          }
+        } catch {}
+        await new Promise(r => setTimeout(r, 100))
+      }
+      console.log('[login] cookie ready', Date.now() - cookieStart, 'ms, server-verified', verified, 'after', Date.now() - verifyStart, 'ms - navigating to', redirect)
 
       router.push(redirect)
       router.refresh()
