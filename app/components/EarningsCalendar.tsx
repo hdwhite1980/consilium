@@ -131,12 +131,25 @@ export default function EarningsCalendar() {
     }
   }
 
+  // Filter out rows with no useful data (no EPS, no rev, no scheduled time)
+  // These are typically tiny ADRs or incomplete Finnhub entries — pure noise.
+  // Exception: if it's in the user's "YOURS" set, always keep it visible.
+  const usefulEarnings = (data?.earnings ?? []).filter(e => {
+    if (e.isYours) return true
+    const hasEps = e.epsEstimate !== null && e.epsEstimate !== undefined
+    const hasRev = e.revenueEstimate !== null && e.revenueEstimate !== undefined
+    const hasTime = e.hour === 'bmo' || e.hour === 'amc' || e.hour === 'dmh'
+    return hasEps || hasRev || hasTime
+  })
+
   // Group earnings by date
   const grouped: Map<string, EarningsRow[]> = new Map()
-  for (const e of data?.earnings ?? []) {
+  for (const e of usefulEarnings) {
     if (!grouped.has(e.date)) grouped.set(e.date, [])
     grouped.get(e.date)!.push(e)
   }
+
+  const hiddenCount = (data?.earnings.length ?? 0) - usefulEarnings.length
 
   return (
     <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
@@ -222,23 +235,60 @@ export default function EarningsCalendar() {
         </div>
       )}
 
-      {!loading && data && data.earnings.length === 0 && (
+      {!loading && data && usefulEarnings.length === 0 && (
         <div className="px-5 py-8 text-center text-xs" style={{ color: 'var(--text3)' }}>
-          No earnings scheduled in this range.
+          {data.earnings.length > 0 
+            ? `No scheduled earnings with estimates in this range. ${data.earnings.length} low-data entries hidden.`
+            : 'No earnings scheduled in this range.'}
         </div>
       )}
 
-      {!loading && data && data.earnings.length > 0 && (
+      {!loading && data && usefulEarnings.length > 0 && (
         <>
           <div className="divide-y" style={{ borderColor: 'rgba(255,255,255,0.04)' }}>
-            {Array.from(grouped.entries()).map(([date, rows]) => (
+            {Array.from(grouped.entries()).map(([date, rows]) => {
+              // Parse date for a cleaner display with day + date on separate lines
+              const d = new Date(date + 'T12:00:00')
+              const dayName = d.toLocaleDateString(undefined, { weekday: 'long' })
+              const monthDay = d.toLocaleDateString(undefined, { month: 'long', day: 'numeric' })
+              const today = new Date()
+              today.setHours(0, 0, 0, 0)
+              const isToday = d.toDateString() === today.toDateString()
+              const tomorrow = new Date(today.getTime() + 86400000)
+              const isTomorrow = d.toDateString() === tomorrow.toDateString()
+              const relativeLabel = isToday ? 'Today' : isTomorrow ? 'Tomorrow' : ''
+              const yoursCount = rows.filter(r => r.isYours).length
+
+              return (
               <div key={date}>
-                {/* Date header */}
+                {/* Date header — prominent, scannable, with calendar icon */}
                 <div
-                  className="px-5 py-2 text-[10px] font-mono uppercase tracking-widest"
-                  style={{ background: 'var(--surface2)', color: 'var(--text3)' }}
+                  className="flex items-center gap-3 px-5 py-3 border-b"
+                  style={{
+                    background: isToday ? 'rgba(96,165,250,0.08)' : 'var(--surface2)',
+                    borderColor: isToday ? 'rgba(96,165,250,0.25)' : 'var(--border)',
+                  }}
                 >
-                  {formatDate(date)} · {rows.length} report{rows.length === 1 ? '' : 's'}
+                  <Calendar size={14} style={{ color: isToday ? '#60a5fa' : 'var(--text3)' }} />
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-base font-bold text-white">{dayName}</span>
+                    <span className="text-sm text-white/60">{monthDay}</span>
+                    {relativeLabel && (
+                      <span
+                        className="text-[10px] font-mono uppercase tracking-widest px-2 py-0.5 rounded-full"
+                        style={{ background: 'rgba(96,165,250,0.15)', color: '#60a5fa', border: '1px solid rgba(96,165,250,0.3)' }}
+                      >
+                        {relativeLabel}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex-1" />
+                  <span className="text-[10px] font-mono uppercase tracking-widest" style={{ color: 'var(--text3)' }}>
+                    {rows.length} report{rows.length === 1 ? '' : 's'}
+                    {yoursCount > 0 && (
+                      <span className="ml-2" style={{ color: '#fbbf24' }}>· {yoursCount} yours</span>
+                    )}
+                  </span>
                 </div>
 
                 {/* Earnings rows for this date */}
@@ -314,8 +364,16 @@ export default function EarningsCalendar() {
                   ))}
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
+
+          {/* Filtered count indicator */}
+          {hiddenCount > 0 && (
+            <div className="px-5 py-2 border-t text-[10px] font-mono uppercase tracking-widest text-center" style={{ borderColor: 'var(--border)', color: 'var(--text3)' }}>
+              {hiddenCount} low-data entr{hiddenCount === 1 ? 'y' : 'ies'} hidden · small-cap ADRs without estimates
+            </div>
+          )}
 
           {/* Pagination */}
           {data.totalPages > 1 && (
