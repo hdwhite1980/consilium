@@ -168,7 +168,7 @@ export default function PortfolioAlerts({ isDark }: Props) {
       {/* Dropdown panel */}
       {open && (
         <div
-          className="absolute right-0 top-full mt-2 w-96 rounded-2xl shadow-2xl z-50 overflow-hidden"
+          className="fixed sm:absolute left-2 right-2 sm:left-auto sm:right-0 top-[60px] sm:top-full mt-0 sm:mt-2 w-auto sm:w-96 max-h-[calc(100vh-80px)] sm:max-h-none rounded-2xl shadow-2xl z-50 overflow-hidden flex flex-col"
           style={{ background: surf, border: `1px solid ${brd}` }}
         >
           {/* Header */}
@@ -182,7 +182,7 @@ export default function PortfolioAlerts({ isDark }: Props) {
             </div>
             <div className="flex items-center gap-2">
               <span className="text-[10px] flex items-center gap-1.5" style={{ color: txt3 }}>
-                <span>{isMarketOpen() ? '🟢' : '⚫'}</span>
+                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: isMarketOpen() ? '#34d399' : '#6b7280' }} aria-label={isMarketOpen() ? 'Market open' : 'Market closed'} />
                 {lastChecked && (
                   <span>last {lastChecked.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                 )}
@@ -202,7 +202,7 @@ export default function PortfolioAlerts({ isDark }: Props) {
           </div>
 
           {/* Alert list */}
-          <div className="max-h-96 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto sm:max-h-96">
             {alerts.length === 0 ? (
               <div className="px-4 py-8 text-center">
                 <Bell size={20} style={{ color: txt3, margin: '0 auto 8px' }} />
