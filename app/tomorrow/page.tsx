@@ -211,7 +211,7 @@ export default function TomorrowPage() {
       Object.keys(localStorage).filter(k => k.startsWith('sb-')).forEach(k => localStorage.removeItem(k))
       document.cookie.split(';').forEach(c => {
         const name = c.split('=')[0].trim()
-        if (name.startsWith('sb-')) {
+        if (name.startsWith('sb-') || name === 'wali_device_id') {
           document.cookie = name + '=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
         }
       })

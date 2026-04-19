@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import crypto from 'crypto'
 
 // Uses service role to bypass RLS for session writes
 function getAdminClient() {
@@ -8,42 +9,43 @@ function getAdminClient() {
   )
 }
 
-// Called on login — registers this device as the only active session
-export async function registerSession(userId: string, sessionToken: string, deviceHint: string) {
+// Called on login - generates a fresh device_id, stores it, returns it.
+// The returned device_id is set as a cookie on the login response so
+// this device can prove itself on subsequent requests. When a new
+// login happens (same user, different browser), a new device_id replaces
+// this one, and the old device will be rejected by validateDeviceId.
+export async function registerSession(userId: string, deviceHint: string): Promise<string> {
   const admin = getAdminClient()
+  const deviceId = crypto.randomUUID()
   await admin
     .from('active_sessions')
     .upsert({
       user_id: userId,
-      session_token: sessionToken,
+      device_id: deviceId,
       device_hint: deviceHint,
       logged_in_at: new Date().toISOString(),
       last_seen_at: new Date().toISOString(),
     }, { onConflict: 'user_id' })
+  return deviceId
 }
 
-// Called on each protected page load — checks token still matches
-export async function validateSession(userId: string, sessionToken: string): Promise<boolean> {
+// Called by middleware on every protected request.
+// Returns true iff the device_id cookie matches what we stored at login.
+// A mismatch means the user logged in from another device, displacing
+// this one - we should bounce them to login with ?error=session_displaced.
+export async function validateDeviceId(userId: string, deviceId: string | undefined): Promise<boolean> {
+  if (!deviceId) return false
   const admin = getAdminClient()
   const { data } = await admin
     .from('active_sessions')
-    .select('session_token, last_seen_at')
+    .select('device_id')
     .eq('user_id', userId)
-    .single()
-
+    .maybeSingle()
   if (!data) return false
-  if (data.session_token !== sessionToken) return false
-
-  // Update last_seen_at (heartbeat)
-  await admin
-    .from('active_sessions')
-    .update({ last_seen_at: new Date().toISOString() })
-    .eq('user_id', userId)
-
-  return true
+  return data.device_id === deviceId
 }
 
-// Called on logout — removes the session record
+// Called on logout - removes the session record
 export async function clearSession(userId: string) {
   const admin = getAdminClient()
   await admin

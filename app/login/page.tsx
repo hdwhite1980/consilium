@@ -20,6 +20,7 @@ function LoginPageInner() {
   const [mfaCode, setMfaCode]         = useState('')
   const [mfaFactorId, setMfaFactorId] = useState<string | null>(null)
   const [mfaError, setMfaError]       = useState<string | null>(null)
+  const [showDisplacedModal, setShowDisplacedModal] = useState(false)
 
   const redirect = searchParams.get('redirect') || '/'
 
@@ -30,7 +31,13 @@ function LoginPageInner() {
     if (msgParam) {
       setError(msgParam)
     } else if (errParam === 'session_displaced') {
-      setError('You were signed out because your account was logged into from another device.')
+      setShowDisplacedModal(true)
+      // Clean the URL so a refresh doesn't show the modal again
+      const timeout = setTimeout(() => {
+        window.history.replaceState({}, '', '/login')
+        setShowDisplacedModal(false)
+      }, 3000)
+      return () => clearTimeout(timeout)
     } else if (errParam) {
       setError('Authentication failed. Please try again.')
     }
@@ -76,15 +83,16 @@ function LoginPageInner() {
         }
       }
 
-      // Register device session + write auth cookies server-side
+      // Register device + write auth cookies server-side.
+      // Server generates device_id and sets the wali_device_id cookie
+      // so middleware can detect when this device gets displaced by
+      // a newer login from somewhere else.
       if (data.session?.access_token && data.session?.refresh_token) {
-        const sessionToken = data.session.access_token.slice(-32)
         try {
           await fetch('/api/auth/session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              sessionToken,
               accessToken: data.session.access_token,
               refreshToken: data.session.refresh_token,
             }),
@@ -147,12 +155,14 @@ function LoginPageInner() {
     }
     // Get session after MFA verification
     const { data: sessionData } = await supabase.auth.getSession()
-    if (sessionData.session?.access_token) {
-      const sessionToken = sessionData.session.access_token.slice(-32)
+    if (sessionData.session?.access_token && sessionData.session?.refresh_token) {
       await fetch('/api/auth/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionToken, accessToken: sessionData.session.access_token, refreshToken: sessionData.session.refresh_token }),
+        body: JSON.stringify({
+          accessToken: sessionData.session.access_token,
+          refreshToken: sessionData.session.refresh_token,
+        }),
       })
     }
     window.location.replace(redirect)
@@ -310,6 +320,25 @@ function LoginPageInner() {
           </form>
         )}
       </div>
+
+      {/* Session displaced modal */}
+      {showDisplacedModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}>
+          <div className="max-w-sm w-full rounded-2xl border p-6 text-center"
+            style={{ background: '#111620', borderColor: 'rgba(248,113,113,0.3)' }}>
+            <div className="text-3xl mb-3">⚠️</div>
+            <h2 className="text-base font-bold text-white mb-2">Signed out</h2>
+            <p className="text-sm text-white/60">
+              Your account was just logged into from another device.
+              This session has been ended for security.
+            </p>
+            <p className="text-[10px] font-mono text-white/30 mt-4">
+              Redirecting in a moment...
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="mt-6 flex items-center gap-4 justify-center">
         <a href="/subscribe"

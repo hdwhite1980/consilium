@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { createClient as createAdmin } from '@supabase/supabase-js'
+import { validateDeviceId } from '@/app/lib/auth/session'
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
@@ -94,7 +95,27 @@ export async function middleware(request: NextRequest) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 
-  // Single-session enforcement: see commit 3 for device-id-based version.
+  // --- Single-session enforcement via device_id ---
+  // When a user logs in, server stores a random UUID in active_sessions
+  // and sets a wali_device_id cookie. On each request, we verify this
+  // device's cookie still matches what's stored. If the user has since
+  // logged in from another browser, a new device_id was written, and
+  // this cookie is stale - we redirect with ?error=session_displaced.
+  //
+  // Unlike token-fingerprint approaches this is immune to Supabase's
+  // token rotation because device_id only changes on intentional login.
+  const deviceIdCookie = request.cookies.get('wali_device_id')?.value
+  const deviceValid = await validateDeviceId(user.id, deviceIdCookie)
+  if (!deviceValid) {
+    const loginUrl = new URL('/login', request.url)
+    loginUrl.searchParams.set('error', 'session_displaced')
+    const response = NextResponse.redirect(loginUrl)
+    // Clear all auth cookies so the stale device starts fresh
+    request.cookies.getAll()
+      .filter(c => c.name.startsWith('sb-') || c.name === 'wali_device_id')
+      .forEach(c => response.cookies.delete(c.name))
+    return response
+  }
 
   // --- Disclaimer ---
   if (pathname !== '/disclaimer') {
