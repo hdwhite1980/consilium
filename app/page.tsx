@@ -385,24 +385,27 @@ function HomeInner() {
   }, [])
 
   const handleSignOut = async () => {
-    // Robust logout - never hangs, always navigates
-    const supabase = createClient()
-
-    // Use scope:'local' to avoid the /logout?scope=global call which
-    // fails intermittently and leaves zombie state. Local logout clears
-    // browser state only and is sufficient for our needs.
-    try {
-      await supabase.auth.signOut({ scope: 'local' })
-    } catch { /* swallow - we're navigating anyway */ }
-
+    // Server cleanup first (best effort)
     try {
       await fetch('/api/auth/session', { method: 'DELETE' })
-    } catch { /* swallow - server cleanup is best-effort */ }
+    } catch { /* swallow */ }
 
-    // Hard navigation (window.location) instead of router.push() to
-    // fully reset all React state, component trees, and cached data.
-    // This prevents the 'zombie dashboard' that made re-login hang.
-    window.location.href = '/login'
+    // Nuke client-side auth state directly - don't call supabase.auth.signOut()
+    // because that hits Supabase's /logout endpoint which keeps failing.
+    try {
+      Object.keys(localStorage).filter(k => k.startsWith('sb-')).forEach(k => localStorage.removeItem(k))
+      document.cookie.split(';').forEach(c => {
+        const name = c.split('=')[0].trim()
+        if (name.startsWith('sb-')) {
+          document.cookie = name + '=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+        }
+      })
+    } catch { /* swallow */ }
+
+    // Cache-busting navigation: unique timestamp forces Next.js router to
+    // discard any cached '/' -> '/login' redirect from the logged-out state.
+    // Without this, re-login fetches the stale redirect and hangs.
+    window.location.replace('/login?t=' + Date.now())
   }
   const abortRef  = useRef<AbortController | null>(null)
   const scroll    = useCallback(() => setTimeout(() => debateRef.current?.scrollTo({ top: 99999, behavior: 'smooth' }), 80), [])
