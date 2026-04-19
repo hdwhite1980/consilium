@@ -309,9 +309,21 @@ export default function NewsPage() {
   useEffect(() => { load() }, [load])
 
   const handleSignOut = async () => {
-    try { await (createClient()).auth.signOut({ scope: 'local' }) } catch {}
+    // Server cleanup first (best effort)
     try { await fetch('/api/auth/session', { method: 'DELETE' }) } catch {}
-    window.location.href = '/login'
+    // Nuke client-side auth state directly - don't call supabase.auth.signOut()
+    // because that hits Supabase's /logout endpoint which fails intermittently
+    // and leaves zombie SDK state that breaks subsequent logins.
+    try {
+      Object.keys(localStorage).filter(k => k.startsWith('sb-')).forEach(k => localStorage.removeItem(k))
+      document.cookie.split(';').forEach(c => {
+        const name = c.split('=')[0].trim()
+        if (name.startsWith('sb-')) {
+          document.cookie = name + '=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+        }
+      })
+    } catch {}
+    window.location.replace('/login')
   }
 
   const handleAnalyze = (ticker: string) => {
