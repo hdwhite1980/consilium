@@ -96,7 +96,18 @@ function LoginPageInner() {
       } else {
         console.warn('[login] NO access_token on session - this is why we hang')
       }
-      console.log('[login] about to navigate to', redirect)
+      // CRITICAL: wait for the cookie to actually be in the browser cookie jar
+      // before hard-navigating. signInWithPassword and /api/auth/session both
+      // write cookies asynchronously, and if we navigate before they commit,
+      // the next request arrives with no cookies and middleware bounces to /login.
+      const projectRef = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').match(/https:\/\/([^.]+)\.supabase\.co/)?.[1]
+      const cookieName = projectRef ? `sb-${projectRef}-auth-token` : 'sb-'
+      const hasCookie = () => document.cookie.split(';').some(c => c.trim().startsWith(cookieName))
+      const start = Date.now()
+      while (!hasCookie() && Date.now() - start < 2000) {
+        await new Promise(r => setTimeout(r, 50))
+      }
+      console.log('[login] cookie ready after', Date.now() - start, 'ms - navigating to', redirect)
 
       router.push(redirect)
       router.refresh()
