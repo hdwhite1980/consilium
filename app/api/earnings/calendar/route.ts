@@ -47,9 +47,18 @@ async function fetchFinnhubEarnings(fromDate: string, toDate: string): Promise<F
 }
 
 /**
- * Fetch user's portfolio tickers.
- * Tries multiple table name conventions — whichever exists will match.
- * Falls back to recent verdict_log entries if no portfolio table found.
+ * Determine which tickers are "YOURS" for a user.
+ *
+ * You chose Option 3 (Hybrid): union of two signals:
+ *   1. STRONG signal — invest_trades: tickers the user has opened as
+ *      actual trades in the Invest page. This is intent + commitment.
+ *   2. WEAKER signal — verdict_log: tickers the user has analyzed in
+ *      the last 30 days. This captures interest even without a trade.
+ *
+ * Both sources fail gracefully if their tables don't exist (e.g.
+ * verdict_log didn't exist until the backtest migration ran).
+ *
+ * Returns tickers as UPPERCASE Set for fast lookup.
  */
 async function fetchUserHoldings(userId: string): Promise<Set<string>> {
   const admin = createClient(
@@ -59,39 +68,35 @@ async function fetchUserHoldings(userId: string): Promise<Set<string>> {
 
   const holdings = new Set<string>()
 
-  // Try common portfolio table names — first one that returns data wins
-  const candidateTables = ['portfolios', 'portfolio', 'holdings', 'user_holdings', 'user_portfolio']
-  for (const tbl of candidateTables) {
-    try {
-      const { data, error } = await admin
-        .from(tbl)
-        .select('ticker, symbol')
-        .eq('user_id', userId)
-        .limit(500)
-      if (!error && data && data.length > 0) {
-        for (const row of data) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const t = ((row as any).ticker ?? (row as any).symbol ?? '').toString().toUpperCase()
-          if (t) holdings.add(t)
-        }
-        if (holdings.size > 0) return holdings
-      }
-    } catch { /* table doesn't exist, try next */ }
-  }
-
-  // Fallback: use tickers from recent verdict_log entries (last 60 days)
-  const sixtyDaysAgo = new Date(Date.now() - 60 * 86400000).toISOString().split('T')[0]
+  // ── Source 1: invest_trades (strong signal — user opened a real trade) ──
   try {
-    const { data } = await admin
+    const { data, error } = await admin
+      .from('invest_trades')
+      .select('ticker')
+      .eq('user_id', userId)
+      .limit(500)
+    if (!error && data) {
+      for (const row of data) {
+        if (row.ticker) holdings.add(row.ticker.toString().toUpperCase())
+      }
+    }
+  } catch { /* table may not exist — non-critical */ }
+
+  // ── Source 2: verdict_log last 30 days (weaker signal — recent analysis) ──
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0]
+  try {
+    const { data, error } = await admin
       .from('verdict_log')
       .select('ticker')
       .eq('user_id', userId)
-      .gte('verdict_date', sixtyDaysAgo)
+      .gte('verdict_date', thirtyDaysAgo)
       .limit(500)
-    for (const row of data ?? []) {
-      if (row.ticker) holdings.add(row.ticker.toUpperCase())
+    if (!error && data) {
+      for (const row of data) {
+        if (row.ticker) holdings.add(row.ticker.toString().toUpperCase())
+      }
     }
-  } catch { /* non-critical */ }
+  } catch { /* table may not exist — non-critical */ }
 
   return holdings
 }
