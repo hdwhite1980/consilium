@@ -528,7 +528,7 @@ export async function GET(req: NextRequest) {
         const nextDayLabel = getNextTradingDayLabel(forwardContext.nextTradingDay)
 
         // ── Pass 1: Claude builds playbook ───────────────────
-        send('status', { message: `Regime: ${regime.regime}. Claude is building tomorrow's playbook...` })
+        send('status', { message: `Regime: ${regime.regime}. Building tomorrow's playbook...` })
         const classifyStart = Date.now()
         const result = await buildPlaybookWithClaude({
           forwardContext,

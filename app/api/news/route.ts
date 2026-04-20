@@ -489,7 +489,7 @@ export async function GET(req: NextRequest) {
         const newsBlock = formatNewsForPrompt(newsResult.items, 40)
 
         // ── Pass 1: Claude classifies ────────────────────────
-        send('status', { message: `Market regime: ${regime.regime}. Claude is classifying movers with confidence scores...` })
+        send('status', { message: `Market regime: ${regime.regime}. Classifying movers with confidence scores...` })
         const classifyStart = Date.now()
         const result = await classifyWithClaude(newsBlock, regime, today)
         console.log(`[today-movers] classification ${Date.now() - classifyStart}ms (bull:${result.topBullish.length} bear:${result.topBearish.length} watch:${result.watchlist.length})`)
