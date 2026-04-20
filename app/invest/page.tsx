@@ -870,6 +870,7 @@ function TierLadder({ tiers, tier, stats, value }: {
   value: { realized: number }
 }) {
   const tierIdx = tiers.findIndex(t => t.name === tier.name)
+  const [rulesOpen, setRulesOpen] = useState(false)
 
   // Relative building heights: Buyer small, Sovereign tallest
   const heights = [20, 32, 48, 68, 92]
@@ -878,8 +879,45 @@ function TierLadder({ tiers, tier, stats, value }: {
     <aside className="fl-ladder">
       <div className="fl-ladder-head">
         <div className="fl-eyebrow">capital hierarchy</div>
-        <h3>Five tiers, one book</h3>
+        <div className="fl-ladder-head-row">
+          <h3>Five tiers, one book</h3>
+          <button
+            className="fl-tier-info-btn"
+            onClick={() => setRulesOpen(v => !v)}
+            aria-label="How tier progression works"
+            title="How tier progression works"
+          >
+            ?
+          </button>
+        </div>
       </div>
+
+      {rulesOpen && (
+        <div className="fl-tier-rules">
+          <div className="fl-tier-rules-head">
+            <span>How progression works</span>
+            <button className="fl-tier-rules-close" onClick={() => setRulesOpen(false)}>×</button>
+          </div>
+          <div className="fl-tier-rules-body">
+            <p>Tiers unlock based on your <strong>total realized profit</strong> (wins minus losses from closed trades). Nothing is gated by time or subscription — only by compounding.</p>
+            <ul>
+              {tiers.map((t) => (
+                <li key={t.name}>
+                  <span className="fl-tier-rules-name" style={{ color: t.color }}>{t.name}</span>
+                  <span className="fl-tier-rules-req mono">
+                    {t.max == null ? `$${t.min.toLocaleString()}+` : `$${t.min.toLocaleString()} — $${t.max.toLocaleString()}`}
+                  </span>
+                  <span className="fl-tier-rules-tag">{t.tagline}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="fl-tier-rules-foot">
+              Options desk unlocks at <strong>Operator</strong>. Realized P/L updates when you close positions.
+              Losing trades subtract from your running total, so tier can drop — this is a feature, not a bug.
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="fl-skyline">
         {tiers.map((t, i) => {
@@ -1339,6 +1377,17 @@ function FloorInner() {
                             {idea.signal?.toLowerCase() ?? 'bull'} · {idea.confidence ?? 0}%
                           </span>
                         </div>
+                        {idea.verdictId && (
+                          <button
+                            className="fl-signal-attribution"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              router.push(`/?ticker=${idea.ticker}&verdict=${idea.verdictId}`)
+                            }}
+                          >
+                            view full debate →
+                          </button>
+                        )}
                         <div className="fl-signal-disclaimer">
                           Educational setup · not a guarantee of profit
                         </div>
@@ -1357,6 +1406,14 @@ function FloorInner() {
                       {optionIdeas.map((opt, i) => {
                         const dte = opt.dte ?? getDTE(opt.expiry)
                         const isCall = opt.optionType === 'call'
+                        const maxLoss = opt.maxLoss ?? opt.cost ?? ((opt.estimatedPremium ?? 0) * 100)
+                        const delta = typeof opt.delta === 'number' ? opt.delta : null
+                        const breakeven = opt.breakeven ?? null
+                        const underlyingPx = opt.underlyingPrice ?? opt.price
+                        // Breakeven move needed as % of underlying
+                        const breakevenMovePct = (breakeven && underlyingPx)
+                          ? ((breakeven - underlyingPx) / underlyingPx) * 100
+                          : null
                         return (
                           <div key={`opt-${opt.underlying}-${opt.strike}-${i}`}
                             className={`fl-option-tile ${isCall ? 'call' : 'put'}`}
@@ -1374,15 +1431,58 @@ function FloorInner() {
                             <div className="fl-option-strike-row mono">
                               <span>${opt.strike} strike</span>
                               <span>&middot;</span>
-                              <span>{dte}d</span>
+                              <span className={dte <= 7 ? 'fl-option-dte-urgent' : ''}>{dte}d</span>
                             </div>
                             {opt.catalyst && <div className="fl-signal-catalyst">{opt.catalyst}</div>}
+
+                            {/* Commit B: risk surfacing block */}
+                            <div className="fl-option-risks">
+                              <div className="fl-option-risk-row">
+                                <span className="fl-option-risk-k">Max loss</span>
+                                <span className="fl-option-risk-v mono fl-option-risk-danger">
+                                  {fmt$(-maxLoss)}
+                                </span>
+                              </div>
+                              {delta !== null && (
+                                <div className="fl-option-risk-row">
+                                  <span className="fl-option-risk-k">Delta</span>
+                                  <span className="fl-option-risk-v mono">
+                                    {delta >= 0 ? '+' : ''}{delta.toFixed(2)}
+                                  </span>
+                                </div>
+                              )}
+                              {breakeven !== null && (
+                                <div className="fl-option-risk-row">
+                                  <span className="fl-option-risk-k">Breakeven</span>
+                                  <span className="fl-option-risk-v mono">
+                                    {fmt$(breakeven)}
+                                    {breakevenMovePct !== null && (
+                                      <span className="fl-option-risk-sub">
+                                        &nbsp;({breakevenMovePct >= 0 ? '+' : ''}{breakevenMovePct.toFixed(1)}%)
+                                      </span>
+                                    )}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+
                             <div className="fl-signal-meta">
                               <span className="mono">{fmt$(opt.cost ?? ((opt.estimatedPremium ?? 0) * 100))} / contract</span>
                               <span className="fl-signal-conf mono">
                                 {opt.confidence ?? 0}%
                               </span>
                             </div>
+                            {opt.verdictId && (
+                              <button
+                                className="fl-signal-attribution"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  router.push(`/?ticker=${opt.underlying ?? opt.ticker}&verdict=${opt.verdictId}`)
+                                }}
+                              >
+                                view full debate →
+                              </button>
+                            )}
                             <div className="fl-signal-disclaimer fl-signal-disclaimer-option">
                               Educational · options can expire worthless · no guarantees
                             </div>
@@ -2097,6 +2197,174 @@ function FloorStyles() {
       .fl-signal-disclaimer-option {
         color: rgba(251, 191, 36, 0.65);
         border-top-color: rgba(251, 191, 36, 0.2);
+      }
+
+      /* ── Commit B: verdict attribution link on tiles ─────────── */
+      .fl-signal-attribution {
+        display: block;
+        width: 100%;
+        margin-top: 6px;
+        padding: 4px 0;
+        background: transparent;
+        border: none;
+        border-top: 1px solid rgba(96, 165, 250, 0.15);
+        color: rgba(96, 165, 250, 0.8);
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 9px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: color 0.15s ease;
+      }
+      .fl-signal-attribution:hover {
+        color: #60a5fa;
+      }
+
+      /* ── Commit B: options risk surfacing block ─────────── */
+      .fl-option-risks {
+        margin-top: 8px;
+        padding: 8px 10px;
+        background: rgba(15, 23, 42, 0.5);
+        border-radius: 3px;
+        border: 1px solid rgba(148, 163, 184, 0.1);
+      }
+      .fl-option-risk-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        padding: 2px 0;
+      }
+      .fl-option-risk-k {
+        font-size: 9px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: rgba(148, 163, 184, 0.7);
+      }
+      .fl-option-risk-v {
+        font-size: 11px;
+        color: rgba(226, 232, 240, 0.9);
+        font-weight: 600;
+      }
+      .fl-option-risk-danger {
+        color: #dc2626 !important;
+      }
+      .fl-option-risk-sub {
+        font-size: 9px;
+        color: rgba(148, 163, 184, 0.6);
+        font-weight: 400;
+      }
+      .fl-option-dte-urgent {
+        color: #dc2626;
+        font-weight: 700;
+      }
+
+      /* ── Commit B: tier info button + rules popover ─────────── */
+      .fl-ladder-head-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .fl-tier-info-btn {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background: rgba(212, 168, 87, 0.1);
+        border: 1px solid rgba(212, 168, 87, 0.25);
+        color: rgba(212, 168, 87, 0.85);
+        font-size: 11px;
+        font-weight: 600;
+        font-family: 'IBM Plex Mono', monospace;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        transition: all 0.15s ease;
+      }
+      .fl-tier-info-btn:hover {
+        background: rgba(212, 168, 87, 0.18);
+        color: #d4a857;
+      }
+      .fl-tier-rules {
+        margin: 10px 0 16px;
+        background: rgba(15, 23, 42, 0.6);
+        border: 1px solid rgba(212, 168, 87, 0.2);
+        border-radius: 4px;
+        overflow: hidden;
+        animation: tierRulesIn 0.25s ease;
+      }
+      @keyframes tierRulesIn {
+        from { opacity: 0; transform: translateY(-4px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      .fl-tier-rules-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 12px;
+        background: rgba(212, 168, 87, 0.05);
+        border-bottom: 1px solid rgba(212, 168, 87, 0.15);
+        font-size: 10px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: rgba(212, 168, 87, 0.9);
+        font-family: 'IBM Plex Mono', monospace;
+      }
+      .fl-tier-rules-close {
+        background: transparent;
+        border: none;
+        color: rgba(148, 163, 184, 0.6);
+        font-size: 16px;
+        cursor: pointer;
+        padding: 0 4px;
+        line-height: 1;
+      }
+      .fl-tier-rules-close:hover { color: rgba(226, 232, 240, 0.9); }
+      .fl-tier-rules-body {
+        padding: 10px 12px;
+        font-size: 11px;
+        line-height: 1.5;
+        color: rgba(148, 163, 184, 0.9);
+      }
+      .fl-tier-rules-body p {
+        margin: 0 0 8px;
+      }
+      .fl-tier-rules-body ul {
+        list-style: none;
+        padding: 0;
+        margin: 8px 0;
+      }
+      .fl-tier-rules-body li {
+        display: grid;
+        grid-template-columns: 90px 110px 1fr;
+        gap: 8px;
+        padding: 4px 0;
+        border-top: 1px dashed rgba(148, 163, 184, 0.08);
+        align-items: baseline;
+      }
+      .fl-tier-rules-body li:first-child {
+        border-top: none;
+      }
+      .fl-tier-rules-name {
+        font-weight: 600;
+        font-size: 11px;
+      }
+      .fl-tier-rules-req {
+        font-size: 10px;
+        color: rgba(148, 163, 184, 0.7);
+      }
+      .fl-tier-rules-tag {
+        font-size: 10px;
+        color: rgba(148, 163, 184, 0.55);
+        font-style: italic;
+      }
+      .fl-tier-rules-foot {
+        margin-top: 10px !important;
+        padding-top: 10px;
+        border-top: 1px dashed rgba(212, 168, 87, 0.2);
+        font-size: 10px !important;
+        color: rgba(148, 163, 184, 0.7) !important;
       }
 
       /* ── Right column ───────────────────────────── */
