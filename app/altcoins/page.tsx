@@ -524,13 +524,6 @@ export default function AltcoinsPage() {
           </>
         )}
 
-        {/* Footer */}
-        {data && (
-          <p className="text-[10px] text-center pb-2" style={{ color: 'var(--text3)' }}>
-            Upcoming from X via Grok · Launched from CoinGecko · Refreshed daily ·
-            Copy a ticker to the main page for full analysis · For informational purposes only.
-          </p>
-        )}
       </div>
     </div>
   )

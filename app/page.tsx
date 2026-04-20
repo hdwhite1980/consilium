@@ -15,7 +15,7 @@ import {
   BarChart2, Globe, DollarSign, Activity, Shield, Zap, LogOut, BookOpen,
   Sun, Moon, Menu, X, Calendar, Flame, Briefcase, Search, Trophy,
   Scale, LineChart, PieChart, Hourglass, RotateCw, Check, Target,
-  Star, ClipboardList, Wallet, RefreshCw, FileText
+  Star, ClipboardList, Wallet, RefreshCw, FileText, Coins
 } from 'lucide-react'
 
 type Signal = 'BULLISH' | 'BEARISH' | 'NEUTRAL'
@@ -588,6 +588,7 @@ function HomeInner() {
     { label: 'Invest',       icon: <Flame size={12} />,         path: '/invest',       color: '#f97316' },
     { label: 'Portfolio',    icon: <Briefcase size={12} />,     path: '/portfolio',    color: '#34d399' },
     { label: 'Macro',        icon: <Globe size={12} />,         path: '/macro',        color: '#60a5fa' },
+    { label: 'Altcoins',     icon: <Coins size={12} />,         path: '/altcoins',     color: '#a78bfa' },
     { label: 'Screener',     icon: <Search size={12} />,        path: '/screener',     color: '#a78bfa' },
     { label: 'Compare',      icon: <Scale size={12} />,         path: '/compare',      color: '#f87171' },
     { label: 'Track Record', icon: <Trophy size={12} />,        path: '/track-record', color: '#fbbf24' },
