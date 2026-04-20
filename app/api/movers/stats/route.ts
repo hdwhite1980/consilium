@@ -74,9 +74,19 @@ export async function GET(req: NextRequest) {
       .select('mover_id, outcome_1d, outcome_3d, change_1d_pct, change_3d_pct, magnitude_hit_1d, magnitude_hit_3d')
       .in('mover_id', ids)
 
-    const outcomeMap = new Map<number, typeof outcomes extends Array<infer T> ? T : never>()
-    for (const o of outcomes ?? []) {
-      outcomeMap.set(o.mover_id as number, o)
+    interface OutcomeRow {
+      mover_id: number
+      outcome_1d: string | null
+      outcome_3d: string | null
+      change_1d_pct: number | null
+      change_3d_pct: number | null
+      magnitude_hit_1d: boolean | null
+      magnitude_hit_3d: boolean | null
+    }
+
+    const outcomeMap = new Map<number, OutcomeRow>()
+    for (const o of (outcomes ?? []) as OutcomeRow[]) {
+      outcomeMap.set(o.mover_id, o)
     }
 
     // ─────────────────────────────────────────────────
