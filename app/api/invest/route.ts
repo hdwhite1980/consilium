@@ -258,6 +258,43 @@ export async function POST(req: NextRequest) {
       ? body.notes.trim().slice(0, 2000)
       : null
 
+    // ══ Commit A: new required/optional fields ══════════════════════════
+    // rationale: REQUIRED (min 10 chars) — the user's thesis for entering
+    // stop_price / target_price: REQUIRED — exit plan defined at entry
+    // verdict_id: OPTIONAL — links this trade back to the verdict_log row
+    //             that inspired it (null for manual trades without a council signal)
+    const rationaleRaw = typeof body.rationale === 'string' ? body.rationale.trim() : ''
+    if (rationaleRaw.length < 10) {
+      return NextResponse.json({
+        ok: false,
+        error: 'rationale is required (min 10 characters) — describe why you are entering this trade',
+      }, { status: 400 })
+    }
+    const rationale = rationaleRaw.slice(0, 2000)
+
+    const stopPriceRaw = Number(body.stop_price)
+    if (!Number.isFinite(stopPriceRaw) || stopPriceRaw <= 0) {
+      return NextResponse.json({
+        ok: false,
+        error: 'stop_price must be a positive number — define your stop-loss at entry',
+      }, { status: 400 })
+    }
+    const stop_price = stopPriceRaw
+
+    const targetPriceRaw = Number(body.target_price)
+    if (!Number.isFinite(targetPriceRaw) || targetPriceRaw <= 0) {
+      return NextResponse.json({
+        ok: false,
+        error: 'target_price must be a positive number — define your take-profit target at entry',
+      }, { status: 400 })
+    }
+    const target_price = targetPriceRaw
+
+    // verdict_id is optional — only present when the trade came from a council idea.
+    // Sanity-check format (UUID or the text IDs our pipeline uses).
+    const verdictIdRaw = typeof body.verdict_id === 'string' ? body.verdict_id.trim() : ''
+    const verdict_id = verdictIdRaw.length > 0 && verdictIdRaw.length <= 100 ? verdictIdRaw : null
+
     let insertRow: Record<string, unknown> = {
       user_id: user.id,
       ticker,
@@ -266,6 +303,12 @@ export async function POST(req: NextRequest) {
       notes,
       position_type,
       opened_at: new Date().toISOString(),
+      // Commit A additions
+      stop_price,
+      target_price,
+      rationale,
+      verdict_id,
+      plan_outcome: 'still_open',
     }
 
     if (position_type === 'stock') {
@@ -377,10 +420,56 @@ export async function POST(req: NextRequest) {
 
     const isWin = exit_price > trade.entry_price
 
+    // ══ Commit A: classify plan_outcome at close ══════════════════════════
+    // Compare exit price vs the user's pre-defined stop/target. Track whether
+    // the trade followed the plan or bailed early. This lets the postmortem
+    // and Track Record dashboard tell you "stop hit as planned" vs
+    // "target reached as planned" vs "closed early without hitting either."
+    const stop = trade.stop_price as number | null
+    const target = trade.target_price as number | null
+    let plan_outcome: 'stop_hit' | 'target_hit' | 'closed_early' = 'closed_early'
+    let stop_hit_at: string | null = null
+    let target_hit_at: string | null = null
+    const nowIso = new Date().toISOString()
+
+    // For both stocks and options the winning direction is exit > entry,
+    // losing direction exit < entry. We use that to interpret stop/target.
+    // Determine bullish vs bearish stance from the signal rather than entry/exit,
+    // since entry and stop form the truth regardless.
+    if (stop !== null && target !== null) {
+      // Bullish plan: target > entry > stop. Bearish plan: stop > entry > target.
+      const isBullishPlan = target > trade.entry_price && stop < trade.entry_price
+      const isBearishPlan = target < trade.entry_price && stop > trade.entry_price
+
+      if (isBullishPlan) {
+        // Bullish: exit at/above target = target hit; exit at/below stop = stop hit
+        if (exit_price >= target) {
+          plan_outcome = 'target_hit'
+          target_hit_at = nowIso
+        } else if (exit_price <= stop) {
+          plan_outcome = 'stop_hit'
+          stop_hit_at = nowIso
+        }
+      } else if (isBearishPlan) {
+        // Bearish: exit at/below target = target hit; exit at/above stop = stop hit
+        if (exit_price <= target) {
+          plan_outcome = 'target_hit'
+          target_hit_at = nowIso
+        } else if (exit_price >= stop) {
+          plan_outcome = 'stop_hit'
+          stop_hit_at = nowIso
+        }
+      }
+      // If neither condition hit, the user closed early — plan_outcome stays 'closed_early'
+    }
+
     // Update the trade
     const updateRow: Record<string, unknown> = {
       exit_price,
-      exit_date: new Date().toISOString(),
+      exit_date: nowIso,
+      plan_outcome,
+      stop_hit_at,
+      target_hit_at,
     }
     if (isOption && exit_premium !== null) {
       updateRow.exit_premium = exit_premium
