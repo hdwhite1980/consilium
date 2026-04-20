@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, RefreshCw, Calendar, Clock, TrendingUp, TrendingDown, AlertTriangle, BookOpen, Zap, Eye, BarChart3, Factory, Newspaper, Globe, Search } from 'lucide-react'
+import { ArrowLeft, RefreshCw, Calendar, Clock, TrendingUp, TrendingDown, AlertTriangle, BookOpen, Zap, Eye, BarChart3, Factory, Newspaper, Globe, Search, ShieldCheck } from 'lucide-react'
 import { createClient } from '@/app/lib/auth/client'
+import { MoversHitRateWidget } from '@/app/components/MoversHitRateWidget'
 
 interface WatchlistItem {
   ticker: string
@@ -19,6 +20,11 @@ interface WatchlistItem {
   timeOfDay: string
   riskLevel: 'high' | 'medium' | 'low'
   plainEnglish: string
+  // Session 4+5: confidence score and grounded verification
+  confidence?: number
+  verified?: boolean
+  verificationSources?: string[]
+  verificationNote?: string
 }
 
 interface EarningsItem {
@@ -65,6 +71,25 @@ interface TomorrowData {
   riskFactors: string[]
   cached?: boolean
   ageMinutes?: number
+  // Session 4+5: regime context + data source counts
+  regime?: {
+    label: 'risk-on' | 'risk-off' | 'mixed'
+    spyChangePct: number | null
+    vixLevel: number | null
+    context: string
+  }
+  forwardCounts?: {
+    tomorrowEarnings: number
+    afterHoursMovers: number
+    economicEvents: number
+  }
+  newsCounts?: {
+    alpaca: number
+    finnhub: number
+    geminiGrounded: number
+    afterDedupe: number
+  }
+  elapsedMs?: number
 }
 
 const SIG_COLOR = { BULLISH: '#34d399', BEARISH: '#f87171', NEUTRAL: '#fbbf24' }
@@ -118,6 +143,39 @@ function WatchCard({ item, onAnalyze }: { item: WatchlistItem; onAnalyze: (t: st
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            {/* Confidence badge (Session 4+5) */}
+            {typeof item.confidence === 'number' && (
+              <span
+                className="text-[10px] font-mono font-semibold px-2 py-1 rounded-full"
+                style={{
+                  background: item.confidence >= 80 ? 'rgba(52,211,153,0.12)'
+                    : item.confidence >= 70 ? 'rgba(251,191,36,0.12)'
+                    : 'rgba(148,163,184,0.10)',
+                  color: item.confidence >= 80 ? '#34d399'
+                    : item.confidence >= 70 ? '#fbbf24'
+                    : '#94a3b8',
+                  border: `1px solid ${item.confidence >= 80 ? 'rgba(52,211,153,0.25)' : item.confidence >= 70 ? 'rgba(251,191,36,0.25)' : 'rgba(148,163,184,0.18)'}`,
+                }}
+                title={`Model confidence: ${item.confidence}%`}
+              >
+                {item.confidence}%
+              </span>
+            )}
+            {/* Verified badge (Session 5) */}
+            {item.verified === true && (
+              <span
+                className="flex items-center gap-0.5 px-1.5 py-1 rounded-full text-[9px] font-mono font-semibold"
+                style={{
+                  background: 'rgba(96,165,250,0.12)',
+                  color: '#60a5fa',
+                  border: '1px solid rgba(96,165,250,0.25)',
+                }}
+                title={item.verificationNote || 'Verified against Reuters/Bloomberg/WSJ'}
+              >
+                <ShieldCheck size={9} />
+                <span>verified</span>
+              </span>
+            )}
             <span className="text-[11px] font-mono font-bold px-2 py-1 rounded-full"
               style={{ background: `${color}15`, color, border: `1px solid ${color}28` }}>
               {item.signal === 'BULLISH' ? <TrendingUp size={10} className="inline mr-1" /> : item.signal === 'BEARISH' ? <TrendingDown size={10} className="inline mr-1" /> : null}
