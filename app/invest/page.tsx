@@ -1502,6 +1502,23 @@ function FloorInner() {
                     </div>
                   </div>
                 )}
+
+                {/* Commit C: options empty state at Operator+ when none returned */}
+                {tier.name !== 'Buyer' && tier.name !== 'Builder' && optionIdeas.length === 0 && ideas.length > 0 && pulledAt && (
+                  <div className="fl-options-section">
+                    <div className="fl-options-header">
+                      <span className="fl-eyebrow">options desk &middot; operator unlock</span>
+                      <h3>Leveraged setups</h3>
+                    </div>
+                    <div className="fl-empty-state fl-empty-state-options">
+                      <p>No leveraged setups fit your budget this scan.</p>
+                      <p className="fl-empty-state-sub">
+                        The council only flags options when a high-conviction stock idea also has an option contract that fits within ~40% of your per-position budget.
+                        Try pulling again later, or grow your account to see more leveraged opportunities.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -1568,6 +1585,17 @@ function FloorInner() {
             </div>
           )}
 
+          {(mobileView === 'portfolio' || mobileView === 'positions') && data.closedTrades.length === 0 && data.openTrades.length > 0 && (
+            <div className="fl-right-section">
+              <div className="fl-eyebrow">closed &middot; reviewed</div>
+              <h3>Recent reviews</h3>
+              <div className="fl-empty-state fl-empty-state-compact">
+                <p>No closed trades yet.</p>
+                <p className="fl-empty-state-sub">Close a position to see your first review with a grade and process score.</p>
+              </div>
+            </div>
+          )}
+
           {(mobileView === 'portfolio' || mobileView === 'positions') && data.closedTrades.length > 0 && (
             <div className="fl-right-section">
               <div className="fl-eyebrow">closed &middot; reviewed</div>
@@ -1622,6 +1650,50 @@ function FloorInner() {
 
                     {expanded && pm && (
                       <div className="fl-postmortem-body">
+                        {/* Commit C: Council context block — shown when trade had verdict/rationale/stop/target metadata */}
+                        {(t.rationale || t.council_signal || t.stop_price || t.target_price || t.plan_outcome) && (
+                          <div className="fl-postmortem-context">
+                            <div className="fl-postmortem-context-header">Council context</div>
+                            {t.council_signal && (
+                              <div className="fl-postmortem-context-row">
+                                <span className="k">Council called</span>
+                                <span className="v mono">
+                                  <span className={t.council_signal.toLowerCase().includes('bull') ? 'up' : t.council_signal.toLowerCase().includes('bear') ? 'dn' : ''}>
+                                    {t.council_signal}
+                                  </span>
+                                  {t.confidence != null && <span className="fl-postmortem-context-sub"> · {t.confidence}%</span>}
+                                </span>
+                              </div>
+                            )}
+                            {t.rationale && (
+                              <div className="fl-postmortem-context-row fl-postmortem-context-row-stacked">
+                                <span className="k">Your thesis at entry</span>
+                                <span className="v fl-postmortem-rationale">&ldquo;{t.rationale}&rdquo;</span>
+                              </div>
+                            )}
+                            {(t.stop_price || t.target_price) && (
+                              <div className="fl-postmortem-context-row">
+                                <span className="k">Plan</span>
+                                <span className="v mono">
+                                  {t.stop_price ? `stop ${fmt$(t.stop_price)}` : '—'}
+                                  {' / '}
+                                  {t.target_price ? `target ${fmt$(t.target_price)}` : '—'}
+                                </span>
+                              </div>
+                            )}
+                            {t.plan_outcome && t.plan_outcome !== 'still_open' && (
+                              <div className="fl-postmortem-context-row">
+                                <span className="k">Plan outcome</span>
+                                <span className={`v mono fl-plan-outcome fl-plan-${t.plan_outcome}`}>
+                                  {t.plan_outcome === 'target_hit' ? '✓ target reached'
+                                    : t.plan_outcome === 'stop_hit' ? '✗ stop hit'
+                                    : '~ closed early (neither stop nor target)'}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
                         {pm.analysis.honestSummary && (
                           <p className="fl-postmortem-summary">{pm.analysis.honestSummary}</p>
                         )}
@@ -3159,6 +3231,161 @@ function FloorStyles() {
         font-size: 12px;
         color: rgba(148, 163, 184, 0.7);
         font-style: italic;
+      }
+
+      /* ── Commit C: postmortem council-context block ─────────── */
+      .fl-postmortem-context {
+        padding: 10px 12px;
+        margin: 0 0 12px;
+        background: rgba(99, 102, 241, 0.05);
+        border: 1px solid rgba(99, 102, 241, 0.15);
+        border-radius: 4px;
+      }
+      .fl-postmortem-context-header {
+        font-size: 9px;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: rgba(99, 102, 241, 0.9);
+        margin-bottom: 8px;
+        font-family: 'IBM Plex Mono', monospace;
+      }
+      .fl-postmortem-context-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        padding: 3px 0;
+        font-size: 11px;
+        gap: 10px;
+      }
+      .fl-postmortem-context-row .k {
+        color: rgba(148, 163, 184, 0.7);
+        font-size: 10px;
+        letter-spacing: 0.03em;
+      }
+      .fl-postmortem-context-row .v {
+        color: rgba(226, 232, 240, 0.92);
+        text-align: right;
+      }
+      .fl-postmortem-context-row .v .up { color: #10b981; }
+      .fl-postmortem-context-row .v .dn { color: #dc2626; }
+      .fl-postmortem-context-sub {
+        color: rgba(148, 163, 184, 0.7);
+        font-size: 10px;
+      }
+      .fl-postmortem-context-row-stacked {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+        padding: 6px 0 3px;
+      }
+      .fl-postmortem-context-row-stacked .v {
+        text-align: left;
+        width: 100%;
+      }
+      .fl-postmortem-rationale {
+        color: rgba(226, 232, 240, 0.85) !important;
+        font-style: italic;
+        line-height: 1.45;
+      }
+      .fl-plan-outcome { font-weight: 600; }
+      .fl-plan-target_hit { color: #10b981 !important; }
+      .fl-plan-stop_hit { color: #dc2626 !important; }
+      .fl-plan-closed_early { color: rgba(251, 191, 36, 0.9) !important; }
+
+      /* ── Commit C: empty states ─────────── */
+      .fl-empty-state {
+        padding: 20px 16px;
+        text-align: center;
+        background: rgba(15, 23, 42, 0.3);
+        border: 1px dashed rgba(148, 163, 184, 0.2);
+        border-radius: 6px;
+      }
+      .fl-empty-state p {
+        margin: 0 0 6px;
+        font-size: 13px;
+        color: rgba(226, 232, 240, 0.8);
+      }
+      .fl-empty-state-sub {
+        font-size: 11px !important;
+        color: rgba(148, 163, 184, 0.7) !important;
+        line-height: 1.5 !important;
+        margin: 0 !important;
+        max-width: 360px;
+        margin-left: auto !important;
+        margin-right: auto !important;
+      }
+      .fl-empty-state-compact {
+        padding: 14px 12px;
+      }
+      .fl-empty-state-options {
+        border-color: rgba(99, 102, 241, 0.2);
+      }
+
+      /* ── Commit C: mobile media queries for Commit A+B elements ─────── */
+      @media (max-width: 640px) {
+        /* Order ticket: stop/target grid collapses to single column */
+        .fl-ticket-grid2 {
+          grid-template-columns: 1fr !important;
+          gap: 8px !important;
+        }
+
+        /* Tier rules popover: wider on narrow screens, smaller text */
+        .fl-tier-rules-body li {
+          grid-template-columns: 80px 90px 1fr;
+          gap: 6px;
+          font-size: 10px;
+        }
+        .fl-tier-rules-name { font-size: 10px !important; }
+        .fl-tier-rules-req { font-size: 9px !important; }
+        .fl-tier-rules-tag { font-size: 9px !important; }
+
+        /* Option risk block: slightly tighter on mobile */
+        .fl-option-risks {
+          padding: 6px 8px;
+        }
+        .fl-option-risk-k { font-size: 8px !important; }
+        .fl-option-risk-v { font-size: 10px !important; }
+
+        /* Signal attribution link: smaller on mobile */
+        .fl-signal-attribution {
+          font-size: 8px !important;
+          padding: 3px 0 !important;
+        }
+
+        /* Ticket disclaimer: smaller padding on mobile */
+        .fl-ticket-disclaimer {
+          padding: 8px 14px !important;
+          font-size: 10px !important;
+        }
+
+        /* Options grid: single column on narrow */
+        .fl-options-grid {
+          grid-template-columns: 1fr !important;
+        }
+
+        /* Signals grid: keep 2-col on phones but shrink tiles */
+        .fl-signals-grid {
+          grid-template-columns: repeat(2, 1fr) !important;
+          gap: 8px !important;
+        }
+        .fl-signal-tile, .fl-option-tile {
+          padding: 9px 10px !important;
+        }
+      }
+
+      @media (max-width: 380px) {
+        /* Very narrow phones: signals grid also becomes single col */
+        .fl-signals-grid {
+          grid-template-columns: 1fr !important;
+        }
+        .fl-postmortem-context-row {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 2px;
+        }
+        .fl-postmortem-context-row .v {
+          text-align: left;
+        }
       }
 
     `}</style>
