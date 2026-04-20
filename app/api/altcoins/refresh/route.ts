@@ -115,59 +115,68 @@ async function fetchGrokUpcomingLaunches(): Promise<UpcomingLaunch[]> {
       [
         {
           role: 'system',
-          content: `You are a crypto market analyst scanning X (Twitter) for upcoming altcoin and memecoin launches scheduled between ${today} and ${nextWeek}.
+          content: `You are a crypto market analyst scanning X (Twitter) for upcoming altcoin and memecoin launches happening between ${today} and ${nextWeek}.
 
-Your job: identify tokens that have CONCRETE launch announcements — not vague "coming soon" posts.
+Your goal: surface as many tokens as possible that are being discussed on X as upcoming launches. Include BOTH institutional-vetted launches AND speculative memecoin launches — the user wants to see the full landscape, from high-quality to degen-tier.
 
-Signals that a launch is real:
-- Specific date mentioned (e.g., "launching April 24", "TGE on Friday")
-- Contract address already deployed (even if trading isn't live)
-- Launchpad confirmed (CoinList, Binance Launchpad, Coinbase, Fjord, DAOMaker, pump.fun)
-- Chain specified (Base, Solana, Ethereum, Arbitrum, etc.)
-- Multiple credible posters discussing it (not just one shill account)
+Types of launches to include:
+1. Serious projects — tokens launching on vetted launchpads (CoinList, Binance, Coinbase, Fjord, DAOMaker)
+2. Chain-native launches — new tokens about to go live on Base, Solana, Ethereum, Arbitrum, Sui, etc.
+3. Memecoin hype — tokens on pump.fun, bonk.fun, four.meme, or any chain where posters are hyping an imminent launch
+4. Airdrop claims about to open — even without a TGE date, imminent airdrop claim windows count
+5. Anything with a contract address circulating and active X discussion about launch timing
+
+CAST A WIDE NET. If X is talking about it as "coming soon," "launching this week," "TGE Friday," "mainnet Tuesday," "claim opens," "minting starts," or similar — include it. You can flag low-confidence items with the "rumor" label, but include them. The user wants volume, not censorship.
 
 Return ONLY this JSON, no other text:
 {
   "launches": [
     {
       "symbol": "TICKER",
-      "name": "Full project name",
-      "launchDate": "YYYY-MM-DD or null if unknown",
-      "platform": "Base / Solana / Ethereum / CoinList / pump.fun / etc. or null",
+      "name": "Project name (or best guess from posts)",
+      "launchDate": "YYYY-MM-DD or null if only vaguely 'this week'",
+      "platform": "Base / Solana / Ethereum / Arbitrum / CoinList / pump.fun / bonk.fun / four.meme / Binance / Coinbase / etc., or null",
       "confidence": "verified" | "user_reported" | "rumor",
-      "sourceUrl": "URL of the most credible X post about it, or null",
-      "mentionCount": <rough integer count of X posts mentioning it>,
-      "summary": "1-2 sentence description of what the token is and why X is talking about it"
+      "sourceUrl": "URL of an X post discussing it, or null",
+      "mentionCount": <rough integer of X posts mentioning it from last 48h>,
+      "summary": "1-2 sentences on what the token is and why X is hyped about it"
     }
   ]
 }
 
-Rules:
-- Return 5-15 launches max. Quality over quantity.
-- Set "confidence": "verified" ONLY if a well-known launchpad or project team confirmed it
-- Set "confidence": "user_reported" if date/platform is claimed but unverified
-- Set "confidence": "rumor" for speculative memecoin launches
-- Skip obvious spam, scam tokens, or rugpull patterns
-- If you cannot find 3+ credible upcoming launches, return "launches": []`,
+Confidence labels:
+- "verified" — official launchpad (CoinList/Binance/Coinbase) confirmed with exact date
+- "user_reported" — project team or multiple credible accounts claiming a date/platform
+- "rumor" — memecoin shills, speculative anticipation, contract floating around without official launch post
+
+Target: 15-30 launches. If X is genuinely quiet (weekends, holidays), 5-10 is fine, but prefer more over fewer. Include ALL tiers of confidence — it's the UI's job to let users filter/sort, not yours to pre-censor.
+
+Exclude only:
+- Tokens that already launched days ago (not upcoming)
+- Obvious scams with zero posts (if 10+ posts exist, include even if it smells scammy — label rumor)
+- Duplicate tickers (pick the most discussed variant)`,
         },
         {
           role: 'user',
-          content: `What altcoin/memecoin launches are scheduled on X between ${today} and ${nextWeek}? Focus on ones with concrete dates, contract addresses, or launchpad confirmation. Return the JSON.`,
+          content: `Scan X and find altcoin/memecoin launches happening between ${today} and ${nextWeek}. Include ALL launches being discussed — serious, memecoin, speculative, airdrop claims, anything. Target 15-30 items. Return JSON only.`,
         },
       ],
-      { temperature: 0.3, maxTokens: 2500, searchEnabled: true, timeoutMs: 60000 }
+      { temperature: 0.4, maxTokens: 4000, searchEnabled: true, timeoutMs: 90000 }
     )
 
     const cleaned = result.replace(/```json|```/g, '').trim()
     const start = cleaned.indexOf('{')
     const end = cleaned.lastIndexOf('}')
     if (start === -1 || end === -1) {
-      console.warn('[altcoins-refresh] Grok upcoming scan: no JSON found')
+      console.warn('[altcoins-refresh] Grok upcoming scan: no JSON found in response')
+      console.warn('[altcoins-refresh] raw response preview:', result.slice(0, 500))
       return []
     }
 
     const parsed = JSON.parse(cleaned.slice(start, end + 1))
     const launches = Array.isArray(parsed.launches) ? parsed.launches : []
+
+    console.log(`[altcoins-refresh] Grok returned ${launches.length} raw upcoming launches`)
 
     // Validate + normalize
     return launches
