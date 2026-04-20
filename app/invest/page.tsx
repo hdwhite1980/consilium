@@ -32,6 +32,14 @@ interface Trade {
   entry_premium?: number | null
   exit_premium?: number | null
   underlying?: string | null
+  // Commit A additions — stop/target/verdict/rationale
+  stop_price?: number | null
+  target_price?: number | null
+  verdict_id?: string | null
+  rationale?: string | null
+  stop_hit_at?: string | null
+  target_hit_at?: string | null
+  plan_outcome?: 'stop_hit' | 'target_hit' | 'closed_early' | 'still_open' | null
   // Enriched client-side
   currentPrice?: number | null
   pnl?: number | null
@@ -103,6 +111,7 @@ interface Idea {
   confidence: number
   catalyst?: string
   rationale?: string
+  verdictId?: string                    // Links trade back to the underlying verdict_log row
   suggestedAmount: number
   suggestedShares: number
   entry?: string
@@ -317,6 +326,11 @@ function OrderTicket({ prefill, cashRemaining, onClose, onSave }: {
     contracts?: number
     entry_premium?: number
     underlying?: string
+    // Commit A additions — stop/target/verdict/rationale
+    stop_price?: number
+    target_price?: number
+    verdict_id?: string
+    rationale?: string
   }) => Promise<void>
 }) {
   // Detect if this is an option-mode ticket by presence of option fields in prefill.
@@ -339,11 +353,31 @@ function OrderTicket({ prefill, cashRemaining, onClose, onSave }: {
   const [contracts, setContracts] = useState(prefill?.suggestedShares?.toString() ?? '1')
   const [premium, setPremium] = useState(prefill?.estimatedPremium?.toString() ?? '')
 
+  // Commit A additions — stop/target/rationale
+  // Prefill stop/target from the council idea when available. Options get numeric
+  // defaults computed from premium (100% target, 50% stop) when user starts blank.
+  const prefillStop = prefill?.stop ? parseFloat(prefill.stop.replace(/[^\d.-]/g, '')) : null
+  const prefillTarget = prefill?.target ? parseFloat(prefill.target.replace(/[^\d.-]/g, '')) : null
+  const [stopPrice, setStopPrice] = useState(prefillStop ? prefillStop.toString() : '')
+  const [targetPrice, setTargetPrice] = useState(prefillTarget ? prefillTarget.toString() : '')
+  const [rationale, setRationale] = useState(prefill?.rationale ?? prefill?.catalyst ?? '')
+
+  // Option-specific stop/target on the premium
+  const [optionStop, setOptionStop] = useState('')
+  const [optionTarget, setOptionTarget] = useState('')
+
+  // Options confirmation step (2-step submit for higher-risk option trades)
+  const [confirmingOption, setConfirmingOption] = useState(false)
+
   const sharesNum = parseFloat(shares) || 0
   const priceNum = parseFloat(price) || 0
   const strikeNum = parseFloat(strike) || 0
   const contractsNum = parseInt(contracts) || 0
   const premiumNum = parseFloat(premium) || 0
+  const stopNum = parseFloat(stopPrice) || 0
+  const targetNum = parseFloat(targetPrice) || 0
+  const optionStopNum = parseFloat(optionStop) || 0
+  const optionTargetNum = parseFloat(optionTarget) || 0
 
   const cost = mode === 'stock'
     ? sharesNum * priceNum
@@ -351,9 +385,36 @@ function OrderTicket({ prefill, cashRemaining, onClose, onSave }: {
   const cashAfter = cashRemaining - cost
   const overBudget = cost > cashRemaining
 
-  const valid = mode === 'stock'
+  // Core trade validity (size + price)
+  const baseValid = mode === 'stock'
     ? ticker.length >= 1 && sharesNum > 0 && priceNum > 0
     : ticker.length >= 1 && strikeNum > 0 && expiry.length > 0 && contractsNum > 0 && premiumNum > 0
+
+  // Commit A: require rationale (min 10 chars — a thesis, not "idk")
+  const rationaleValid = rationale.trim().length >= 10
+
+  // Commit A: require stop + target. For stock these are share prices; for options they're premium exit levels.
+  const stopTargetValid = mode === 'stock'
+    ? stopNum > 0 && targetNum > 0 && stopNum !== priceNum && targetNum !== priceNum
+    : optionStopNum > 0 && optionTargetNum > 0 && optionStopNum !== premiumNum && optionTargetNum !== premiumNum
+
+  // Sanity check the direction of stop/target vs entry. If user is bullish,
+  // stop should be BELOW entry and target ABOVE. For bearish, flipped.
+  // If prefill.signal says BEARISH we invert expectation.
+  const isBearishPrefill = (prefill?.signal ?? '').toUpperCase().includes('BEAR')
+  const stopTargetDirValid = (() => {
+    if (!stopTargetValid) return false
+    if (mode === 'stock') {
+      if (isBearishPrefill) return stopNum > priceNum && targetNum < priceNum
+      return stopNum < priceNum && targetNum > priceNum
+    } else {
+      // Options: target premium is above entry (take profit), stop premium is below (cut loss).
+      // Same for calls and puts — the premium moves up when the position is winning.
+      return optionTargetNum > premiumNum && optionStopNum < premiumNum
+    }
+  })()
+
+  const valid = baseValid && rationaleValid && stopTargetValid && stopTargetDirValid
 
   const lookupPrice = useCallback(async () => {
     if (!ticker) return
@@ -525,11 +586,92 @@ function OrderTicket({ prefill, cashRemaining, onClose, onSave }: {
             )}
           </div>
 
+          {/* Commit A: Stop-loss and target fields */}
+          {mode === 'stock' && (
+            <div className="fl-ticket-grid2">
+              <div className="fl-field">
+                <label>
+                  Stop-loss *
+                  {prefillStop && <span style={{ opacity: 0.5, fontSize: '10px', marginLeft: 6 }}>council: {fmt$(prefillStop)}</span>}
+                </label>
+                <input
+                  type="number" step="0.01" value={stopPrice}
+                  onChange={e => setStopPrice(e.target.value)}
+                  placeholder={isBearishPrefill ? `above ${fmt$(priceNum)}` : `below ${fmt$(priceNum)}`}
+                />
+              </div>
+              <div className="fl-field">
+                <label>
+                  Target *
+                  {prefillTarget && <span style={{ opacity: 0.5, fontSize: '10px', marginLeft: 6 }}>council: {fmt$(prefillTarget)}</span>}
+                </label>
+                <input
+                  type="number" step="0.01" value={targetPrice}
+                  onChange={e => setTargetPrice(e.target.value)}
+                  placeholder={isBearishPrefill ? `below ${fmt$(priceNum)}` : `above ${fmt$(priceNum)}`}
+                />
+              </div>
+            </div>
+          )}
+
+          {mode === 'option' && (
+            <div className="fl-ticket-grid2">
+              <div className="fl-field">
+                <label>Stop premium *</label>
+                <input
+                  type="number" step="0.01" value={optionStop}
+                  onChange={e => setOptionStop(e.target.value)}
+                  placeholder={`cut below ${fmt$(premiumNum)}`}
+                />
+              </div>
+              <div className="fl-field">
+                <label>Target premium *</label>
+                <input
+                  type="number" step="0.01" value={optionTarget}
+                  onChange={e => setOptionTarget(e.target.value)}
+                  placeholder={`exit above ${fmt$(premiumNum)}`}
+                />
+              </div>
+            </div>
+          )}
+
+          {stopTargetValid && !stopTargetDirValid && (
+            <div className="fl-ticket-hint fl-ticket-hint-warn">
+              {mode === 'stock'
+                ? (isBearishPrefill
+                    ? 'For a bearish trade: stop should be ABOVE entry, target BELOW.'
+                    : 'For a bullish trade: stop should be BELOW entry, target ABOVE.')
+                : 'Target premium must be above entry and stop premium below — the premium rises when your option wins.'}
+            </div>
+          )}
+
           <div className="fl-field">
-            <label>Notes <span style={{ opacity: 0.5 }}>(optional)</span></label>
-            <textarea value={notes} onChange={e => setNotes(e.target.value)}
-              placeholder="Thesis, catalyst, setup…" rows={2} />
+            <label>
+              Why this trade? *
+              <span style={{ opacity: 0.5, fontSize: '10px', marginLeft: 6 }}>min 10 characters</span>
+            </label>
+            <textarea
+              value={rationale}
+              onChange={e => setRationale(e.target.value)}
+              placeholder="Your thesis: catalyst, technical setup, or why council signal convinced you…"
+              rows={2}
+            />
+            {rationale.length > 0 && !rationaleValid && (
+              <div className="fl-field-hint">Needs at least 10 characters — a real thesis, not "idk"</div>
+            )}
           </div>
+
+          <div className="fl-field">
+            <label>Extra notes <span style={{ opacity: 0.5 }}>(optional)</span></label>
+            <textarea value={notes} onChange={e => setNotes(e.target.value)}
+              placeholder="Anything else — risk sizing reasoning, prior similar trades…" rows={2} />
+          </div>
+        </div>
+
+        <div className="fl-ticket-disclaimer">
+          {mode === 'option'
+            ? 'This is educational only. Options are high-risk and can expire worthless — never trade more than you can afford to lose. Wali-OS does not guarantee any outcome.'
+            : 'This is educational only. Markets can move against you and past performance is not indicative of future results. Wali-OS does not guarantee any outcome.'}
         </div>
 
         <div className="fl-ticket-footer">
@@ -537,6 +679,11 @@ function OrderTicket({ prefill, cashRemaining, onClose, onSave }: {
           <button className="fl-primary-btn" disabled={!valid || overBudget || saving}
             onClick={async () => {
               if (!valid || overBudget) return
+              // Commit A: for options, show 1-step confirmation before writing
+              if (mode === 'option' && !confirmingOption) {
+                setConfirmingOption(true)
+                return
+              }
               setSaving(true)
               try {
                 if (mode === 'option') {
@@ -555,6 +702,11 @@ function OrderTicket({ prefill, cashRemaining, onClose, onSave }: {
                     council_signal: prefill?.signal,
                     confidence: prefill?.confidence,
                     notes: notes || undefined,
+                    // Commit A additions
+                    stop_price: optionStopNum,
+                    target_price: optionTargetNum,
+                    verdict_id: prefill?.verdictId,
+                    rationale: rationale.trim(),
                   })
                 } else {
                   await onSave({
@@ -565,13 +717,27 @@ function OrderTicket({ prefill, cashRemaining, onClose, onSave }: {
                     council_signal: prefill?.signal,
                     confidence: prefill?.confidence,
                     notes: notes || undefined,
+                    // Commit A additions
+                    stop_price: stopNum,
+                    target_price: targetNum,
+                    verdict_id: prefill?.verdictId,
+                    rationale: rationale.trim(),
                   })
                 }
-              } finally { setSaving(false) }
+              } finally { setSaving(false); setConfirmingOption(false) }
             }}>
-            {saving ? 'Submitting…' : 'Submit order →'}
+            {saving
+              ? 'Submitting…'
+              : mode === 'option' && confirmingOption
+                ? `Confirm — max loss ${fmt$(cost)}`
+                : 'Submit order →'}
           </button>
         </div>
+        {mode === 'option' && confirmingOption && !saving && (
+          <div className="fl-ticket-confirm-hint">
+            Tap again to confirm. If this option expires worthless, you lose {fmt$(cost)} — the entire contract cost.
+          </div>
+        )}
       </div>
     </div>
   )
@@ -961,6 +1127,11 @@ function FloorInner() {
     contracts?: number
     entry_premium?: number
     underlying?: string
+    // Commit A additions
+    stop_price?: number
+    target_price?: number
+    verdict_id?: string
+    rationale?: string
   }) => {
     await fetch('/api/invest', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1168,6 +1339,9 @@ function FloorInner() {
                             {idea.signal?.toLowerCase() ?? 'bull'} · {idea.confidence ?? 0}%
                           </span>
                         </div>
+                        <div className="fl-signal-disclaimer">
+                          Educational setup · not a guarantee of profit
+                        </div>
                       </div>
                     )
                   })}
@@ -1208,6 +1382,9 @@ function FloorInner() {
                               <span className="fl-signal-conf mono">
                                 {opt.confidence ?? 0}%
                               </span>
+                            </div>
+                            <div className="fl-signal-disclaimer fl-signal-disclaimer-option">
+                              Educational · options can expire worthless · no guarantees
                             </div>
                           </div>
                         )
@@ -1906,6 +2083,22 @@ function FloorStyles() {
       }
       .fl-signal-conf { color: #10b981 !important; }
 
+      /* ── Disclaimers on idea tiles ─────────────────── */
+      .fl-signal-disclaimer {
+        margin-top: 8px;
+        padding-top: 6px;
+        border-top: 1px dashed rgba(148, 163, 184, 0.15);
+        font-size: 8px;
+        letter-spacing: 0.05em;
+        color: rgba(148, 163, 184, 0.5);
+        text-align: center;
+        font-style: italic;
+      }
+      .fl-signal-disclaimer-option {
+        color: rgba(251, 191, 36, 0.65);
+        border-top-color: rgba(251, 191, 36, 0.2);
+      }
+
       /* ── Right column ───────────────────────────── */
       .fl-right {
         padding: 24px 20px;
@@ -2212,6 +2405,53 @@ function FloorStyles() {
         padding: 14px 20px;
         border-top: 1px solid rgba(148, 163, 184, 0.1);
         background: rgba(15, 23, 42, 0.3);
+      }
+
+      /* ── Commit A: ticket disclaimer + stop/target + rationale styles ─────────── */
+      .fl-ticket-disclaimer {
+        padding: 10px 20px;
+        margin: 0;
+        font-size: 11px;
+        line-height: 1.45;
+        color: rgba(251, 191, 36, 0.8);
+        background: rgba(251, 191, 36, 0.05);
+        border-top: 1px solid rgba(251, 191, 36, 0.2);
+        text-align: center;
+      }
+      .fl-ticket-grid2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+      .fl-ticket-hint {
+        padding: 8px 12px;
+        margin: -2px 0 8px 0;
+        font-size: 11px;
+        line-height: 1.4;
+        border-radius: 4px;
+        color: rgba(148, 163, 184, 0.8);
+        background: rgba(148, 163, 184, 0.06);
+      }
+      .fl-ticket-hint-warn {
+        color: #fbbf24;
+        background: rgba(251, 191, 36, 0.08);
+        border-left: 2px solid rgba(251, 191, 36, 0.5);
+      }
+      .fl-field-hint {
+        font-size: 10px;
+        letter-spacing: 0.04em;
+        color: rgba(251, 191, 36, 0.75);
+        margin-top: 4px;
+        font-style: italic;
+      }
+      .fl-ticket-confirm-hint {
+        padding: 10px 20px 12px;
+        font-size: 11px;
+        line-height: 1.45;
+        color: rgba(220, 38, 38, 0.85);
+        background: rgba(220, 38, 38, 0.06);
+        border-top: 1px solid rgba(220, 38, 38, 0.2);
+        text-align: center;
       }
 
       /* ── Trade confirmation (first win) ─────────── */
