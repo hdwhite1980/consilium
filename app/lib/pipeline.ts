@@ -29,6 +29,7 @@ import { buildMacroIntelligenceContext } from './macro-intelligence'
 import type { SignalBundle } from './aggregator'
 import { runSocialScout, formatSocialSentimentForPrompt, type SocialSentiment } from './social-scout'
 import { callGrok } from './grok'
+import { verifyFactualClaims, type VerificationResult } from './verification'
 
 function getAnthropic() { return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) }
 function getOpenAI()    { return new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) }
@@ -139,6 +140,15 @@ export interface PipelineResult {
   counter?: CounterResult
   judge: JudgeResult
   calibration?: CalibrationResult
+  verifications?: {
+    lead?: VerificationResult
+    devil?: VerificationResult
+    rebuttal?: VerificationResult
+    counter?: VerificationResult
+    totalVerified: number
+    totalStripped: number
+    allSourceUrls: string[]
+  }
   transcript: TranscriptMessage[]
   social: SocialSentiment
 }
@@ -1810,25 +1820,76 @@ export async function runPipeline(
   transcript.push({ role: 'claude', stage: 'lead_analyst', content: claude.reasoning, signal: claude.signal, confidence: claude.confidence, timestamp: ts() })
   onProgress('claude_done', claude)
 
+  // ── Gap #9: kick off verification of Lead's reasoning in parallel ──
+  // Doesn't block GPT/Rebuttal; we await all verifications at the end.
+  const leadVerifyPromise = verifyFactualClaims(bundle.ticker, 'lead', claude.reasoning)
+    .catch((e) => { console.warn('[verification/lead] failed:', (e as Error).message); return null })
+
   onProgress('gpt_start', { gemini, claude })
   const gpt = await runGPT(bundle, gemini, claude, social)
   transcript.push({ role: 'gpt', stage: 'devils_advocate', content: gpt.reasoning, signal: gpt.signal, confidence: gpt.confidence, timestamp: ts() })
   onProgress('gpt_done', gpt)
+
+  // Verify Devil's challenges in parallel
+  const devilText = [gpt.reasoning, ...gpt.challenges, gpt.strongestCounterArgument].filter(Boolean).join('\n\n')
+  const devilVerifyPromise = verifyFactualClaims(bundle.ticker, 'devil', devilText)
+    .catch((e) => { console.warn('[verification/devil] failed:', (e as Error).message); return null })
 
   onProgress('rebuttal_start', { claude, gpt })
   const rebuttal = await runRebuttal(bundle, claude, gpt)
   transcript.push({ role: 'claude', stage: 'rebuttal', content: rebuttal.rebuttal, signal: rebuttal.signal, confidence: rebuttal.confidence, timestamp: ts() })
   onProgress('rebuttal_done', rebuttal)
 
+  // Verify Rebuttal's research answer + rebuttal text
+  const rebuttalText = [rebuttal.rebuttal, rebuttal.researchAnswer, ...rebuttal.maintains, rebuttal.finalStance].filter(Boolean).join('\n\n')
+  const rebuttalVerifyPromise = verifyFactualClaims(bundle.ticker, 'rebuttal', rebuttalText)
+    .catch((e) => { console.warn('[verification/rebuttal] failed:', (e as Error).message); return null })
+
   onProgress('counter_start', { gpt, rebuttal })
   const counter = await runCounter(bundle, gpt, rebuttal)
   transcript.push({ role: 'gpt', stage: 'counter', content: counter.finalChallenge, timestamp: ts() })
   onProgress('counter_done', counter)
+
+  // Verify Counter's research answer + challenge text
+  const counterText = [counter.finalChallenge, counter.researchAnswer, ...counter.pressesOn, counter.closingArgument].filter(Boolean).join('\n\n')
+  const counterVerifyPromise = verifyFactualClaims(bundle.ticker, 'counter', counterText)
+    .catch((e) => { console.warn('[verification/counter] failed:', (e as Error).message); return null })
+
+  // Await all verifications before Judge so calibration has clean data
+  const [leadVer, devilVer, rebuttalVer, counterVer] = await Promise.all([
+    leadVerifyPromise,
+    devilVerifyPromise,
+    rebuttalVerifyPromise,
+    counterVerifyPromise,
+  ])
+
+  // Aggregate verification stats for the UI badge
+  const verifications = {
+    lead: leadVer ?? undefined,
+    devil: devilVer ?? undefined,
+    rebuttal: rebuttalVer ?? undefined,
+    counter: counterVer ?? undefined,
+    totalVerified: (leadVer?.verifiedCount ?? 0) + (devilVer?.verifiedCount ?? 0) +
+                   (rebuttalVer?.verifiedCount ?? 0) + (counterVer?.verifiedCount ?? 0),
+    totalStripped: (leadVer?.strippedCount ?? 0) + (devilVer?.strippedCount ?? 0) +
+                   (rebuttalVer?.strippedCount ?? 0) + (counterVer?.strippedCount ?? 0),
+    allSourceUrls: [
+      ...(leadVer?.allSourceUrls ?? []),
+      ...(devilVer?.allSourceUrls ?? []),
+      ...(rebuttalVer?.allSourceUrls ?? []),
+      ...(counterVer?.allSourceUrls ?? []),
+    ],
+  }
+
+  onProgress('verification_done', {
+    totalVerified: verifications.totalVerified,
+    totalStripped: verifications.totalStripped,
+  })
 
   onProgress('judge_start', {})
   const { judge, calibration } = await runJudgeWithCalibration(bundle, gemini, claude, gpt, rebuttal, counter, 1, social)
   transcript.push({ role: 'judge', stage: 'arbitrator', content: judge.summary, signal: judge.signal, confidence: judge.confidence, timestamp: ts() })
   onProgress('judge_done', judge)
 
-  return { gemini, claude, gpt, rebuttal, counter, judge, calibration, transcript, social }
+  return { gemini, claude, gpt, rebuttal, counter, judge, calibration, verifications, transcript, social }
 }

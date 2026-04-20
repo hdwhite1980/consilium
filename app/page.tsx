@@ -15,7 +15,7 @@ import {
   BarChart2, Globe, DollarSign, Activity, Shield, Zap, LogOut, BookOpen,
   Sun, Moon, Menu, X, Calendar, Flame, Briefcase, Search, Trophy,
   Scale, LineChart, PieChart, Hourglass, RotateCw, Check, Target,
-  Star, ClipboardList, Wallet, RefreshCw, FileText, Coins
+  Star, ClipboardList, Wallet, RefreshCw, FileText, Coins, ShieldCheck
 } from 'lucide-react'
 
 type Signal = 'BULLISH' | 'BEARISH' | 'NEUTRAL'
@@ -308,6 +308,7 @@ function HomeInner() {
   const [reb, setReb]           = useState<RebuttalResult | null>(null)
   const [ctr, setCtr]           = useState<CounterResult | null>(null)
   const [jud, setJud]           = useState<JudgeResult | null>(null)
+  const [verify, setVerify]     = useState<{ totalVerified: number; totalStripped: number; allSourceUrls: string[] } | null>(null)
   const [soc, setSoc]           = useState<SocialSentiment | null>(null)
   const [socOpen, setSocOpen]   = useState(false)
   const [err, setErr]           = useState<string | null>(null)
@@ -456,7 +457,7 @@ function HomeInner() {
   const run = useCallback(async () => {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
-    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setSoc(null); setErr(null); setCached(null)
+    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setSoc(null); setErr(null); setCached(null); setVerify(null)
 
     try {
       const res = await fetch('/api/analyze', {
@@ -495,6 +496,7 @@ function HomeInner() {
             case 'counter_done':   setCtr(data); scroll(); break
             case 'judge_start':  setStage('judge'); scroll(); break
             case 'judge_done':   setJud(data); scroll(); break
+            case 'verification_done': setVerify(data); scroll(); break
             case 'complete':     setStage('done'); if (data.cached) setCached({ at: data.cachedAt, ageMinutes: data.ageMinutes }); scroll(); break
             case 'error':        setStage('error'); setErr(data.message); break
           }
@@ -510,7 +512,7 @@ function HomeInner() {
   const forceRun = useCallback(async () => {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
-    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setSoc(null); setErr(null); setCached(null)
+    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setSoc(null); setErr(null); setCached(null); setVerify(null)
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
@@ -546,6 +548,7 @@ function HomeInner() {
             case 'counter_done':   setCtr(data); scroll(); break
             case 'judge_start':  setStage('judge'); scroll(); break
             case 'judge_done':   setJud(data); scroll(); break
+            case 'verification_done': setVerify(data); scroll(); break
             case 'complete':     setStage('done'); scroll(); break
             case 'error':        setStage('error'); setErr(data.message); break
           }
@@ -1578,6 +1581,15 @@ function HomeInner() {
                     style={{ background: `${PERSONAS[persona].color}12`, color: PERSONAS[persona].color, border: `1px solid ${PERSONAS[persona].color}25` }}>
                     {PERSONAS[persona].icon} {PERSONAS[persona].label}
                   </span>
+                  {verify && verify.totalVerified > 0 && (
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full inline-flex items-center gap-1"
+                      style={{ background: 'rgba(52,211,153,0.1)', color: '#34d399', border: '1px solid rgba(52,211,153,0.25)' }}
+                      title={verify.totalStripped > 0 ? `${verify.totalStripped} unverified claim${verify.totalStripped === 1 ? '' : 's'} stripped before verdict` : 'All factual claims verified against credible sources'}>
+                      <ShieldCheck size={10} />
+                      {verify.totalVerified} verified
+                      {verify.totalStripped > 0 && ` · ${verify.totalStripped} stripped`}
+                    </span>
+                  )}
                   <span className="ml-auto text-[10px] font-mono" style={{ color: 'var(--text3)' }}>Final</span>
                 </div>
 
