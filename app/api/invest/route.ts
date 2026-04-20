@@ -22,12 +22,23 @@ function getStage(totalValue: number) {
 const OPTIONS_MIN_VALUE = 200
 
 // ── Options budget heuristic ─────────────────────────────────
-// Per-position budget × 0.20 = max premium per contract. Keeps paper trading honest
-// by capping how much leverage the user can simulate relative to their account size.
-function getOptionBudget(deployable: number, maxPositions: number): { maxPremiumPerContract: number } {
+// Per-position budget × N = max premium per contract. Tighter caps for larger
+// accounts (where absolute dollar amounts matter more), looser for smaller
+// accounts (where a tight cap forces Claude into unrealistic deep-OTM strikes).
+//
+// At $1000 account / 5 positions = $200/pos:
+//   OLD: 20% → $40 cap → Claude often proposes $0.50+ premiums → filtered out
+//   NEW: 40% → $80 cap → Claude can propose normal ATM strikes on cheap stocks
+//
+// At $50k account / 10 positions = $5k/pos:
+//   20% → $1k cap — reasonable for real option sizing discipline
+function getOptionBudget(deployable: number, maxPositions: number): { maxPremiumPerContract: number; capPct: number } {
   const perPosition = deployable / Math.max(1, maxPositions)
-  const cap = perPosition * 0.20
-  return { maxPremiumPerContract: cap }
+  // Looser cap at small accounts because premium dollars are tiny either way,
+  // and a tight cap just causes Claude to return 0 valid options most of the time.
+  const capPct = deployable < 5000 ? 0.40 : 0.20
+  const cap = perPosition * capPct
+  return { maxPremiumPerContract: cap, capPct }
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -88,12 +99,18 @@ TRADER CONTEXT:
 INSTRUCTIONS:
 1. Generate 1-3 option ideas. Each MUST be on one of the candidate underlyings listed above.
 2. Choose option_type based on the stock signal: BULLISH → call, BEARISH → put.
-3. Pick strike and expiry that fit the premium cap. For bullish plays on <$20 stocks, ATM or slightly OTM calls with 20-45 DTE work well. For bearish plays, near-the-money puts with similar DTE.
-4. Estimate the premium per share (NOT total contract). Remember contract cost = premium × 100.
-5. HARD CAP: estimated_premium × 100 MUST be ≤ $${maxContractCost.toFixed(2)}. If you can't find a valid option for a ticker at this premium cap, SKIP that ticker.
-6. Estimate delta: calls are positive (0.20-0.80), puts negative (-0.20 to -0.80). ATM options are ~0.50.
-7. Calculate breakeven: calls = strike + premium, puts = strike - premium.
-8. Calculate max_loss: premium × 100 × number_of_contracts (always 1 contract in this flow).
+3. HARD CAP: estimated_premium × 100 MUST be ≤ $${maxContractCost.toFixed(2)}. This is non-negotiable — any option exceeding this will be rejected.
+
+   STRIKE SELECTION STRATEGY TO HIT THE CAP:
+   - If the underlying is cheap (<$5), ATM options may fit the cap. Check: ATM premium on a $2 stock is typically $0.10-$0.25 for 30 DTE.
+   - If the underlying is mid-price ($5-$30), you likely need slightly OTM strikes (5-15% OTM) with 20-45 DTE.
+   - If the underlying is expensive (>$30), you'll need deeper OTM strikes (15-30% OTM) or short DTE (7-21 days) to fit a tight budget.
+   - When in doubt, go FURTHER OTM rather than closer to ATM — deeper OTM = cheaper premium = fits the cap.
+   - If you cannot find a valid strike for a ticker at this premium cap, SKIP that ticker. Better to return 1 valid option than 3 that get filtered out.
+
+4. Estimate delta: calls are positive (0.15-0.80), puts negative (-0.15 to -0.80). ATM = ~0.50. Deep OTM = 0.15-0.30.
+5. Calculate breakeven: calls = strike + premium, puts = strike - premium.
+6. Calculate max_loss: premium × 100 × number_of_contracts (always 1 contract in this flow).
 
 Return JSON ONLY — no markdown:
 {
@@ -159,6 +176,9 @@ If none of the candidates fit the premium budget, return: { "options": [] }`
       }
       return true
     })
+
+    // Diagnostic summary — helps identify when Claude's estimates miss the cap
+    console.log(`[options] generated ${rawOptions.length} raw → ${filtered.length} after filter (cap $${maxContractCost.toFixed(2)}, candidates: ${candidates.map(c => c.ticker).join(',')})`)
 
     // Normalise numeric fields
     return filtered.map((o) => ({
