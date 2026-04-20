@@ -44,6 +44,7 @@ const CREDIBLE_DOMAINS = new Set([
   'ft.com',
   'nytimes.com',
   'economist.com',
+  'washingtonpost.com',
 
   // Tier 2 — reputable financial news
   'cnbc.com',
@@ -54,6 +55,13 @@ const CREDIBLE_DOMAINS = new Set([
   'forbes.com',
   'fortune.com',
   'businessinsider.com',
+  'axios.com',
+  'bnnbloomberg.ca',
+  'apnews.com',
+  'cnn.com',
+  'abcnews.go.com',
+  'nbcnews.com',
+  'foxbusiness.com',
 
   // Tier 3 — financial coverage (slightly looser)
   'seekingalpha.com',
@@ -61,6 +69,10 @@ const CREDIBLE_DOMAINS = new Set([
   'investing.com',
   'thestreet.com',
   'morningstar.com',
+  'zerohedge.com',
+  'kitco.com',
+  'tradingeconomics.com',
+  'finimize.com',
 
   // Primary sources
   'sec.gov',
@@ -73,12 +85,35 @@ const CREDIBLE_DOMAINS = new Set([
   'newyorkfed.org',
   'congress.gov',
   'whitehouse.gov',
+  'house.gov',
+  'senate.gov',
+  'europa.eu',
+  'bankofengland.co.uk',
+  'ecb.europa.eu',
 
   // Crypto-specific reputable sources (for crypto tickers)
   'coindesk.com',
   'theblock.co',
   'decrypt.co',
   'cointelegraph.com',
+  'cryptoslate.com',
+  'ambcrypto.com',
+  'beincrypto.com',
+  'u.today',
+  'watcher.guru',
+  'blockworks.co',
+  'cryptobriefing.com',
+  'protos.com',
+
+  // Data sources (canonical for data-type claims)
+  'alternative.me',           // Crypto Fear & Greed Index
+  'coingecko.com',             // Crypto prices
+  'coinmarketcap.com',         // Crypto market data
+  'fred.stlouisfed.org',       // Fed economic data
+  'blockchain.com',            // On-chain data
+  'glassnode.com',             // On-chain analytics
+  'dune.com',                  // Query-based blockchain analytics
+  'defillama.com',             // DeFi TVL data
 ])
 
 const EXCLUDED_DOMAINS = new Set([
@@ -215,24 +250,40 @@ async function batchVerifyClaims(
 
   const claimsBlock = claims.map((c, i) => `[${i + 1}] ${c}`).join('\n')
 
-  const prompt = `You are a financial fact-checker. For each of the following claims about ${ticker}, use Google Search to verify whether credible non-X/non-social-media sources report it. Ignore X/Twitter, Reddit, Stocktwits, TikTok, Instagram, YouTube as sources — only count mainstream financial journalism (Reuters, Bloomberg, WSJ, FT, CNBC, MarketWatch) and primary sources (SEC, Federal Reserve, Treasury, company IR pages).
+  const prompt = `You are a financial fact-checker. For each of the following claims about ${ticker}, use Google Search to verify whether credible NON-social-media sources report it.
+
+ACCEPTABLE SOURCES (these count as verification):
+- Major financial journalism: Reuters, Bloomberg, WSJ, FT, CNBC, MarketWatch, Barron's, Financial Times
+- Primary sources: SEC filings, Fed/Treasury/BLS publications, company IR pages, government websites
+- Reputable crypto journalism: CoinDesk, The Block, Decrypt, CoinTelegraph, Blockworks
+- Canonical data sources (for data/index claims): Alternative.me (Crypto Fear & Greed), CoinGecko, CoinMarketCap, FRED (stlouisfed.org), TradingEconomics, Glassnode, DeFiLlama
+- Crypto news aggregators: Watcher.Guru, u.today, CryptoSlate, BeInCrypto, AmbCrypto
+
+NOT ACCEPTABLE (do not count as verification):
+- X/Twitter, Reddit, Stocktwits, TikTok, Instagram, YouTube
+- Random blogs with no editorial oversight
+- Unsourced forum posts
 
 CLAIMS TO VERIFY:
 ${claimsBlock}
 
 For EACH claim, determine:
-- verified: true if at least one credible mainstream news outlet or primary source confirms it
+- verified: true if at least one ACCEPTABLE source (above) confirms it; false otherwise
 - sourceUrl: the URL of the most credible source found (null if none)
-- sourceOutlet: the outlet name (e.g., "Reuters", "Bloomberg", "SEC filing")
+- sourceOutlet: the outlet name (e.g., "Reuters", "Bloomberg", "SEC filing", "Alternative.me")
 - reasoning: 1-2 sentences on why verified or why rejected
 
-VERIFICATION STRICTNESS: MEDIUM
-- Require credible outlet reporting, not just primary source
-- A claim is "verified" if a reputable financial news site has covered it
-- If the only source is X/Twitter/Reddit, mark it as UNVERIFIED
-- If no search results corroborate the claim at all, mark UNVERIFIED
-- Vague or hypothetical claims that can't be checked → UNVERIFIED
-- If a claim is about a future event with a specific date, look for announcements from the relevant institution
+CRITICAL CONSISTENCY RULE:
+If your reasoning states that sources confirmed the claim, you MUST set verified=true.
+If your reasoning states sources did not confirm or you couldn't find corroboration, you MUST set verified=false.
+Never set verified=false while writing reasoning that says "multiple outlets reported..." or "confirmed by..." — these are contradictions. Read your own reasoning carefully before setting the verified field.
+
+VERIFICATION GUIDANCE:
+- Data/index claims (e.g., "Fear & Greed at 27", "BTC at $74k", "CPI came in at 3.2%") → check canonical data sources first
+- Event claims (e.g., "NY Fed buying Treasuries tomorrow", "SEC approved ETF") → require credible news coverage
+- Price movements with news context → verify the underlying news event, not the exact price
+- Vague claims ("sentiment is bearish") → mark UNVERIFIED, these are not factual
+- Future events → look for announcements from the relevant institution
 
 Return ONLY this JSON, no other text:
 {
@@ -303,26 +354,57 @@ Return one object per claim in order. If a claim can't be verified, set verified
       }
 
       // Double-check: even if model says "verified", require the source URL
-      // to be from a credible domain (or the groundingMetadata to include one)
+      // to be from a credible domain (or the groundingMetadata to include one).
       const modelSaidVerified = !!v.verified
       const providedUrl = typeof v.sourceUrl === 'string' && v.sourceUrl.startsWith('http') ? v.sourceUrl : null
-      const urlIsCredible = providedUrl ? isCredibleDomain(providedUrl) : false
+      const providedUrlIsCredible = providedUrl ? isCredibleDomain(providedUrl) : false
+      const modelReasoning = typeof v.reasoning === 'string' ? v.reasoning.slice(0, 400) : ''
+      const modelOutlet = typeof v.sourceOutlet === 'string' ? v.sourceOutlet.slice(0, 80) : null
 
-      // If the model said verified but the URL isn't credible, check if
-      // groundingMetadata has ANY credible URL we can credit as source
-      let finalUrl = urlIsCredible ? providedUrl : null
-      if (!finalUrl && modelSaidVerified && credibleGroundingUrls.length > 0) {
+      // Heuristic: detect self-contradiction. If model's reasoning text strongly
+      // suggests verification succeeded (e.g. "multiple outlets reported",
+      // "confirmed by", "sources confirm"), but verified=false, it's likely
+      // a structured-output glitch. Trust the reasoning's tone.
+      const reasoningSuggestsVerified = /multiple (outlets|sources) (reported|confirm)|confirmed by|sources (confirm|show|verify)|well[- ]documented|widely reported|(reuters|bloomberg|wsj|cnbc|ft) (reports|reported|covered)/i.test(modelReasoning)
+
+      // If flagged as verified by the model OR the reasoning clearly suggests
+      // verification succeeded, try to find a credible URL. Then apply the
+      // whitelist check as the final gate.
+      const effectiveModelVerified = modelSaidVerified || (reasoningSuggestsVerified && credibleGroundingUrls.length > 0)
+
+      let finalUrl: string | null = null
+      if (providedUrlIsCredible) {
+        finalUrl = providedUrl
+      } else if (effectiveModelVerified && credibleGroundingUrls.length > 0) {
         finalUrl = credibleGroundingUrls[0]
       }
 
-      const finalVerified = modelSaidVerified && !!finalUrl
+      const finalVerified = effectiveModelVerified && !!finalUrl
+
+      // Construct a clean reasoning/rejection_reason
+      let cleanReasoning: string
+      if (finalVerified) {
+        // Verified: store model's reasoning as-is
+        cleanReasoning = modelReasoning
+      } else if (modelSaidVerified && !finalUrl) {
+        // Demotion case: model said verified but neither URL nor grounding
+        // provided a credible domain. Store clear reason, not model reasoning.
+        const citedDomain = providedUrl ? (extractDomain(providedUrl) ?? 'unknown') : 'none'
+        cleanReasoning = `Model claimed verification via ${modelOutlet ?? citedDomain} but source not in credible whitelist. Grounding returned ${groundingUrls.length} sources (${credibleGroundingUrls.length} credible).`
+      } else if (!modelSaidVerified && reasoningSuggestsVerified && credibleGroundingUrls.length === 0) {
+        // Self-contradiction with no credible grounding to rescue it
+        cleanReasoning = `Model reasoning suggested verification but verified=false and no credible grounding sources found. Possible structured-output glitch. Original reasoning: ${modelReasoning.slice(0, 200)}`
+      } else {
+        // Genuine rejection — use model's reasoning
+        cleanReasoning = modelReasoning || 'Claim not confirmed by credible mainstream sources'
+      }
 
       return {
         claim,
         verified: finalVerified,
         sourceUrl: finalUrl,
-        sourceOutlet: typeof v.sourceOutlet === 'string' ? v.sourceOutlet.slice(0, 80) : null,
-        reasoning: typeof v.reasoning === 'string' ? v.reasoning.slice(0, 400) : '',
+        sourceOutlet: modelOutlet,
+        reasoning: cleanReasoning,
       }
     })
   } catch (e) {
