@@ -1,0 +1,56 @@
+name: Backtest Outcomes Resolver
+
+# Runs daily at 22:00 UTC (= 6pm ET during DST, 5pm ET during standard time)
+# Resolves pending outcome_1w and outcome_1m entries in verdict_log by
+# looking up actual price data from Finnhub daily candles.
+#
+# Safe to run daily because the endpoint:
+#   - Only updates rows where outcome is currently NULL or 'pending'
+#   - Only resolves rows old enough (>7 days for 1w, >30 days for 1m)
+#   - Is idempotent — running twice the same day does nothing extra
+#
+# Runs every day (not just weekdays) because we want weekend/holiday
+# verdicts to resolve on the next trading day.
+
+on:
+  schedule:
+    - cron: '0 22 * * *'   # daily, every day
+  workflow_dispatch:  # allows manual trigger from GitHub Actions UI
+
+jobs:
+  resolve-backtest-outcomes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Trigger backtest outcomes resolver
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET not configured in GitHub secrets"
+            exit 1
+          fi
+          
+          echo "Triggering backtest outcomes resolver at $(date -u)"
+          
+          response=$(curl -sS -w "\n__HTTP_STATUS:%{http_code}__" \
+            --max-time 300 \
+            -X POST "https://wali-os.com/api/backtest/outcomes" \
+            -H "x-cron-secret: $CRON_SECRET" \
+            -H "Content-Type: application/json")
+          
+          body=$(echo "$response" | sed 's/__HTTP_STATUS:[0-9]*__$//')
+          status=$(echo "$response" | grep -o '__HTTP_STATUS:[0-9]*__' | grep -o '[0-9]*')
+          
+          echo "HTTP Status: $status"
+          echo "Response body:"
+          echo "$body"
+          
+          # Accept both 200 (sync completion) and 202 (fire-and-forget)
+          if [ "$status" != "200" ] && [ "$status" != "202" ]; then
+            echo "::error::Backtest outcomes resolver failed with status $status"
+            exit 1
+          fi
+          
+          echo "✓ Backtest outcomes resolver completed"
+          echo "::notice::Check Supabase verdict_log for updated outcome_1w_strict / outcome_1m_strict values"

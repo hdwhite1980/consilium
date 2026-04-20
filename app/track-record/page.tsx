@@ -1,269 +1,343 @@
+// ═════════════════════════════════════════════════════════════
+// /backtest — Public dashboard showing Wali-OS verdict track record
+//
+// This is a MARKETING + CREDIBILITY page. Anyone can view it (including
+// anonymous users). Shows aggregate performance across all users' verdicts.
+//
+// If authenticated, adds a "Your Personal Stats" toggle at the top.
+// ═════════════════════════════════════════════════════════════
+
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
-import { ArrowLeft, TrendingUp, TrendingDown, Minus, RefreshCw, Trophy, Target, Activity } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import Link from 'next/link'
 
-interface VerdictRecord {
-  id: string
-  ticker: string
-  signal: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
-  confidence: number | null
-  entry_price: number | null
-  stop_loss: number | null
-  take_profit: number | null
-  time_horizon: string | null
-  persona: string | null
-  timeframe: string | null
-  outcome_1w: 'correct' | 'incorrect' | 'neutral' | 'pending' | null
-  outcome_1m: 'correct' | 'incorrect' | 'neutral' | 'pending' | null
-  pct_change_1w: number | null
-  pct_change_1m: number | null
-  price_at_1w: number | null
-  price_at_1m: number | null
-  verdict_date: string
-  check_1w_after: string
-  check_1m_after: string
+type HitRate = { wins: number; losses: number; expired: number; total: number; hitRate: number }
+type Direction = { correct: number; incorrect: number; pending: number; total: number; accuracy: number }
+
+interface StatsResponse {
+  ok: boolean
+  scope: string
+  horizon: string
+  filters: { persona: string; timeframe: string }
+  totalVerdicts: number
+  overall: { hitRate: HitRate; direction: Direction }
+  byPersona: Array<{ persona: string; sampleSize: number; hitRate: HitRate; direction: Direction }>
+  byTimeframe: Array<{ timeframe: string; sampleSize: number; hitRate: HitRate; direction: Direction }>
+  byConfidence: Array<{ band: string; sampleSize: number; hitRate: HitRate; direction: Direction }>
+  bySignal: Array<{ signal: string; sampleSize: number; hitRate: HitRate; direction: Direction }>
+  recent: Array<{
+    ticker: string; signal: string; confidence: number | null; persona: string | null;
+    timeframe: string | null; verdict_date: string; entry_price: number | null;
+    outcome_strict: string; outcome_directional: string; outcome_price: number | null;
+  }>
+  generatedAt: string
 }
 
-interface Stats {
-  total: number
-  resolved1w: number
-  resolved1m: number
-  winRate1w: number | null
-  winRate1m: number | null
-  avgGain1w: number | null
-  bySignal: Array<{ signal: string; total: number; correct: number; winRate: number | null }>
+function pct(n: number): string {
+  return (n * 100).toFixed(1) + '%'
 }
 
-const SIG_COLOR: Record<string, string> = { BULLISH: '#34d399', BEARISH: '#f87171', NEUTRAL: '#fbbf24' }
-const SIG_ICON = { BULLISH: TrendingUp, BEARISH: TrendingDown, NEUTRAL: Minus }
-
-export default function TrackRecordPage() {
-  const router = useRouter()
-  const [verdicts, setVerdicts] = useState<VerdictRecord[]>([])
-  const [stats, setStats] = useState<Stats | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [checking, setChecking] = useState(false)
-  const [filter, setFilter] = useState<'all' | 'BULLISH' | 'BEARISH' | 'NEUTRAL'>('all')
-
-  const load = async (check = false) => {
-    if (check) setChecking(true)
-    try {
-      const r = await fetch(`/api/track-record${check ? '?check=true' : ''}`)
-      const d = await r.json()
-      setVerdicts(d.verdicts ?? [])
-      setStats(d.stats ?? null)
-    } catch { /* ignore */ }
-    setLoading(false)
-    setChecking(false)
+function formatOutcome(outcome: string): { label: string; color: string } {
+  switch (outcome) {
+    case 'win':    return { label: 'Win',    color: 'text-green-400' }
+    case 'loss':   return { label: 'Loss',   color: 'text-red-400' }
+    case 'expired': return { label: 'Expired', color: 'text-gray-400' }
+    case 'pending': return { label: 'Pending', color: 'text-yellow-400' }
+    default: return { label: outcome, color: 'text-gray-500' }
   }
+}
 
-  useEffect(() => { load() }, [])
+export default function BacktestPage() {
+  const [scope, setScope] = useState<'public' | 'user'>('public')
+  const [horizon, setHorizon] = useState<'1w' | '1m'>('1w')
+  const [personaFilter, setPersonaFilter] = useState<string>('all')
+  const [timeframeFilter, setTimeframeFilter] = useState<string>('all')
+  const [data, setData] = useState<StatsResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
-  const filtered = filter === 'all' ? verdicts : verdicts.filter(v => v.signal === filter)
-  const pending = verdicts.filter(v => v.outcome_1w === 'pending').length
+  useEffect(() => {
+    setLoading(true)
+    setError(null)
+    const params = new URLSearchParams({ scope, horizon, persona: personaFilter, timeframe: timeframeFilter })
+    fetch(`/api/backtest/stats?${params}`)
+      .then(async r => {
+        if (!r.ok) throw new Error(await r.text())
+        return r.json()
+      })
+      .then((d: StatsResponse) => setData(d))
+      .catch(e => setError(e.message ?? 'Failed to load stats'))
+      .finally(() => setLoading(false))
+  }, [scope, horizon, personaFilter, timeframeFilter])
 
-  const fmt$ = (n: number | null) => n != null ? `$${n.toFixed(2)}` : '—'
-  const fmtPct = (n: number | null) => n != null ? `${n >= 0 ? '+' : ''}${n.toFixed(1)}%` : '—'
+  return (
+    <div className="min-h-screen bg-gray-950 text-gray-100">
+      <div className="max-w-6xl mx-auto px-4 py-8">
+        {/* Header */}
+        <div className="mb-8">
+          <Link href="/" className="text-blue-400 hover:text-blue-300 text-sm">← Back</Link>
+          <h1 className="text-3xl font-bold mt-2">Wali-OS Verdict Track Record</h1>
+          <p className="text-gray-400 mt-2">
+            Transparent backtest of every non-neutral AI council verdict. Updated daily.
+          </p>
+        </div>
 
-  const outcomeColor = (o: string | null) =>
-    o === 'correct' ? '#34d399' : o === 'incorrect' ? '#f87171' : o === 'neutral' ? '#fbbf24' : 'rgba(255,255,255,0.3)'
+        {/* Scope + filter controls */}
+        <div className="flex flex-wrap gap-3 mb-6 text-sm">
+          <div className="flex bg-gray-900 rounded overflow-hidden">
+            <button
+              onClick={() => setScope('public')}
+              className={`px-4 py-2 ${scope === 'public' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+            >
+              All Users
+            </button>
+            <button
+              onClick={() => setScope('user')}
+              className={`px-4 py-2 ${scope === 'user' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+            >
+              My Verdicts
+            </button>
+          </div>
 
-  const outcomeLabel = (o: string | null) =>
-    o === 'correct' ? '✓' : o === 'incorrect' ? '✗' : o === 'neutral' ? '~' : '…'
+          <div className="flex bg-gray-900 rounded overflow-hidden">
+            <button
+              onClick={() => setHorizon('1w')}
+              className={`px-4 py-2 ${horizon === '1w' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+            >
+              1 Week
+            </button>
+            <button
+              onClick={() => setHorizon('1m')}
+              className={`px-4 py-2 ${horizon === '1m' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+            >
+              1 Month
+            </button>
+          </div>
 
-  if (loading) return (
-    <div className="flex items-center justify-center min-h-screen" style={{ background: 'var(--bg)' }}>
-      <div className="flex gap-1">
-        {[0,1,2].map(i => <span key={i} className="w-2 h-2 rounded-full animate-bounce bg-purple-400" style={{ animationDelay: `${i*0.15}s` }} />)}
+          <select
+            value={personaFilter}
+            onChange={(e) => setPersonaFilter(e.target.value)}
+            className="bg-gray-900 border border-gray-800 rounded px-3 py-2"
+          >
+            <option value="all">All personas</option>
+            <option value="balanced">Balanced</option>
+            <option value="technical">Technical</option>
+            <option value="fundamental">Fundamental</option>
+          </select>
+
+          <select
+            value={timeframeFilter}
+            onChange={(e) => setTimeframeFilter(e.target.value)}
+            className="bg-gray-900 border border-gray-800 rounded px-3 py-2"
+          >
+            <option value="all">All timeframes</option>
+            <option value="1D">1 Day</option>
+            <option value="1W">1 Week</option>
+            <option value="1M">1 Month</option>
+            <option value="3M">3 Month</option>
+          </select>
+        </div>
+
+        {loading && <div className="text-gray-400 py-8 text-center">Loading stats...</div>}
+        {error && !loading && (
+          <div className="bg-red-900/30 border border-red-800 rounded p-4 text-red-300">
+            {error.includes('authentication required')
+              ? 'Sign in to view your personal stats.'
+              : `Error: ${error}`}
+          </div>
+        )}
+
+        {data && !loading && (
+          <>
+            {/* Headline stats */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+              <div className="bg-gray-900 border border-gray-800 rounded p-6">
+                <div className="text-gray-400 text-sm mb-1">Total Verdicts</div>
+                <div className="text-3xl font-bold">{data.totalVerdicts.toLocaleString()}</div>
+                <div className="text-xs text-gray-500 mt-1">non-neutral calls tracked</div>
+              </div>
+              <div className="bg-gray-900 border border-gray-800 rounded p-6">
+                <div className="text-gray-400 text-sm mb-1">Hit Rate ({horizon})</div>
+                <div className="text-3xl font-bold text-green-400">
+                  {pct(data.overall.hitRate.hitRate)}
+                </div>
+                <div className="text-xs text-gray-500 mt-1">
+                  {data.overall.hitRate.wins}W / {data.overall.hitRate.losses}L / {data.overall.hitRate.expired} expired
+                </div>
+                <div className="text-xs text-gray-600 mt-1">target hit vs stop hit</div>
+              </div>
+              <div className="bg-gray-900 border border-gray-800 rounded p-6">
+                <div className="text-gray-400 text-sm mb-1">Direction Accuracy ({horizon})</div>
+                <div className="text-3xl font-bold text-blue-400">
+                  {pct(data.overall.direction.accuracy)}
+                </div>
+                <div className="text-xs text-gray-500 mt-1">
+                  {data.overall.direction.correct} correct / {data.overall.direction.incorrect} incorrect
+                </div>
+                <div className="text-xs text-gray-600 mt-1">price moved in right direction</div>
+              </div>
+            </div>
+
+            {/* Breakdowns */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+              <BreakdownTable
+                title="By Persona"
+                rows={data.byPersona.map(p => ({
+                  label: p.persona,
+                  sampleSize: p.sampleSize,
+                  hitRate: p.hitRate.hitRate,
+                  decidedSize: p.hitRate.wins + p.hitRate.losses,
+                  direction: p.direction.accuracy,
+                  directionSize: p.direction.correct + p.direction.incorrect,
+                }))}
+              />
+              <BreakdownTable
+                title="By Timeframe"
+                rows={data.byTimeframe.map(t => ({
+                  label: t.timeframe,
+                  sampleSize: t.sampleSize,
+                  hitRate: t.hitRate.hitRate,
+                  decidedSize: t.hitRate.wins + t.hitRate.losses,
+                  direction: t.direction.accuracy,
+                  directionSize: t.direction.correct + t.direction.incorrect,
+                }))}
+              />
+              <BreakdownTable
+                title="By Confidence Band"
+                rows={data.byConfidence.map(c => ({
+                  label: c.band,
+                  sampleSize: c.sampleSize,
+                  hitRate: c.hitRate.hitRate,
+                  decidedSize: c.hitRate.wins + c.hitRate.losses,
+                  direction: c.direction.accuracy,
+                  directionSize: c.direction.correct + c.direction.incorrect,
+                }))}
+              />
+              <BreakdownTable
+                title="Bullish vs Bearish"
+                rows={data.bySignal.map(s => ({
+                  label: s.signal,
+                  sampleSize: s.sampleSize,
+                  hitRate: s.hitRate.hitRate,
+                  decidedSize: s.hitRate.wins + s.hitRate.losses,
+                  direction: s.direction.accuracy,
+                  directionSize: s.direction.correct + s.direction.incorrect,
+                }))}
+              />
+            </div>
+
+            {/* Recent verdicts */}
+            <div className="bg-gray-900 border border-gray-800 rounded overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-800">
+                <h2 className="font-semibold">Recent Verdicts</h2>
+                <div className="text-xs text-gray-500 mt-1">Last 100 verdicts (newest first)</div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-950/50 text-gray-400 text-xs">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Date</th>
+                      <th className="px-3 py-2 text-left">Ticker</th>
+                      <th className="px-3 py-2 text-left">Signal</th>
+                      <th className="px-3 py-2 text-right">Confidence</th>
+                      <th className="px-3 py-2 text-left">Persona</th>
+                      <th className="px-3 py-2 text-left">TF</th>
+                      <th className="px-3 py-2 text-right">Entry</th>
+                      <th className="px-3 py-2 text-right">Close@{horizon}</th>
+                      <th className="px-3 py-2 text-left">Strict</th>
+                      <th className="px-3 py-2 text-left">Directional</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-800">
+                    {data.recent.map((v, i) => {
+                      const strict = formatOutcome(v.outcome_strict)
+                      const direction = formatOutcome(v.outcome_directional)
+                      return (
+                        <tr key={i} className="hover:bg-gray-950/50">
+                          <td className="px-3 py-2 text-gray-400">{v.verdict_date}</td>
+                          <td className="px-3 py-2 font-mono font-semibold">{v.ticker}</td>
+                          <td className={`px-3 py-2 font-semibold ${v.signal === 'BULLISH' ? 'text-green-400' : 'text-red-400'}`}>
+                            {v.signal}
+                          </td>
+                          <td className="px-3 py-2 text-right">{v.confidence ?? '—'}%</td>
+                          <td className="px-3 py-2 text-gray-400 capitalize">{v.persona ?? '—'}</td>
+                          <td className="px-3 py-2 text-gray-400">{v.timeframe ?? '—'}</td>
+                          <td className="px-3 py-2 text-right font-mono">{v.entry_price ? '$' + v.entry_price.toFixed(2) : '—'}</td>
+                          <td className="px-3 py-2 text-right font-mono">{v.outcome_price ? '$' + v.outcome_price.toFixed(2) : '—'}</td>
+                          <td className={`px-3 py-2 ${strict.color}`}>{strict.label}</td>
+                          <td className={`px-3 py-2 ${direction.color}`}>{direction.label}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {data.recent.length === 0 && (
+                <div className="p-8 text-center text-gray-500">
+                  No verdicts yet — run some analyses to populate the track record.
+                </div>
+              )}
+            </div>
+
+            <div className="mt-6 text-xs text-gray-500 text-center">
+              Stats generated at {new Date(data.generatedAt).toLocaleString()}. 
+              Outcomes updated daily at 4am ET. NEUTRAL verdicts excluded from all stats.
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
+}
 
+interface BreakdownRow {
+  label: string
+  sampleSize: number
+  hitRate: number
+  decidedSize: number
+  direction: number
+  directionSize: number
+}
+
+function BreakdownTable({ title, rows }: { title: string; rows: BreakdownRow[] }) {
   return (
-    <div className="flex flex-col min-h-screen" style={{ background: 'var(--bg)', color: 'var(--text)' }}>
-      {/* Header */}
-      <header className="flex items-center gap-3 px-4 py-3 border-b sticky top-0 z-10"
-        style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-        <button onClick={() => router.push('/')} className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/70">
-          <ArrowLeft size={13} /> Back
-        </button>
-        <div className="w-px h-4" style={{ background: 'var(--border)' }} />
-        <Trophy size={14} style={{ color: '#a78bfa' }} />
-        <span className="text-sm font-bold">Track Record</span>
-        <div className="flex-1" />
-        {pending > 0 && (
-          <span className="text-[10px] text-white/40">{pending} pending outcome{pending > 1 ? 's' : ''}</span>
-        )}
-        <button onClick={() => load(true)} disabled={checking}
-          className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg disabled:opacity-40 hover:opacity-80"
-          style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)' }}>
-          <RefreshCw size={11} className={checking ? 'animate-spin' : ''} />
-          {checking ? 'Checking...' : 'Check outcomes'}
-        </button>
-      </header>
-
-      <div className="max-w-4xl mx-auto px-4 py-6 w-full space-y-5">
-
-        {/* Stats row */}
-        {stats && stats.total > 0 && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {[
-              { label: 'Total verdicts', val: stats.total.toString(), icon: Activity, color: '#a78bfa' },
-              { label: '1-week accuracy', val: stats.winRate1w != null ? `${stats.winRate1w.toFixed(0)}%` : `${stats.resolved1w} resolved`, icon: Target, color: stats.winRate1w && stats.winRate1w > 55 ? '#34d399' : '#f87171' },
-              { label: '1-month accuracy', val: stats.winRate1m != null ? `${stats.winRate1m.toFixed(0)}%` : `${stats.resolved1m} resolved`, icon: Trophy, color: stats.winRate1m && stats.winRate1m > 55 ? '#34d399' : '#f87171' },
-              { label: 'Avg 1W gain', val: stats.avgGain1w != null ? fmtPct(stats.avgGain1w) : '—', icon: TrendingUp, color: stats.avgGain1w && stats.avgGain1w > 0 ? '#34d399' : '#f87171' },
-            ].map(({ label, val, icon: Icon, color }) => (
-              <div key={label} className="rounded-2xl p-4 text-center" style={{ background: 'var(--surface)', border: '1px solid rgba(255,255,255,0.07)' }}>
-                <Icon size={14} style={{ color, margin: '0 auto 6px' }} />
-                <div className="text-xl font-bold font-mono" style={{ color }}>{val}</div>
-                <div className="text-[10px] text-white/30 mt-1">{label}</div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Signal breakdown */}
-        {stats && stats.resolved1w > 0 && (
-          <div className="rounded-2xl overflow-hidden" style={{ background: 'var(--surface)', border: '1px solid rgba(255,255,255,0.07)' }}>
-            <div className="px-4 py-2.5 border-b text-[10px] font-mono uppercase tracking-widest text-white/30"
-              style={{ borderColor: 'var(--border)' }}>
-              1-week accuracy by signal
-            </div>
-            <div className="grid grid-cols-3 divide-x" style={{ borderColor: 'var(--border)' }}>
-              {stats.bySignal.map(s => (
-                <div key={s.signal} className="px-4 py-3 text-center">
-                  <div className="text-sm font-bold font-mono" style={{ color: SIG_COLOR[s.signal] }}>
-                    {s.winRate != null ? `${s.winRate.toFixed(0)}%` : '—'}
-                  </div>
-                  <div className="text-[10px] text-white/40 mt-0.5">{s.signal} · {s.total} calls</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Filter tabs */}
-        {verdicts.length > 0 && (
-          <div className="flex gap-1 border-b" style={{ borderColor: 'var(--border)' }}>
-            {(['all','BULLISH','BEARISH','NEUTRAL'] as const).map(f => (
-              <button key={f} onClick={() => setFilter(f)}
-                className="px-3 py-2 text-xs font-semibold border-b-2 transition-all capitalize"
-                style={{
-                  color: filter === f ? (f === 'all' ? '#a78bfa' : SIG_COLOR[f]) : 'rgba(255,255,255,0.3)',
-                  borderColor: filter === f ? (f === 'all' ? '#a78bfa' : SIG_COLOR[f]) : 'transparent'
-                }}>
-                {f === 'all' ? `All (${verdicts.length})` : `${f.charAt(0) + f.slice(1).toLowerCase()} (${verdicts.filter(v => v.signal === f).length})`}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Verdict list */}
-        {filtered.length === 0 ? (
-          <div className="rounded-2xl p-10 text-center" style={{ background: 'var(--surface)', border: '1px solid rgba(255,255,255,0.07)' }}>
-            <Trophy size={28} style={{ color: 'var(--text3)', margin: '0 auto 12px' }} />
-            <p className="text-sm text-white/40">No verdicts logged yet.</p>
-            <p className="text-xs text-white/25 mt-1">Run an analysis — verdicts are logged automatically for BULLISH and BEARISH signals.</p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {filtered.map(v => {
-              const SignalIcon = SIG_ICON[v.signal]
-              const sigColor = SIG_COLOR[v.signal]
-              const today = new Date().toISOString().split('T')[0]
-              const w1Due = v.check_1w_after <= today
-              const m1Due = v.check_1m_after <= today
-
-              return (
-                <div key={v.id} className="rounded-xl overflow-hidden"
-                  style={{ background: 'var(--surface)', border: '1px solid rgba(255,255,255,0.07)' }}>
-                  <div className="flex items-center gap-3 px-4 py-3">
-                    {/* Signal icon */}
-                    <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-                      style={{ background: `${sigColor}12` }}>
-                      <SignalIcon size={14} style={{ color: sigColor }} />
-                    </div>
-
-                    {/* Core info */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-mono font-bold text-sm">{v.ticker}</span>
-                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded font-mono"
-                          style={{ background: `${sigColor}15`, color: sigColor }}>
-                          {v.signal}
-                        </span>
-                        {v.confidence && (
-                          <span className="text-[10px] text-white/40">{v.confidence}% conf</span>
-                        )}
-                        <span className="text-[10px] text-white/25">{v.verdict_date}</span>
-                        {v.timeframe && <span className="text-[10px] text-white/25">{v.timeframe}</span>}
-                      </div>
-                      <div className="flex items-center gap-3 mt-0.5 flex-wrap">
-                        {v.entry_price && <span className="text-[10px] text-white/40">entry {fmt$(v.entry_price)}</span>}
-                        {v.stop_loss && <span className="text-[10px]" style={{ color: '#f87171' }}>stop {fmt$(v.stop_loss)}</span>}
-                        {v.take_profit && <span className="text-[10px]" style={{ color: '#34d399' }}>target {fmt$(v.take_profit)}</span>}
-                      </div>
-                    </div>
-
-                    {/* Outcomes */}
-                    <div className="flex gap-2 shrink-0">
-                      {/* 1W */}
-                      <div className="text-center min-w-[52px]">
-                        <div className="text-[9px] text-white/25 mb-0.5">1 WEEK</div>
-                        {v.outcome_1w === 'pending' ? (
-                          <div className="text-[10px] text-white/25">
-                            {w1Due ? <span style={{ color: '#fbbf24' }}>due</span> : `${Math.ceil((new Date(v.check_1w_after).getTime() - Date.now()) / 86400000)}d`}
-                          </div>
-                        ) : (
-                          <div>
-                            <div className="text-base font-bold" style={{ color: outcomeColor(v.outcome_1w) }}>
-                              {outcomeLabel(v.outcome_1w)}
-                            </div>
-                            {v.pct_change_1w != null && (
-                              <div className="text-[10px] font-mono" style={{ color: outcomeColor(v.outcome_1w) }}>
-                                {fmtPct(v.pct_change_1w)}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* 1M */}
-                      <div className="text-center min-w-[52px]">
-                        <div className="text-[9px] text-white/25 mb-0.5">1 MONTH</div>
-                        {v.outcome_1m === 'pending' ? (
-                          <div className="text-[10px] text-white/25">
-                            {m1Due ? <span style={{ color: '#fbbf24' }}>due</span> : `${Math.ceil((new Date(v.check_1m_after).getTime() - Date.now()) / 86400000)}d`}
-                          </div>
-                        ) : (
-                          <div>
-                            <div className="text-base font-bold" style={{ color: outcomeColor(v.outcome_1m) }}>
-                              {outcomeLabel(v.outcome_1m)}
-                            </div>
-                            {v.pct_change_1m != null && (
-                              <div className="text-[10px] font-mono" style={{ color: outcomeColor(v.outcome_1m) }}>
-                                {fmtPct(v.pct_change_1m)}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-
-        {verdicts.length > 0 && (
-          <p className="text-[10px] text-center text-white/20 pb-4">
-            ✓ = moved in predicted direction by &gt;2% · ✗ = moved opposite · ~ = stayed within 3% (neutral) · … = outcome pending
-          </p>
-        )}
+    <div className="bg-gray-900 border border-gray-800 rounded">
+      <div className="px-4 py-3 border-b border-gray-800">
+        <h3 className="font-semibold">{title}</h3>
       </div>
+      <table className="w-full text-sm">
+        <thead className="text-gray-400 text-xs">
+          <tr>
+            <th className="px-3 py-2 text-left">Group</th>
+            <th className="px-3 py-2 text-right">Sample</th>
+            <th className="px-3 py-2 text-right">Hit Rate</th>
+            <th className="px-3 py-2 text-right">Direction</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-800">
+          {rows.map((r) => (
+            <tr key={r.label}>
+              <td className="px-3 py-2 capitalize">{r.label}</td>
+              <td className="px-3 py-2 text-right text-gray-400">{r.sampleSize}</td>
+              <td className="px-3 py-2 text-right">
+                {r.decidedSize > 0 ? (
+                  <span className={r.hitRate >= 0.5 ? 'text-green-400' : 'text-red-400'}>
+                    {pct(r.hitRate)} <span className="text-xs text-gray-500">({r.decidedSize})</span>
+                  </span>
+                ) : <span className="text-gray-600">—</span>}
+              </td>
+              <td className="px-3 py-2 text-right">
+                {r.directionSize > 0 ? (
+                  <span className={r.direction >= 0.5 ? 'text-blue-400' : 'text-gray-400'}>
+                    {pct(r.direction)} <span className="text-xs text-gray-500">({r.directionSize})</span>
+                  </span>
+                ) : <span className="text-gray-600">—</span>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }
