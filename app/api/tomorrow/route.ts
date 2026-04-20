@@ -1,57 +1,53 @@
+// ═════════════════════════════════════════════════════════════
+// app/api/tomorrow/route.ts — Tomorrow's Movers (rewrite)
+//
+// What changed vs the original:
+//   1. Real Finnhub earnings calendar for next trading day (no more hallucinated dates)
+//   2. Real Finnhub economic calendar (Fed, CPI, jobs — actual scheduled events)
+//   3. After-hours price moves on today's earnings reporters
+//   4. Multi-source news (Alpaca + Finnhub + Gemini grounded)
+//   5. Market regime context injected into prompt
+//   6. Claude Sonnet 4 classification with confidence scores
+//   7. Gemini 2.5 Pro grounded verification of top 5
+//   8. Confidence thresholding (≥60% shown)
+//   9. Telemetry to movers_log with source='tomorrow'
+//
+// Preserves:
+//   - SSE streaming protocol
+//   - news_cache table with 'tomorrow_YYYY-MM-DD' key
+//   - Client response shape (adds fields, doesn't remove)
+// ═════════════════════════════════════════════════════════════
+
 import { NextRequest } from 'next/server'
+import Anthropic from '@anthropic-ai/sdk'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { createServerClient } from '@/app/lib/supabase'
+import { createClient as createAdmin } from '@supabase/supabase-js'
+import { fetchMultiSourceNews, formatNewsForPrompt } from '@/app/lib/multi-source-news'
+import { getMarketRegime, type MarketRegime } from '@/app/lib/market-regime'
+import { fetchForwardContext, formatForwardContextForPrompt, type ForwardContext } from '@/app/lib/forward-data'
 
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
 
-const ALPACA_HEADERS = {
-  'APCA-API-KEY-ID': process.env.ALPACA_API_KEY!,
-  'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY!,
-  'Accept': 'application/json',
-}
+const getAdminClient = () => createAdmin(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+)
 
-// Get next trading day
-function getNextTradingDay(): string {
-  const now = new Date()
-  const day = now.getDay() // 0=Sun, 1=Mon...6=Sat
-  const daysAhead = day === 5 ? 3 : day === 6 ? 2 : 1 // skip weekend
-  const next = new Date(now)
-  next.setDate(next.getDate() + daysAhead)
-  return next.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
-}
-
+// ─────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────
 function getTodayStr(): string {
   return new Date().toISOString().split('T')[0]
 }
 
-async function fetchUpcomingNews(): Promise<string> {
-  try {
-    const res = await fetch(
-      'https://data.alpaca.markets/v1beta1/news?limit=50&sort=desc',
-      { headers: ALPACA_HEADERS }
-    )
-    if (!res.ok) return ''
-    const data = await res.json()
-    return (data.news || []).slice(0, 40)
-      .map((n: { headline: string; summary?: string; symbols?: string[] }) =>
-        `• [${n.symbols?.join(',') || 'MARKET'}] ${n.headline}${n.summary ? ' — ' + n.summary.slice(0, 120) : ''}`
-      ).join('\n')
-  } catch { return '' }
-}
-
-async function fetchCryptoNews(): Promise<string> {
-  try {
-    const res = await fetch(
-      'https://data.alpaca.markets/v1beta1/news?limit=20&sort=desc&symbols=BTC,ETH,SOL,DOGE,XRP',
-      { headers: ALPACA_HEADERS }
-    )
-    if (!res.ok) return ''
-    const data = await res.json()
-    return (data.news || []).slice(0, 15)
-      .map((n: { headline: string; symbols?: string[] }) =>
-        `• [${n.symbols?.join(',') || 'CRYPTO'}] ${n.headline}`
-      ).join('\n')
-  } catch { return '' }
+function getNextTradingDayLabel(dateStr: string): string {
+  const d = new Date(dateStr + 'T00:00:00Z')
+  return d.toLocaleDateString('en-US', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    timeZone: 'UTC',
+  })
 }
 
 function parseJSON<T>(text: string): T {
@@ -62,7 +58,9 @@ function parseJSON<T>(text: string): T {
   return JSON.parse(clean.slice(start, end + 1)) as T
 }
 
-// ── Sector top movers ──────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// Sector top movers (cached 5 min) — shared pattern from Session 2
+// ─────────────────────────────────────────────────────────────
 const SECTOR_TICKERS: Record<string, { name: string; emoji: string; tickers: string[] }> = {
   XLK:  { name: 'Technology',       emoji: '💻', tickers: ['NVDA','MSFT','AAPL','META','GOOGL','AVGO','ORCL','AMD','ADBE','CRM'] },
   XLV:  { name: 'Healthcare',       emoji: '🏥', tickers: ['LLY','UNH','JNJ','ABBV','MRK','TMO','ABT','DHR','PFE','AMGN'] },
@@ -77,12 +75,20 @@ const SECTOR_TICKERS: Record<string, { name: string; emoji: string; tickers: str
   XLC:  { name: 'Comm. Services',   emoji: '📡', tickers: ['META','GOOGL','NFLX','DIS','CHTR','T','VZ','TMUS','EA','TTWO'] },
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let sectorCache: { data: any[]; fetchedAt: number } | null = null
+const SECTOR_CACHE_TTL_MS = 5 * 60 * 1000
+
 async function fetchSectorTopMovers(): Promise<Array<{
   sector: string; etf: string; emoji: string; direction: string; etfChange: number;
   topMovers: Array<{ ticker: string; change: number; signal: 'up' | 'down' }>
 }>> {
+  if (sectorCache && Date.now() - sectorCache.fetchedAt < SECTOR_CACHE_TTL_MS) {
+    return sectorCache.data
+  }
   const finnhubKey = process.env.FINNHUB_API_KEY
   if (!finnhubKey) return []
+
   const results = []
   for (const [etf, info] of Object.entries(SECTOR_TICKERS)) {
     try {
@@ -101,12 +107,362 @@ async function fetchSectorTopMovers(): Promise<Array<{
         await new Promise(r => setTimeout(r, 80))
       }
       const topMovers = tickerQuotes.sort((a, b) => Math.abs(b.change) - Math.abs(a.change)).slice(0, 10)
-      results.push({ sector: info.name, etf, emoji: info.emoji, direction: etfChange > 0.3 ? 'up' : etfChange < -0.3 ? 'down' : 'mixed', etfChange: parseFloat(etfChange.toFixed(2)), topMovers })
+      results.push({
+        sector: info.name,
+        etf,
+        emoji: info.emoji,
+        direction: etfChange > 0.3 ? 'up' : etfChange < -0.3 ? 'down' : 'mixed',
+        etfChange: parseFloat(etfChange.toFixed(2)),
+        topMovers,
+      })
     } catch { /* skip */ }
   }
-  return results.sort((a, b) => Math.abs(b.etfChange) - Math.abs(a.etfChange))
+  const sorted = results.sort((a, b) => Math.abs(b.etfChange) - Math.abs(a.etfChange))
+  sectorCache = { data: sorted, fetchedAt: Date.now() }
+  return sorted
 }
 
+// ─────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────
+interface WatchlistItem {
+  ticker: string
+  companyName: string
+  type: 'stock' | 'crypto'
+  signal: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
+  confidence: number
+  catalyst: string
+  setupType: 'earnings' | 'technical_breakout' | 'news_continuation' | 'sector_play' | 'macro_event' | 'catalyst' | 'after_hours_move'
+  magnitude: 'high' | 'medium' | 'low'
+  keyLevel?: string
+  planBull?: string
+  planBear?: string
+  timeOfDay: 'pre-market' | 'market-open' | 'intraday' | 'after-hours'
+  riskLevel: 'high' | 'medium' | 'low'
+  plainEnglish: string
+  // Post-verification
+  verified?: boolean
+  verificationSources?: string[]
+  verificationNote?: string
+}
+
+interface TomorrowResult {
+  nextTradingDay: string
+  generatedAt: string
+  marketOutlook: string
+  keyTheme: string
+  preMarketWatchlist: WatchlistItem[]
+  earningsCalendar: Array<{
+    ticker: string
+    companyName: string
+    reportTime: string
+    expectedMove?: string
+    analystExpectation?: string
+    watchFor?: string
+  }>
+  economicEvents: Array<{
+    event: string
+    time: string
+    impact: 'high' | 'medium' | 'low'
+    whatToWatch: string
+  }>
+  sectorSetups: Array<{
+    sector: string
+    etf: string
+    direction: 'bullish' | 'bearish' | 'mixed'
+    reason: string
+    topPlay: string
+  }>
+  cryptoSetup: string
+  openingBellPlaybook: string
+  riskFactors: string[]
+}
+
+// ─────────────────────────────────────────────────────────────
+// Pass 1: Claude Sonnet 4 builds the tomorrow playbook
+// ─────────────────────────────────────────────────────────────
+async function buildPlaybookWithClaude(params: {
+  forwardContext: ForwardContext
+  newsBlock: string
+  regime: MarketRegime
+  todayLabel: string
+  nextDayLabel: string
+}): Promise<TomorrowResult> {
+  const { forwardContext, newsBlock, regime, todayLabel, nextDayLabel } = params
+  const forwardBlock = formatForwardContextForPrompt(forwardContext)
+
+  const system = `You are a professional market strategist preparing traders for the NEXT US trading day (${nextDayLabel}). Today is ${todayLabel}.
+
+You have REAL data — do not invent earnings dates, EPS estimates, or economic events. Only use what is provided in the FORWARD-LOOKING DATA block below. If specific data isn't there, don't make it up.
+
+You also have market regime context. Use it when assessing conviction. Bullish setups in risk-off markets often fail. Bearish setups in risk-on markets often fade.
+
+For every watchlist item you flag, assign a confidence score 0-100 representing how likely your directional call is correct by end of next trading day:
+  - 80-100: extremely high conviction (real catalyst + regime alignment)
+  - 65-79: strong conviction (real catalyst)
+  - 60-64: moderate conviction
+  - below 60: don't include
+
+Only include items with confidence >= 60. Quality over quantity.
+
+All numeric fields must be plain numbers (no $ signs, no commas).`
+
+  const user = `MARKET REGIME RIGHT NOW:
+${regime.contextParagraph}
+
+FORWARD-LOOKING DATA FOR ${nextDayLabel}:
+${forwardBlock}
+
+TODAY'S NEWS HEADLINES (may carry forward into tomorrow):
+${newsBlock}
+
+Build tomorrow's trader playbook. Consider:
+1. Stocks with earnings reports (use the real dates/times above — don't make them up)
+2. After-hours movers that will gap at the open
+3. Scheduled economic events (use the real ones above)
+4. Today's news that creates continuation trades tomorrow
+5. Sector rotations likely to continue
+6. Pre-market catalysts (product launches, FDA, analyst days)
+
+Respond JSON ONLY (no markdown, no preamble):
+{
+  "nextTradingDay": "${nextDayLabel}",
+  "generatedAt": "${new Date().toISOString()}",
+  "marketOutlook": "2-3 sentences on the setup heading into tomorrow — dominant theme, macro backdrop, risk-on vs risk-off bias",
+  "keyTheme": "single most important theme for tomorrow",
+  "preMarketWatchlist": [
+    {
+      "ticker": "SYMBOL",
+      "companyName": "Full Name",
+      "type": "stock",
+      "signal": "BULLISH|BEARISH|NEUTRAL",
+      "confidence": 72,
+      "catalyst": "specific reason e.g. 'Reports earnings BMO — EPS est 1.20, revenue est 50B, high bar given valuation'",
+      "setupType": "earnings|technical_breakout|news_continuation|sector_play|macro_event|catalyst|after_hours_move",
+      "magnitude": "high|medium|low",
+      "keyLevel": "specific price level to watch",
+      "planBull": "what to look for if bullish scenario plays out",
+      "planBear": "what to look for if bearish scenario plays out",
+      "timeOfDay": "pre-market|market-open|intraday|after-hours",
+      "riskLevel": "high|medium|low",
+      "plainEnglish": "2-3 sentences explaining for a beginner — what to watch for tomorrow"
+    }
+  ],
+  "earningsCalendar": [
+    {
+      "ticker": "SYMBOL",
+      "companyName": "Full Name",
+      "reportTime": "pre-market|after-hours|during-market",
+      "expectedMove": "percentage estimate e.g. ±5%",
+      "analystExpectation": "brief summary of what analysts expect (base this on the EPS/rev estimates provided)",
+      "watchFor": "what will make it a beat or miss"
+    }
+  ],
+  "economicEvents": [
+    {
+      "event": "event name (MUST be from the real list above)",
+      "time": "approximate time",
+      "impact": "high|medium|low",
+      "whatToWatch": "plain English what this means for markets"
+    }
+  ],
+  "sectorSetups": [
+    {
+      "sector": "sector name",
+      "etf": "e.g. XLK",
+      "direction": "bullish|bearish|mixed",
+      "reason": "why this sector is set up for tomorrow",
+      "topPlay": "best individual stock play"
+    }
+  ],
+  "cryptoSetup": "2-3 sentences on crypto heading into tomorrow",
+  "openingBellPlaybook": "Plain English step-by-step for the first 30 minutes of trading tomorrow. What to watch, what levels matter, when to wait vs act. Written for a beginner.",
+  "riskFactors": ["key risk 1 that could invalidate the outlook", "key risk 2", "key risk 3"]
+}
+
+Rules:
+- preMarketWatchlist: 5-8 items, confidence >= 60 each
+- earningsCalendar: ONLY tickers from the forward data above — do NOT invent
+- economicEvents: ONLY events from the forward data above — do NOT invent
+- sectorSetups: 3-5 sectors max, based on sector data provided
+- Be specific. Vague setups aren't useful.`
+
+  const msg = await anthropic.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 5000,
+    system,
+    messages: [{ role: 'user', content: user }],
+  })
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const text = (msg.content[0] as any).text as string
+  const parsed = parseJSON<TomorrowResult>(text)
+
+  // Enforce confidence threshold + array sanity
+  const watchlist = (parsed.preMarketWatchlist ?? []).filter(
+    (w) => w && w.ticker && typeof w.confidence === 'number' && w.confidence >= 60
+  )
+
+  return {
+    ...parsed,
+    preMarketWatchlist: watchlist,
+    earningsCalendar: Array.isArray(parsed.earningsCalendar) ? parsed.earningsCalendar : [],
+    economicEvents: Array.isArray(parsed.economicEvents) ? parsed.economicEvents : [],
+    sectorSetups: Array.isArray(parsed.sectorSetups) ? parsed.sectorSetups : [],
+    riskFactors: Array.isArray(parsed.riskFactors) ? parsed.riskFactors : [],
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Pass 2: Gemini Pro grounded verification of top 5
+// ─────────────────────────────────────────────────────────────
+interface VerificationResult {
+  ticker: string
+  verified: boolean
+  sources: string[]
+  note: string
+}
+
+async function verifyWatchlistWithGemini(
+  items: WatchlistItem[],
+  nextDayLabel: string
+): Promise<Map<string, VerificationResult>> {
+  const resultMap = new Map<string, VerificationResult>()
+  if (items.length === 0) return resultMap
+
+  const top5 = items.slice(0, 5)
+  const list = top5.map((m, i) =>
+    `[${i + 1}] ${m.ticker} (${m.signal}): ${m.catalyst}`
+  ).join('\n')
+
+  const prompt = `You are a financial fact-checker. For each claim below about what will move tomorrow (${nextDayLabel}), use Google Search to verify whether CREDIBLE mainstream financial sources (Reuters, Bloomberg, WSJ, CNBC, MarketWatch, Financial Times, Barron's, or SEC filings / company IR pages) confirm the setup or catalyst.
+
+CLAIMS TO VERIFY:
+${list}
+
+For EACH claim, return:
+- verified: true if credible sources confirm the setup (e.g., earnings ARE reporting that day, the after-hours move DID happen, the economic event IS scheduled)
+- sources: array of 1-3 credible URLs found (empty if none)
+- note: 1 sentence on what you confirmed or why it couldn't be verified
+
+Do NOT count X/Twitter, Reddit, Stocktwits, YouTube, or random blogs as credible.
+
+Return ONLY this JSON, no preamble:
+{
+  "verifications": [
+    {
+      "ticker": "AAPL",
+      "verified": true,
+      "sources": ["https://www.reuters.com/..."],
+      "note": "Reuters confirmed Apple reports Q2 earnings after-hours on 2026-04-21"
+    }
+  ]
+}`
+
+  try {
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-2.5-pro',
+      generationConfig: { temperature: 0.1, maxOutputTokens: 2500 },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      tools: [{ googleSearch: {} } as any],
+    })
+    const result = await model.generateContent(prompt)
+    const text = result.response.text()
+    const clean = text.replace(/```json|```/g, '').trim()
+    const start = clean.indexOf('{')
+    const end = clean.lastIndexOf('}')
+    if (start === -1 || end === -1) return resultMap
+
+    const parsed = JSON.parse(clean.slice(start, end + 1))
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const verifications: any[] = Array.isArray(parsed.verifications) ? parsed.verifications : []
+
+    for (const v of verifications) {
+      if (!v?.ticker) continue
+      resultMap.set(v.ticker.toUpperCase(), {
+        ticker: v.ticker.toUpperCase(),
+        verified: !!v.verified,
+        sources: Array.isArray(v.sources) ? v.sources.filter((u: unknown) => typeof u === 'string').slice(0, 3) : [],
+        note: typeof v.note === 'string' ? v.note.slice(0, 250) : '',
+      })
+    }
+  } catch (e) {
+    console.warn('[tomorrow-movers] verification failed:', (e as Error).message?.slice(0, 120))
+  }
+
+  return resultMap
+}
+
+// ─────────────────────────────────────────────────────────────
+// Telemetry: log preMarketWatchlist to movers_log
+// ─────────────────────────────────────────────────────────────
+function logMoversToDb(
+  result: TomorrowResult,
+  regime: MarketRegime,
+  pricesAtFlag: Record<string, number>
+): void {
+  void (async () => {
+    try {
+      const admin = getAdminClient()
+      const rows = result.preMarketWatchlist.map(m => ({
+        source: 'tomorrow',
+        ticker: m.ticker.toUpperCase(),
+        company_name: m.companyName ?? null,
+        asset_type: m.type ?? 'stock',
+        signal: m.signal,
+        magnitude: m.magnitude ?? null,
+        confidence: m.confidence ?? null,
+        timeframe: 'tomorrow',
+        headline: m.catalyst ?? null,
+        catalyst: m.catalyst ?? null,
+        reason: m.plainEnglish ?? null,
+        classification_model: 'claude-sonnet-4',
+        verification_status: m.verified === true ? 'verified' : m.verified === false ? 'stripped' : 'skipped',
+        verification_sources: m.verificationSources ?? null,
+        market_regime: regime.regime,
+        spy_change_pct: regime.spyChangePct,
+        vix_level: regime.vixLevel,
+        price_at_flag: pricesAtFlag[m.ticker.toUpperCase()] ?? null,
+      }))
+
+      if (rows.length > 0) {
+        const { error } = await admin.from('movers_log').insert(rows)
+        if (error) console.warn('[tomorrow-movers/log] insert failed:', error.message)
+      }
+    } catch (e) {
+      console.warn('[tomorrow-movers/log] fire-and-forget failed:', (e as Error).message?.slice(0, 100))
+    }
+  })()
+}
+
+// ─────────────────────────────────────────────────────────────
+// Fetch prices for tickers (for telemetry)
+// ─────────────────────────────────────────────────────────────
+async function fetchPricesForTickers(tickers: string[]): Promise<Record<string, number>> {
+  const token = process.env.FINNHUB_API_KEY
+  if (!token || tickers.length === 0) return {}
+  const prices: Record<string, number> = {}
+  await Promise.all(tickers.slice(0, 20).map(async (t) => {
+    try {
+      const ctrl = new AbortController()
+      const timer = setTimeout(() => ctrl.abort(), 3000)
+      try {
+        const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${t}&token=${token}`, {
+          signal: ctrl.signal, cache: 'no-store',
+        })
+        if (res.ok) {
+          const q = await res.json()
+          if (typeof q?.c === 'number' && q.c > 0) prices[t.toUpperCase()] = q.c
+        }
+      } finally { clearTimeout(timer) }
+    } catch { /* skip */ }
+  }))
+  return prices
+}
+
+// ═════════════════════════════════════════════════════════════
+// Route handler
+// ═════════════════════════════════════════════════════════════
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const forceRefresh = searchParams.get('refresh') === 'true'
@@ -114,8 +470,20 @@ export async function GET(req: NextRequest) {
   const encoder = new TextEncoder()
   const stream = new ReadableStream({
     async start(controller) {
-      const send = (event: string, data: unknown) =>
-        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+      let controllerClosed = false
+      const send = (event: string, data: unknown) => {
+        if (controllerClosed) return
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+        } catch { controllerClosed = true }
+      }
+
+      const heartbeat = setInterval(() => {
+        try { controller.enqueue(encoder.encode(`: heartbeat\n\n`)) } catch { /* closed */ }
+      }, 15000)
+
+      const pipelineStart = Date.now()
+      console.log('[tomorrow-movers] START')
 
       try {
         const supabase = createServerClient()
@@ -124,7 +492,7 @@ export async function GET(req: NextRequest) {
 
         // ── Cache check ──────────────────────────────────────
         if (!forceRefresh) {
-          send('status', { message: 'Checking cached analysis...' })
+          send('status', { message: 'Checking cached playbook...' })
           const { data: cached } = await supabase
             .from('news_cache')
             .select('*')
@@ -133,155 +501,115 @@ export async function GET(req: NextRequest) {
 
           if (cached?.data) {
             const age = Math.round((Date.now() - new Date(cached.generated_at).getTime()) / 60000)
-            send('status', { message: `Loaded cached analysis from ${age} minute${age === 1 ? '' : 's'} ago` })
+            send('status', { message: `Loaded cached playbook from ${age} minute${age === 1 ? '' : 's'} ago` })
             const sectorTopMovers = await fetchSectorTopMovers().catch(() => [])
             send('complete', { ...cached.data, sectorTopMovers, cached: true, ageMinutes: age })
+            console.log(`[tomorrow-movers] cache hit (age ${age}m) in ${Date.now() - pipelineStart}ms`)
             return
           }
         }
 
         // ── Fresh analysis ───────────────────────────────────
-        send('status', { message: 'Gathering market intelligence for tomorrow...' })
+        send('status', { message: 'Fetching forward-looking data, news, and regime...' })
 
-        const [marketNews, cryptoNews, sectorTopMovers] = await Promise.all([
+        const parallelStart = Date.now()
+        const [forwardContext, newsResult, regime, sectorTopMovers] = await Promise.all([
+          fetchForwardContext(),
+          fetchMultiSourceNews({ includeCrypto: true }),
+          getMarketRegime(),
           fetchSectorTopMovers(),
-          fetchUpcomingNews(),
-          fetchCryptoNews(),
         ])
+        console.log(`[tomorrow-movers] parallel fetch ${Date.now() - parallelStart}ms (earnings:${forwardContext.counts.tomorrowEarnings} afterhours:${forwardContext.counts.afterHoursMovers} econ:${forwardContext.counts.economicEvents} news:${newsResult.counts.afterDedupe})`)
 
-        send('status', { message: 'The council is building tomorrow\'s playbook...' })
-
-        const nextDay = getNextTradingDay()
-        const today_display = new Date().toLocaleDateString('en-US', {
-          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+        const newsBlock = formatNewsForPrompt(newsResult.items, 40)
+        const todayLabel = new Date().toLocaleDateString('en-US', {
+          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
         })
+        const nextDayLabel = getNextTradingDayLabel(forwardContext.nextTradingDay)
 
-        const MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro']
-        let result = null
+        // ── Pass 1: Claude builds playbook ───────────────────
+        send('status', { message: `Regime: ${regime.regime}. Claude is building tomorrow's playbook...` })
+        const classifyStart = Date.now()
+        const result = await buildPlaybookWithClaude({
+          forwardContext,
+          newsBlock,
+          regime,
+          todayLabel,
+          nextDayLabel,
+        })
+        console.log(`[tomorrow-movers] playbook ${Date.now() - classifyStart}ms (watchlist:${result.preMarketWatchlist.length} earnings:${result.earningsCalendar.length} econ:${result.economicEvents.length})`)
 
-        for (const modelName of MODELS) {
-          try {
-            const model = genAI.getGenerativeModel({ model: modelName })
-            const response = await model.generateContent(`You are a professional market strategist preparing traders for the NEXT trading day (${nextDay}). Today is ${today_display}.
+        // ── Pass 2: Gemini verifies top 5 ────────────────────
+        send('status', { message: 'Verifying top setups against Reuters, Bloomberg, WSJ...' })
+        const verifyStart = Date.now()
+        const sorted = [...result.preMarketWatchlist].sort((a, b) => b.confidence - a.confidence)
+        const verifications = await verifyWatchlistWithGemini(sorted, nextDayLabel)
+        console.log(`[tomorrow-movers] verification ${Date.now() - verifyStart}ms (${verifications.size} verified)`)
 
-CURRENT MARKET NEWS AND DEVELOPMENTS:
-${marketNews}
-
-CRYPTO DEVELOPMENTS:
-${cryptoNews}
-
-Your job is to look AHEAD and identify:
-1. Stocks with earnings reports tomorrow or in the next 2 days
-2. Stocks reacting to news TODAY that will continue moving tomorrow
-3. Scheduled economic data releases that will move markets (Fed minutes, CPI, jobs report, etc.)
-4. Stocks setting up technically for a big move (consolidation breaking out, approaching key levels)
-5. Sector rotations already in progress
-6. Any pre-market catalysts to watch (analyst days, product launches, FDA decisions)
-7. Crypto setups heading into tomorrow
-
-Think like a professional trader preparing their watchlist the night before.
-
-Respond JSON ONLY (no markdown):
-{
-  "nextTradingDay": "${nextDay}",
-  "generatedAt": "${new Date().toISOString()}",
-  "marketOutlook": "2-3 sentence overall market setup heading into tomorrow — what is the dominant theme, what is the macro backdrop, is sentiment risk-on or risk-off?",
-  "keyTheme": "single most important theme for tomorrow e.g. 'Earnings season ramp-up', 'Fed decision reaction', 'Sector rotation into defensives'",
-  "preMarketWatchlist": [
-    {
-      "ticker": "SYMBOL",
-      "companyName": "Full Company Name",
-      "type": "stock",
-      "signal": "BULLISH|BEARISH|NEUTRAL",
-      "catalyst": "specific reason e.g. 'Reports earnings before market open — expected $1.20 EPS'",
-      "setupType": "earnings|technical_breakout|news_continuation|sector_play|macro_event|catalyst",
-      "magnitude": "high|medium|low",
-      "keyLevel": "specific price level to watch e.g. 'Watch $45.50 — if it holds pre-market this confirms bullish setup'",
-      "planBull": "what to watch for if bullish scenario plays out",
-      "planBear": "what to watch for if bearish scenario plays out",
-      "timeOfDay": "pre-market|market-open|intraday|after-hours",
-      "riskLevel": "high|medium|low",
-      "plainEnglish": "2-3 sentences explaining this setup to a beginner — what is happening and what to watch for tomorrow"
-    }
-  ],
-  "earningsCalendar": [
-    {
-      "ticker": "SYMBOL",
-      "companyName": "Full Name",
-      "reportTime": "pre-market|after-hours|during-market",
-      "expectedMove": "percentage e.g. ±5%",
-      "analystExpectation": "brief summary of what analysts expect",
-      "watchFor": "what will make it a beat or miss"
-    }
-  ],
-  "economicEvents": [
-    {
-      "event": "event name e.g. 'Fed Minutes Release'",
-      "time": "approximate time e.g. '2:00 PM ET'",
-      "impact": "high|medium|low",
-      "whatToWatch": "plain English explanation of what this means for markets"
-    }
-  ],
-  "sectorSetups": [
-    {
-      "sector": "sector name",
-      "etf": "e.g. XLK",
-      "direction": "bullish|bearish|mixed",
-      "reason": "why this sector is set up for a move tomorrow",
-      "topPlay": "best individual stock play in this sector for tomorrow"
-    }
-  ],
-  "cryptoSetup": "2-3 sentences on crypto heading into tomorrow — any key levels, catalysts, or setups to watch",
-  "openingBellPlaybook": "A plain English step-by-step guide for what to do in the first 30 minutes of trading tomorrow. Written for someone new to trading. What should they watch, what price levels matter, when should they wait vs act?",
-  "riskFactors": ["key risk 1 that could change the outlook", "key risk 2", "key risk 3"]
-}
-
-Rules:
-- Only include tickers with SPECIFIC setups or catalysts — no speculation without basis
-- The preMarketWatchlist should have 5-8 stocks/crypto
-- earningsCalendar should list any earnings reports you know about tomorrow (can be empty array if none known)
-- economicEvents can be empty array if no major events
-- Be specific with price levels where possible
-- Write for a mix of beginners and experienced traders`)
-
-            result = parseJSON(response.response.text())
-            break
-          } catch (e) {
-            const msg = (e as Error).message ?? ''
-            if (!msg.includes('503') && !msg.includes('overload') && !msg.includes('404')) throw e
-            console.warn(`Model ${modelName} unavailable, trying next...`)
+        const attachVerif = (w: WatchlistItem): WatchlistItem => {
+          const v = verifications.get(w.ticker.toUpperCase())
+          if (!v) return w
+          return {
+            ...w,
+            verified: v.verified,
+            verificationSources: v.sources,
+            verificationNote: v.note,
           }
         }
+        result.preMarketWatchlist = result.preMarketWatchlist.map(attachVerif)
 
-        if (!result) throw new Error('All models unavailable')
+        // ── Telemetry (fire-and-forget) ──────────────────────
+        const allTickers = result.preMarketWatchlist.map(m => m.ticker.toUpperCase())
+        const pricesAtFlag = await fetchPricesForTickers(allTickers).catch(() => ({}))
+        logMoversToDb(result, regime, pricesAtFlag)
 
-        // Save to cache
+        // ── Save to cache ────────────────────────────────────
         try {
           const saveResult = await supabase
             .from('news_cache')
             .upsert(
-              { cache_key: cacheKey, cache_date: getTodayStr(), generated_at: new Date().toISOString(), data: result },
+              { cache_key: cacheKey, cache_date: today, generated_at: new Date().toISOString(), data: result },
               { onConflict: 'cache_key' }
             )
-          if (saveResult.error) {
-            console.error('Tomorrow cache save error:', saveResult.error)
-          }
-        } catch (saveErr) {
-          console.error('Tomorrow cache save failed:', saveErr)
+          if (saveResult.error) console.error('[tomorrow-movers] cache save error:', saveResult.error)
+        } catch (e) {
+          console.error('[tomorrow-movers] cache save failed:', e)
         }
 
-        send('complete', { ...(result as Record<string, unknown>), sectorTopMovers, cached: false, ageMinutes: 0 })
+        const totalMs = Date.now() - pipelineStart
+        console.log(`[tomorrow-movers] TOTAL ${totalMs}ms (${(totalMs/1000).toFixed(1)}s)`)
 
+        send('complete', {
+          ...result,
+          sectorTopMovers,
+          regime: {
+            label: regime.regime,
+            spyChangePct: regime.spyChangePct,
+            vixLevel: regime.vixLevel,
+            context: regime.contextParagraph,
+          },
+          forwardCounts: forwardContext.counts,
+          newsCounts: newsResult.counts,
+          cached: false,
+          ageMinutes: 0,
+          elapsedMs: totalMs,
+        })
       } catch (err) {
-        console.error('Tomorrow movers error:', err)
-        send('error', { message: err instanceof Error ? err.message : 'Failed to generate analysis' })
+        console.error('[tomorrow-movers] error:', err)
+        send('error', { message: err instanceof Error ? err.message : 'Failed to generate playbook' })
       } finally {
-        controller.close()
+        clearInterval(heartbeat)
+        controllerClosed = true
+        try { controller.close() } catch { /* already closed */ }
       }
     }
   })
 
   return new Response(stream, {
-    headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
   })
 }
