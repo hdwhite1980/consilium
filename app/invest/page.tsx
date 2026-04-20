@@ -135,6 +135,11 @@ interface Idea {
   cost?: number
   breakeven?: number
   maxLoss?: number
+  // Phase 2 — Tradier enrichment
+  iv?: number | null
+  optionSymbol?: string | null
+  isEstimated?: boolean
+  dataSource?: 'claude-estimate' | 'tradier'
 }
 
 interface FloorData {
@@ -1435,7 +1440,9 @@ function FloorInner() {
                               </span>
                               <span className="fl-signal-px mono">
                                 {fmt$(opt.estimatedPremium ?? 0)}/sh
-                                <span className="fl-option-est-label">est</span>
+                                <span className={`fl-option-est-label ${opt.dataSource === 'tradier' ? 'is-live' : ''}`}>
+                                  {opt.dataSource === 'tradier' ? 'live' : 'est'}
+                                </span>
                               </span>
                             </div>
                             <div className="fl-option-strike-row mono">
@@ -1458,6 +1465,14 @@ function FloorInner() {
                                   <span className="fl-option-risk-k">Delta</span>
                                   <span className="fl-option-risk-v mono">
                                     {delta >= 0 ? '+' : ''}{delta.toFixed(2)}
+                                  </span>
+                                </div>
+                              )}
+                              {typeof opt.iv === 'number' && opt.iv > 0 && (
+                                <div className="fl-option-risk-row">
+                                  <span className="fl-option-risk-k">IV</span>
+                                  <span className="fl-option-risk-v mono">
+                                    {(opt.iv * 100).toFixed(0)}%
                                   </span>
                                 </div>
                               )}
@@ -2965,6 +2980,10 @@ function FloorStyles() {
         border-radius: 2px;
         font-weight: 500;
         vertical-align: middle;
+      }
+      .fl-option-est-label.is-live {
+        color: rgba(16, 185, 129, 0.85);
+        background: rgba(16, 185, 129, 0.1);
       }
       .fl-options-grid {
         display: grid;

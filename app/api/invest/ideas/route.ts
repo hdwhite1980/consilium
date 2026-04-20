@@ -2,55 +2,322 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/app/lib/auth/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { getVolumeMoversEnhanced } from '@/app/lib/data/screener'
+import { enrichOptionIdea, isTradierConfigured, getTradierMode } from '@/app/lib/tradier'
 
-// ── Tier config — matches app/api/invest/route.ts exactly ───
-const TIER_CONFIG = [
-  { name: 'Buyer',     min: 1,     max: 50,       maxPositions: 2,  color: '#14b8a6',
-    stopPct: '20–30%', targetPct: '40–80%',
-    strategy: 'first-position practice — simple momentum or breakout entries, tight discipline on stops',
-    optionsUnlocked: false },
-  { name: 'Builder',   min: 50,    max: 200,      maxPositions: 3,  color: '#3b82f6',
-    stopPct: '15–20%', targetPct: '30–60%',
-    strategy: 'technical setups with catalyst awareness — building a real book',
-    optionsUnlocked: false },
-  { name: 'Operator',  min: 200,   max: 1000,     maxPositions: 4,  color: '#6366f1',
-    stopPct: '12–18%', targetPct: '25–50%',
-    strategy: 'full-debate analysis — running the book with intent; options unlocked with strict sizing',
-    optionsUnlocked: true },
-  { name: 'Principal', min: 1000,  max: 10000,    maxPositions: 5,  color: '#d4a857',
-    stopPct: '8–12%',  targetPct: '15–30%',
-    strategy: 'high-conviction plays with real weight — decision quality matters',
-    optionsUnlocked: true },
-  { name: 'Sovereign', min: 10000, max: Infinity, maxPositions: 10, color: '#f5f5f5',
-    stopPct: '5–10%',  targetPct: '10–25%',
-    strategy: 'diversified conviction-weighted — any instrument, complete capital authority',
-    optionsUnlocked: true },
+const STAGE_CONFIG = [
+  { name: 'Spark',   min: 0,      max: 10,     maxPositions: 2, stopPct: '20–30%', targetPct: '40–80%', strategy: 'momentum and volume spike plays on micro-cap stocks' },
+  { name: 'Ember',   min: 10,     max: 50,     maxPositions: 2, stopPct: '18–25%', targetPct: '35–70%', strategy: 'momentum with early technical confirmation' },
+  { name: 'Flame',   min: 50,     max: 200,    maxPositions: 3, stopPct: '15–20%', targetPct: '30–60%', strategy: 'technical setups with catalyst awareness' },
+  { name: 'Blaze',   min: 200,    max: 1000,   maxPositions: 4, stopPct: '10–15%', targetPct: '20–40%', strategy: 'fundamentally-supported technical breakouts' },
+  { name: 'Inferno', min: 1000,   max: 10000,  maxPositions: 5, stopPct: '8–12%',  targetPct: '15–30%', strategy: 'high-conviction full debate analysis' },
+  { name: 'Free',    min: 10000,  max: Infinity, maxPositions: 10, stopPct: '5–10%', targetPct: '10–25%', strategy: 'diversified conviction-weighted portfolio' },
 ]
 
-function getTier(totalValue: number) {
-  return TIER_CONFIG.find(t => totalValue >= t.min && totalValue < t.max) ?? TIER_CONFIG[0]
+function getStage(totalValue: number) {
+  return STAGE_CONFIG.find(s => totalValue >= s.min && totalValue < s.max) ?? STAGE_CONFIG[0]
 }
 
-// ── Stock price range logic (unchanged from prior implementation) ───
+// ── Tier gate for options eligibility ────────────────────────
+// MUST match the TIERS array in /api/invest/journey. Options unlock at Operator+.
+// Below Operator ($200), we skip option generation entirely.
+const OPTIONS_MIN_VALUE = 200
+
+// ── Options budget heuristic ─────────────────────────────────
+// Per-position budget × N = max premium per contract. Tighter caps for larger
+// accounts (where absolute dollar amounts matter more), looser for smaller
+// accounts (where a tight cap forces Claude into unrealistic deep-OTM strikes).
+//
+// At $1000 account / 5 positions = $200/pos:
+//   OLD: 20% → $40 cap → Claude often proposes $0.50+ premiums → filtered out
+//   NEW: 40% → $80 cap → Claude can propose normal ATM strikes on cheap stocks
+//
+// At $50k account / 10 positions = $5k/pos:
+//   20% → $1k cap — reasonable for real option sizing discipline
+function getOptionBudget(deployable: number, maxPositions: number): { maxPremiumPerContract: number; capPct: number } {
+  const perPosition = deployable / Math.max(1, maxPositions)
+  // Looser cap at small accounts because premium dollars are tiny either way,
+  // and a tight cap just causes Claude to return 0 valid options most of the time.
+  const capPct = deployable < 5000 ? 0.40 : 0.20
+  const cap = perPosition * capPct
+  return { maxPremiumPerContract: cap, capPct }
+}
+
+// ═════════════════════════════════════════════════════════════
+// Options idea generator (Phase 1 — Claude estimates only)
+//
+// Called after stock ideas are generated. Asks Claude to propose 2-3 option
+// plays based on the top stock ideas (mirror pattern). Every numeric field
+// (strike, premium, delta, breakeven, maxLoss) is a MODEL ESTIMATE — real
+// market prices will differ. Phase 2 (deferred) will enrich with Tradier.
+//
+// All option ideas are cost-capped: contract cost ≤ maxPremiumPerContract * 100.
+// Post-generation filter rejects anything over budget.
+// ═════════════════════════════════════════════════════════════
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function generateOptionIdeas(params: {
+  anthropic: Anthropic
+  topStockIdeas: any[]  // eslint-disable-line @typescript-eslint/no-explicit-any
+  maxPremiumPerContract: number
+  perPositionBudget: number
+  stageName: string
+  marketContext: string
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+}): Promise<any[]> {
+  const { anthropic, topStockIdeas, maxPremiumPerContract, perPositionBudget, stageName, marketContext } = params
+
+  if (topStockIdeas.length === 0) return []
+
+  // Mirror pattern: only propose options for the top 3 highest-confidence bullish stock ideas.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const candidates = topStockIdeas
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .filter((i: any) => i.ticker && typeof i.confidence === 'number')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .sort((a: any, b: any) => (b.confidence ?? 0) - (a.confidence ?? 0))
+    .slice(0, 3)
+
+  if (candidates.length === 0) return []
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const candidatesDesc = candidates.map((i: any) =>
+    `${i.ticker} @ ~$${i.price?.toFixed(2) ?? '?'} — ${i.signal} ${i.confidence}% — ${i.catalyst ?? 'no catalyst'}`
+  ).join('\n')
+
+  const maxContractCost = maxPremiumPerContract * 100
+  const maxPremiumSh = maxPremiumPerContract.toFixed(2)
+
+  const prompt = `You are proposing OPTION plays that mirror the top stock ideas already selected by the Wali-OS AI Council. This is Phase 1 — you are ESTIMATING strikes, premiums, deltas, and breakevens. These numbers are not from a real options chain.
+
+CANDIDATE UNDERLYINGS (from top-confidence stock ideas):
+${candidatesDesc}
+
+TRADER CONTEXT:
+- Stage: ${stageName}
+- Per-position budget: ~$${perPositionBudget.toFixed(2)}
+- HARD CAP: max premium per contract = $${maxPremiumSh}/share (total contract cost ≤ $${maxContractCost.toFixed(2)})
+- Market context: ${marketContext || 'mixed'}
+
+INSTRUCTIONS:
+1. Generate 1-3 option ideas. Each MUST be on one of the candidate underlyings listed above.
+2. Choose option_type based on the stock signal: BULLISH → call, BEARISH → put.
+3. HARD CAP: estimated_premium × 100 MUST be ≤ $${maxContractCost.toFixed(2)}. This is non-negotiable — any option exceeding this will be rejected.
+
+   STRIKE SELECTION STRATEGY TO HIT THE CAP:
+   - If the underlying is cheap (<$5), ATM options may fit the cap. Check: ATM premium on a $2 stock is typically $0.10-$0.25 for 30 DTE.
+   - If the underlying is mid-price ($5-$30), you likely need slightly OTM strikes (5-15% OTM) with 20-45 DTE.
+   - If the underlying is expensive (>$30), you'll need deeper OTM strikes (15-30% OTM) or short DTE (7-21 days) to fit a tight budget.
+   - When in doubt, go FURTHER OTM rather than closer to ATM — deeper OTM = cheaper premium = fits the cap.
+   - If you cannot find a valid strike for a ticker at this premium cap, SKIP that ticker. Better to return 1 valid option than 3 that get filtered out.
+
+4. Estimate delta: calls are positive (0.15-0.80), puts negative (-0.15 to -0.80). ATM = ~0.50. Deep OTM = 0.15-0.30.
+5. Calculate breakeven: calls = strike + premium, puts = strike - premium.
+6. Calculate max_loss: premium × 100 × number_of_contracts (always 1 contract in this flow).
+
+Return JSON ONLY — no markdown:
+{
+  "options": [
+    {
+      "underlying": "SNDL",
+      "ticker": "SNDL",
+      "optionType": "call",
+      "positionType": "option",
+      "strike": 2.0,
+      "expiry": "2026-05-16",
+      "dte": 26,
+      "estimatedPremium": 0.15,
+      "delta": 0.42,
+      "breakeven": 2.15,
+      "cost": 15.00,
+      "maxLoss": 15.00,
+      "signal": "BULLISH",
+      "confidence": 68,
+      "suggestedShares": 1,
+      "catalyst": "Mirrors stock idea — leveraged play on the same thesis",
+      "rationale": "One sentence on why options make sense here vs shares",
+      "price": 1.84,
+      "underlyingPrice": 1.84
+    }
+  ]
+}
+
+If none of the candidates fit the premium budget, return: { "options": [] }`
+
+  try {
+    const msg = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1500,
+      system: 'You estimate option plays. All numeric fields are plain numbers — no $ signs, no commas.',
+      messages: [{ role: 'user', content: prompt }],
+    })
+
+    const text = (msg.content[0] as { type: string; text: string }).text
+    const clean = text.replace(/```json|```/g, '').trim()
+    const parsed = JSON.parse(clean)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rawOptions: any[] = Array.isArray(parsed.options) ? parsed.options : []
+
+    // Post-generation filter: enforce the premium cap and basic sanity
+    const filtered = rawOptions.filter((o) => {
+      if (!o || typeof o !== 'object') return false
+      if (!o.underlying || !o.strike || !o.expiry) return false
+      if (o.optionType !== 'call' && o.optionType !== 'put') return false
+      const premium = Number(o.estimatedPremium)
+      if (!Number.isFinite(premium) || premium <= 0) return false
+      const contractCost = premium * 100
+      if (contractCost > maxContractCost * 1.02) {
+        // 2% tolerance for rounding
+        console.warn(`[options] filtering out ${o.ticker}: cost $${contractCost.toFixed(2)} exceeds cap $${maxContractCost.toFixed(2)}`)
+        return false
+      }
+      // Sanity: require underlying to be one of our candidates
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (!candidates.some((c: any) => c.ticker === o.underlying || c.ticker === o.ticker)) {
+        console.warn(`[options] filtering out ${o.ticker}: not in candidate list`)
+        return false
+      }
+      return true
+    })
+
+    // Diagnostic summary — helps identify when Claude's estimates miss the cap
+    console.log(`[options] generated ${rawOptions.length} raw → ${filtered.length} after filter (cap $${maxContractCost.toFixed(2)}, candidates: ${candidates.map(c => c.ticker).join(',')})`)
+
+    // ── Phase 2: enrich with real Tradier option chain data ─────────
+    // For each Claude-proposed option, fetch the real option chain and
+    // find the nearest actual strike+expiry. If Tradier succeeds we swap
+    // in real premium/delta/IV data; if it fails we keep Claude's estimate
+    // and flag it with isEstimated: true so the UI shows the "est" badge.
+    const tradierEnabled = isTradierConfigured()
+    if (tradierEnabled) {
+      console.log(`[options] Tradier enabled (${getTradierMode()}) — enriching ${filtered.length} ideas`)
+    } else {
+      console.log('[options] Tradier not configured — all ideas will be marked as estimates')
+    }
+
+    // Process all enrichments in parallel, cap at 3 (from slice below)
+    const top3 = filtered.slice(0, 3)
+
+    const enriched = await Promise.all(
+      top3.map(async (o) => {
+        const baseNormalised = {
+          ...o,
+          positionType: 'option' as const,
+          strike: Number(o.strike),
+          estimatedPremium: Number(o.estimatedPremium),
+          delta: typeof o.delta === 'number' ? Number(o.delta) : null,
+          breakeven: Number(o.breakeven ?? (o.optionType === 'call' ? o.strike + o.estimatedPremium : o.strike - o.estimatedPremium)),
+          cost: Number(o.cost ?? Number(o.estimatedPremium) * 100),
+          maxLoss: Number(o.maxLoss ?? Number(o.estimatedPremium) * 100),
+          dte: Number(o.dte ?? 0),
+          confidence: Math.round(Number(o.confidence ?? 60)),
+          suggestedShares: 1,
+          isEstimated: true,   // Default; overridden if Tradier succeeds
+          iv: null as number | null,
+          optionSymbol: null as string | null,
+          dataSource: 'claude-estimate' as 'claude-estimate' | 'tradier',
+        }
+
+        if (!tradierEnabled) return baseNormalised
+
+        // Attempt real-chain enrichment
+        try {
+          const real = await enrichOptionIdea({
+            underlying: o.underlying ?? o.ticker,
+            optionType: o.optionType,
+            targetStrike: Number(o.strike),
+            targetExpiration: String(o.expiry),
+          })
+
+          if (!real) {
+            console.log(`[options] Tradier lookup empty for ${o.ticker ?? o.underlying} — keeping Claude estimate`)
+            return baseNormalised
+          }
+
+          // Check if the real contract cost still fits within budget cap
+          // (Real premium may differ substantially from Claude's estimate)
+          const realContractCost = real.premium * 100
+          if (realContractCost > maxContractCost * 1.5) {
+            // Soft limit: reject only if real price exceeds 150% of cap
+            // (some premium drift is fine for educational purposes)
+            console.warn(`[options] real premium exceeds cap by too much for ${o.ticker}: $${realContractCost.toFixed(2)} vs cap $${maxContractCost.toFixed(2)} — dropping`)
+            return null
+          }
+
+          // Successful enrichment — swap in real data
+          console.log(`[options] Tradier enriched ${o.ticker}: strike ${o.strike} → ${real.strike}, premium ${o.estimatedPremium.toFixed(2)} → ${real.premium.toFixed(2)}`)
+
+          const breakeven = o.optionType === 'call'
+            ? real.strike + real.premium
+            : real.strike - real.premium
+
+          const newDte = Math.max(0, Math.round(
+            (new Date(real.expiration + 'T00:00:00Z').getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+          ))
+
+          return {
+            ...baseNormalised,
+            strike: real.strike,
+            estimatedPremium: real.premium,
+            delta: real.delta,
+            iv: real.iv,
+            breakeven,
+            cost: realContractCost,
+            maxLoss: realContractCost,
+            expiry: real.expiration,
+            dte: newDte,
+            optionSymbol: real.optionSymbol,
+            isEstimated: false,
+            dataSource: 'tradier' as const,
+          }
+        } catch (e) {
+          console.warn(`[options] enrichment error for ${o.ticker}:`, (e as Error).message?.slice(0, 100))
+          return baseNormalised
+        }
+      })
+    )
+
+    // Drop any nulls (options rejected due to real premium exceeding soft cap)
+    const finalOptions = enriched.filter((o): o is NonNullable<typeof o> => o !== null)
+
+    const tradierEnrichedCount = finalOptions.filter(o => o.dataSource === 'tradier').length
+    console.log(`[options] final: ${finalOptions.length} ideas, ${tradierEnrichedCount} enriched from Tradier`)
+
+    return finalOptions
+
+  } catch (err) {
+    console.error('[options] generation failed:', (err as Error).message)
+    return []
+  }
+}
+
+// Calculate ideal price range based on deployable cash
+// Target: each position should buy 10–50 shares (feels like a real holding)
+// Per-position capital = deployable / max positions
+// ideal price = per-position capital / target shares
 function getPriceRange(deployable: number, maxPositions: number): { minPrice: number; maxPrice: number; targetShares: number } {
   const perPosition = deployable / Math.max(1, maxPositions)
 
   if (perPosition <= 5) {
+    // Under $5/position — buy fractional or 1-3 shares of $1-3 stocks
     return { minPrice: 0.5, maxPrice: 5, targetShares: Math.max(1, Math.floor(perPosition)) }
   } else if (perPosition <= 20) {
+    // $5-20/position — $1-8 stocks, 3-15 shares
     return { minPrice: 1, maxPrice: Math.min(8, perPosition * 0.7), targetShares: 5 }
   } else if (perPosition <= 100) {
+    // $20-100/position — $3-25 stocks, 5-20 shares
     return { minPrice: 2, maxPrice: Math.min(25, perPosition * 0.6), targetShares: 10 }
   } else if (perPosition <= 500) {
+    // $100-500/position — $5-60 stocks, 10-30 shares
     return { minPrice: 5, maxPrice: Math.min(60, perPosition * 0.5), targetShares: 15 }
   } else if (perPosition <= 2000) {
+    // $500-2000/position — $10-150 stocks
     return { minPrice: 10, maxPrice: Math.min(150, perPosition * 0.4), targetShares: 20 }
   } else {
+    // $2000+/position — any price, 20-50 shares
     return { minPrice: 20, maxPrice: Math.min(500, perPosition * 0.3), targetShares: 30 }
   }
 }
 
-// Small-cap catalogs for backup candidate pool (when live movers empty)
+// Small-cap stocks by sector — known to trade in lower price ranges
 const SECTOR_SMALLCAPS: Record<string, string[]> = {
   'Technology':       ['SSYS', 'NAOV', 'CIFS', 'GPRO', 'VUZI', 'AEYE', 'IDEX', 'INPX', 'DLPN', 'GXII'],
   'Healthcare':       ['CLOV', 'OCGN', 'SNGX', 'MESO', 'NRXP', 'IPHA', 'ATOS', 'IMVT', 'VVOS', 'BFRI'],
@@ -65,21 +332,7 @@ const SECTOR_SMALLCAPS: Record<string, string[]> = {
   'Comm. Services':   ['PHUN', 'ATUS', 'MINM', 'SOPA', 'GFAI', 'AEAC', 'CIDM', 'MFAC', 'LIQT', 'CODA'],
 }
 
-// Liquid large-cap names with reliable options chains for Operator+ option ideas.
-// These are used as the candidate pool when generating option setups.
-const OPTIONS_LIQUID_UNIVERSE = [
-  'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD',
-  'NFLX', 'CRM', 'ADBE', 'AVGO', 'INTC', 'QCOM', 'MU', 'PLTR',
-  'SPY', 'QQQ', 'IWM', 'DIA',
-  'XLK', 'XLE', 'XLF', 'XLV', 'XLI', 'XLY', 'XLU', 'XLRE', 'XLP',
-  'JPM', 'BAC', 'WFC', 'GS', 'C',
-  'BA', 'CAT', 'GE', 'F', 'GM',
-  'WMT', 'COST', 'HD', 'LOW', 'TGT',
-  'PFE', 'JNJ', 'UNH', 'LLY', 'MRK',
-  'XOM', 'CVX', 'COP',
-  'DIS', 'UBER', 'ABNB', 'HOOD', 'COIN', 'SHOP',
-]
-
+// Fetch current sector performance from macro data
 async function fetchSectorPerformance(): Promise<Array<{ name: string; signal: string; change1D: number; etf: string }>> {
   try {
     const res = await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/macro`, {
@@ -97,108 +350,112 @@ async function fetchSectorPerformance(): Promise<Array<{ name: string; signal: s
   } catch { return [] }
 }
 
-// Shared: live Finnhub price lookup
-async function fetchLivePrice(ticker: string): Promise<number | null> {
-  const key = process.env.FINNHUB_API_KEY
-  if (!key) return null
-  try {
-    const res = await fetch(
-      `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(ticker)}&token=${key}`,
-      { cache: 'no-store' }
-    )
-    if (!res.ok) return null
-    const q = await res.json()
-    return (q.c && q.c > 0) ? Number(q.c) : null
-  } catch { return null }
-}
-
 export async function POST(req: NextRequest) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
 
-  const { totalValue, openTrades, cashRemaining } = await req.json()
-  const tier = getTier(totalValue ?? 0)
+  const { totalValue, openTrades, startingBalance, cashRemaining } = await req.json()
+  const stage = getStage(totalValue ?? 0)
   const deployable = cashRemaining ?? Math.max(0,
     (totalValue ?? 0) - (openTrades?.reduce((s: number, t: { entry_price: number; shares: number }) => s + t.entry_price * t.shares, 0) ?? 0)
   )
 
-  const priceRange = getPriceRange(deployable, tier.maxPositions)
-  const { minPrice, maxPrice, targetShares } = priceRange
+  // Dynamic price range based on how much they can actually deploy
+  const priceRange = getPriceRange(deployable, stage.maxPositions)
+  const minPrice = priceRange.minPrice
+  const maxPrice = priceRange.maxPrice
+  const targetShares = priceRange.targetShares
 
-  const priceTierTickers = (() => {
-    const POOL: Record<string, string[]> = {
-      'under5':   ['SNDL','CLOV','MVIS','WKHS','GOEV','RIDE','NKLA','PHUN','BBIG','ILUS','AMC','CMAX','NRXP','OCGN','TELL'],
-      'under15':  ['GPRO','LAZR','LIDR','BLNK','PLUG','FCEL','HYLN','SOLO','XPEV','NIO','GOTU','GRAB','ACHR','JOBY'],
-      'under30':  ['F','BAC','T','ITUB','VALE','SWN','RIG','NOK','ERIC','GOLD','AG','FSM','MRO','APA','BORR'],
-      'under75':  ['SNAP','LYFT','RIVN','LCID','SOFI','OPEN','UWMC','VUZI','NAOV','SPCE','PTRA','DKNG','PENN','MGAM','AGS'],
-      'under200': ['UBER','HOOD','COIN','RBLX','PLTR','MARA','RIOT','HUT','BITF','CLSK','IREN','WULF','BTBT','CIFR','CORZ'],
-      'any':      ['AMD','NVDA','META','GOOGL','MSFT','AAPL','AMZN','TSLA','JPM','GS'],
-    }
-    const key = maxPrice <= 5 ? 'under5' : maxPrice <= 15 ? 'under15' : maxPrice <= 30 ? 'under30' : maxPrice <= 75 ? 'under75' : maxPrice <= 200 ? 'under200' : 'any'
-    return POOL[key] ?? []
-  })()
+  // Pick candidate tickers from the right price tier
+  const SMALL_CAP_BY_PRICE: Record<string, string[]> = {
+    'under5':   ['SNDL','CLOV','MVIS','WKHS','GOEV','RIDE','NKLA','PHUN','BBIG','ILUS','AMC','CMAX','NRXP','OCGN','TELL'],
+    'under15':  ['GPRO','LAZR','LIDR','BLNK','PLUG','FCEL','HYLN','SOLO','XPEV','NIO','GOTU','GRAB','ACHR','JOBY','ARCHER'],
+    'under30':  ['F','BAC','T','ITUB','VALE','SWN','RIG','NOK','ERIC','GOLD','AG','FSM','MRO','APA','BORR'],
+    'under75':  ['SNAP','LYFT','RIVN','LCID','SOFI','OPEN','UWMC','VUZI','NAOV','SPCE','PTRA','DKNG','PENN','MGAM','AGS'],
+    'under200': ['UBER','HOOD','COIN','RBLX','PLTR','MARA','RIOT','HUT','BITF','CLSK','IREN','WULF','BTBT','CIFR','CORZ'],
+    'any':      ['AMD','NVDA','META','GOOGL','MSFT','AAPL','AMZN','TSLA','JPM','GS'],
+  }
 
-  // Sector performance
+  const priceTier = maxPrice <= 5 ? 'under5' : maxPrice <= 15 ? 'under15' : maxPrice <= 30 ? 'under30' : maxPrice <= 75 ? 'under75' : maxPrice <= 200 ? 'under200' : 'any'
+  const priceTierTickers = SMALL_CAP_BY_PRICE[priceTier] ?? []
+
+  // Fetch live sector performance
   const sectors = await fetchSectorPerformance()
+
+  // Rank: BULLISH first, then by change1D descending
   const ranked = [...sectors].sort((a, b) => {
     const sigScore = (s: string) => s === 'BULLISH' ? 2 : s === 'NEUTRAL' ? 1 : 0
     if (sigScore(b.signal) !== sigScore(a.signal)) return sigScore(b.signal) - sigScore(a.signal)
     return b.change1D - a.change1D
   })
+
+  // Take top 5 sectors (or all if fewer)
   const topSectors = ranked.slice(0, 5)
   const bullishSectors = topSectors.filter(s => s.signal === 'BULLISH')
-  const bearishSectors = ranked.filter(s => s.signal === 'BEARISH').slice(0, 3)
+  const allTopNames = topSectors.map(s => s.name)
 
+  // Build sector context for the AI
   const sectorContext = topSectors.map(s =>
     `${s.name}: ${s.signal} (${s.change1D >= 0 ? '+' : ''}${s.change1D.toFixed(2)}% today)`
   ).join('\n')
 
-  // Candidate ticker pool
+  // Gather candidate tickers from top sectors
   const candidateTickers: string[] = []
   for (const sector of topSectors) {
     const tickers = SECTOR_SMALLCAPS[sector.name] ?? []
     candidateTickers.push(...tickers.slice(0, 4))
   }
 
-  // Real volume movers from screener
+  // ── Step 1: Get real volume movers in the price range ────────
+  // These are actual stocks moving TODAY with real volume data
   const realMovers = await getVolumeMoversEnhanced(minPrice, maxPrice, 10)
+
+  // Format movers for AI context
   const moversContext = realMovers.length > 0
-    ? `TODAY'S REAL VOLUME MOVERS in the $${minPrice.toFixed(2)}–$${maxPrice.toFixed(2)} range:\n` +
+    ? `TODAY'S REAL VOLUME MOVERS in the $${minPrice.toFixed(2)}–$${maxPrice.toFixed(2)} range (from Alpaca screener):\n` +
       realMovers.map(m =>
-        `${m.ticker}: $${m.price.toFixed(2)}, ${m.changePercent >= 0 ? '+' : ''}${m.changePercent.toFixed(1)}% today`
+        `${m.ticker}: $${m.price.toFixed(2)}, ${m.changePercent >= 0 ? '+' : ''}${m.changePercent.toFixed(1)}% today, volume moving`
       ).join('\n')
-    : `No screener data available — use knowledge of current $${minPrice.toFixed(2)}–$${maxPrice.toFixed(2)} stocks`
+    : `No screener data available — use your knowledge of current $${minPrice.toFixed(2)}–$${maxPrice.toFixed(2)} stocks`
 
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
-  // ── STOCK IDEAS (always generated) ──────────────────────────
-  const stockPrompt = `You are the Wali-OS Council — a journey guide for investors at all tiers. Recommend tier-appropriate stocks based on live sector data.
+  const msg = await anthropic.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 2000,
+    system: `You are the Wali-OS AI Council's journey guide for investors at all levels. You recommend stage-appropriate stocks using live sector performance data.
 
-CRITICAL PRICE RULE: Every stock you recommend MUST currently trade between $${minPrice.toFixed(2)} and $${maxPrice.toFixed(2)}. This is calculated from the user's capital so each position is ~${targetShares} shares and feels meaningful. Do NOT recommend stocks outside this range.
+CRITICAL PRICE RULE: Every stock you recommend MUST currently trade between $${minPrice.toFixed(2)} and $${maxPrice.toFixed(2)}. This range is calculated from the user's available capital so each position feels meaningful — around ${targetShares} shares per position. A $${maxPrice.toFixed(0)} stock with ${targetShares} shares = $${(maxPrice * targetShares).toFixed(0)} which is appropriate for their balance. Do NOT recommend stocks outside this range.
 
-TRADER PROFILE:
-Tier: ${tier.name} — total portfolio $${(totalValue ?? 0).toFixed(2)}, cash to deploy: $${deployable.toFixed(2)}
-Price range: $${minPrice.toFixed(2)}–$${maxPrice.toFixed(2)} (target ~${targetShares} shares/position)
-Per-position budget: ~$${(deployable / tier.maxPositions).toFixed(2)}
-Strategy: ${tier.strategy}
-Stop range: ${tier.stopPct} | Target range: ${tier.targetPct}
+All numeric fields must be plain numbers — no $ signs, no commas.`,
+    messages: [{
+      role: 'user',
+      content: `TRADER PROFILE:
+Stage: ${stage.name} — total portfolio $${(totalValue ?? 0).toFixed(2)}, cash to deploy: $${deployable.toFixed(2)}
+STOCK PRICE RANGE: $${minPrice.toFixed(2)}–$${maxPrice.toFixed(2)} (sized so they can buy ~${targetShares} shares per position)
+Per-position budget: ~$${(deployable / stage.maxPositions).toFixed(2)}
+Strategy: ${stage.strategy}
+Stop range: ${stage.stopPct} | Target range: ${stage.targetPct}
 
 ${moversContext}
 
-TODAY'S SECTORS:
+TODAY'S SECTOR PERFORMANCE:
 ${sectorContext || 'Sector data unavailable — use broad market context'}
 
-STRONGEST BULLISH: ${bullishSectors.map(s => s.name).join(', ') || 'None — market is mixed/bearish'}
+STRONGEST SECTORS TODAY: ${allTopNames.slice(0, 3).join(', ')}
+BULLISH SECTORS: ${bullishSectors.map(s => s.name).join(', ') || 'None — market is mixed/bearish'}
 
-BACKUP CANDIDATE TICKERS:
+BACKUP CANDIDATE TICKERS (only use if real movers list is empty):
 ${candidateTickers.slice(0, 10).join(', ')}, ${priceTierTickers.slice(0, 8).join(', ')}
 
+INSTRUCTION: Use the REAL VOLUME MOVERS above as your primary source — these are confirmed to be trading in range TODAY. For each, explain the technical setup and why the sector conditions support it. Only use backup candidates if the movers list is empty.
+
 Generate EXACTLY 5 stock ideas. Each must:
-1. Trade between $${minPrice.toFixed(2)} and $${maxPrice.toFixed(2)} — prefer real movers
-2. Come from a top-performing sector
-3. Have a specific catalyst RIGHT NOW
-4. Suggest ~${targetShares} shares for ~$${(deployable / tier.maxPositions).toFixed(2)} per-position
+1. Trade between $${minPrice.toFixed(2)} and $${maxPrice.toFixed(2)} — prefer stocks from the real movers list
+2. Come from a top-performing sector where possible
+3. Have a specific catalyst or technical reason RIGHT NOW
+4. Suggest ~${targetShares} shares for ~$${(deployable / stage.maxPositions).toFixed(2)} per-position budget
 
 Return JSON ONLY — no markdown, no backticks:
 {
@@ -212,7 +469,7 @@ Return JSON ONLY — no markdown, no backticks:
       "signal": "BULLISH",
       "confidence": 71,
       "catalyst": "One specific reason to buy this week",
-      "rationale": "2 sentences on why this fits the ${tier.name}-tier per-position budget and sector momentum",
+      "rationale": "2 sentences — why this fits their $${(deployable / stage.maxPositions).toFixed(2)} per-position budget and sector momentum",
       "suggestedAmount": 3.68,
       "suggestedShares": ${targetShares},
       "entry": "$1.80–1.90",
@@ -225,35 +482,44 @@ Return JSON ONLY — no markdown, no backticks:
       "volumeNote": "volume 4.2× average"
     }
   ],
-  "journeyNote": "One sentence referencing their ${tier.name} tier progress and today's market",
-  "stageAdvice": "One practical tip for the ${tier.name} tier today",
-  "marketContext": "One sentence on overall market conditions"
+  "journeyNote": "One sentence referencing their ${stage.name} stage progress and today's market",
+  "stageAdvice": "One practical tip for the ${stage.name} stage today",
+  "marketContext": "One sentence on overall market conditions from the sector data"
 }`
-
-  let stockIdeas: Array<Record<string, unknown>> = []
-  let stockJourneyNote = ''
-  let stockAdvice = ''
-  let marketContext = ''
+    }]
+  })
 
   try {
-    const msg = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 2000,
-      system: `You are the Wali-OS Council — recommend only stocks currently trading in the specified price band. All numeric fields are plain numbers (no $, no commas).`,
-      messages: [{ role: 'user', content: stockPrompt }],
-    })
-
     const text = (msg.content[0] as { type: string; text: string }).text
     const clean = text.replace(/```json|```/g, '').trim()
     const result = JSON.parse(clean)
 
-    // Validate + enrich with live prices
+    const finnhubKey = process.env.FINNHUB_API_KEY
+    const validIdeas = []
+
     for (const idea of (result.ideas ?? [])) {
       if (!idea.ticker) continue
-      const livePrice = await fetchLivePrice(idea.ticker)
-      const displayPrice = livePrice ?? idea.price ?? 0
-      if (livePrice && (livePrice > maxPrice || livePrice < minPrice)) continue
 
+      // Fetch live price
+      let livePrice: number | null = null
+      if (finnhubKey) {
+        try {
+          const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${idea.ticker}&token=${finnhubKey}`, { cache: 'no-store' })
+          if (res.ok) {
+            const q = await res.json()
+            if (q.c > 0) livePrice = q.c
+          }
+        } catch { /* ignore */ }
+      }
+
+      const displayPrice = livePrice ?? idea.price ?? 0
+
+      // Hard reject if outside dynamic price range
+      if (livePrice && (livePrice > maxPrice || livePrice < minPrice)) {
+        continue
+      }
+
+      // Normalise numeric fields
       idea.suggestedAmount = typeof idea.suggestedAmount === 'string'
         ? parseFloat(String(idea.suggestedAmount).replace(/[^0-9.-]/g, '')) || 0
         : (idea.suggestedAmount ?? 0)
@@ -262,139 +528,76 @@ Return JSON ONLY — no markdown, no backticks:
         : (idea.suggestedShares ?? 1)
       idea.livePrice = livePrice
       idea.price = displayPrice
-      idea.positionType = 'stock'
 
+      // Recalculate based on live price
       if (livePrice && idea.suggestedShares > 0) {
         idea.suggestedAmount = parseFloat((livePrice * idea.suggestedShares).toFixed(2))
       }
-      stockIdeas.push(idea)
+
+      validIdeas.push(idea)
     }
-    stockJourneyNote = result.journeyNote ?? ''
-    stockAdvice = result.stageAdvice ?? ''
-    marketContext = result.marketContext ?? ''
-  } catch (err) {
-    console.error('[ideas] stock generation failed:', err)
-  }
 
-  // ── OPTIONS IDEAS (Operator+ only) ──────────────────────────
-  let optionIdeas: Array<Record<string, unknown>> = []
+    // ── Phase 1: Options generation ─────────────────────────
+    // Only generate options when the account is at Operator+ tier ($200+).
+    // Below that, tiers are still learning stock discipline.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let optionIdeas: any[] = []
+    let optionsBudgetWarning: string | null = null
 
-  if (tier.optionsUnlocked) {
-    // Per-contract budget = 2% of account (beginner-safe at Operator).
-    // Contracts are 100 shares × premium, so max premium/share = budget / 100.
-    const optionsBudget = Math.max(5, Math.floor((totalValue ?? 0) * 0.02))
-    const maxPremiumPerShare = optionsBudget / 100
+    const accountTotalValue = totalValue ?? 0
+    if (accountTotalValue >= OPTIONS_MIN_VALUE && validIdeas.length > 0) {
+      const optionBudget = getOptionBudget(deployable, stage.maxPositions)
+      const perPositionBudget = deployable / Math.max(1, stage.maxPositions)
 
-    // Pick underlying from liquid universe that aligns with a strong sector.
-    // For simplicity we pass the whole liquid universe and let the model match sectors.
-    const liquidPool = OPTIONS_LIQUID_UNIVERSE.slice(0, 30).join(', ')
-
-    const optionsPrompt = `You are the Wali-OS options desk. Recommend 2 option setups ONLY — long calls or long puts, no spreads, no selling options.
-
-TRADER PROFILE:
-Tier: ${tier.name} — total portfolio $${(totalValue ?? 0).toFixed(2)}
-Options budget: $${optionsBudget} per contract MAX (2% of account at Operator safety level)
-This means MAXIMUM premium/share = $${maxPremiumPerShare.toFixed(2)} (since 1 contract = 100 shares × premium)
-
-CRITICAL RULES:
-1. Only long calls or long puts (no spreads, no complex structures)
-2. Expiration: 30–45 DTE (no weeklies, no 0DTE)
-3. Strike: pick moneyness that yields premium ≤ $${maxPremiumPerShare.toFixed(2)}/share so total cost fits budget
-4. Avoid earnings within expiry window (IV crush risk)
-5. Only liquid underlyings
-
-LIQUID UNDERLYINGS TO CHOOSE FROM:
-${liquidPool}
-
-TODAY'S SECTORS (match option directionally to sector signal):
-${sectorContext}
-
-BULLISH SECTORS → look for CALL setups on names in these sectors
-BEARISH SECTORS (${bearishSectors.map(s => s.name).join(', ') || 'none'}) → look for PUT setups on names in these sectors
-
-Generate EXACTLY 2 option ideas. One CALL and one PUT if both sector directions present, otherwise 2 of the dominant direction.
-
-Return JSON ONLY — no markdown:
-{
-  "options": [
-    {
-      "underlying": "AAPL",
-      "companyName": "Apple Inc",
-      "sector": "Technology",
-      "sectorSignal": "BULLISH",
-      "underlyingPrice": 178.50,
-      "optionType": "call",
-      "strike": 180,
-      "expiry": "2026-05-22",
-      "dte": 31,
-      "estimatedPremium": 3.25,
-      "delta": 0.48,
-      "cost": 325,
-      "breakeven": 183.25,
-      "maxLoss": 325,
-      "signal": "BULLISH",
-      "confidence": 68,
-      "catalyst": "Earnings beat yesterday, sector rotating into tech",
-      "rationale": "2 sentences — why this strike/expiry for ${tier.name} tier; how the sector supports direction",
-      "risk": "medium",
-      "timeframe": "close by 10 DTE or at 50% profit"
-    }
-  ]
-}`
-
-    try {
-      const msg = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1500,
-        system: `You are a conservative options educator for a retail platform. You only recommend long calls and long puts, never complex structures. All numeric fields are plain numbers. Expiry dates use YYYY-MM-DD format. Cost = estimatedPremium × 100.`,
-        messages: [{ role: 'user', content: optionsPrompt }],
+      optionIdeas = await generateOptionIdeas({
+        anthropic,
+        topStockIdeas: validIdeas,
+        maxPremiumPerContract: optionBudget.maxPremiumPerContract,
+        perPositionBudget,
+        stageName: stage.name,
+        marketContext: result.marketContext ?? '',
       })
 
-      const text = (msg.content[0] as { type: string; text: string }).text
-      const clean = text.replace(/```json|```/g, '').trim()
-      const result = JSON.parse(clean)
+      // Phase 2: compute how many options got real Tradier data
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const tradierCount = optionIdeas.filter((o: any) => o.dataSource === 'tradier').length
+      const allFromTradier = optionIdeas.length > 0 && tradierCount === optionIdeas.length
+      const someFromTradier = tradierCount > 0 && tradierCount < optionIdeas.length
+      const tradierMode = getTradierMode()
+      const delayNote = tradierMode === 'sandbox' ? ' (sandbox data has a 15-minute delay)' : ''
 
-      for (const opt of (result.options ?? [])) {
-        if (!opt.underlying || !opt.strike || !opt.expiry) continue
-
-        // Validate budget
-        const estCost = (opt.estimatedPremium ?? 0) * 100
-        if (estCost > optionsBudget * 1.25) continue // allow 25% slippage buffer
-
-        // Enrich with current underlying price
-        const livePrice = await fetchLivePrice(opt.underlying)
-        if (livePrice) opt.underlyingPrice = livePrice
-
-        opt.positionType = 'option'
-        opt.cost = estCost
-        // Normalize for display in signals grid
-        opt.ticker = opt.underlying
-        opt.price = opt.underlyingPrice
-        opt.suggestedShares = 1  // 1 contract
-        opt.suggestedAmount = estCost
-
-        optionIdeas.push(opt)
+      // Warn when account is small relative to options risk, even though we allow it
+      if (accountTotalValue < 5000 && optionIdeas.length > 0) {
+        const dataNote = allFromTradier
+          ? `Prices are from Tradier${delayNote}.`
+          : someFromTradier
+            ? `Some prices are from Tradier${delayNote}; others are AI estimates.`
+            : 'All prices shown are AI estimates.'
+        optionsBudgetWarning = `Your account is under $5,000 — option premiums will be small and leverage is limited. Consider growing the account before committing real capital to options. ${dataNote}`
+      } else if (optionIdeas.length > 0) {
+        if (allFromTradier) {
+          optionsBudgetWarning = `Prices are from Tradier's live option chain${delayNote}. Tiles labeled "live" show real market data. Verify on your broker before trading real money.`
+        } else if (someFromTradier) {
+          optionsBudgetWarning = `Some prices are from Tradier's option chain${delayNote} (labeled "live"); others are AI estimates (labeled "est") where the real chain was unavailable. Verify on your broker before trading.`
+        } else {
+          optionsBudgetWarning = `Strike prices, premiums, deltas and breakevens shown are AI estimates — real market prices will differ. Verify on a real broker before trading.`
+        }
       }
-    } catch (err) {
-      console.error('[ideas] options generation failed:', err)
     }
-  }
 
-  return NextResponse.json({
-    ideas: stockIdeas,
-    options: optionIdeas,
-    journeyNote: stockJourneyNote,
-    stageAdvice: stockAdvice,
-    marketContext,
-    topSectors: topSectors.map(s => ({ name: s.name, signal: s.signal, change1D: s.change1D })),
-    tier: tier.name,
-    tierConfig: {
-      name: tier.name,
-      maxPositions: tier.maxPositions,
-      stopPct: tier.stopPct,
-      targetPct: tier.targetPct,
-      strategy: tier.strategy,
-      optionsUnlocked: tier.optionsUnlocked,
-    },
-  })
+    return NextResponse.json({
+      ideas: validIdeas,
+      options: optionIdeas,
+      optionsBudgetWarning,
+      journeyNote: result.journeyNote ?? '',
+      stageAdvice: result.stageAdvice ?? '',
+      marketContext: result.marketContext ?? '',
+      topSectors: topSectors.map(s => ({ name: s.name, signal: s.signal, change1D: s.change1D })),
+      stage: stage.name,
+      stageConfig: stage,
+    })
+  } catch (err) {
+    console.error('Invest ideas error:', err)
+    return NextResponse.json({ error: 'Failed to generate ideas' }, { status: 500 })
+  }
 }
