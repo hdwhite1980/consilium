@@ -1004,6 +1004,7 @@ function FloorInner() {
 
   // Options ideas (Operator+ only — empty array at lower tiers)
   const [optionIdeas, setOptionIdeas] = useState<Idea[]>([])
+  const [optionsBudgetWarning, setOptionsBudgetWarning] = useState<string | null>(null)
 
   // Post-mortem cache — keyed by trade_id
   const [postmortems, setPostmortems] = useState<Record<string, Postmortem>>({})
@@ -1143,6 +1144,7 @@ function FloorInner() {
       const body = await res.json()
       setIdeas(body.ideas ?? [])
       setOptionIdeas(body.options ?? [])
+      setOptionsBudgetWarning(body.optionsBudgetWarning ?? null)
       setPulledAt(new Date())
     } catch { /* ignore */ }
     setLoadingIdeas(false)
@@ -1402,6 +1404,11 @@ function FloorInner() {
                       <span className="fl-eyebrow">options desk &middot; operator unlock</span>
                       <h3>Leveraged setups</h3>
                     </div>
+                    {optionsBudgetWarning && (
+                      <div className="fl-options-warning">
+                        {optionsBudgetWarning}
+                      </div>
+                    )}
                     <div className="fl-options-grid">
                       {optionIdeas.map((opt, i) => {
                         const dte = opt.dte ?? getDTE(opt.expiry)
@@ -1426,7 +1433,10 @@ function FloorInner() {
                                   {isCall ? 'CALL' : 'PUT'}
                                 </span>
                               </span>
-                              <span className="fl-signal-px mono">{fmt$(opt.estimatedPremium ?? 0)}/sh</span>
+                              <span className="fl-signal-px mono">
+                                {fmt$(opt.estimatedPremium ?? 0)}/sh
+                                <span className="fl-option-est-label">est</span>
+                              </span>
                             </div>
                             <div className="fl-option-strike-row mono">
                               <span>${opt.strike} strike</span>
@@ -2860,6 +2870,29 @@ function FloorStyles() {
         font-weight: 500;
         color: #f5f5f5;
         letter-spacing: -0.01em;
+      }
+      .fl-options-warning {
+        margin: 0 0 14px;
+        padding: 10px 12px;
+        font-size: 11px;
+        line-height: 1.5;
+        color: rgba(251, 191, 36, 0.85);
+        background: rgba(251, 191, 36, 0.06);
+        border-left: 2px solid rgba(251, 191, 36, 0.5);
+        border-radius: 3px;
+      }
+      .fl-option-est-label {
+        display: inline-block;
+        margin-left: 5px;
+        padding: 1px 4px;
+        font-size: 7px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: rgba(251, 191, 36, 0.7);
+        background: rgba(251, 191, 36, 0.08);
+        border-radius: 2px;
+        font-weight: 500;
+        vertical-align: middle;
       }
       .fl-options-grid {
         display: grid;
