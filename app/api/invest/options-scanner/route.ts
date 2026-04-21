@@ -21,7 +21,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { createClient } from '@/app/lib/auth/server'
 import { createClient as createAdmin } from '@supabase/supabase-js'
-import { getOptionChain, getOptionExpirations, isTradierConfigured, getTradierMode, type TradierOption } from '@/app/lib/tradier'
+import { getOptionChain, getOptionExpirations, isTradierConfigured, getTradierMode, isTradierAuthFailing, type TradierOption } from '@/app/lib/tradier'
 import { getUniverseTickers, mergeWithCouncilCandidates, getUniverseEntry } from '@/app/lib/optionable-universe'
 import { getActiveCouncilCandidates } from '@/app/lib/council-candidates'
 import { getMarketRegime, type MarketRegime } from '@/app/lib/market-regime'
@@ -518,6 +518,42 @@ export async function POST(req: NextRequest) {
     const chainStart = Date.now()
     const chains = await fetchChainsForTickers(tickers)
     console.log(`[options-scanner] chains: fetched ${chains.size}/${tickers.length} in ${Date.now() - chainStart}ms`)
+
+    // Detect systemic Tradier auth failure (every call returning 401)
+    // This would otherwise manifest as "no options found" which is misleading.
+    const authStatus = isTradierAuthFailing()
+    if (authStatus.failing && chains.size === 0) {
+      console.error(`[options-scanner] TRADIER AUTH FAILING: ${authStatus.recent401s}/${authStatus.total} requests failed (${authStatus.lastError})`)
+      return NextResponse.json({
+        error: 'Tradier API authentication failed',
+        details: `${authStatus.recent401s} of ${authStatus.total} recent requests returned 401 Unauthorized. Check that TRADIER_API_KEY is set correctly in Railway env and matches the TRADIER_ENV mode (sandbox tokens don't work in production and vice versa).`,
+        tradierMode: getTradierMode(),
+      }, { status: 503 })
+    }
+
+    // If chains are ALL empty but no auth issue, Tradier coverage is simply absent for these tickers
+    if (chains.size === 0) {
+      return NextResponse.json({
+        budget,
+        horizon,
+        scannedTickers: tickers.length,
+        chainsRetrieved: 0,
+        candidatesAfterFilter: 0,
+        picks: [],
+        regime: {
+          label: regime.regime,
+          spyChangePct: regime.spyChangePct,
+          vixLevel: regime.vixLevel,
+          context: regime.contextParagraph,
+        },
+        councilCandidateCount: councilCandidates.length,
+        generatedAt: new Date().toISOString(),
+        elapsedMs: Date.now() - started,
+        cached: false,
+        tradierMode: getTradierMode(),
+        message: `Tradier returned no option chains for any of the ${tickers.length} tickers. This may be a temporary outage or sandbox coverage gap. Try again in a few minutes.`,
+      })
+    }
 
     // ── Pre-filter to top 30 candidates ───────────────────────
     const filterStart = Date.now()

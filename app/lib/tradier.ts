@@ -90,12 +90,60 @@ export interface EnrichedOption {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Auth failure tracking — lets callers detect systemic 401s
+// and report a clear error rather than "no results found"
+// ─────────────────────────────────────────────────────────────
+interface AuthFailureState {
+  count401: number
+  total: number
+  lastError: string | null
+  resetAt: number
+}
+const authState: AuthFailureState = { count401: 0, total: 0, lastError: null, resetAt: Date.now() }
+const AUTH_STATE_WINDOW_MS = 2 * 60 * 1000  // reset counters every 2 min
+
+function trackAuthAttempt(status: number | 'error', errorMsg?: string): void {
+  // Reset window if stale
+  if (Date.now() - authState.resetAt > AUTH_STATE_WINDOW_MS) {
+    authState.count401 = 0
+    authState.total = 0
+    authState.lastError = null
+    authState.resetAt = Date.now()
+  }
+  authState.total++
+  if (status === 401) {
+    authState.count401++
+    authState.lastError = errorMsg ?? 'HTTP 401 Unauthorized'
+  }
+}
+
+/**
+ * Returns true if the Tradier API is failing with auth errors on the majority
+ * of recent calls. Used by callers (like the options scanner) to return a
+ * specific "auth failed" error rather than silently returning no results.
+ */
+export function isTradierAuthFailing(): { failing: boolean; recent401s: number; total: number; lastError: string | null } {
+  // Refresh window state
+  if (Date.now() - authState.resetAt > AUTH_STATE_WINDOW_MS) {
+    return { failing: false, recent401s: 0, total: 0, lastError: null }
+  }
+  const failing = authState.total >= 5 && authState.count401 / authState.total > 0.5
+  return {
+    failing,
+    recent401s: authState.count401,
+    total: authState.total,
+    lastError: authState.lastError,
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // Low-level fetch with timeout
 // ─────────────────────────────────────────────────────────────
 async function tradierGet(path: string, params: Record<string, string>, timeoutMs = 8000): Promise<AnyObj | null> {
   const key = getApiKey()
   if (!key) {
     console.warn('[tradier] TRADIER_API_KEY not set')
+    trackAuthAttempt('error', 'TRADIER_API_KEY not set')
     return null
   }
 
@@ -116,14 +164,17 @@ async function tradierGet(path: string, params: Record<string, string>, timeoutM
     })
 
     if (!res.ok) {
+      trackAuthAttempt(res.status, `HTTP ${res.status}`)
       console.warn(`[tradier] ${path} returned ${res.status}`)
       return null
     }
 
+    trackAuthAttempt(res.status)
     const data = await res.json()
     return data
   } catch (e) {
     const msg = (e as Error).message?.slice(0, 120) ?? 'unknown'
+    trackAuthAttempt('error', msg)
     console.warn(`[tradier] ${path} failed:`, msg)
     return null
   } finally {
