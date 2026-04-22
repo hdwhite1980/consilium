@@ -1,0 +1,55 @@
+# ═════════════════════════════════════════════════════════════
+# .github/workflows/watchlist-compute-cron.yml
+#
+# Triggers /api/watchlist/compute every 15 minutes during US
+# market hours (13:30–20:00 UTC, Mon–Fri).
+#
+# Why GitHub Actions instead of Railway cron:
+#   - Free tier covers this
+#   - Easier to suspend during off-hours (no compute on weekends)
+#   - Already using this pattern for backtest-outcomes and altcoins
+#
+# The endpoint returns 202 immediately; actual compute runs in
+# background. This step just kicks it off and checks the response
+# code so the job doesn't hang.
+# ═════════════════════════════════════════════════════════════
+
+name: Watchlist Compute
+
+on:
+  schedule:
+    # Every 15 min during US market hours (9:30 AM–4:00 PM ET).
+    # Note: GitHub cron is UTC. ET is UTC-5 (standard) / UTC-4 (daylight).
+    # We schedule for UTC 13:30–20:00 which covers both 9:30 AM ET (DST)
+    # and 8:30 AM ET (standard) through 4:00 PM ET (DST) / 3:00 PM ET (standard).
+    # Slight over-coverage is fine — fewer missed windows.
+    - cron: '*/15 13-20 * * 1-5'
+  workflow_dispatch:  # Allows manual trigger from GitHub UI
+
+jobs:
+  compute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: POST to /api/watchlist/compute
+        run: |
+          set -e
+          response=$(curl -s -o /tmp/body.txt -w "%{http_code}" \
+            -X POST "https://wali-os.com/api/watchlist/compute" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            --max-time 30)
+
+          echo "HTTP status: $response"
+          echo "Body:"
+          cat /tmp/body.txt
+          echo ""
+
+          # Accept 200 OR 202 (fire-and-forget returns 202)
+          if [ "$response" = "200" ] || [ "$response" = "202" ]; then
+            echo "✓ Watchlist compute triggered successfully"
+            exit 0
+          else
+            echo "✗ Watchlist compute failed with HTTP $response"
+            exit 1
+          fi
