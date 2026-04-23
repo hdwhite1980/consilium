@@ -25,6 +25,7 @@ import { getOptionChain, getOptionExpirations, isTradierConfigured, getTradierMo
 import { getUniverseTickers, mergeWithCouncilCandidates, getUniverseEntry } from '@/app/lib/optionable-universe'
 import { getActiveCouncilCandidates } from '@/app/lib/council-candidates'
 import { getMarketRegime, type MarketRegime } from '@/app/lib/market-regime'
+import { autoAddOptionToWatchlist } from '@/app/lib/watchlist-auto-add'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
@@ -590,6 +591,25 @@ export async function POST(req: NextRequest) {
 
     // ── Telemetry + cache ─────────────────────────────────────
     logPicksToDb(picks, regime)
+
+    // Auto-add high-confidence picks to user's watchlist
+    // Only picks with confidence >= 70 auto-add (lower ones are just browsing)
+    for (const pick of picks) {
+      if (pick.confidence >= 70) {
+        autoAddOptionToWatchlist({
+          userId: user.id,
+          ticker: pick.ticker,
+          optionSymbol: pick.optionSymbol,
+          optionType: pick.optionType,
+          strike: pick.strike,
+          expiration: pick.expiration,
+          premiumAtAdd: pick.premium,
+          deltaAtAdd: pick.delta ?? undefined,
+          ivAtAdd: pick.iv ?? undefined,
+          source: 'invest',
+        })
+      }
+    }
 
     const result: ScannerResult = {
       budget,

@@ -3,40 +3,75 @@
 // ═════════════════════════════════════════════════════════════
 // app/components/AddToWatchlistButton.tsx
 //
-// Reusable button for /today, /tomorrow, /analyze, /options pages.
-// Adds a ticker to the user's watchlist with a given source label.
+// Reusable button that adds a STOCK or OPTION to the user's watchlist.
+// Use on /today, /tomorrow, /analyze, /options pages.
 //
-// States:
-//   - idle: "+ Watch"
-//   - adding: spinner
-//   - added: checkmark (for 2 seconds, then reverts)
-//   - error: brief error message
+// Usage:
+//   // Stock:
+//   <AddToWatchlistButton ticker="NVDA" source="movers" />
 //
-// Doesn't show "already on watchlist" — upsert is idempotent so
-// clicking on a ticker already in watchlist just refreshes the
-// verdict metadata silently.
+//   // Option:
+//   <AddToWatchlistButton
+//     ticker="NVDA"
+//     source="analyze"
+//     assetType="option"
+//     optionSymbol="NVDA250517C00500000"
+//     optionType="call"
+//     strike={500}
+//     expiration="2025-05-17"
+//     premiumAtAdd={12.50}
+//     deltaAtAdd={0.45}
+//     ivAtAdd={0.42}
+//   />
+//
+// State machine: idle → adding → added (2s) → idle
+//                                       → error (3s) → idle
 // ═════════════════════════════════════════════════════════════
 
 import { useState, useCallback } from 'react'
-import { Eye, Check, Plus } from 'lucide-react'
+import { Eye, Check, Plus, Zap } from 'lucide-react'
 
-interface Props {
+interface StockProps {
   ticker: string
   source?: 'analyze' | 'invest' | 'movers' | 'manual'
   size?: 'sm' | 'md'
   variant?: 'ghost' | 'filled'
   className?: string
   onAdded?: () => void
+  assetType?: 'stock'
 }
 
-export function AddToWatchlistButton({
-  ticker,
-  source = 'manual',
-  size = 'sm',
-  variant = 'ghost',
-  className = '',
-  onAdded,
-}: Props) {
+interface OptionProps {
+  ticker: string                          // underlying
+  source?: 'analyze' | 'invest' | 'movers' | 'manual'
+  size?: 'sm' | 'md'
+  variant?: 'ghost' | 'filled'
+  className?: string
+  onAdded?: () => void
+  assetType: 'option'
+  optionSymbol: string
+  optionType: 'call' | 'put'
+  strike: number
+  expiration: string                      // YYYY-MM-DD
+  premiumAtAdd?: number
+  deltaAtAdd?: number
+  ivAtAdd?: number
+}
+
+type Props = StockProps | OptionProps
+
+export function AddToWatchlistButton(props: Props) {
+  const {
+    ticker,
+    source = 'manual',
+    size = 'sm',
+    variant = 'ghost',
+    className = '',
+    onAdded,
+  } = props
+
+  const isOption = props.assetType === 'option'
+
   const [state, setState] = useState<'idle' | 'adding' | 'added' | 'error'>('idle')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
@@ -49,15 +84,28 @@ export function AddToWatchlistButton({
     setErrorMsg(null)
 
     try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const body: any = { ticker, source }
+      if (isOption) {
+        const o = props as OptionProps
+        body.assetType = 'option'
+        body.optionSymbol = o.optionSymbol
+        body.optionType = o.optionType
+        body.strike = o.strike
+        body.expiration = o.expiration
+        if (typeof o.premiumAtAdd === 'number') body.premiumAtAdd = o.premiumAtAdd
+        if (typeof o.deltaAtAdd === 'number') body.deltaAtAdd = o.deltaAtAdd
+        if (typeof o.ivAtAdd === 'number') body.ivAtAdd = o.ivAtAdd
+      }
+
       const res = await fetch('/api/watchlist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticker, source }),
+        body: JSON.stringify(body),
       })
-      const body = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        throw new Error(body?.error ?? 'Failed')
-      }
+      const resBody = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(resBody?.error ?? 'Failed')
+
       setState('added')
       onAdded?.()
       setTimeout(() => setState('idle'), 2000)
@@ -66,7 +114,7 @@ export function AddToWatchlistButton({
       setState('error')
       setTimeout(() => { setState('idle'); setErrorMsg(null) }, 3000)
     }
-  }, [ticker, source, state, onAdded])
+  }, [ticker, source, state, onAdded, isOption, props])
 
   const padX = size === 'sm' ? 'px-2' : 'px-3'
   const padY = size === 'sm' ? 'py-1' : 'py-1.5'
@@ -82,16 +130,26 @@ export function AddToWatchlistButton({
 
   const style = state === 'added' ? addedStyle : state === 'error' ? errorStyle : baseStyle
 
+  const idleLabel = isOption ? 'Watch option' : 'Watch'
+  const addedLabel = isOption ? 'Watching' : 'Added'
+  const IdleIcon = isOption ? Zap : Plus
+
+  const titleText = state === 'error'
+    ? (errorMsg ?? 'Error')
+    : isOption
+      ? `Add ${ticker} ${(props as OptionProps).optionType.toUpperCase()} $${(props as OptionProps).strike} to watchlist`
+      : `Add ${ticker} to watchlist`
+
   return (
     <button
       onClick={handleClick}
       disabled={state === 'adding' || state === 'added'}
-      title={state === 'error' ? errorMsg ?? 'Error' : `Add ${ticker} to watchlist`}
+      title={titleText}
       className={`inline-flex items-center gap-1 ${padX} ${padY} ${textSize} font-mono rounded transition-all hover:opacity-90 disabled:cursor-default ${className}`}
       style={style}>
       {state === 'idle' && (<>
-        <Plus size={iconSize} />
-        <span>Watch</span>
+        <IdleIcon size={iconSize} />
+        <span>{idleLabel}</span>
       </>)}
       {state === 'adding' && (<>
         <span className="inline-block w-2 h-2 rounded-full thinking-dot"
@@ -100,7 +158,7 @@ export function AddToWatchlistButton({
       </>)}
       {state === 'added' && (<>
         <Check size={iconSize} />
-        <span>Added</span>
+        <span>{addedLabel}</span>
       </>)}
       {state === 'error' && (<>
         <Eye size={iconSize} />
