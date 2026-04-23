@@ -60,7 +60,7 @@ export function autoAddStockToWatchlist(params: AutoAddStockParams): void {
           latest_verdict_confidence: params.verdictConfidence ?? null,
           latest_verdict_at: params.verdictAt ?? null,
         }, {
-          onConflict: 'user_id,ticker',
+          onConflict: 'user_id,ticker,asset_type',
           ignoreDuplicates: false,
         })
 
