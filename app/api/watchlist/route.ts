@@ -306,7 +306,7 @@ export async function POST(req: NextRequest) {
       latestVerdict = data
     } catch { /* no verdict is fine */ }
 
-    const conflictTarget = assetType === 'option' ? 'user_id,option_symbol' : 'user_id,ticker'
+    const conflictTarget = assetType === 'option' ? 'user_id,option_symbol' : 'user_id,ticker,asset_type'
 
     const { data: upserted, error } = await admin
       .from('watchlist_entries')
