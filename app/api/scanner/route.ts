@@ -26,6 +26,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/app/lib/auth/server'
+import { createClient as createAdmin } from '@supabase/supabase-js'
 import { fetchBars } from '@/app/lib/data/alpaca'
 import { calculateTechnicals, type TechnicalSignals } from '@/app/lib/signals/technicals'
 import {
@@ -291,6 +292,61 @@ export async function POST(req: NextRequest) {
 
     // Cache
     scanCache.set(key, { result, fetchedAt: Date.now() })
+
+    // Log scan to DB for performance tracking (fire-and-forget, never throws)
+    void (async () => {
+      try {
+        const admin = createAdmin(
+          process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          process.env.SUPABASE_SERVICE_ROLE_KEY!,
+        )
+        // Insert the scan record
+        const { data: scanRow, error: logErr } = await admin
+          .from('scanner_log')
+          .insert({
+            user_id: user.id,
+            universe,
+            mode,
+            filter_hash: hashFilter(effectiveFilter),
+            pick_count: picks.length,
+            picks: picks.map(p => ({
+              ticker: p.ticker,
+              compositeScore: p.compositeScore,
+              directionalScore: p.directionalScore,
+              relStrengthScore: p.relStrengthScore,
+              direction: p.direction,
+              currentPrice: p.currentPrice,
+            })),
+            spy_change_10d: spyChange10d,
+            spy_change_30d: spyChange30d,
+            generated_at: result.generatedAt,
+            elapsed_ms: result.elapsedMs,
+          })
+          .select('id')
+          .single()
+
+        if (logErr || !scanRow) {
+          console.warn('[scanner] log insert failed:', logErr?.message)
+          return
+        }
+
+        // Insert pick outcomes stubs (return_1d etc. populated later by cron)
+        const outcomeRows = picks.map(p => ({
+          scan_id: scanRow.id,
+          ticker: p.ticker,
+          direction: p.direction,
+          composite_score: p.compositeScore,
+          price_at_scan: p.currentPrice,
+        }))
+
+        if (outcomeRows.length > 0) {
+          const { error: outErr } = await admin.from('scanner_pick_outcomes').insert(outcomeRows)
+          if (outErr) console.warn('[scanner] outcomes insert failed:', outErr.message)
+        }
+      } catch (e) {
+        console.warn('[scanner] logging error:', (e as Error).message?.slice(0, 100))
+      }
+    })()
 
     console.log(`[scanner] TOTAL ${result.elapsedMs}ms (${(result.elapsedMs / 1000).toFixed(1)}s) — returned ${picks.length} picks`)
     return NextResponse.json(result)

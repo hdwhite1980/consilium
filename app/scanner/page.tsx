@@ -19,8 +19,9 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/app/lib/auth/client'
 import {
   ArrowLeft, Search, Zap, TrendingUp, TrendingDown, Minus,
-  Filter, X, LogOut, RefreshCw, ChevronDown, BarChart3,
+  Filter, X, LogOut, ChevronDown, BarChart3,
   Activity, Target, Eye, Play, Clock, Globe,
+  Star, StarOff, Save, Download, Check,
 } from 'lucide-react'
 import { AddToWatchlistButton } from '@/app/components/AddToWatchlistButton'
 
@@ -94,6 +95,33 @@ interface CustomFilter {
   priceTiers: string[]
   tagsIncludeAny: string[]
   tagsExcludeAny: string[]
+}
+
+interface PresetRow {
+  id: number
+  name: string
+  universe: string
+  mode: 'bullish' | 'bearish' | 'both'
+  filter: Partial<CustomFilter>
+  isFavorite: boolean
+  createdAt: string
+  lastUsedAt: string | null
+}
+
+interface ScannerHitRate {
+  total_1d: number | null
+  hits_1d: number | null
+  total_7d: number | null
+  hits_7d: number | null
+  total_30d: number | null
+  hits_30d: number | null
+  hit_rate_1d: number | null
+  hit_rate_7d: number | null
+  hit_rate_30d: number | null
+  avg_return_7d: number | null
+  avg_return_30d: number | null
+  avg_rel_7d: number | null
+  avg_rel_30d: number | null
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -513,6 +541,15 @@ export default function ScannerPage() {
     sectors: [], caps: [], priceTiers: [], tagsIncludeAny: [], tagsExcludeAny: [],
   })
 
+  // Presets
+  const [presets, setPresets] = useState<PresetRow[]>([])
+  const [showPresetSave, setShowPresetSave] = useState(false)
+  const [presetName, setPresetName] = useState('')
+  const [presetSaving, setPresetSaving] = useState(false)
+
+  // Hit rate telemetry
+  const [hitRate, setHitRate] = useState<ScannerHitRate | null>(null)
+
   // Sort state
   const [sortBy, setSortBy] = useState<'composite' | 'directional' | 'rel_strength'>('composite')
 
@@ -535,6 +572,132 @@ export default function ScannerPage() {
       .then((body: ScannerConfig) => setConfig(body))
       .catch((e) => console.warn('Failed to load scanner config:', e))
   }, [authLoaded])
+
+  // Load presets + hit rate
+  const loadPresets = useCallback(async () => {
+    try {
+      const res = await fetch('/api/scanner/presets', { credentials: 'include' })
+      const body = await res.json()
+      if (res.ok && Array.isArray(body?.presets)) setPresets(body.presets)
+    } catch { /* ignore */ }
+  }, [])
+
+  const loadHitRate = useCallback(async () => {
+    try {
+      const res = await fetch('/api/scanner/outcomes')
+      const body = await res.json()
+      if (res.ok && body?.overall) setHitRate(body.overall)
+    } catch { /* ignore */ }
+  }, [])
+
+  useEffect(() => {
+    if (!authLoaded) return
+    void loadPresets()
+    void loadHitRate()
+  }, [authLoaded, loadPresets, loadHitRate])
+
+  // Apply a preset to the scan form
+  const applyPreset = useCallback(async (preset: PresetRow) => {
+    setUniverse(preset.universe)
+    setMode(preset.mode)
+    setFilter({
+      sectors: preset.filter.sectors ?? [],
+      caps: preset.filter.caps ?? [],
+      priceTiers: preset.filter.priceTiers ?? [],
+      tagsIncludeAny: preset.filter.tagsIncludeAny ?? [],
+      tagsExcludeAny: preset.filter.tagsExcludeAny ?? [],
+    })
+    // Mark as used
+    try {
+      await fetch('/api/scanner/presets', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: preset.name }),
+      })
+    } catch { /* ignore */ }
+  }, [])
+
+  // Save current config as a preset
+  const savePreset = useCallback(async () => {
+    const name = presetName.trim()
+    if (!name) return
+    setPresetSaving(true)
+    try {
+      await fetch('/api/scanner/presets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          universe,
+          mode,
+          filter: {
+            sectors: filter.sectors.length > 0 ? filter.sectors : undefined,
+            caps: filter.caps.length > 0 ? filter.caps : undefined,
+            priceTiers: filter.priceTiers.length > 0 ? filter.priceTiers : undefined,
+            tagsIncludeAny: filter.tagsIncludeAny.length > 0 ? filter.tagsIncludeAny : undefined,
+            tagsExcludeAny: filter.tagsExcludeAny.length > 0 ? filter.tagsExcludeAny : undefined,
+          },
+        }),
+      })
+      setPresetName('')
+      setShowPresetSave(false)
+      await loadPresets()
+    } catch { /* ignore */ } finally {
+      setPresetSaving(false)
+    }
+  }, [presetName, universe, mode, filter, loadPresets])
+
+  // Delete a preset
+  const deletePreset = useCallback(async (name: string) => {
+    if (!confirm(`Delete preset "${name}"?`)) return
+    try {
+      await fetch(`/api/scanner/presets?name=${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+      })
+      await loadPresets()
+    } catch { /* ignore */ }
+  }, [loadPresets])
+
+  // Toggle favorite status
+  const toggleFavorite = useCallback(async (preset: PresetRow) => {
+    try {
+      await fetch('/api/scanner/presets', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: preset.name, isFavorite: !preset.isFavorite }),
+      })
+      await loadPresets()
+    } catch { /* ignore */ }
+  }, [loadPresets])
+
+  // CSV export
+  const exportCsv = useCallback(() => {
+    if (!result?.picks || result.picks.length === 0) return
+    const headers = [
+      'Rank', 'Ticker', 'Direction', 'CompositeScore', 'DirectionalScore', 'RelStrengthScore',
+      'Price', 'Change1d', 'Change10d', 'Change30d', 'SPY10d', 'SPY30d', 'RelStrength10d', 'RelStrength30d',
+      'RSI', 'VsSMA20', 'VsSMA50', 'MACD', 'VolumeRatio', 'TechBias', 'Sector', 'Cap', 'Tags', 'KeySetup',
+    ]
+    const rows = result.picks.map((p, i) => [
+      i + 1, p.ticker, p.direction, p.compositeScore, p.directionalScore, p.relStrengthScore,
+      p.currentPrice.toFixed(2), p.priceChange1d.toFixed(2), p.priceChange10d.toFixed(2), p.priceChange30d.toFixed(2),
+      p.spyChange10d.toFixed(2), p.spyChange30d.toFixed(2), p.relStrength10d.toFixed(2), p.relStrength30d.toFixed(2),
+      p.rsi.toFixed(1), p.priceVsSma20.toFixed(2), p.priceVsSma50.toFixed(2), p.macdTrend, p.volumeRatio.toFixed(2),
+      p.technicalBias, p.sector, p.cap, p.tags.join('|'),
+      // Quote keySetup to protect commas
+      `"${p.keySetup.replace(/"/g, '""')}"`,
+    ])
+    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `scanner_${result.universe}_${result.mode}_${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }, [result])
 
   const runScan = useCallback(async () => {
     setErr(null)
@@ -649,6 +812,94 @@ export default function ScannerPage() {
 
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-4xl mx-auto px-3 sm:px-5 py-4 space-y-4">
+
+          {/* Hit rate widget */}
+          {hitRate && hitRate.total_7d !== null && hitRate.total_7d > 0 && (
+            <section className="rounded-xl border p-3"
+              style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+              <div className="flex items-center gap-2 mb-2">
+                <BarChart3 size={11} style={{ color: '#a78bfa' }} />
+                <span className="text-[10px] font-mono uppercase tracking-widest" style={{ color: '#a78bfa' }}>
+                  Scanner accuracy (all picks)
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">1-day</div>
+                  <div className="text-base font-bold font-mono"
+                    style={{ color: (hitRate.hit_rate_1d ?? 0) >= 55 ? '#34d399' : (hitRate.hit_rate_1d ?? 0) >= 45 ? '#fbbf24' : '#f87171' }}>
+                    {hitRate.hit_rate_1d !== null ? `${hitRate.hit_rate_1d}%` : '—'}
+                  </div>
+                  <div className="text-[9px] font-mono text-white/35">
+                    {hitRate.hits_1d ?? 0}/{hitRate.total_1d ?? 0}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">7-day</div>
+                  <div className="text-base font-bold font-mono"
+                    style={{ color: (hitRate.hit_rate_7d ?? 0) >= 55 ? '#34d399' : (hitRate.hit_rate_7d ?? 0) >= 45 ? '#fbbf24' : '#f87171' }}>
+                    {hitRate.hit_rate_7d !== null ? `${hitRate.hit_rate_7d}%` : '—'}
+                  </div>
+                  <div className="text-[9px] font-mono text-white/35">
+                    {hitRate.hits_7d ?? 0}/{hitRate.total_7d ?? 0}
+                    {hitRate.avg_rel_7d !== null && (
+                      <span className="ml-1.5" style={{ color: hitRate.avg_rel_7d >= 0 ? '#34d399' : '#f87171' }}>
+                        · vs SPY {hitRate.avg_rel_7d >= 0 ? '+' : ''}{hitRate.avg_rel_7d}%
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">30-day</div>
+                  <div className="text-base font-bold font-mono"
+                    style={{ color: (hitRate.hit_rate_30d ?? 0) >= 55 ? '#34d399' : (hitRate.hit_rate_30d ?? 0) >= 45 ? '#fbbf24' : '#f87171' }}>
+                    {hitRate.hit_rate_30d !== null ? `${hitRate.hit_rate_30d}%` : '—'}
+                  </div>
+                  <div className="text-[9px] font-mono text-white/35">
+                    {hitRate.hits_30d ?? 0}/{hitRate.total_30d ?? 0}
+                    {hitRate.avg_rel_30d !== null && (
+                      <span className="ml-1.5" style={{ color: hitRate.avg_rel_30d >= 0 ? '#34d399' : '#f87171' }}>
+                        · vs SPY {hitRate.avg_rel_30d >= 0 ? '+' : ''}{hitRate.avg_rel_30d}%
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* Preset bar */}
+          {presets.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] font-mono uppercase tracking-widest text-white/40">Presets:</span>
+              {presets.slice(0, 8).map(p => (
+                <div key={p.id} className="flex items-center gap-1 rounded-lg"
+                  style={{
+                    background: p.isFavorite ? 'rgba(251,191,36,0.08)' : 'rgba(167,139,250,0.06)',
+                    border: `1px solid ${p.isFavorite ? 'rgba(251,191,36,0.2)' : 'rgba(167,139,250,0.18)'}`,
+                  }}>
+                  <button onClick={() => applyPreset(p)}
+                    className="px-2 py-1 text-[10px] font-mono hover:opacity-80 transition-all"
+                    style={{ color: p.isFavorite ? '#fbbf24' : '#a78bfa' }}>
+                    {p.isFavorite && <Star size={9} className="inline mr-0.5" fill="currentColor" />}
+                    {p.name}
+                  </button>
+                  <button onClick={() => toggleFavorite(p)}
+                    className="px-1 py-1 hover:opacity-80 transition-all"
+                    title={p.isFavorite ? 'Unfavorite' : 'Favorite'}
+                    style={{ color: 'var(--text3)' }}>
+                    {p.isFavorite ? <StarOff size={9} /> : <Star size={9} />}
+                  </button>
+                  <button onClick={() => deletePreset(p.name)}
+                    className="px-1 py-1 hover:opacity-80 transition-all"
+                    title="Delete"
+                    style={{ color: '#f87171' }}>
+                    <X size={9} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Control panel */}
           <section className="rounded-2xl border p-4 sm:p-5 space-y-4"
@@ -770,33 +1021,74 @@ export default function ScannerPage() {
               )}
             </div>
 
-            {/* Run scan button */}
-            <button
-              onClick={runScan}
-              disabled={scanning || !config}
-              className="w-full py-3 rounded-lg text-sm font-semibold transition-all hover:opacity-90 disabled:opacity-50"
-              style={{
-                background: scanning ? 'var(--surface2)' : 'rgba(167,139,250,0.18)',
-                color: scanning ? 'var(--text3)' : '#a78bfa',
-                border: '1px solid rgba(167,139,250,0.3)',
-              }}>
-              {scanning ? (
-                <span className="flex items-center justify-center gap-2">
-                  <span className="inline-flex gap-1">
-                    {[0, 1, 2].map(i => (
-                      <span key={i} className="w-1.5 h-1.5 rounded-full thinking-dot"
-                        style={{ background: '#a78bfa', animationDelay: `${i * 0.15}s` }} />
-                    ))}
+            {/* Run scan button + Save preset */}
+            <div className="flex gap-2">
+              <button
+                onClick={runScan}
+                disabled={scanning || !config}
+                className="flex-1 py-3 rounded-lg text-sm font-semibold transition-all hover:opacity-90 disabled:opacity-50"
+                style={{
+                  background: scanning ? 'var(--surface2)' : 'rgba(167,139,250,0.18)',
+                  color: scanning ? 'var(--text3)' : '#a78bfa',
+                  border: '1px solid rgba(167,139,250,0.3)',
+                }}>
+                {scanning ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <span className="inline-flex gap-1">
+                      {[0, 1, 2].map(i => (
+                        <span key={i} className="w-1.5 h-1.5 rounded-full thinking-dot"
+                          style={{ background: '#a78bfa', animationDelay: `${i * 0.15}s` }} />
+                      ))}
+                    </span>
+                    Scanning universe…
                   </span>
-                  Scanning universe…
-                </span>
-              ) : (
-                <span className="flex items-center justify-center gap-2">
-                  <Search size={14} />
-                  Run scan
-                </span>
-              )}
-            </button>
+                ) : (
+                  <span className="flex items-center justify-center gap-2">
+                    <Search size={14} />
+                    Run scan
+                  </span>
+                )}
+              </button>
+              <button onClick={() => setShowPresetSave(!showPresetSave)}
+                disabled={scanning}
+                title="Save current filter combo as a preset"
+                className="px-3 py-3 rounded-lg text-sm font-semibold transition-all hover:opacity-90 disabled:opacity-50"
+                style={{
+                  background: showPresetSave ? 'rgba(251,191,36,0.15)' : 'var(--surface2)',
+                  color: showPresetSave ? '#fbbf24' : 'var(--text3)',
+                  border: `1px solid ${showPresetSave ? 'rgba(251,191,36,0.3)' : 'rgba(255,255,255,0.1)'}`,
+                }}>
+                <Save size={14} />
+              </button>
+            </div>
+
+            {/* Save preset inline form */}
+            {showPresetSave && (
+              <div className="flex gap-2 items-center">
+                <input
+                  type="text"
+                  autoFocus
+                  maxLength={60}
+                  value={presetName}
+                  onChange={(e) => setPresetName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') savePreset() }}
+                  placeholder="Preset name (e.g. 'My AI watchlist')"
+                  className="flex-1 px-3 py-2 rounded-lg text-sm font-mono"
+                  style={{ background: 'var(--surface2)', color: 'var(--text1)', border: '1px solid rgba(255,255,255,0.1)' }}
+                />
+                <button onClick={savePreset}
+                  disabled={presetSaving || !presetName.trim()}
+                  className="px-3 py-2 rounded-lg text-xs font-semibold transition-all hover:opacity-90 disabled:opacity-50"
+                  style={{ background: 'rgba(52,211,153,0.15)', color: '#34d399', border: '1px solid rgba(52,211,153,0.3)' }}>
+                  {presetSaving ? '...' : <Check size={12} />}
+                </button>
+                <button onClick={() => { setShowPresetSave(false); setPresetName('') }}
+                  className="p-2 rounded-lg transition-all hover:opacity-80"
+                  style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>
+                  <X size={12} />
+                </button>
+              </div>
+            )}
 
             {err && (
               <div className="text-xs p-2.5 rounded-lg flex items-start gap-2"
@@ -832,9 +1124,9 @@ export default function ScannerPage() {
             </section>
           )}
 
-          {/* Sort controls (shown when results present) */}
+          {/* Sort controls + Export (shown when results present) */}
           {result && result.picks.length > 0 && (
-            <div className="flex items-center gap-2 text-xs">
+            <div className="flex items-center gap-2 text-xs flex-wrap">
               <span className="text-white/40 font-mono">Sort:</span>
               {[
                 { key: 'composite' as const, label: 'Composite' },
@@ -852,6 +1144,13 @@ export default function ScannerPage() {
                   {s.label}
                 </button>
               ))}
+              <button onClick={exportCsv}
+                className="ml-auto flex items-center gap-1 px-2 py-1 rounded font-mono text-[10px] transition-all hover:opacity-80"
+                style={{ background: 'rgba(96,165,250,0.1)', color: '#60a5fa', border: '1px solid rgba(96,165,250,0.2)' }}
+                title="Download picks as CSV">
+                <Download size={10} />
+                Export CSV
+              </button>
             </div>
           )}
 

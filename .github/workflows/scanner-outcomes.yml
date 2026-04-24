@@ -1,0 +1,33 @@
+name: scanner-outcomes
+
+# Runs once daily at 21:30 UTC (16:30 ET) after US market close
+# Computes 1d/7d/30d forward returns for scanner picks that have
+# passed those time thresholds. Picks direction correctness.
+
+on:
+  schedule:
+    - cron: '30 21 * * 1-5'  # Mon-Fri, 21:30 UTC (4:30 PM ET)
+  workflow_dispatch:
+
+jobs:
+  compute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: POST /api/scanner/outcomes
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          ENDPOINT: https://wali-os.com/api/scanner/outcomes
+        run: |
+          echo "Hitting $ENDPOINT"
+          status=$(curl -sS -o /tmp/response.txt -w "%{http_code}" \
+            -X POST "$ENDPOINT" \
+            -H "x-cron-secret: $CRON_SECRET" \
+            -m 45)
+          echo "HTTP $status"
+          cat /tmp/response.txt
+          echo ""
+          if [ "$status" != "200" ] && [ "$status" != "202" ]; then
+            echo "::error ::Endpoint returned $status"
+            exit 1
+          fi
