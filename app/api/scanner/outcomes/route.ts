@@ -84,7 +84,7 @@ interface PendingOutcome {
   return_30d: number | null
 }
 
-async function computeOutcomeUpdates(
+function computeOutcomeUpdates(
   pending: PendingOutcome,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   tickerBars: any[],
