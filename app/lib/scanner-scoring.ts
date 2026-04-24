@@ -157,18 +157,25 @@ function scoreDirection(t: TechnicalSignals): DirectionalResult {
   // ── 3. Volume confirmation (15 points max) ────────────────
   let volBull = 0, volBear = 0
 
-  if (t.volumeSignal === 'surge') {
+  if (t.volumeSignal === 'high') {
     // High volume confirms whatever direction price is moving
     if (t.priceChange1D > 0) {
-      volBull += 10
-      reasons.push(`Volume surge ${t.volumeRatio.toFixed(1)}x on up day`)
+      if (t.volumeRatio >= 2.0) {
+        volBull += 10
+        reasons.push(`Volume surge ${t.volumeRatio.toFixed(1)}x on up day`)
+      } else {
+        volBull += 6
+        reasons.push(`Above-avg volume ${t.volumeRatio.toFixed(1)}x on up day`)
+      }
     } else if (t.priceChange1D < 0) {
-      volBear += 10
-      reasons.push(`Volume surge ${t.volumeRatio.toFixed(1)}x on down day`)
+      if (t.volumeRatio >= 2.0) {
+        volBear += 10
+        reasons.push(`Volume surge ${t.volumeRatio.toFixed(1)}x on down day`)
+      } else {
+        volBear += 6
+        reasons.push(`Above-avg volume ${t.volumeRatio.toFixed(1)}x on down day`)
+      }
     }
-  } else if (t.volumeSignal === 'high') {
-    if (t.priceChange1D > 0) volBull += 5
-    else if (t.priceChange1D < 0) volBear += 5
   } else if (t.volumeSignal === 'low') {
     volBull -= 2
     volBear -= 2
