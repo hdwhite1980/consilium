@@ -2,27 +2,25 @@
 
 import type { SocialSentiment } from '@/app/lib/social-scout'
 import { useState, useRef, useCallback, useEffect, Suspense } from 'react'
-import { useRouter, useSearchParams, usePathname } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/app/lib/auth/client'
 import TechnicalCharts from '@/app/components/TechnicalCharts'
 import OptionsRecommendations from '@/app/components/OptionsRecommendations'
 import { useTheme } from '@/app/lib/theme'
 import { Tutorial, TutorialLauncher, MAIN_TUTORIAL } from '@/app/components/Tutorial'
 import PortfolioAlerts from '@/app/components/PortfolioAlerts'
-import AnalysisQA, { AnalysisQAContext } from '@/app/components/AnalysisQA'
 import WaliLogo from '@/app/components/WaliLogo'
 import {
   TrendingUp, TrendingDown, Minus, Clock, AlertTriangle,
   BarChart2, Globe, DollarSign, Activity, Shield, Zap, LogOut, BookOpen,
   Sun, Moon, Menu, X, Calendar, Flame, Briefcase, Search, Trophy,
   Scale, LineChart, PieChart, Hourglass, RotateCw, Check, Target,
-  Star, ClipboardList, Wallet, RefreshCw, FileText, Coins, ShieldCheck,
-  ChevronDown
+  Star, ClipboardList, Wallet, RefreshCw, FileText, Coins, ShieldCheck
 } from 'lucide-react'
 
 type Signal = 'BULLISH' | 'BEARISH' | 'NEUTRAL'
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Log Trade Menu Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// ── Log Trade Menu ────────────────────────────────────────────────────────────
 function LogTradeMenu({ destinations }: {
   destinations: Array<{ icon: React.ReactNode; label: string; desc: string; color: string; onClick: () => void }>
 }) {
@@ -36,14 +34,14 @@ function LogTradeMenu({ destinations }: {
         onClick={() => setOpen(o => !o)}
         aria-expanded={open}
         aria-controls={panelId}
-        aria-label="Log your trade Ã¢â‚¬â€ choose a destination"
+        aria-label="Log your trade — choose a destination"
         className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all hover:opacity-90 focus:outline focus:outline-2 focus:outline-offset-1"
         style={{ background: 'rgba(52,211,153,0.08)', color: '#34d399', border: '1px solid rgba(52,211,153,0.2)', outlineColor: '#34d399' }}>
         <span className="flex items-center gap-1.5">
           <ClipboardList size={12} aria-hidden="true" />
           <span>Acted on this analysis? Log your trade</span>
         </span>
-        <span style={{ color: 'rgba(52,211,153,0.5)' }} aria-hidden="true">{open ? 'Ã¢â€“Â²' : 'Ã¢â€“Â¼'}</span>
+        <span style={{ color: 'rgba(52,211,153,0.5)' }} aria-hidden="true">{open ? '▲' : '▼'}</span>
       </button>
       {open && (
         <div id={panelId} role="menu" className="mt-1 rounded-xl overflow-hidden z-10 relative"
@@ -54,7 +52,7 @@ function LogTradeMenu({ destinations }: {
               type="button"
               role="menuitem"
               onClick={() => { setOpen(false); d.onClick() }}
-              aria-label={`${d.label} Ã¢â‚¬â€ ${d.desc}`}
+              aria-label={`${d.label} — ${d.desc}`}
               className="w-full flex items-center gap-3 px-3 py-2.5 text-left transition-all hover:opacity-80 focus:outline focus:outline-2 focus:outline-offset-[-2px]"
               style={{ borderBottom: i < destinations.length - 1 ? '1px solid var(--border)' : 'none', outlineColor: d.color }}>
               <span className="text-base w-5 text-center" aria-hidden="true">{d.icon}</span>
@@ -62,7 +60,7 @@ function LogTradeMenu({ destinations }: {
                 <div className="text-xs font-semibold" style={{ color: d.color }}>{d.label}</div>
                 <div className="text-[10px]" style={{ color: 'var(--text3)' }}>{d.desc}</div>
               </div>
-              <span className="text-xs" style={{ color: 'var(--text3)' }} aria-hidden="true">Ã¢â€ â€™</span>
+              <span className="text-xs" style={{ color: 'var(--text3)' }} aria-hidden="true">→</span>
             </button>
           ))}
         </div>
@@ -256,7 +254,7 @@ function Think({ label, color }: { label: string; color: string }) {
           <span key={i} className="w-1.5 h-1.5 rounded-full thinking-dot" style={{ background: color, animationDelay: `${i * 0.15}s` }} />
         ))}
       </div>
-      <span className="text-xs font-mono" style={{ color: 'var(--text3)' }}>{label} is thinkingÃ¢â‚¬Â¦</span>
+      <span className="text-xs font-mono" style={{ color: 'var(--text3)' }}>{label} is thinking…</span>
     </div>
   )
 }
@@ -286,7 +284,7 @@ function Collapsible({
         <span style={{ color }} aria-hidden="true">{icon}</span>
         <span className="text-sm font-semibold flex-1" style={{ color: 'var(--text)' }}>{title}</span>
         {badge}
-        <span className="text-xs ml-auto" style={{ color: 'var(--text3)' }} aria-hidden="true">{open ? 'Ã¢â€“Â²' : 'Ã¢â€“Â¼'}</span>
+        <span className="text-xs ml-auto" style={{ color: 'var(--text3)' }} aria-hidden="true">{open ? '▲' : '▼'}</span>
       </button>
       {open && (
         <div id={panelId} className="px-4 pb-4 pt-1 border-t" style={{ borderColor: 'var(--border)' }}>
@@ -317,14 +315,12 @@ function HomeInner() {
   const [cached, setCached]     = useState<{ at: string; ageMinutes: number } | null>(null)
 
   const router = useRouter()
-  const pathname = usePathname()
   const searchParams = useSearchParams()
   const debateRef = useRef<HTMLDivElement>(null)
   const [userEmail, setUserEmail] = useState<string | null>(null)
   const [subStatus, setSubStatus] = useState<{ status: string; daysLeft: number | null } | null>(null)
   const { theme, toggle: toggleTheme } = useTheme()
   const [navOpen, setNavOpen] = useState(false)
-  const [navGroupOpen, setNavGroupOpen] = useState<string | null>(null)
   const [showTutorial, setShowTutorial] = useState(false)
   const [preMarketBrief, setPreMarketBrief] = useState<{headline?:string;one_line?:string;risk_of_day?:string;watchlist?:string[];portfolio_alerts?:string[]} | null>(null)
   const [showBrief, setShowBrief] = useState(false)
@@ -589,57 +585,31 @@ function HomeInner() {
   const txt3  = isDark ? 'rgba(255,255,255,0.6)'  : '#4b5563'
   const inputBg = isDark ? '#181e2a' : '#ffffff'
 
-  const NAV_TOP: Array<{ label: string; icon: React.ReactNode; path: string; color: string }> = [
+  const NAV_ITEMS: Array<{ label: string; icon: React.ReactNode; path: string; color: string }> = [
     { label: 'Today',        icon: <Zap size={12} />,           path: '/news',         color: '#fbbf24' },
     { label: 'Tomorrow',     icon: <Calendar size={12} />,      path: '/tomorrow',     color: '#a78bfa' },
     { label: 'Invest',       icon: <Flame size={12} />,         path: '/invest',       color: '#f97316' },
+    { label: 'Portfolio',    icon: <Briefcase size={12} />,     path: '/portfolio',    color: '#34d399' },
+    { label: 'Macro',        icon: <Globe size={12} />,         path: '/macro',        color: '#60a5fa' },
+    { label: 'Altcoins',     icon: <Coins size={12} />,         path: '/altcoins',     color: '#a78bfa' },
+    { label: 'Screener',     icon: <Search size={12} />,        path: '/screener',     color: '#a78bfa' },
     { label: 'Compare',      icon: <Scale size={12} />,         path: '/compare',      color: '#f87171' },
     { label: 'Track Record', icon: <Trophy size={12} />,        path: '/track-record', color: '#fbbf24' },
     { label: 'Guide',        icon: <BookOpen size={12} />,      path: '/guide',        color: txt3 },
-  ]
-
-  const NAV_GROUPS: Array<{ label: string; icon: React.ReactNode; color: string; items: Array<{ label: string; icon: React.ReactNode; path: string; color: string }> }> = [
-    {
-      label: 'Discover',
-      icon: <Search size={12} />,
-      color: '#a78bfa',
-      items: [
-        { label: 'Screener', icon: <Search size={12} />,    path: '/screener', color: '#a78bfa' },
-        { label: 'Scanner',  icon: <Target size={12} />,    path: '/scanner',  color: '#a78bfa' },
-        { label: 'Options',  icon: <LineChart size={12} />, path: '/options',  color: '#fbbf24' },
-        { label: 'Macro',    icon: <Globe size={12} />,     path: '/macro',    color: '#60a5fa' },
-        { label: 'Altcoins', icon: <Coins size={12} />,     path: '/altcoins', color: '#a78bfa' },
-      ],
-    },
-    {
-      label: 'Positions',
-      icon: <Briefcase size={12} />,
-      color: '#34d399',
-      items: [
-        { label: 'Portfolio', icon: <Briefcase size={12} />,     path: '/portfolio', color: '#34d399' },
-        { label: 'Watchlist', icon: <ClipboardList size={12} />, path: '/watchlist', color: '#60a5fa' },
-      ],
-    },
-  ]
-
-  const NAV_ITEMS: Array<{ label: string; icon: React.ReactNode; path: string; color: string }> = [
-    ...NAV_TOP.slice(0, 3),
-    ...NAV_GROUPS.flatMap(g => g.items),
-    ...NAV_TOP.slice(3),
   ]
 
   return (
     <>
     <div className="flex flex-col min-h-screen md:h-screen md:overflow-hidden" style={{ background: bg, color: txt }}>
 
-      {/* Ã¢â€â‚¬Ã¢â€â‚¬ Skip-to-content link for keyboard users Ã¢â€â‚¬Ã¢â€â‚¬ */}
+      {/* ── Skip-to-content link for keyboard users ── */}
       <a href="#main-content"
         className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:rounded-lg focus:outline focus:outline-2 focus:outline-offset-2"
         style={{ background: '#7c3aed', color: 'white', outlineColor: '#a78bfa' }}>
         Skip to main content
       </a>
 
-      {/* Ã¢â€â‚¬Ã¢â€â‚¬ Top nav bar Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
+      {/* ── Top nav bar ─────────────────────────────── */}
       {/* Pre-market Brief Banner */}
       {preMarketBrief?.headline && (
         <div className="shrink-0" style={{ background: isDark ? 'rgba(251,191,36,0.07)' : 'rgba(251,191,36,0.12)', borderBottom: '1px solid rgba(251,191,36,0.15)' }}>
@@ -653,7 +623,7 @@ function HomeInner() {
             <span className="text-[10px] font-bold px-1.5 py-0.5 rounded font-mono shrink-0"
               style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>PRE-MARKET</span>
             <span className="text-xs flex-1 truncate" style={{ color: txt2 }}>{preMarketBrief.headline}</span>
-            <span className="text-[10px] shrink-0" style={{ color: txt3 }} aria-hidden="true">{showBrief ? 'Ã¢â€“Â²' : 'Ã¢â€“Â¼'}</span>
+            <span className="text-[10px] shrink-0" style={{ color: txt3 }} aria-hidden="true">{showBrief ? '▲' : '▼'}</span>
           </button>
           {showBrief && (
             <div id="premarket-details" className="px-3 pb-2 space-y-1.5 text-xs">
@@ -665,28 +635,28 @@ function HomeInner() {
                 </div>
               )}
               {preMarketBrief.watchlist && preMarketBrief.watchlist.length > 0 && (
-                <div><span style={{ color: txt3 }}>Watch: </span><span style={{ color: txt2 }}>{preMarketBrief.watchlist.join(' Ã‚Â· ')}</span></div>
+                <div><span style={{ color: txt3 }}>Watch: </span><span style={{ color: txt2 }}>{preMarketBrief.watchlist.join(' · ')}</span></div>
               )}
             </div>
           )}
         </div>
       )}
 
-      {/* Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
-           TOP NAV Ã¢â‚¬â€ two rows on mobile/tablet, single row on xl+
+      {/* ───────────────────────────────────────────────────────────
+           TOP NAV — two rows on mobile/tablet, single row on xl+
 
-           Row 1 (always visible):  Logo Ã‚Â· analysis controls Ã‚Â· Analyze button Ã‚Â· user cluster
+           Row 1 (always visible):  Logo · analysis controls · Analyze button · user cluster
            Row 2 (xl+ inline, smaller breakpoints separate):  nav links
 
-           The user cluster (theme Ã‚Â· status Ã‚Â· email Ã‚Â· LOGOUT Ã‚Â· mobile menu)
+           The user cluster (theme · status · email · LOGOUT · mobile menu)
            is locked to the right edge and can never be pushed off-screen.
-         Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
+         ─────────────────────────────────────────────────────────── */}
       <nav className="border-b shrink-0" style={{ background: surf, borderColor: brd }} aria-label="Primary navigation">
 
-        {/* Ã¢â€â‚¬Ã¢â€â‚¬ Row 1a: brand (left) + user cluster (right) Ã¢â‚¬â€ always on its own row Ã¢â€â‚¬Ã¢â€â‚¬ */}
+        {/* ── Row 1a: brand (left) + user cluster (right) — always on its own row ── */}
         <div className="flex items-center gap-2 px-3 py-2">
 
-          {/* Logo Ã¢â‚¬â€ home link. Text always visible now (no more hidden sm:block) */}
+          {/* Logo — home link. Text always visible now (no more hidden sm:block) */}
           <button
             type="button"
             onClick={() => router.push('/')}
@@ -697,13 +667,13 @@ function HomeInner() {
             <span className="text-sm font-bold tracking-tight" style={{ color: txt }}>WALI-OS</span>
           </button>
 
-          {/* Ã¢â€â‚¬Ã¢â€â‚¬ User cluster Ã¢â‚¬â€ locked to right Ã¢â€â‚¬Ã¢â€â‚¬ */}
+          {/* ── User cluster — locked to right ── */}
           <div className="flex items-center gap-1.5 ml-auto shrink-0" role="group" aria-label="Account and settings">
 
-            {/* Portfolio Alerts Ã¢â‚¬â€ mounted globally so polling runs everywhere */}
+            {/* Portfolio Alerts — mounted globally so polling runs everywhere */}
             <PortfolioAlerts isDark={isDark} />
 
-            {/* Theme toggle Ã¢â‚¬â€ bigger tap target on mobile */}
+            {/* Theme toggle — bigger tap target on mobile */}
             <button
               type="button"
               onClick={toggleTheme}
@@ -726,7 +696,7 @@ function HomeInner() {
               className="w-1.5 h-1.5 rounded-full animate-pulse-dot shrink-0"
               style={{ background: stage === 'done' ? '#34d399' : stage === 'error' ? '#f87171' : running ? '#fbbf24' : brd2 }} />
 
-            {/* User area Ã¢â‚¬â€ trial badge + email + LOGOUT */}
+            {/* User area — trial badge + email + LOGOUT */}
             {userEmail && (
               <div className="flex items-center gap-1.5 pl-1.5 border-l" style={{ borderColor: brd }}>
                 {subStatus?.status !== 'exempt' && subStatus?.status === 'trialing' && subStatus.daysLeft !== null && (
@@ -766,7 +736,7 @@ function HomeInner() {
               </div>
             )}
 
-            {/* Mobile menu toggle Ã¢â‚¬â€ bigger tap area */}
+            {/* Mobile menu toggle — bigger tap area */}
             <button
               type="button"
               onClick={() => setNavOpen(!navOpen)}
@@ -780,7 +750,7 @@ function HomeInner() {
           </div>
         </div>
 
-        {/* Ã¢â€â‚¬Ã¢â€â‚¬ Row 1b: analysis controls (ticker + timeframe + persona + analyze) Ã¢â€â‚¬Ã¢â€â‚¬ */}
+        {/* ── Row 1b: analysis controls (ticker + timeframe + persona + analyze) ── */}
         <div className="flex items-center gap-1.5 px-3 pb-2 pt-0 flex-wrap" role="group" aria-label="Analysis controls">
 
             {/* Ticker with proper label */}
@@ -796,7 +766,7 @@ function HomeInner() {
                 value={ticker}
                 onChange={e => setTicker(e.target.value.toUpperCase().replace(/[^A-Z/]/g, ''))}
                 onKeyDown={e => { if (e.key === 'Enter' && !running) { setTicker(t => t.replace(/\//g, '')); setTimeout(run, 0) } }}
-                placeholder="AAPL Ã‚Â· BTC Ã‚Â· EUR/USD"
+                placeholder="AAPL · BTC · EUR/USD"
                 maxLength={7}
                 data-tutorial="ticker-input"
                 aria-label="Ticker symbol (e.g. AAPL, BTC, or EUR/USD)"
@@ -807,17 +777,17 @@ function HomeInner() {
             {/* Timeframe */}
             <div className="flex gap-0.5" role="radiogroup" aria-label="Timeframe" data-tutorial="timeframe-selector">
               {([
-                { tf: '1D', label: '1D', title: 'Intraday Ã¢â‚¬â€ 15-min bars, same-day to next session targets' },
-                { tf: '1W', label: '1W', title: 'Swing trade Ã¢â‚¬â€ hourly bars, 3-10 day targets' },
-                { tf: '1M', label: '1M', title: 'Position trade Ã¢â‚¬â€ daily bars, 3-6 week targets' },
-                { tf: '3M', label: '3M', title: 'Investment Ã¢â‚¬â€ daily bars, 6-13 week targets' },
+                { tf: '1D', label: '1D', title: 'Intraday — 15-min bars, same-day to next session targets' },
+                { tf: '1W', label: '1W', title: 'Swing trade — hourly bars, 3-10 day targets' },
+                { tf: '1M', label: '1M', title: 'Position trade — daily bars, 3-6 week targets' },
+                { tf: '3M', label: '3M', title: 'Investment — daily bars, 6-13 week targets' },
               ] as { tf: TF; label: string; title: string }[]).map(({ tf: t, label, title }) => (
                 <button
                   key={t}
                   type="button"
                   role="radio"
                   aria-checked={tf === t}
-                  aria-label={`${label} timeframe Ã¢â‚¬â€ ${title}`}
+                  aria-label={`${label} timeframe — ${title}`}
                   onClick={() => setTf(t)}
                   title={title}
                   className="px-2.5 py-2 sm:py-1.5 rounded-md text-xs font-mono border transition-all focus:outline focus:outline-2 focus:outline-offset-1"
@@ -830,7 +800,7 @@ function HomeInner() {
               ))}
             </div>
 
-            {/* Persona Ã¢â‚¬â€ label always visible now, no more hidden lg:inline */}
+            {/* Persona — label always visible now, no more hidden lg:inline */}
             <div className="flex items-center gap-0.5 rounded-lg p-0.5" role="radiogroup" aria-label="Analyst persona" data-tutorial="persona-selector" style={{ background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)', border: `1px solid ${brd}` }}>
               {(Object.entries(PERSONAS) as [Persona, typeof PERSONAS[Persona]][]).map(([key, p]) => (
                 <button
@@ -838,7 +808,7 @@ function HomeInner() {
                   type="button"
                   role="radio"
                   aria-checked={persona === key}
-                  aria-label={`${p.label} analyst Ã¢â‚¬â€ ${p.desc}`}
+                  aria-label={`${p.label} analyst — ${p.desc}`}
                   onClick={() => setPersona(key)}
                   title={p.desc}
                   className="flex items-center gap-1 px-2 py-1.5 sm:py-1 rounded-md text-[11px] font-mono transition-all focus:outline focus:outline-2 focus:outline-offset-1"
@@ -854,7 +824,7 @@ function HomeInner() {
               ))}
             </div>
 
-            {/* Why is this moving? Ã¢â‚¬â€ shows when price has moved >2% */}
+            {/* Why is this moving? — shows when price has moved >2% */}
             {md?.currentPrice && md?.technicals?.priceChange1D && Math.abs(md.technicals.priceChange1D) >= 2 && (
               <button
                 type="button"
@@ -888,7 +858,7 @@ function HomeInner() {
                 className="flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40 focus:outline focus:outline-2 focus:outline-offset-1"
                 style={{ background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24', outlineColor: '#fbbf24' }}>
                 {whyMoving.loading ? <Hourglass size={11} aria-hidden="true" /> : <Zap size={11} aria-hidden="true" />}
-                <span>{whyMoving.loading ? 'AnalyzingÃ¢â‚¬Â¦' : `Why is ${ticker} moving?`}</span>
+                <span>{whyMoving.loading ? 'Analyzing…' : `Why is ${ticker} moving?`}</span>
               </button>
             )}
 
@@ -897,85 +867,16 @@ function HomeInner() {
               onClick={run}
               disabled={running}
               data-tutorial="analyze-btn"
-              aria-label={running ? 'Analyzing Ã¢â‚¬â€ please wait' : `Analyze ${ticker}`}
+              aria-label={running ? 'Analyzing — please wait' : `Analyze ${ticker}`}
               className="ml-auto sm:ml-0 px-4 py-2 sm:py-1.5 rounded-lg text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95 disabled:opacity-40 shrink-0 focus:outline focus:outline-2 focus:outline-offset-2"
               style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', outlineColor: '#a78bfa' }}>
-              {running ? <span aria-hidden="true">Ã¢â‚¬Â¦</span> : 'Analyze'}
+              {running ? <span aria-hidden="true">…</span> : 'Analyze'}
             </button>
         </div>
 
-        {/* Row 2 (xl+): desktop nav with top-level buttons + dropdown groups */}
+        {/* ── Row 2 (xl+): desktop nav links inline ── */}
         <div className="hidden xl:flex items-center gap-1 px-3 pb-2 pt-0">
-          {NAV_TOP.slice(0, 3).map(n => (
-            <button
-              key={n.path}
-              type="button"
-              onClick={() => router.push(n.path)}
-              aria-label={`Go to ${n.label}`}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all hover:opacity-80 focus:outline focus:outline-2 focus:outline-offset-1"
-              style={{ color: n.color, background: `${n.color}10`, border: `1px solid ${n.color}20`, outlineColor: n.color }}>
-              <span className="text-[11px]" aria-hidden="true">{n.icon}</span>
-              <span>{n.label}</span>
-            </button>
-          ))}
-          {NAV_GROUPS.map(group => {
-            const isOpen = navGroupOpen === group.label
-            const isActive = group.items.some(item => pathname === item.path)
-            return (
-              <div
-                key={group.label}
-                className="relative"
-                onMouseEnter={() => setNavGroupOpen(group.label)}
-                onMouseLeave={() => setNavGroupOpen(null)}>
-                <button
-                  type="button"
-                  onClick={() => setNavGroupOpen(isOpen ? null : group.label)}
-                  aria-haspopup="menu"
-                  aria-expanded={isOpen}
-                  aria-label={`${group.label} menu`}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all hover:opacity-80 focus:outline focus:outline-2 focus:outline-offset-1"
-                  style={{
-                    color: group.color,
-                    background: isActive ? `${group.color}18` : `${group.color}10`,
-                    border: `1px solid ${isActive ? group.color + '40' : group.color + '20'}`,
-                    outlineColor: group.color,
-                  }}>
-                  <span className="text-[11px]" aria-hidden="true">{group.icon}</span>
-                  <span>{group.label}</span>
-                  <ChevronDown
-                    size={10}
-                    className={'transition-transform ' + (isOpen ? 'rotate-180' : '')}
-                    aria-hidden="true" />
-                </button>
-                {isOpen && (
-                  <div
-                    role="menu"
-                    aria-label={`${group.label} submenu`}
-                    className="absolute top-full left-0 mt-1 py-1 rounded-lg shadow-lg z-50 min-w-[170px]"
-                    style={{ background: surf, border: `1px solid ` + brd }}>
-                    {group.items.map(item => (
-                      <button
-                        key={item.path}
-                        type="button"
-                        role="menuitem"
-                        onClick={() => { router.push(item.path); setNavGroupOpen(null) }}
-                        aria-label={`Go to ${item.label}`}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold transition-all hover:opacity-80 text-left focus:outline focus:outline-2 focus:outline-offset-1"
-                        style={{
-                          color: item.color,
-                          background: pathname === item.path ? `${item.color}15` : 'transparent',
-                          outlineColor: item.color,
-                        }}>
-                        <span className="text-[11px]" aria-hidden="true">{item.icon}</span>
-                        <span>{item.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )
-          })}
-          {NAV_TOP.slice(3).map(n => (
+          {NAV_ITEMS.map(n => (
             <button
               key={n.path}
               type="button"
@@ -991,7 +892,7 @@ function HomeInner() {
         </div>
       </nav>
 
-      {/* Ã¢â€â‚¬Ã¢â€â‚¬ Mobile / tablet nav drawer Ã¢â€â‚¬Ã¢â€â‚¬ */}
+      {/* ── Mobile / tablet nav drawer ── */}
       {navOpen && (
         <div
           id="mobile-nav-drawer"
@@ -1018,7 +919,7 @@ function HomeInner() {
         </div>
       )}
 
-      {/* Ã¢â€â‚¬Ã¢â€â‚¬ Stage progress bar Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
+      {/* ── Stage progress bar ──────────────────────── */}
       {running && (
         <div className="px-3 py-2 border-b shrink-0" style={{ background: surf, borderColor: brd }}>
           <div className="flex items-center gap-1 max-w-2xl mx-auto">
@@ -1044,7 +945,7 @@ function HomeInner() {
         </div>
       )}
 
-      {/* Ã¢â€â‚¬Ã¢â€â‚¬ Cached / stale banner Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
+      {/* ── Cached / stale banner ────────────────────── */}
       {cached && stage === 'done' && (
         <div className="px-3 py-2 flex items-center justify-between border-b shrink-0"
           style={{
@@ -1053,8 +954,8 @@ function HomeInner() {
           }}>
           <span className="text-xs" style={{ color: txt2 }}>
             {cached.ageMinutes > 60
-              ? <><strong style={{ color: '#f87171' }} className="inline-flex items-center gap-1"><AlertTriangle size={11} />Stale Ã¢â‚¬â€ {cached.ageMinutes}m old.</strong> Price may have moved.</>
-              : <span className="inline-flex items-center gap-1"><Clock size={11} />Cached analysis Ã‚Â· {cached.ageMinutes}m ago</span>
+              ? <><strong style={{ color: '#f87171' }} className="inline-flex items-center gap-1"><AlertTriangle size={11} />Stale — {cached.ageMinutes}m old.</strong> Price may have moved.</>
+              : <span className="inline-flex items-center gap-1"><Clock size={11} />Cached analysis · {cached.ageMinutes}m ago</span>
             }
           </span>
           <button onClick={forceRun}
@@ -1065,10 +966,10 @@ function HomeInner() {
         </div>
       )}
 
-      {/* Ã¢â€â‚¬Ã¢â€â‚¬ Main layout: sidebar + debate Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ */}
+      {/* ── Main layout: sidebar + debate ───────────── */}
       <main id="main-content" role="main" aria-label="Analysis dashboard" className="flex flex-col md:flex-row flex-1 md:overflow-hidden">
 
-        {/* Left sidebar Ã¢â‚¬â€ only show when there's data */}
+        {/* Left sidebar — only show when there's data */}
         {md && (
           <aside data-tutorial="sidebar" className="w-full md:w-56 lg:w-60 md:shrink-0 flex flex-col gap-2 p-3 md:overflow-y-auto border-b md:border-b-0 md:border-r"
             style={{ background: isDark ? '#0d1117' : '#f5f7fb', borderColor: brd }}>
@@ -1119,7 +1020,7 @@ function HomeInner() {
             <Card title="Technicals" icon={<BarChart2 size={11}/>} color="#a78bfa" surf={surf} brd={brd} txt3={txt3}>
               {([
                 ['RSI', <span style={{ color: md!.technicals?.rsi > 70 ? '#f87171' : md!.technicals?.rsi < 30 ? '#34d399' : txt }}>{md!.technicals?.rsi?.toFixed(1)}</span>],
-                ['MACD', <span style={{ color: md!.technicals?.macdHistogram >= 0 ? '#34d399' : '#f87171' }}>{md!.technicals?.macdHistogram >= 0 ? 'Ã¢â€“Â² pos' : 'Ã¢â€“Â¼ neg'}</span>],
+                ['MACD', <span style={{ color: md!.technicals?.macdHistogram >= 0 ? '#34d399' : '#f87171' }}>{md!.technicals?.macdHistogram >= 0 ? '▲ pos' : '▼ neg'}</span>],
                 ['MA cross', (() => {
                     const t = md!.technicals
                     // Only show cross if we have real SMA200 data (not fallback)
@@ -1177,7 +1078,7 @@ function HomeInner() {
                 <div className="flex justify-between text-xs">
                   <span style={{ color: txt3 }}>Earnings</span>
                   <span className="font-mono text-[10px]" style={{ color: md!.fundamentals?.earningsRisk === 'high' ? '#f87171' : md!.fundamentals?.earningsRisk === 'moderate' ? '#fbbf24' : '#34d399' }}>
-                    {md!.fundamentals?.daysToEarnings}d Ã¢â‚¬â€ {md!.fundamentals?.earningsRisk}
+                    {md!.fundamentals?.daysToEarnings}d — {md!.fundamentals?.earningsRisk}
                   </span>
                 </div>
               )}
@@ -1193,7 +1094,7 @@ function HomeInner() {
                   color={md!.smartMoney?.insiderSignal.includes('buy') ? '#34d399' : md!.smartMoney?.insiderSignal.includes('sell') ? '#f87171' : '#fbbf24'} />
               </div>
               {md!.smartMoney?.notableHolders.length > 0 && (
-                <div className="text-[9px] leading-relaxed" style={{ color: txt3 }}>{md!.smartMoney?.notableHolders.join(' Ã‚Â· ')}</div>
+                <div className="text-[9px] leading-relaxed" style={{ color: txt3 }}>{md!.smartMoney?.notableHolders.join(' · ')}</div>
               )}
             </Card>
           )}
@@ -1205,7 +1106,7 @@ function HomeInner() {
                 <div className="flex justify-between text-xs">
                   <span style={{ color: txt3 }}>P/C ratio</span>
                   <span className="font-mono text-[10px]" style={{ color: md!.options?.putCallSignal === 'bullish' ? '#34d399' : md!.options?.putCallSignal === 'bearish' ? '#f87171' : txt }}>
-                    {md!.options?.putCallRatio.toFixed(2)} Ã¢â‚¬â€ {md!.options?.putCallSignal}
+                    {md!.options?.putCallRatio.toFixed(2)} — {md!.options?.putCallSignal}
                   </span>
                 </div>
               ) : (
@@ -1247,7 +1148,7 @@ function HomeInner() {
                   <span style={{ color: txt3 }}>Trend</span>
                   <span className="font-mono text-[10px] capitalize" style={{ color: md.technicals.trendLines.trend === 'uptrend' ? '#34d399' : md.technicals.trendLines.trend === 'downtrend' ? '#f87171' : txt }}>
                     {md.technicals.trendLines.trend}
-                    {md.technicals.trendLines.higherHighs && md.technicals.trendLines.higherLows ? ' Ã¢â€ â€˜Ã¢â€ â€˜' : md.technicals.trendLines.lowerHighs && md.technicals.trendLines.lowerLows ? ' Ã¢â€ â€œÃ¢â€ â€œ' : ''}
+                    {md.technicals.trendLines.higherHighs && md.technicals.trendLines.higherLows ? ' ↑↑' : md.technicals.trendLines.lowerHighs && md.technicals.trendLines.lowerLows ? ' ↓↓' : ''}
                   </span>
                 </div>
               )}
@@ -1284,7 +1185,7 @@ function HomeInner() {
                   {md.technicals.chartPattern.target && (
                     <div className="text-[10px] mt-1 font-mono" style={{ color: md.technicals.chartPattern.type === 'bullish' ? '#34d399' : '#f87171' }}>
                       Target: ${md.technicals.chartPattern.target.toFixed(2)}
-                      {md.technicals.chartPattern.invalidation && ` Ã‚Â· Invalidation: $${md.technicals.chartPattern.invalidation.toFixed(2)}`}
+                      {md.technicals.chartPattern.invalidation && ` · Invalidation: $${md.technicals.chartPattern.invalidation.toFixed(2)}`}
                     </div>
                   )}
                 </div>
@@ -1293,7 +1194,7 @@ function HomeInner() {
               {md.technicals.gapPattern && (
                 <div className="mt-1 px-2 py-1.5 rounded-lg" style={{ background: md.technicals.gapPattern.bullish ? 'rgba(52,211,153,0.06)' : 'rgba(248,113,113,0.06)', border: `1px solid ${md.technicals.gapPattern.bullish ? 'rgba(52,211,153,0.15)' : 'rgba(248,113,113,0.15)'}` }}>
                   <div className="text-[10px] font-semibold mb-0.5" style={{ color: md.technicals.gapPattern.bullish ? '#34d399' : '#f87171' }}>
-                    Ã¢Â¬â€  {md.technicals.gapPattern.type === 'gap_up' ? 'Gap Up' : 'Gap Down'} {md.technicals.gapPattern.size.toFixed(1)}%
+                    ⬆ {md.technicals.gapPattern.type === 'gap_up' ? 'Gap Up' : 'Gap Down'} {md.technicals.gapPattern.size.toFixed(1)}%
                     {md.technicals.gapPattern.filled && <span className="ml-1 opacity-60">(filled)</span>}
                   </div>
                   <div className="text-[10px] leading-relaxed" style={{ color: txt3 }}>{md.technicals.gapPattern.description}</div>
@@ -1305,7 +1206,7 @@ function HomeInner() {
 
           {/* Golden Zone Fibonacci */}
           {md?.technicals?.goldenZone && (
-            <Card title="Golden Zone" icon={<span style={{ fontSize: 10 }}>Ã¢Â¬Â¡</span>} color="#fbbf24" surf={surf} brd={brd} txt3={txt3}>
+            <Card title="Golden Zone" icon={<span style={{ fontSize: 10 }}>⬡</span>} color="#fbbf24" surf={surf} brd={brd} txt3={txt3}>
               {(() => {
                 const gz = md!.technicals!.goldenZone!
                 return (
@@ -1319,7 +1220,7 @@ function HomeInner() {
                     )}
                     {!gz.inGoldenZone && (
                       <div className="text-[10px] text-center mb-1.5" style={{ color: txt3 }}>
-                        {gz.distToZone.toFixed(1)}% from zone Ã‚Â· {gz.trending === 'up' ? 'Ã¢â€ â€”' : 'Ã¢â€ Ëœ'} {gz.trending}trend
+                        {gz.distToZone.toFixed(1)}% from zone · {gz.trending === 'up' ? '↗' : '↘'} {gz.trending}trend
                       </div>
                     )}
                     {/* Golden pocket highlight */}
@@ -1327,7 +1228,7 @@ function HomeInner() {
                       <div className="text-[9px] font-mono uppercase text-center mb-1" style={{ color: 'rgba(251,191,36,0.6)' }}>Golden Pocket (optimal entry)</div>
                       <div className="flex justify-between text-[10px] font-mono">
                         <span style={{ color: '#34d399' }}>${gz.goldenPocketLow.toFixed(2)}</span>
-                        <span style={{ color: txt3 }}>Ã¢â‚¬â€</span>
+                        <span style={{ color: txt3 }}>—</span>
                         <span style={{ color: '#f87171' }}>${gz.goldenPocketHigh.toFixed(2)}</span>
                       </div>
                     </div>
@@ -1339,7 +1240,7 @@ function HomeInner() {
                         <div key={l.level} className="flex justify-between text-xs"
                           style={{ opacity: isPocket ? 1 : isInPocket ? 0.9 : 0.65 }}>
                           <span style={{ color: isPocket ? '#fbbf24' : txt3 }}>
-                            {(l.level * 100).toFixed(1)}%{isPocket ? ' Ã¢â€”â€ ' : ''}
+                            {(l.level * 100).toFixed(1)}%{isPocket ? ' ◆' : ''}
                           </span>
                           <span className="font-mono text-[11px]" style={{ color: l.type === 'support' ? '#34d399' : '#f87171' }}>
                             ${l.price.toFixed(2)}
@@ -1348,7 +1249,7 @@ function HomeInner() {
                       )
                     })}
                     <div className="text-[9px] mt-1.5 text-center" style={{ color: txt3 }}>
-                      Swing: ${gz.swingLow.toFixed(2)} Ã¢â‚¬â€œ ${gz.swingHigh.toFixed(2)}
+                      Swing: ${gz.swingLow.toFixed(2)} – ${gz.swingHigh.toFixed(2)}
                     </div>
                   </>
                 )
@@ -1396,8 +1297,8 @@ function HomeInner() {
                   {cached.ageMinutes > 60 ? <AlertTriangle size={11} /> : <Clock size={11} />}
                   <span className="text-xs" style={{ color: 'var(--text2)' }}>
                     {cached.ageMinutes > 60
-                      ? <><strong style={{ color: '#f87171' }}>Stale analysis Ã¢â‚¬â€ {cached.ageMinutes} minutes old.</strong> Price may have moved significantly. Run a fresh analysis.</>
-                      : <>Cached analysis from <strong style={{ color: '#fbbf24' }}>{cached.ageMinutes} minute{cached.ageMinutes === 1 ? '' : 's'} ago</strong> Ã¢â‚¬â€ no AI credits used</>
+                      ? <><strong style={{ color: '#f87171' }}>Stale analysis — {cached.ageMinutes} minutes old.</strong> Price may have moved significantly. Run a fresh analysis.</>
+                      : <>Cached analysis from <strong style={{ color: '#fbbf24' }}>{cached.ageMinutes} minute{cached.ageMinutes === 1 ? '' : 's'} ago</strong> — no AI credits used</>
                     }
                   </span>
                 </div>
@@ -1417,7 +1318,7 @@ function HomeInner() {
               <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
                 <BarChart2 size={40} style={{ opacity: 0.6, color: 'var(--text3)' }} />
                 <div className="text-base font-semibold" style={{ color: 'var(--text2)' }}>Enter a ticker and click Analyze</div>
-                <div className="text-xs font-mono" style={{ color: 'var(--text3)' }}>Stocks Ã‚Â· Crypto Ã‚Â· Forex (EUR/USD, GBP/JPY...)</div>
+                <div className="text-xs font-mono" style={{ color: 'var(--text3)' }}>Stocks · Crypto · Forex (EUR/USD, GBP/JPY...)</div>
               </div>
             )}
 
@@ -1435,7 +1336,7 @@ function HomeInner() {
                 <div className="space-y-1 mb-3">
                   {gem.headlines.map((h, i) => (
                     <div key={i} className="text-xs flex gap-1.5" style={{ color: 'var(--text3)' }}>
-                      <span className="text-[8px] mt-0.5 shrink-0" style={{ color: '#60a5fa60' }}>Ã¢â€”Â</span>{h}
+                      <span className="text-[8px] mt-0.5 shrink-0" style={{ color: '#60a5fa60' }}>●</span>{h}
                     </div>
                   ))}
                 </div>
@@ -1450,19 +1351,19 @@ function HomeInner() {
               </Collapsible>
             )}
 
-            {/* Social Pulse Ã¢â‚¬â€ live X sentiment from Grok */}
+            {/* Social Pulse — live X sentiment from Grok */}
             {stage === 'grok' && !soc && <Think label="Social Pulse" color="#1d9bf0" />}
             {soc && !soc.isFallback && (
               <Collapsible
                 title="Social Pulse"
                 icon={<span className="text-xs font-bold">X</span>}
                 color="#1d9bf0"
-                badge={<><span className="text-[10px] font-mono px-2 py-0.5 rounded-full" style={{ background: 'rgba(29,155,240,0.12)', color: '#1d9bf0' }}>{soc.overallMood}</span><span className="text-[10px] font-mono ml-1" style={{ color: 'var(--text3)' }}>Live Ã‚Â· X</span></>}
+                badge={<><span className="text-[10px] font-mono px-2 py-0.5 rounded-full" style={{ background: 'rgba(29,155,240,0.12)', color: '#1d9bf0' }}>{soc.overallMood}</span><span className="text-[10px] font-mono ml-1" style={{ color: 'var(--text3)' }}>Live · X</span></>}
                 defaultOpen={false}>
               <div className="pt-2">
                 <div className="flex items-center gap-2 mb-2 text-[10px] font-mono uppercase tracking-wider" style={{ color: 'var(--text3)' }}>
                   <span>Intensity: <span style={{ color: '#1d9bf0' }}>{soc.intensity}</span></span>
-                  <span>Ã‚Â·</span>
+                  <span>·</span>
                   <span>Confidence: <span style={{ color: '#1d9bf0' }}>{soc.confidence}</span></span>
                 </div>
                 <p className="text-sm leading-relaxed mb-3" style={{ color: 'var(--text2)' }}>{soc.keyNarrative}</p>
@@ -1479,7 +1380,7 @@ function HomeInner() {
                     <div className="space-y-1">
                       {soc.bullishTalkingPoints.map((p, i) => (
                         <div key={i} className="text-xs flex gap-1.5" style={{ color: 'var(--text3)' }}>
-                          <span className="text-[8px] mt-0.5 shrink-0" style={{ color: '#34d39960' }}>Ã¢â€”Â</span>{p}
+                          <span className="text-[8px] mt-0.5 shrink-0" style={{ color: '#34d39960' }}>●</span>{p}
                         </div>
                       ))}
                     </div>
@@ -1492,7 +1393,7 @@ function HomeInner() {
                     <div className="space-y-1">
                       {soc.bearishTalkingPoints.map((p, i) => (
                         <div key={i} className="text-xs flex gap-1.5" style={{ color: 'var(--text3)' }}>
-                          <span className="text-[8px] mt-0.5 shrink-0" style={{ color: '#f8717160' }}>Ã¢â€”Â</span>{p}
+                          <span className="text-[8px] mt-0.5 shrink-0" style={{ color: '#f8717160' }}>●</span>{p}
                         </div>
                       ))}
                     </div>
@@ -1527,7 +1428,7 @@ function HomeInner() {
                 </div>
 
                 <div className="text-[10px] font-mono mt-2" style={{ color: 'var(--text3)' }}>
-                  Live from X Ã‚Â· Grok Ã‚Â· {new Date(soc.collectedAt).toLocaleTimeString()}
+                  Live from X · Grok · {new Date(soc.collectedAt).toLocaleTimeString()}
                 </div>
               </div>
               </Collapsible>
@@ -1593,10 +1494,10 @@ function HomeInner() {
             )}
 
             {/* Rebuttal */}
-            {(stage as string) === 'rebuttal' && !reb && <Think label="Lead Analyst rebuttingÃ¢â‚¬Â¦" color="#a78bfa" />}
+            {(stage as string) === 'rebuttal' && !reb && <Think label="Lead Analyst rebutting…" color="#a78bfa" />}
             {reb && (
               <Collapsible
-                title="Lead Analyst Ã¢â‚¬â€ Rebuttal"
+                title="Lead Analyst — Rebuttal"
                 icon={<span className="text-xs font-bold">L</span>}
                 color="#a78bfa"
                 badge={<><SBadge s={reb.signal} sm /><span className="text-[10px] font-mono ml-1" style={{ color: 'var(--text3)' }}>Round 2</span></>}
@@ -1619,7 +1520,7 @@ function HomeInner() {
                 {reb.maintains.length > 0 && (
                   <div className="rounded-lg p-3" style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)' }}>
                     <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#a78bfa' }}>Stands firm on</div>
-                    {reb.maintains.map((m, i) => <div key={i} className="text-xs flex gap-1.5 mb-1" style={{ color: 'var(--text2)' }}><span style={{ color: '#a78bfa' }}>Ã¢â€“Â¶</span>{m}</div>)}
+                    {reb.maintains.map((m, i) => <div key={i} className="text-xs flex gap-1.5 mb-1" style={{ color: 'var(--text2)' }}><span style={{ color: '#a78bfa' }}>▶</span>{m}</div>)}
                   </div>
                 )}
                 <div className="flex items-center gap-2">
@@ -1633,10 +1534,10 @@ function HomeInner() {
             )}
 
             {/* Counter */}
-            {(stage as string) === 'counter' && !ctr && <Think label="Devil's Advocate counteringÃ¢â‚¬Â¦" color="#f87171" />}
+            {(stage as string) === 'counter' && !ctr && <Think label="Devil's Advocate countering…" color="#f87171" />}
             {ctr && (
               <Collapsible
-                title="Devil's Advocate Ã¢â‚¬â€ Final Counter"
+                title="Devil's Advocate — Final Counter"
                 icon={<span className="text-xs font-bold">D</span>}
                 color="#f87171"
                 badge={<span className="text-[10px] font-mono ml-1" style={{ color: 'var(--text3)' }}>Round 2</span>}
@@ -1686,7 +1587,7 @@ function HomeInner() {
                       title={verify.totalStripped > 0 ? `${verify.totalStripped} unverified claim${verify.totalStripped === 1 ? '' : 's'} stripped before verdict` : 'All factual claims verified against credible sources'}>
                       <ShieldCheck size={10} />
                       {verify.totalVerified} verified
-                      {verify.totalStripped > 0 && ` Ã‚Â· ${verify.totalStripped} stripped`}
+                      {verify.totalStripped > 0 && ` · ${verify.totalStripped} stripped`}
                     </span>
                   )}
                   <span className="ml-auto text-[10px] font-mono" style={{ color: 'var(--text3)' }}>Final</span>
@@ -1694,7 +1595,7 @@ function HomeInner() {
 
                 <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{jud.summary}</p>
 
-                {/* Ã¢â€â‚¬Ã¢â€â‚¬ TRADE PLAN Ã¢â‚¬â€ prominent, right under verdict Ã¢â€â‚¬Ã¢â€â‚¬ */}
+                {/* ── TRADE PLAN — prominent, right under verdict ── */}
                 {jud.entryPrice && (
                   <div className="rounded-2xl p-4 mt-1"
                     style={{ background: 'rgba(251,191,36,0.08)', border: '2px solid rgba(251,191,36,0.3)' }}>
@@ -1722,24 +1623,24 @@ function HomeInner() {
                           // BULLISH: stop must be < entry, target must be > entry
                           if (stopP !== null && stopP >= entryP) {
                             const c = (atr > 0 ? entryP - atr * 2 : entryP * 0.93).toFixed(2)
-                            stopVal = `$${c} Ã¢â‚¬â€ 2Ãƒâ€” ATR below entry`
+                            stopVal = `$${c} — 2× ATR below entry`
                             stopFixed = true
                           }
                           if (tpP !== null && tpP <= entryP) {
                             const c = (atr > 0 ? entryP + atr * 3 : entryP * 1.08).toFixed(2)
-                            tpVal = `$${c} first target (3Ãƒâ€” ATR above entry)`
+                            tpVal = `$${c} first target (3× ATR above entry)`
                             tpFixed = true
                           }
                         } else {
                           // BEARISH: stop must be > entry, target must be < entry
                           if (stopP !== null && stopP <= entryP) {
                             const c = (atr > 0 ? entryP + atr * 2 : entryP * 1.07).toFixed(2)
-                            stopVal = `$${c} Ã¢â‚¬â€ 2Ãƒâ€” ATR above entry`
+                            stopVal = `$${c} — 2× ATR above entry`
                             stopFixed = true
                           }
                           if (tpP !== null && tpP >= entryP) {
                             const c = (atr > 0 ? entryP - atr * 3 : entryP * 0.92).toFixed(2)
-                            tpVal = `$${c} first target (3Ãƒâ€” ATR below entry)`
+                            tpVal = `$${c} first target (3× ATR below entry)`
                             tpFixed = true
                           }
                         }
@@ -1860,7 +1761,7 @@ function HomeInner() {
 
                 <Bar2 val={jud.confidence} color="#fbbf24" label="confidence" />
 
-                {/* Plain English Ã¢â‚¬â€ always visible */}
+                {/* Plain English — always visible */}
                 {jud.plainEnglish && (
                   <div className="rounded-xl p-4 space-y-2" style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}>
                     <div className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: 'var(--text3)' }}>Plain English</div>
@@ -1897,7 +1798,7 @@ function HomeInner() {
                   </button>
                 )}
 
-                {/* Action plan Ã¢â‚¬â€ always visible */}
+                {/* Action plan — always visible */}
                 {jud.actionPlan && (() => {
                   const isBearish2 = jud.signal === 'BEARISH'
                   const currentP2 = md?.currentPrice ?? 0
@@ -1914,14 +1815,14 @@ function HomeInner() {
                       <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{jud.actionPlan}</p>
                       {(cStop || cTp) && (
                         <div className="mt-2 text-[11px] leading-relaxed px-3 py-2 rounded-lg" style={{ background: 'rgba(251,191,36,0.08)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)' }}>
-                          Note: price levels in the text above were recalculated Ã¢â‚¬â€ {cStop ? `stop corrected to ${cStop}` : ''}{cStop && cTp ? ', ' : ''}{cTp ? `target corrected to ${cTp}` : ''} (ATR-derived, direction-validated). Use the Trade Plan boxes above.
+                          Note: price levels in the text above were recalculated — {cStop ? `stop corrected to ${cStop}` : ''}{cStop && cTp ? ', ' : ''}{cTp ? `target corrected to ${cTp}` : ''} (ATR-derived, direction-validated). Use the Trade Plan boxes above.
                         </div>
                       )}
                     </div>
                   )
                 })()}
 
-                {/* Log Trade CTA Ã¢â‚¬â€ multi-destination */}
+                {/* Log Trade CTA — multi-destination */}
                 {jud.signal && jud.signal !== 'NEUTRAL' && (() => {
                   const entryPrice = md?.currentPrice ?? 0
                   const params = new URLSearchParams({
@@ -1951,7 +1852,7 @@ function HomeInner() {
                   return <LogTradeMenu destinations={destinations} />
                 })()}
 
-                {/* Collapsible deep-dive sections Ã¢â‚¬â€ inside the verdict card */}
+                {/* Collapsible deep-dive sections — inside the verdict card */}
                 {(jud.technicalsExplained || jud.fundamentalsExplained || jud.smartMoneyExplained) && (
                   <Collapsible title="Signal Explanations" icon={<BarChart2 size={14}/>} color="#a78bfa">
                     <div className="space-y-3 pt-2">
@@ -1977,7 +1878,7 @@ function HomeInner() {
                   </Collapsible>
                 )}
 
-                {/* Council options view Ã¢â‚¬â€ collapsible */}
+                {/* Council options view — collapsible */}
                 {jud.optionsStrategy && (
                   <Collapsible title="Council Options View" icon={<Scale size={14} />} color="#a78bfa">
                     <p className="text-sm leading-relaxed pt-2" style={{ color: 'var(--text2)' }}>{jud.optionsStrategy}</p>
@@ -1986,7 +1887,7 @@ function HomeInner() {
               </div>
             )}
 
-            {/* Technical Charts Ã¢â‚¬â€ collapsible */}
+            {/* Technical Charts — collapsible */}
             {stage === 'done' && md && (
               <Collapsible title="Technical Charts" icon={<BarChart2 size={14}/>} color="#a78bfa">
                 <div className="pt-2">
@@ -1996,7 +1897,7 @@ function HomeInner() {
               </Collapsible>
             )}
 
-            {/* Options Recommendations Ã¢â‚¬â€ collapsible */}
+            {/* Options Recommendations — collapsible */}
             {stage === 'done' && jud && md && (
               <Collapsible title="Options Strategy" icon={<BarChart2 size={14} />} color="#34d399"
                 badge={<span className="text-[10px] font-mono px-2 py-0.5 rounded-full ml-1" style={{ background: `${SIG_COLOR[jud.signal]}15`, color: SIG_COLOR[jud.signal], border: `1px solid ${SIG_COLOR[jud.signal]}25` }}>{jud.signal} on {ticker}</span>}>
@@ -2026,7 +1927,7 @@ function HomeInner() {
             {stage === 'done' && (md?.conviction?.signals?.length ?? 0) > 0 && (
               <div className="animate-slide-up rounded-xl p-4 border"
                 style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                <div className="text-[10px] font-mono uppercase tracking-widest mb-3" style={{ color: 'var(--text3)' }}>Signal matrix Ã¢â‚¬â€ {md!.conviction?.signals?.length ?? 0} signals analyzed</div>
+                <div className="text-[10px] font-mono uppercase tracking-widest mb-3" style={{ color: 'var(--text3)' }}>Signal matrix — {md!.conviction?.signals?.length ?? 0} signals analyzed</div>
                 <div className="space-y-1">
                   {(md!.conviction?.signals ?? []).map((s, i) => (
                     <div key={i} className="flex items-center gap-2">
@@ -2047,42 +1948,6 @@ function HomeInner() {
               </div>
             )}
 
-            {/* Follow-up Q&A panel - opens explicitly via toggle */}
-            {stage === 'done' && jud && md && (
-              <AnalysisQA
-                context={{
-                  ticker,
-                  currentPrice: md.currentPrice ?? 0,
-                  verdict: jud,
-                  news: gem ? {
-                    summary: gem.summary,
-                    sentiment: gem.sentiment,
-                    headlines: gem.headlines,
-                    keyEvents: gem.keyEvents,
-                    macroFactors: gem.macroFactors,
-                    regimeAssessment: gem.regimeAssessment,
-                  } : null,
-                  leadAnalyst: cla,
-                  devilsAdvocate: gpt,
-                  rebuttal: reb,
-                  counter: ctr,
-                  technicals: md.technicals ? {
-                    rsi: md.technicals.rsi,
-                    macd: md.technicals.macdCrossover,
-                    sma50: md.technicals.sma50,
-                    sma200: md.technicals.sma200,
-                    bias: md.technicals.technicalBias,
-                    keySignals: md.conviction?.signals?.slice(0, 8).map(s => `${s.category}: ${s.signal}`),
-                  } : null,
-                  social: soc ? {
-                    summary: soc.keyNarrative,
-                    bullishCount: soc.bullishTalkingPoints?.length ?? 0,
-                    bearishCount: soc.bearishTalkingPoints?.length ?? 0,
-                    keyThemes: [...(soc.bullishTalkingPoints ?? []), ...(soc.bearishTalkingPoints ?? [])].slice(0, 6),
-                  } : null,
-                } satisfies AnalysisQAContext}
-              />
-            )}
             {err && (
               <div role="alert" aria-live="assertive" className="rounded-xl p-4 text-sm font-mono"
                 style={{ background: 'rgba(248,113,113,0.07)', border: '1px solid rgba(248,113,113,0.22)', color: '#fca5a5' }}>
@@ -2123,13 +1988,13 @@ function HomeInner() {
               aria-label="Close dialog"
               className="ml-auto text-lg leading-none rounded hover:opacity-70 focus:outline focus:outline-2 focus:outline-offset-1"
               style={{ color: txt3, outlineColor: '#fbbf24' }}>
-              <span aria-hidden="true">Ãƒâ€”</span>
+              <span aria-hidden="true">×</span>
             </button>
           </div>
           <div className="px-4 py-4 space-y-4">
             {whyMoving.loading && !whyMoving.catalyst && (
               <div className="text-sm animate-pulse" style={{ color: txt3 }} role="status" aria-live="polite">
-                Scanning headlines and analyzing catalystÃ¢â‚¬Â¦
+                Scanning headlines and analyzing catalyst…
               </div>
             )}
             {whyMoving.catalyst && (
