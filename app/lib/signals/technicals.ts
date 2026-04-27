@@ -515,7 +515,7 @@ function calcPivots(bars: Bar[]): { s1: number; s2: number; r1: number; r2: numb
 // PATTERN DETECTION ENGINE
 // ═══════════════════════════════════════════════════════════
 
-function detectCandlePattern(bars: Bar[]): CandlePattern | null {
+export function detectCandlePattern(bars: Bar[]): CandlePattern | null {
   if (bars.length < 3) return null
   const n  = bars.length - 1
   const c  = bars[n]
@@ -645,7 +645,7 @@ function analyzeTrendLines(bars: Bar[]): TrendLines {
   return { higherHighs, lowerLows, higherLows, lowerHighs, trend, dynamicSupport, dynamicResistance }
 }
 
-function detectChartPattern(bars: Bar[], currentPrice: number): ChartPattern | null {
+export function detectChartPattern(bars: Bar[], currentPrice: number): ChartPattern | null {
   if (bars.length < 20) return null
   const w = bars.slice(-40), n = w.length
   const highs = w.map(b => b.h), lows = w.map(b => b.l), closes = w.map(b => b.c)

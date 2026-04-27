@@ -5,6 +5,7 @@ import { useState, useRef, useCallback, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams, usePathname } from 'next/navigation'
 import { createClient } from '@/app/lib/auth/client'
 import TechnicalCharts from '@/app/components/TechnicalCharts'
+import IntradayCharts from '@/app/components/IntradayCharts'
 import OptionsRecommendations from '@/app/components/OptionsRecommendations'
 import { useTheme } from '@/app/lib/theme'
 import { Tutorial, TutorialLauncher, MAIN_TUTORIAL } from '@/app/components/Tutorial'
@@ -1998,6 +1999,18 @@ function HomeInner() {
                   <TechnicalCharts ticker={ticker} technicals={md.technicals as any} />
                 </div>
               </Collapsible>
+            )}
+
+
+            {/* Intraday charts - separate component, no AI signals, pure visualization */}
+            {stage === 'done' && md && (
+              <IntradayCharts
+                ticker={ticker}
+                analysisPatterns={{
+                  candle: md.technicals?.candlePattern ?? null,
+                  chart: md.technicals?.chartPattern ?? null,
+                }}
+              />
             )}
 
             {/* Options Recommendations — collapsible */}
