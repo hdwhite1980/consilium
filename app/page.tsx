@@ -6,6 +6,7 @@ import { useRouter, useSearchParams, usePathname } from 'next/navigation'
 import { createClient } from '@/app/lib/auth/client'
 import TechnicalCharts from '@/app/components/TechnicalCharts'
 import IntradayCharts from '@/app/components/IntradayCharts'
+import type { CandlePattern as TechCandlePattern, ChartPattern as TechChartPattern } from '@/app/lib/signals/technicals'
 import OptionsRecommendations from '@/app/components/OptionsRecommendations'
 import { useTheme } from '@/app/lib/theme'
 import { Tutorial, TutorialLauncher, MAIN_TUTORIAL } from '@/app/components/Tutorial'
@@ -2007,8 +2008,8 @@ function HomeInner() {
               <IntradayCharts
                 ticker={ticker}
                 analysisPatterns={{
-                  candle: md.technicals?.candlePattern ?? null,
-                  chart: md.technicals?.chartPattern ?? null,
+                  candle: (md.technicals?.candlePattern ?? null) as TechCandlePattern | null,
+                  chart: (md.technicals?.chartPattern ?? null) as TechChartPattern | null,
                 }}
               />
             )}
