@@ -2,20 +2,22 @@
 
 import type { SocialSentiment } from '@/app/lib/social-scout'
 import { useState, useRef, useCallback, useEffect, Suspense } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams, usePathname } from 'next/navigation'
 import { createClient } from '@/app/lib/auth/client'
 import TechnicalCharts from '@/app/components/TechnicalCharts'
 import OptionsRecommendations from '@/app/components/OptionsRecommendations'
 import { useTheme } from '@/app/lib/theme'
 import { Tutorial, TutorialLauncher, MAIN_TUTORIAL } from '@/app/components/Tutorial'
 import PortfolioAlerts from '@/app/components/PortfolioAlerts'
+import AnalysisQA, { AnalysisQAContext } from '@/app/components/AnalysisQA'
 import WaliLogo from '@/app/components/WaliLogo'
 import {
   TrendingUp, TrendingDown, Minus, Clock, AlertTriangle,
   BarChart2, Globe, DollarSign, Activity, Shield, Zap, LogOut, BookOpen,
   Sun, Moon, Menu, X, Calendar, Flame, Briefcase, Search, Trophy,
   Scale, LineChart, PieChart, Hourglass, RotateCw, Check, Target,
-  Star, ClipboardList, Wallet, RefreshCw, FileText, Coins, ShieldCheck
+  Star, ClipboardList, Wallet, RefreshCw, FileText, Coins, ShieldCheck,
+  ChevronDown
 } from 'lucide-react'
 
 type Signal = 'BULLISH' | 'BEARISH' | 'NEUTRAL'
@@ -315,12 +317,14 @@ function HomeInner() {
   const [cached, setCached]     = useState<{ at: string; ageMinutes: number } | null>(null)
 
   const router = useRouter()
+  const pathname = usePathname()
   const searchParams = useSearchParams()
   const debateRef = useRef<HTMLDivElement>(null)
   const [userEmail, setUserEmail] = useState<string | null>(null)
   const [subStatus, setSubStatus] = useState<{ status: string; daysLeft: number | null } | null>(null)
   const { theme, toggle: toggleTheme } = useTheme()
   const [navOpen, setNavOpen] = useState(false)
+  const [navGroupOpen, setNavGroupOpen] = useState<string | null>(null)
   const [showTutorial, setShowTutorial] = useState(false)
   const [preMarketBrief, setPreMarketBrief] = useState<{headline?:string;one_line?:string;risk_of_day?:string;watchlist?:string[];portfolio_alerts?:string[]} | null>(null)
   const [showBrief, setShowBrief] = useState(false)
@@ -585,17 +589,46 @@ function HomeInner() {
   const txt3  = isDark ? 'rgba(255,255,255,0.6)'  : '#4b5563'
   const inputBg = isDark ? '#181e2a' : '#ffffff'
 
-  const NAV_ITEMS: Array<{ label: string; icon: React.ReactNode; path: string; color: string }> = [
+  // Always-visible top-level nav items (high-frequency actions + utilities)
+  const NAV_TOP: Array<{ label: string; icon: React.ReactNode; path: string; color: string }> = [
     { label: 'Today',        icon: <Zap size={12} />,           path: '/news',         color: '#fbbf24' },
     { label: 'Tomorrow',     icon: <Calendar size={12} />,      path: '/tomorrow',     color: '#a78bfa' },
     { label: 'Invest',       icon: <Flame size={12} />,         path: '/invest',       color: '#f97316' },
-    { label: 'Portfolio',    icon: <Briefcase size={12} />,     path: '/portfolio',    color: '#34d399' },
-    { label: 'Macro',        icon: <Globe size={12} />,         path: '/macro',        color: '#60a5fa' },
-    { label: 'Altcoins',     icon: <Coins size={12} />,         path: '/altcoins',     color: '#a78bfa' },
-    { label: 'Screener',     icon: <Search size={12} />,        path: '/screener',     color: '#a78bfa' },
     { label: 'Compare',      icon: <Scale size={12} />,         path: '/compare',      color: '#f87171' },
     { label: 'Track Record', icon: <Trophy size={12} />,        path: '/track-record', color: '#fbbf24' },
     { label: 'Guide',        icon: <BookOpen size={12} />,      path: '/guide',        color: txt3 },
+  ]
+
+  // Dropdown groups for desktop nav
+  const NAV_GROUPS: Array<{ label: string; icon: React.ReactNode; color: string; items: Array<{ label: string; icon: React.ReactNode; path: string; color: string }> }> = [
+    {
+      label: 'Discover',
+      icon: <Search size={12} />,
+      color: '#a78bfa',
+      items: [
+        { label: 'Screener', icon: <Search size={12} />,    path: '/screener', color: '#a78bfa' },
+        { label: 'Scanner',  icon: <Target size={12} />,    path: '/scanner',  color: '#a78bfa' },
+        { label: 'Options',  icon: <LineChart size={12} />, path: '/options',  color: '#fbbf24' },
+        { label: 'Macro',    icon: <Globe size={12} />,     path: '/macro',    color: '#60a5fa' },
+        { label: 'Altcoins', icon: <Coins size={12} />,     path: '/altcoins', color: '#a78bfa' },
+      ],
+    },
+    {
+      label: 'Positions',
+      icon: <Briefcase size={12} />,
+      color: '#34d399',
+      items: [
+        { label: 'Portfolio', icon: <Briefcase size={12} />,     path: '/portfolio', color: '#34d399' },
+        { label: 'Watchlist', icon: <ClipboardList size={12} />, path: '/watchlist', color: '#60a5fa' },
+      ],
+    },
+  ]
+
+  // Flattened list for mobile drawer (preserves drawer behavior)
+  const NAV_ITEMS: Array<{ label: string; icon: React.ReactNode; path: string; color: string }> = [
+    ...NAV_TOP.slice(0, 3),
+    ...NAV_GROUPS.flatMap(g => g.items),
+    ...NAV_TOP.slice(3),
   ]
 
   return (
@@ -874,9 +907,78 @@ function HomeInner() {
             </button>
         </div>
 
-        {/* ── Row 2 (xl+): desktop nav links inline ── */}
+        {/* Row 2 (xl+): desktop nav with top-level buttons + dropdown groups */}
         <div className="hidden xl:flex items-center gap-1 px-3 pb-2 pt-0">
-          {NAV_ITEMS.map(n => (
+          {NAV_TOP.slice(0, 3).map(n => (
+            <button
+              key={n.path}
+              type="button"
+              onClick={() => router.push(n.path)}
+              aria-label={`Go to ${n.label}`}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all hover:opacity-80 focus:outline focus:outline-2 focus:outline-offset-1"
+              style={{ color: n.color, background: `${n.color}10`, border: `1px solid ${n.color}20`, outlineColor: n.color }}>
+              <span className="text-[11px]" aria-hidden="true">{n.icon}</span>
+              <span>{n.label}</span>
+            </button>
+          ))}
+          {NAV_GROUPS.map(group => {
+            const isOpen = navGroupOpen === group.label
+            const isActive = group.items.some(item => pathname === item.path)
+            return (
+              <div
+                key={group.label}
+                className="relative"
+                onMouseEnter={() => setNavGroupOpen(group.label)}
+                onMouseLeave={() => setNavGroupOpen(null)}>
+                <button
+                  type="button"
+                  onClick={() => setNavGroupOpen(isOpen ? null : group.label)}
+                  aria-haspopup="menu"
+                  aria-expanded={isOpen}
+                  aria-label={`${group.label} menu`}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all hover:opacity-80 focus:outline focus:outline-2 focus:outline-offset-1"
+                  style={{
+                    color: group.color,
+                    background: isActive ? `${group.color}18` : `${group.color}10`,
+                    border: `1px solid ${isActive ? group.color + '40' : group.color + '20'}`,
+                    outlineColor: group.color,
+                  }}>
+                  <span className="text-[11px]" aria-hidden="true">{group.icon}</span>
+                  <span>{group.label}</span>
+                  <ChevronDown
+                    size={10}
+                    className={'transition-transform ' + (isOpen ? 'rotate-180' : '')}
+                    aria-hidden="true" />
+                </button>
+                {isOpen && (
+                  <div
+                    role="menu"
+                    aria-label={`${group.label} submenu`}
+                    className="absolute top-full left-0 mt-1 py-1 rounded-lg shadow-lg z-50 min-w-[170px]"
+                    style={{ background: surf, border: `1px solid ` + brd }}>
+                    {group.items.map(item => (
+                      <button
+                        key={item.path}
+                        type="button"
+                        role="menuitem"
+                        onClick={() => { router.push(item.path); setNavGroupOpen(null) }}
+                        aria-label={`Go to ${item.label}`}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold transition-all hover:opacity-80 text-left focus:outline focus:outline-2 focus:outline-offset-1"
+                        style={{
+                          color: item.color,
+                          background: pathname === item.path ? `${item.color}15` : 'transparent',
+                          outlineColor: item.color,
+                        }}>
+                        <span className="text-[11px]" aria-hidden="true">{item.icon}</span>
+                        <span>{item.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+          {NAV_TOP.slice(3).map(n => (
             <button
               key={n.path}
               type="button"
@@ -890,6 +992,7 @@ function HomeInner() {
           ))}
           <TutorialLauncher tutorialId="main" />
         </div>
+
       </nav>
 
       {/* ── Mobile / tablet nav drawer ── */}
@@ -1946,6 +2049,43 @@ function HomeInner() {
                   ))}
                 </div>
               </div>
+            )}
+
+            {/* Follow-up Q&A panel - opens explicitly via toggle */}
+            {stage === 'done' && jud && md && (
+              <AnalysisQA
+                context={{
+                  ticker,
+                  currentPrice: md.currentPrice ?? 0,
+                  verdict: jud,
+                  news: gem ? {
+                    summary: gem.summary,
+                    sentiment: gem.sentiment,
+                    headlines: gem.headlines,
+                    keyEvents: gem.keyEvents,
+                    macroFactors: gem.macroFactors,
+                    regimeAssessment: gem.regimeAssessment,
+                  } : null,
+                  leadAnalyst: cla,
+                  devilsAdvocate: gpt,
+                  rebuttal: reb,
+                  counter: ctr,
+                  technicals: md.technicals ? {
+                    rsi: md.technicals.rsi,
+                    macd: md.technicals.macdCrossover,
+                    sma50: md.technicals.sma50,
+                    sma200: md.technicals.sma200,
+                    bias: md.technicals.technicalBias,
+                    keySignals: md.conviction?.signals?.slice(0, 8).map(s => `${s.category}: ${s.signal}`),
+                  } : null,
+                  social: soc ? {
+                    summary: soc.keyNarrative,
+                    bullishCount: soc.bullishTalkingPoints?.length ?? 0,
+                    bearishCount: soc.bearishTalkingPoints?.length ?? 0,
+                    keyThemes: [...(soc.bullishTalkingPoints ?? []), ...(soc.bearishTalkingPoints ?? [])].slice(0, 6),
+                  } : null,
+                } satisfies AnalysisQAContext}
+              />
             )}
 
             {err && (
