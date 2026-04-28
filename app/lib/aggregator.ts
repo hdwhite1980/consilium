@@ -6,6 +6,7 @@
 
 import { fetchNews, fetchBars, formatNewsForAI, formatBarsForAI } from './data/alpaca'
 import { getExtendedHoursContext, type ExtendedHoursContext } from './data/extended-hours'
+import { getSectorContext, type SectorContext } from './data/sector-context'
 import { fetchCryptoBars, fetchCryptoPrice, fetchCryptoMetadata, isCryptoTicker } from './data/crypto'
 import { fetchForexBars, fetchForexRate, fetchForexMetadata, isForexTicker, getForexInfo } from './data/forex'
 import { calculateTechnicals } from './signals/technicals'
@@ -50,6 +51,9 @@ export type SignalBundle = {
 
   // Extended-hours context (pre-market / after-hours move when market closed)
   extendedHours?: ExtendedHoursContext
+
+  // Sector + correlated-stock context (sector ETF perf, peer perf, divergence flag)
+  sectorContext?: SectorContext
 
   // Combined AI-ready context strings (what gets passed to each AI)
   aiContext: {
@@ -364,13 +368,14 @@ Focus on central bank policy signals, economic data releases, and technical stru
   const socialContextPromise = getLatestSocialContext(sym).catch(() => '')
   const monitorAlertsPromise = getMonitorAlerts(sym, 120).catch(() => '')
 
-  const [marketContext, fundamentals, smartMoney, optionsFlow, edgarData, extendedHours] = await Promise.all([
+  const [marketContext, fundamentals, smartMoney, optionsFlow, edgarData, extendedHours, sectorContext] = await Promise.all([
     buildMarketContext(sym, timeframe),
     fetchFundamentals(sym, currentPrice),
     fetchSmartMoney(sym),
     fetchOptionsFlow(sym, currentPrice),
     Promise.race([fetchEdgarFundamentals(sym), new Promise<null>(r => setTimeout(() => r(null), 8000))]).catch(() => null),
     getExtendedHoursContext(sym).catch(() => undefined),
+    getSectorContext(sym).catch(() => undefined),
   ])
 
   // Check DB for existing intelligence data — if none, seed it with tight timeouts
@@ -463,6 +468,7 @@ Focus on central bank policy signals, economic data releases, and technical stru
     bars, news, currentPrice,
     technicals, marketContext, fundamentals, smartMoney, optionsFlow, conviction,
     extendedHours,
+    sectorContext,
     aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: digestContext || '', socialContext: socialContext || '', monitorAlerts: monitorAlerts || '', fullBundle },
   }
 }

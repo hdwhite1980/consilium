@@ -394,7 +394,7 @@ function buildLeadSystemPrompt(bundle: SignalBundle, lens: 'technical' | 'fundam
   if (isForexPair) {
     return `You are the Lead Analyst in an elite AI council analyzing ${bundle.ticker}. This is a FOREX currency pair. Analysis focuses on: central bank policy divergence, macroeconomic data (inflation, employment, GDP), interest rate differentials, technical price action, and global risk sentiment. There are no earnings, P/E, or insider data for forex. Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data — only use what you have. IMPORTANT: If price data shows period change >±200%, treat as potential data error.
 
-${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
   }
 
   const personaIdentity = {
@@ -413,7 +413,7 @@ Be decisive. Support every claim with specific data. Your analysis will be chall
 
 NEWS RECENCY: Weight news by freshness. Last 24 hours is current and actionable. Last 48-72 hours is recent context. Anything older is background unless it's a structural development (M&A close, leadership change, regulatory ruling). Breaking news from the last 6 hours overrides older narrative coverage.
 
-${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
 }
 
 /**
@@ -452,7 +452,7 @@ ${baseCalibration}
 7. Earnings proximity: When earnings are within 7 days (see EARNINGS PROXIMITY context if present), pressure-test specifically how much earnings risk is being priced in. A bullish technical thesis 3 days before a print needs to address: (a) what's the implied move? (b) what's analyst revision trend? (c) is the entry level above or below the implied-move band? Don't let the Lead skip past binary catalyst risk.
 8. News recency: Weight news by freshness same as the Lead — last 24h current, 24-72h recent, older background. Don't cite stale narrative as a reason to disagree.
 
-${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
   }
 
   if (lens === 'fundamental') {
@@ -469,7 +469,7 @@ ${baseCalibration}
 
 6. Cross-pressure discipline: Your challenges should primarily cite chart patterns, price action, technical indicators, and flow evidence — not re-argue the fundamentals. Let the Lead have their fundamental thesis — attack on technicals.
 
-${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
   }
 
   // balanced — original calibrated prompt (attack on whatever is weakest)
@@ -483,7 +483,7 @@ SELECTION DISCIPLINE:
 
 ${baseCalibration}
 
-${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
 }
 
 function timeframeContext(tf: string): string {
@@ -592,6 +592,22 @@ function earningsContext(bundle: SignalBundle): string {
 
   return `\n\nEARNINGS PROXIMITY: ${header}${moveCtx} ${guidance}`
 }
+
+/**
+ * Sector + correlated-stock context for prompts.
+ * Surfaces sector ETF perf, peer perf, and single-name divergence
+ * so the Council can distinguish ticker-specific moves from sector-wide ones.
+ *
+ * Wired into all 9 prompt assembly sites alongside extendedHoursContext + earningsContext.
+ *
+ * Returns empty string when no sector data is available (crypto, OTC, unmapped sectors).
+ */
+function sectorContextString(bundle: SignalBundle): string {
+  const sc = bundle.sectorContext
+  if (!sc || !sc.promptContext) return ''
+  return sc.promptContext
+}
+
 
 
 
@@ -976,7 +992,7 @@ export async function runClaude(bundle: SignalBundle, gemini: GeminiResult, soci
       role: 'user',
       content: `TICKER: ${bundle.ticker} | TIMEFRAME: ${bundle.timeframe} | PRICE: $${bundle.currentPrice.toFixed(2)} | LENS: ${lens.toUpperCase()}${isPersonaExplicit(persona) ? ' (user-selected)' : ' (timeframe default)'}
 
-${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}
 
 NEWS SCOUT BRIEF:
 ${gemini.summary}
@@ -1227,7 +1243,7 @@ PROCEDURAL RULES:
 - Never cite missing or unavailable data as a reason for lower conviction. If a metric is unavailable, ignore it entirely rather than mentioning its absence.
 - Refer to council members by their role names only.
 
-${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
 }
 
 function buildJudgeUserPrompt(
@@ -1301,7 +1317,7 @@ Reward honest NEUTRAL calls when data warranted them. Penalize aggressive positi
 
   return `TICKER: ${bundle.ticker} | PRICE: $${bundle.currentPrice.toFixed(2)} | ROUND: ${round} | LEAD LENS: ${lens.toUpperCase()} | TIMEFRAME: ${bundle.timeframe}
 
-${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}
 
 ${newsScout}
 
@@ -1444,7 +1460,7 @@ CALIBRATION PRINCIPLES:
 
 6. Your recommendation is ADVISORY. The Judge will still produce the final verdict. But a well-reasoned recommendation should rarely be ignored.
 
-${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
 }
 
 async function runCalibrator(

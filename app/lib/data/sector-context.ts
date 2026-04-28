@@ -25,7 +25,7 @@ import { fetchMultiBars } from './alpaca'
 
 const FINNHUB_BASE = 'https://finnhub.io/api/v1'
 const CACHE_DAYS = 30
-const PEER_COUNT = 3
+const PEER_COUNT = 5
 
 // =============================================================
 // Sector -> Sector ETF mapping
