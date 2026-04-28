@@ -9,7 +9,8 @@ const KEY = () => process.env.FINNHUB_API_KEY!
 
 export interface FundamentalSignals {
   // Valuation
-  peRatio: number | null
+  peRatio: number | null            // trailing P/E (TTM, normalized)
+  forwardPE: number | null          // forward P/E (next 12 months)
   pbRatio: number | null
   psRatio: number | null
   evEbitda: number | null
@@ -146,7 +147,8 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
   const m = metrics?.metric ?? {}
 
   // ── Valuation ─────────────────────────────────────────────
-  const peRatio = m['peNormalizedAnnual'] ?? m['peBasicExclExtraTTM'] ?? null
+  const peRatio = m['peNormalizedAnnual'] ?? m['peBasicExclExtraTTM'] ?? m['peTTM'] ?? null
+  const forwardPE = m['forwardPE'] ?? null
   const pbRatio = m['pbAnnual'] ?? null
   const psRatio = m['psAnnual'] ?? null
   const evEbitda = m['currentEv/freeCashFlowAnnual'] ?? null
@@ -317,7 +319,10 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
   const fmt = (n: number | null, suffix = '') => n !== null ? `${n.toFixed(1)}${suffix}` : 'N/A'
   const lines = [
     `=== FUNDAMENTAL SIGNALS ===`,
-    `Valuation: P/E ${fmt(peRatio)}x | P/S ${fmt(psRatio)}x | P/B ${fmt(pbRatio)}x`,
+    `VALUATION (use these exact values, do not infer alternatives):`,
+    `  P/E (TTM, normalized): ${fmt(peRatio)}x`,
+    forwardPE !== null ? `  Forward P/E: ${fmt(forwardPE)}x` : '',
+    `  P/S: ${fmt(psRatio)}x | P/B: ${fmt(pbRatio)}x`,
     `Margins: Gross ${fmt(grossMargin, '%')} | Operating ${fmt(operatingMargin, '%')} | Net ${fmt(netMargin, '%')}`,
     `Growth: Revenue YoY ${fmt(revenueGrowthYoY, '%')} | EPS YoY ${fmt(epsGrowthYoY, '%')}`,
     `FCF Yield: ${fmt(freeCashFlowYield, '%')} | ROE: ${fmt(roe, '%')} | Debt/Equity: ${fmt(debtToEquity, 'x')}`,
@@ -336,7 +341,7 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
   ].filter(Boolean)
 
   return {
-    peRatio, pbRatio, psRatio, evEbitda, debtToEquity,
+    peRatio, forwardPE, pbRatio, psRatio, evEbitda, debtToEquity,
     revenueGrowthYoY, epsGrowthYoY, grossMargin, operatingMargin,
     netMargin, freeCashFlowYield, roe,
     nextEarningsDate, daysToEarnings, earningsRisk,
