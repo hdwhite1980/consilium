@@ -148,7 +148,7 @@ Circulating Supply: ${cryptoMeta.circulatingSupply ? (cryptoMeta.circulatingSupp
 ATH: ${cryptoMeta.ath ? '$' + cryptoMeta.ath.toLocaleString() : 'N/A'} (${cryptoMeta.athChangePercent?.toFixed(1) ?? 'N/A'}% from ATH)
 ${cryptoMeta.description ? 'About: ' + cryptoMeta.description : ''}`,
       // Valuation
-      peRatio: null, pbRatio: null, psRatio: null, evEbitda: null, debtToEquity: null,
+      peRatio: null, forwardPE: null, pbRatio: null, psRatio: null, evEbitda: null, debtToEquity: null,
       // Growth
       revenueGrowthYoY: cryptoMeta.priceChange7d ?? null,
       epsGrowthYoY: null, grossMargin: null, operatingMargin: null,
@@ -272,7 +272,7 @@ Session High: ${dp(forexMeta.weekHigh)} | Session Low: ${dp(forexMeta.weekLow)}
 Group: ${forexMeta.group} pair
 Background: ${forexMeta.description}
 Note: Forex has no P/E ratio, earnings, or insider data. Analysis focuses on technical signals, macro regime, central bank policy divergence, and price action.`,
-      peRatio: null, pbRatio: null, psRatio: null, evEbitda: null, debtToEquity: null,
+      peRatio: null, forwardPE: null, pbRatio: null, psRatio: null, evEbitda: null, debtToEquity: null,
       revenueGrowthYoY: null, epsGrowthYoY: null, grossMargin: null, operatingMargin: null,
       netMargin: null, freeCashFlowYield: null, roe: null,
       nextEarningsDate: null, daysToEarnings: null, earningsRisk: 'none' as const,
