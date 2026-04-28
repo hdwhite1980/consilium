@@ -174,6 +174,95 @@ function isCredibleDomain(url: string): boolean {
   return false
 }
 
+// Map of well-known outlet name fragments -> canonical credible domain.
+// Used to match Gemini grounding `title` fields when the URI is a
+// vertexaisearch.cloud.google.com redirect (which hides the real source).
+// Names are matched case-insensitively as substrings of the title.
+//
+// Defensive: only includes outlets already in CREDIBLE_DOMAINS. We are
+// not opening the credibility door wider — just adding a name-based
+// path to the same whitelist.
+const CREDIBLE_OUTLET_NAMES: Array<[string, string]> = [
+  // [outlet name fragment (lowercase), canonical domain]
+  ['bloomberg', 'bloomberg.com'],
+  ['reuters', 'reuters.com'],
+  ['wall street journal', 'wsj.com'],
+  ['the wsj', 'wsj.com'],
+  ['financial times', 'ft.com'],
+  ['the economist', 'economist.com'],
+  ['new york times', 'nytimes.com'],
+  ['nyt', 'nytimes.com'],
+  ['washington post', 'washingtonpost.com'],
+  ['cnbc', 'cnbc.com'],
+  ['marketwatch', 'marketwatch.com'],
+  ["barron's", 'barrons.com'],
+  ['barrons', 'barrons.com'],
+  ['yahoo finance', 'finance.yahoo.com'],
+  ["investor's business daily", 'investors.com'],
+  ['ibd', 'investors.com'],
+  ['forbes', 'forbes.com'],
+  ['fortune', 'fortune.com'],
+  ['business insider', 'businessinsider.com'],
+  ['axios', 'axios.com'],
+  ['ap news', 'apnews.com'],
+  ['associated press', 'apnews.com'],
+  ['cnn business', 'cnn.com'],
+  ['fox business', 'foxbusiness.com'],
+  ['nbc news', 'nbcnews.com'],
+  ['abc news', 'abcnews.go.com'],
+  ['seeking alpha', 'seekingalpha.com'],
+  ['benzinga', 'benzinga.com'],
+  ['investing.com', 'investing.com'],
+  ['thestreet', 'thestreet.com'],
+  ['the street', 'thestreet.com'],
+  ['morningstar', 'morningstar.com'],
+  ['zerohedge', 'zerohedge.com'],
+  ['kitco', 'kitco.com'],
+  ['trading economics', 'tradingeconomics.com'],
+  ['finimize', 'finimize.com'],
+  ['sec.gov', 'sec.gov'],
+  ['securities and exchange commission', 'sec.gov'],
+  ['federal reserve', 'federalreserve.gov'],
+  ['u.s. treasury', 'treasury.gov'],
+  ['us treasury', 'treasury.gov'],
+  ['bureau of labor statistics', 'bls.gov'],
+  ['bureau of economic analysis', 'bea.gov'],
+  ['cftc', 'cftc.gov'],
+  ['fdic', 'fdic.gov'],
+  ['new york fed', 'newyorkfed.org'],
+  ['ny fed', 'newyorkfed.org'],
+  ['congress.gov', 'congress.gov'],
+  ['white house', 'whitehouse.gov'],
+  ['european central bank', 'ecb.europa.eu'],
+  ['bank of england', 'bankofengland.co.uk'],
+  ['coindesk', 'coindesk.com'],
+  ['the block', 'theblock.co'],
+  ['decrypt', 'decrypt.co'],
+  ['cointelegraph', 'cointelegraph.com'],
+  ['cryptoslate', 'cryptoslate.com'],
+  ['ambcrypto', 'ambcrypto.com'],
+]
+
+function isCredibleSourceTitle(title: string): boolean {
+  if (!title) return false
+  const lc = title.toLowerCase()
+  // First: try to extract a domain-like token from the title
+  // (e.g. "bloomberg.com - Stock News" → 'bloomberg.com')
+  const domainMatch = lc.match(/[a-z0-9-]+(?:\.[a-z0-9-]+)+/)
+  if (domainMatch) {
+    const candidate = domainMatch[0].replace(/^www\./, '')
+    if (EXCLUDED_DOMAINS.has(candidate)) return false
+    for (const credible of CREDIBLE_DOMAINS) {
+      if (candidate === credible || candidate.endsWith('.' + credible)) return true
+    }
+  }
+  // Second: match outlet names (Bloomberg, Reuters, etc.)
+  for (const [fragment] of CREDIBLE_OUTLET_NAMES) {
+    if (lc.includes(fragment)) return true
+  }
+  return false
+}
+
 // ─────────────────────────────────────────────────────────────
 // Step 1: Extract factual claims from a reasoning block
 // ─────────────────────────────────────────────────────────────
@@ -333,10 +422,20 @@ Return one object per claim in order. If a claim can't be verified, set verified
     // Inspect groundingMetadata for an independent check on sources
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const meta = (result.response.candidates?.[0] as any)?.groundingMetadata as GroundingMetadata | undefined
-    const groundingUrls: string[] = (meta?.groundingChunks ?? [])
-      .map((ch) => ch?.web?.uri ?? '')
-      .filter(Boolean)
-    const credibleGroundingUrls = groundingUrls.filter(isCredibleDomain)
+    // Build a richer source list. Gemini's grounding API returns
+    // redirect URLs in `uri` (always vertexaisearch.cloud.google.com),
+    // but the underlying source name is in `title`. We check BOTH.
+    const groundingSources: Array<{ uri: string; title: string }> = (meta?.groundingChunks ?? [])
+      .map((ch) => ({
+        uri: ch?.web?.uri ?? '',
+        title: ch?.web?.title ?? '',
+      }))
+      .filter(s => s.uri || s.title)
+    const groundingUrls: string[] = groundingSources.map(s => s.uri).filter(Boolean)
+    const credibleGroundingSources = groundingSources.filter(s =>
+      isCredibleDomain(s.uri) || isCredibleSourceTitle(s.title)
+    )
+    const credibleGroundingUrls = credibleGroundingSources.map(s => s.uri).filter(Boolean)
 
     console.log(`[verification] Gemini grounding surfaced ${groundingUrls.length} sources (${credibleGroundingUrls.length} credible)`)
 
