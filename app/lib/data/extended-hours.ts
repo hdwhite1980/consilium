@@ -76,11 +76,11 @@ export interface ExtendedHoursContext {
   /** Most recent trade price (regular OR extended) */
   latestPrice: number
 
-  /** Today's regular session close (or null if mid-session / no data) */
-  regularSessionClose: number | null
+  /** Most recently completed regular session close (yesterday during pre-market, today during after-hours) */
+  lastRegularClose: number | null
 
-  /** Yesterday's regular session close */
-  previousDayClose: number | null
+  /** The session-before-last close (for context — usually 2 trading days ago during pre-market) */
+  priorRegularClose: number | null
 
   /** The extended-hours move object (null if no meaningful AH/PM data) */
   extendedMove: ExtendedHoursMove | null
@@ -207,8 +207,8 @@ export async function getExtendedHoursContext(
     marketStatus,
     isMarketOpen,
     latestPrice: 0,
-    regularSessionClose: null,
-    previousDayClose: null,
+    lastRegularClose: null,
+    priorRegularClose: null,
     extendedMove: null,
     promptContext: '',
   }
@@ -232,26 +232,36 @@ export async function getExtendedHoursContext(
   let extendedMove: ExtendedHoursMove | null = null
 
   if (marketStatus !== 'regular') {
-    // Determine reference price:
-    //   - After-hours (today, evening): use today's regular close (= dailyBar.c)
-    //   - Pre-market (tomorrow's morning): use yesterday's close (= prevDailyBar.c)
-    //   - Closed overnight: use prevDailyBar (most recent regular session close)
-    let direction: 'pre-market' | 'after-hours'
-    let fromPrice: number | null
+    // Reference price is ALWAYS the most recently completed regular session close.
+    //
+    // Alpaca snapshot fields work like this:
+    //   - dailyBar.c       = most recently COMPLETED daily bar's close
+    //   - prevDailyBar.c   = the bar before that
+    //
+    // Concretely:
+    //   - Tuesday pre-market: dailyBar = Monday's close (yesterday)  <- USE THIS
+    //                         prevDailyBar = Friday's close
+    //   - Tuesday after-hours: dailyBar = Tuesday's close (just-finished)  <- USE THIS
+    //                          prevDailyBar = Monday's close
+    //   - Saturday closed: dailyBar = Friday's close  <- USE THIS
+    //                      prevDailyBar = Thursday's close
+    //
+    // So `dailyBar.c` is correct in every closed-market scenario.
 
-    if (marketStatus === 'after-hours') {
+    let direction: 'pre-market' | 'after-hours'
+    if (marketStatus === 'pre-market') {
+      direction = 'pre-market'
+    } else if (marketStatus === 'after-hours') {
       direction = 'after-hours'
-      fromPrice = todayClose
-    } else if (marketStatus === 'pre-market') {
-      direction = 'pre-market'
-      fromPrice = prevClose
     } else {
-      // 'closed' (overnight or weekend) — depends on time of day
-      // If after midnight ET but before pre-market open: still measuring against yesterday's close
-      // We'll treat this as pre-market context (the "next session is coming" frame)
+      // 'closed' (overnight or weekend) - frame depends on time of day
+      // After 8 PM ET: still "after-hours" until midnight, but market data quiet
+      // Overnight (midnight-4 AM) and weekend: "pre-market" framing for next session
+      // We use the simpler heuristic: closed = pre-market framing for next session.
       direction = 'pre-market'
-      fromPrice = prevClose
     }
+
+    const fromPrice = todayClose  // most recently completed regular session
 
     if (fromPrice && fromPrice > 0 && latestPrice > 0) {
       const dollarChange = latestPrice - fromPrice
@@ -300,8 +310,8 @@ export async function getExtendedHoursContext(
     marketStatus,
     isMarketOpen,
     latestPrice,
-    regularSessionClose: todayClose,
-    previousDayClose: prevClose,
+    lastRegularClose: todayClose,
+    priorRegularClose: prevClose,
     extendedMove,
     promptContext,
   }
