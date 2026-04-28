@@ -100,7 +100,7 @@ export async function callGrok(
     temperature = 0.3,
     maxTokens = 1500,
     searchEnabled = true,
-    timeoutMs = 60000,
+    timeoutMs = 90000,
   } = opts
 
   const apiKey = process.env.XAI_API_KEY

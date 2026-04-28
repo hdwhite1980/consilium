@@ -221,7 +221,7 @@ Maximum 8 claims.`
       model: 'gemini-2.5-pro',
       generationConfig: {
         temperature: 0.1,
-        maxOutputTokens: 1500,
+        maxOutputTokens: 4000,
         responseMimeType: 'application/json',
       },
     })
@@ -305,7 +305,7 @@ Return one object per claim in order. If a claim can't be verified, set verified
       model: 'gemini-2.5-pro',
       generationConfig: {
         temperature: 0.1,
-        maxOutputTokens: 3000,
+        maxOutputTokens: 6000,
       },
       // Google Search grounding — critical for verification
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

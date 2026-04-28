@@ -776,7 +776,7 @@ async function fetchGrokSentiment(ticker: string, question: string): Promise<str
         },
         { role: 'user', content: question },
       ],
-      { temperature: 0.3, maxTokens: 400, searchEnabled: true, timeoutMs: 25000 }
+      { temperature: 0.3, maxTokens: 400, searchEnabled: true, timeoutMs: 45000 }
     )
     const clean = result.trim()
     if (clean.length < 20 || clean.toLowerCase().includes('insufficient live sentiment')) return ''

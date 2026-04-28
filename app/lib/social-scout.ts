@@ -191,7 +191,7 @@ Remember: low confidence is the correct answer when signal is weak. Do not manuf
         temperature: 0.3,
         maxTokens: 1500,
         searchEnabled: true,
-        timeoutMs: 40000,
+        timeoutMs: 90000,
       }
     )
     return parseAndCoerce(raw)
