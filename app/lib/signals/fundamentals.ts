@@ -162,10 +162,25 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
   const roe = m['roeAnnual'] ?? m['roeTTM'] ?? null
 
   // ── Earnings calendar ─────────────────────────────────────
-  const nextEarning = calendar?.earningsCalendar?.[0]
+  // Finnhub returns multiple entries when the date range spans quarters.
+  // Order is NOT guaranteed (often furthest-first), so we must sort ourselves.
+  // Take the SOONEST upcoming earnings (date >= today, ascending order).
+  const todayMidnight = new Date()
+  todayMidnight.setHours(0, 0, 0, 0)
+  const upcoming = (calendar?.earningsCalendar ?? [])
+    .filter(e => e?.date && new Date(e.date).getTime() >= todayMidnight.getTime())
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+  const nextEarning = upcoming[0]
   const nextEarningsDate = nextEarning?.date ?? null
+  // daysToEarnings: rounded difference from midnight-today to midnight-of-earnings-date.
+  // This ensures earnings-today returns 0 (not -1 due to time-of-day arithmetic).
   const daysToEarnings = nextEarningsDate
-    ? Math.round((new Date(nextEarningsDate).getTime() - Date.now()) / 86400000) : null
+    ? (() => {
+        const earnDate = new Date(nextEarningsDate)
+        earnDate.setHours(0, 0, 0, 0)
+        return Math.round((earnDate.getTime() - todayMidnight.getTime()) / 86400000)
+      })()
+    : null
   const earningsRisk: FundamentalSignals['earningsRisk'] =
     daysToEarnings !== null && daysToEarnings <= 7 ? 'high' :
     daysToEarnings !== null && daysToEarnings <= 21 ? 'moderate' :
