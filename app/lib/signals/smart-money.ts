@@ -96,21 +96,29 @@ async function fetchInsiderTransactions(ticker: string): Promise<InsiderTransact
     const data = await res.json()
     const txns: Array<Record<string, unknown>> = data?.data ?? []
     return txns.slice(0, 15).map(t => {
-      const shares    = Math.abs(Number(t.share ?? 0))
+      // Finnhub /stock/insider-transactions response shape:
+      //   share         = total shares HELD AFTER the transaction (running total)
+      //   change        = signed transaction size (+buy, -sell)
+      //   transactionCode = single letter ('P'=Purchase, 'S'=Sale, 'A'=Award, etc.)
+      // We MUST use `change` for the transaction size, not `share` (which is the
+      // executive's total holdings — using that inflates dollar values 100-1000x).
+      const txShares  = Math.abs(Number(t.change ?? 0))
       const price     = Number(t.transactionPrice ?? 0)
-      const totalVal  = shares * price
-      // Finnhub: transactionCode P=Purchase S=Sale 10b5-1=plan sale
-      const isBuy = String(t.transactionCode) === 'P'
+      const totalVal  = txShares * price
+      // Finnhub: transactionCode P=Purchase S=Sale (other codes ignored as non-market events)
+      const code = String(t.transactionCode ?? '').trim().toUpperCase()
+      const isBuy = code === 'P'
+      const isSell = code === 'S'
       return {
         name:           String(t.name ?? 'Insider'),
         title:          String(t.reportedTitle ?? 'Executive'),
         type:           isBuy ? 'buy' as const : 'sell' as const,
-        shares,
+        shares:         txShares,
         pricePerShare:  price,
-        totalValue:     isBuy ? totalVal : -totalVal,
+        totalValue:     isBuy ? totalVal : isSell ? -totalVal : 0,
         date:           String(t.transactionDate ?? t.filingDate ?? ''),
       }
-    }).filter(t => t.shares > 0)
+    }).filter(t => t.shares > 0 && (t.type === 'buy' || t.totalValue !== 0))
   } catch {
     return []
   }
