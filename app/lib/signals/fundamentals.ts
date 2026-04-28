@@ -132,6 +132,33 @@ async function getInsiderTransactions(ticker: string) {
   )
 }
 
+
+// ── Earnings tier directive ─────────────────────────────────
+// Explicit action-framing tied to proximity. The Council was
+// inferring no-trade from daysToEarnings inconsistently — this
+// makes the framing explicit per tier.
+function buildEarningsTierDirective(
+  date: string,
+  days: number | null,
+  risk: 'high' | 'moderate' | 'low' | 'none'
+): string {
+  const base = `Next report ${date} (${days}d) — ${risk} risk`
+  if (days === null) return base
+  if (days === 0) {
+    return `${base}\n  ⚠ EARNINGS TIER: TODAY. Do NOT recommend new entries before the report. Default action plan: wait for post-earnings reaction. If technicals look attractive, frame as "monitor post-earnings setup," not "enter now."`
+  }
+  if (days === 1) {
+    return `${base}\n  ⚠ EARNINGS TIER: TOMORROW (typically pre-market). There is no full trading session between this analysis and the catalyst. Do NOT recommend new entries before the report. Default action plan: wait for post-earnings reaction.`
+  }
+  if (days >= 2 && days <= 3) {
+    return `${base}\n  ⚠ EARNINGS TIER: WITHIN 3 DAYS. Acknowledge binary risk explicitly in the action plan. Entries acceptable only with reduced position size and a clear pre-earnings invalidation level. Default to caution.`
+  }
+  if (days >= 4 && days <= 7) {
+    return `${base}\n  EARNINGS TIER: WITHIN A WEEK. Factor into thesis but normal entries acceptable with risk management appropriate to upcoming binary event.`
+  }
+  return base
+}
+
 export async function fetchFundamentals(ticker: string, currentPrice: number): Promise<FundamentalSignals> {
   // Parallel fetch all Finnhub endpoints
   const [metrics, calendar, surprises, recommendations, priceTarget, ratings, insiders] = await Promise.all([
@@ -327,7 +354,7 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
     `Growth: Revenue YoY ${fmt(revenueGrowthYoY, '%')} | EPS YoY ${fmt(epsGrowthYoY, '%')}`,
     `FCF Yield: ${fmt(freeCashFlowYield, '%')} | ROE: ${fmt(roe, '%')} | Debt/Equity: ${fmt(debtToEquity, 'x')}`,
     ``,
-    `Earnings: ${nextEarningsDate ? `Next report ${nextEarningsDate} (${daysToEarnings}d) — ${earningsRisk} risk` : 'No upcoming earnings found'}`,
+    `Earnings: ${nextEarningsDate ? buildEarningsTierDirective(nextEarningsDate, daysToEarnings, earningsRisk) : 'No upcoming earnings found'}`,
     earningsImpliedMove !== null ? `Earnings implied move (ATM straddle): ±${earningsImpliedMove.toFixed(1)}%${earningsHistoricalMove !== null ? ` vs historical avg ±${earningsHistoricalMove.toFixed(1)}% — ${earningsEdge === 'sell_vol' ? 'OPTIONS OVERPRICED (vol selling favored)' : earningsEdge === 'buy_vol' ? 'OPTIONS UNDERPRICED (vol buying favored)' : 'fair value'}` : ''}` : '',
     epsSurprises.length ? `EPS surprises (last ${epsSurprises.length}Q): ${epsSurprises.map(s => `${s.period}: ${s.surprisePct >= 0 ? '+' : ''}${s.surprisePct.toFixed(1)}%`).join(', ')}` : '',
     avgSurprisePct !== null ? `Avg EPS surprise: ${avgSurprisePct >= 0 ? '+' : ''}${avgSurprisePct.toFixed(1)}% — ${consistentBeater ? 'consistent beater' : 'mixed record'}` : '',
