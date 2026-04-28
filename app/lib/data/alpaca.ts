@@ -29,7 +29,7 @@ async function fetchPaginatedBars(baseUrl: string): Promise<AlpacaBar[]> {
   let pages = 0
 
   while (pages < MAX_PAGES) {
-    const url = pageToken
+    const url: string = pageToken
       ? `${baseUrl}&page_token=${encodeURIComponent(pageToken)}`
       : baseUrl
     const res = await fetch(url, { headers: alpacaHeaders(), next: { revalidate: 300 } })
@@ -54,7 +54,7 @@ async function fetchPaginatedMultiBars(baseUrl: string): Promise<Record<string, 
   let pages = 0
 
   while (pages < MAX_PAGES) {
-    const url = pageToken
+    const url: string = pageToken
       ? `${baseUrl}&page_token=${encodeURIComponent(pageToken)}`
       : baseUrl
     const res = await fetch(url, { headers: alpacaHeaders(), next: { revalidate: 300 } })
