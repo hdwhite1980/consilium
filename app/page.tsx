@@ -126,6 +126,13 @@ interface MarketData {
   }
   fundamentals: {
     earningsDate: string | null; daysToEarnings: number | null; earningsRisk: string
+    earningsHour: 'bmo' | 'amc' | 'dmh' | null
+    earningsTimestamp: string | null
+    hoursUntilEarnings: number | null
+    epsEstimate: number | null
+    epsActual: number | null
+    revenueEstimate: number | null
+    revenueActual: number | null
     analystConsensus: string; analystUpside: number | null
     analystBuy: number; analystHold: number; analystSell: number
     peRatio: number | null; consistentBeater: boolean; avgSurprisePct: number | null
@@ -1700,6 +1707,17 @@ function HomeInner() {
 
                 <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{jud.summary}</p>
 
+                {/* ── EARNINGS COUNTDOWN ── shown above Trade Plan when earnings imminent */}
+                {md?.fundamentals?.earningsTimestamp && (() => {
+                  const target = new Date(md.fundamentals.earningsTimestamp).getTime()
+                  return <EarningsCountdown
+                    targetMs={target}
+                    hour={md.fundamentals.earningsHour ?? null}
+                    daysToEarnings={md.fundamentals.daysToEarnings ?? null}
+                    epsActual={md.fundamentals.epsActual ?? null}
+                  />
+                })()}
+
                 {/* ── TRADE PLAN — prominent, right under verdict ── */}
                 {jud.entryPrice && (
                   <div className="rounded-2xl p-4 mt-1"
@@ -2195,6 +2213,80 @@ function HomeInner() {
       />
     )}
     </>
+  )
+}
+
+
+// ── EarningsCountdown ─────────────────────────────────────────
+// Live ticking countdown to the next earnings report. Updates every
+// 60 seconds. Color coded: <24h red, <72h yellow, otherwise gray.
+// If earningsTimestamp is in the past (already reported, awaiting
+// post-print data), shows time-since instead.
+function EarningsCountdown({
+  targetMs,
+  hour,
+  daysToEarnings,
+  epsActual,
+}: {
+  targetMs: number
+  hour: 'bmo' | 'amc' | 'dmh' | string | null
+  daysToEarnings: number | null
+  epsActual: number | null
+}) {
+  const [now, setNow] = useState<number>(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000)
+    return () => clearInterval(id)
+  }, [])
+  const diffMs = targetMs - now
+  const isPast = diffMs < 0
+  const absMs = Math.abs(diffMs)
+  const days = Math.floor(absMs / 86_400_000)
+  const hours = Math.floor((absMs % 86_400_000) / 3_600_000)
+  const minutes = Math.floor((absMs % 3_600_000) / 60_000)
+  // Format
+  let text: string
+  if (isPast && epsActual !== null) {
+    // Already reported, EPS in
+    text = `Reported ${days > 0 ? `${days}d ` : ''}${hours}h ${minutes}m ago — EPS actual: ${epsActual.toFixed(2)}`
+  } else if (isPast) {
+    text = `Reported ${days > 0 ? `${days}d ` : ''}${hours}h ${minutes}m ago — awaiting confirmation`
+  } else if (days > 0) {
+    text = `Earnings in ${days}d ${hours}h ${minutes}m`
+  } else {
+    text = `Earnings in ${hours}h ${minutes}m`
+  }
+  // Hour qualifier
+  const hourQualifier =
+    hour === 'bmo' ? 'before market open' :
+    hour === 'amc' ? 'after market close' :
+    hour === 'dmh' ? 'during market hours' : ''
+  // Color tier
+  const totalHours = absMs / 3_600_000
+  const color = isPast ? '#34d399'
+    : totalHours < 24 ? '#f87171'
+    : totalHours < 72 ? '#fbbf24'
+    : '#9ca3af'
+  const bg = isPast ? 'rgba(52,211,153,0.08)'
+    : totalHours < 24 ? 'rgba(248,113,113,0.10)'
+    : totalHours < 72 ? 'rgba(251,191,36,0.10)'
+    : 'rgba(156,163,175,0.08)'
+  const border = isPast ? 'rgba(52,211,153,0.25)'
+    : totalHours < 24 ? 'rgba(248,113,113,0.30)'
+    : totalHours < 72 ? 'rgba(251,191,36,0.30)'
+    : 'rgba(156,163,175,0.20)'
+  return (
+    <div
+      className="rounded-xl px-3 py-2 mt-1 flex items-center justify-between"
+      style={{ background: bg, border: `1px solid ${border}` }}
+    >
+      <div className="text-[10px] font-mono uppercase tracking-widest" style={{ color }}>
+        {isPast ? 'POST-EARNINGS' : 'EARNINGS COUNTDOWN'}
+      </div>
+      <div className="text-xs font-mono" style={{ color }}>
+        {text}{hourQualifier && !isPast ? ` (${hourQualifier})` : ''}
+      </div>
+    </div>
   )
 }
 

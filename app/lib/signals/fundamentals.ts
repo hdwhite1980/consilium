@@ -29,6 +29,13 @@ export interface FundamentalSignals {
   nextEarningsDate: string | null
   daysToEarnings: number | null
   earningsRisk: 'high' | 'moderate' | 'low' | 'none'
+  earningsHour: 'bmo' | 'amc' | 'dmh' | null   // bmo = before-market-open (~8:30 AM ET), amc = after-market-close (~4:30 PM ET), dmh = during-market-hours
+  earningsTimestamp: string | null              // ISO with approximate ET time computed from hour code
+  hoursUntilEarnings: number | null             // more precise than daysToEarnings; can be negative if catalyst already passed today
+  epsEstimate: number | null                    // analyst EPS estimate for the upcoming/just-reported quarter
+  epsActual: number | null                      // populated after the report drops; null pre-earnings
+  revenueEstimate: number | null
+  revenueActual: number | null
 
   // EPS surprises (last 4 quarters)
   epsSurprises: EpsSurprise[]
@@ -96,7 +103,19 @@ async function getBasicFinancials(ticker: string) {
 async function getEarningsCalendar(ticker: string) {
   const from = new Date().toISOString().split('T')[0]
   const to = new Date(Date.now() + 90 * 86400000).toISOString().split('T')[0]
-  return finnhubGet<{ earningsCalendar: Array<{ date: string; symbol: string }> }>(
+  return finnhubGet<{
+    earningsCalendar: Array<{
+      date: string
+      symbol: string
+      hour?: 'bmo' | 'amc' | 'dmh' | string | null
+      epsEstimate?: number | null
+      epsActual?: number | null
+      revenueEstimate?: number | null
+      revenueActual?: number | null
+      quarter?: number | null
+      year?: number | null
+    }>
+  }>(
     `/calendar/earnings?symbol=${ticker}&from=${from}&to=${to}`
   )
 }
@@ -140,15 +159,27 @@ async function getInsiderTransactions(ticker: string) {
 function buildEarningsTierDirective(
   date: string,
   days: number | null,
-  risk: 'high' | 'moderate' | 'low' | 'none'
+  risk: 'high' | 'moderate' | 'low' | 'none',
+  hour: 'bmo' | 'amc' | 'dmh' | null = null,
+  hoursUntil: number | null = null
 ): string {
-  const base = `Next report ${date} (${days}d) — ${risk} risk`
+  // Build a precise time qualifier from the hour code
+  const hourLabel =
+    hour === 'bmo' ? ' before market open (~8:30 AM ET)' :
+    hour === 'amc' ? ' after market close (~4:30 PM ET)' :
+    hour === 'dmh' ? ' during market hours (~12:00 PM ET)' : ''
+  const hoursLabel = hoursUntil !== null
+    ? (hoursUntil < 0 ? ` — already reported ~${Math.abs(hoursUntil).toFixed(1)}h ago, awaiting post-print data`
+       : hoursUntil < 24 ? ` — in ~${hoursUntil.toFixed(1)}h`
+       : '')
+    : ''
+  const base = `Next report ${date}${hourLabel}${hoursLabel} (${days}d) — ${risk} risk`
   if (days === null) return base
   if (days === 0) {
-    return `${base}\n  ⚠ EARNINGS TIER: TODAY. Do NOT recommend new entries before the report. Default action plan: wait for post-earnings reaction. If technicals look attractive, frame as "monitor post-earnings setup," not "enter now."`
+    return `${base}\n  ⚠ EARNINGS TIER: TODAY${hourLabel ? ' (' + hourLabel.trim() + ')' : ''}. Do NOT recommend new entries before the report. Default action plan: wait for post-earnings reaction. If technicals look attractive, frame as "monitor post-earnings setup," not "enter now."`
   }
   if (days === 1) {
-    return `${base}\n  ⚠ EARNINGS TIER: TOMORROW (typically pre-market). There is no full trading session between this analysis and the catalyst. Do NOT recommend new entries before the report. Default action plan: wait for post-earnings reaction.`
+    return `${base}\n  ⚠ EARNINGS TIER: TOMORROW${hourLabel ? ' (' + hourLabel.trim() + ')' : ''}. There is no full trading session between this analysis and the catalyst. Do NOT recommend new entries before the report. Default action plan: wait for post-earnings reaction.`
   }
   if (days >= 2 && days <= 3) {
     return `${base}\n  ⚠ EARNINGS TIER: WITHIN 3 DAYS. Acknowledge binary risk explicitly in the action plan. Entries acceptable only with reduced position size and a clear pre-earnings invalidation level. Default to caution.`
@@ -201,6 +232,32 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
   const nextEarning = upcoming[0]
   const nextEarningsDate = nextEarning?.date ?? null
+  const rawHour = ((nextEarning as { hour?: unknown })?.hour ?? '').toString().toLowerCase()
+  const earningsHour: FundamentalSignals['earningsHour'] =
+    rawHour === 'bmo' ? 'bmo' :
+    rawHour === 'amc' ? 'amc' :
+    rawHour === 'dmh' ? 'dmh' : null
+
+  // Build a more precise timestamp using the hour code. ET is UTC-4 (DST)
+  // or UTC-5 (standard); we approximate using UTC-4 since US earnings season
+  // is largely Q1/Q2 (DST). Approximations are documented; exact times
+  // come from the company itself.
+  // bmo: 8:30 AM ET = 12:30 UTC
+  // amc: 4:30 PM ET = 20:30 UTC
+  // dmh: 12:00 PM ET = 16:00 UTC
+  let earningsTimestamp: string | null = null
+  let hoursUntilEarnings: number | null = null
+  if (nextEarningsDate) {
+    const utcOffset =
+      earningsHour === 'bmo' ? '12:30:00Z' :
+      earningsHour === 'amc' ? '20:30:00Z' :
+      earningsHour === 'dmh' ? '16:00:00Z' :
+      '13:30:00Z'  // default: market open if no hour code
+    earningsTimestamp = `${nextEarningsDate}T${utcOffset}`
+    const ms = new Date(earningsTimestamp).getTime() - Date.now()
+    hoursUntilEarnings = Math.round((ms / 3_600_000) * 10) / 10  // 1 decimal
+  }
+
   // daysToEarnings: rounded difference from midnight-today to midnight-of-earnings-date.
   // This ensures earnings-today returns 0 (not -1 due to time-of-day arithmetic).
   const daysToEarnings = nextEarningsDate
@@ -354,7 +411,7 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
     `Growth: Revenue YoY ${fmt(revenueGrowthYoY, '%')} | EPS YoY ${fmt(epsGrowthYoY, '%')}`,
     `FCF Yield: ${fmt(freeCashFlowYield, '%')} | ROE: ${fmt(roe, '%')} | Debt/Equity: ${fmt(debtToEquity, 'x')}`,
     ``,
-    `Earnings: ${nextEarningsDate ? buildEarningsTierDirective(nextEarningsDate, daysToEarnings, earningsRisk) : 'No upcoming earnings found'}`,
+    `Earnings: ${nextEarningsDate ? buildEarningsTierDirective(nextEarningsDate, daysToEarnings, earningsRisk, earningsHour, hoursUntilEarnings) : 'No upcoming earnings found'}`,
     earningsImpliedMove !== null ? `Earnings implied move (ATM straddle): ±${earningsImpliedMove.toFixed(1)}%${earningsHistoricalMove !== null ? ` vs historical avg ±${earningsHistoricalMove.toFixed(1)}% — ${earningsEdge === 'sell_vol' ? 'OPTIONS OVERPRICED (vol selling favored)' : earningsEdge === 'buy_vol' ? 'OPTIONS UNDERPRICED (vol buying favored)' : 'fair value'}` : ''}` : '',
     epsSurprises.length ? `EPS surprises (last ${epsSurprises.length}Q): ${epsSurprises.map(s => `${s.period}: ${s.surprisePct >= 0 ? '+' : ''}${s.surprisePct.toFixed(1)}%`).join(', ')}` : '',
     avgSurprisePct !== null ? `Avg EPS surprise: ${avgSurprisePct >= 0 ? '+' : ''}${avgSurprisePct.toFixed(1)}% — ${consistentBeater ? 'consistent beater' : 'mixed record'}` : '',
@@ -372,6 +429,11 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
     revenueGrowthYoY, epsGrowthYoY, grossMargin, operatingMargin,
     netMargin, freeCashFlowYield, roe,
     nextEarningsDate, daysToEarnings, earningsRisk,
+    earningsHour, earningsTimestamp, hoursUntilEarnings,
+    epsEstimate: (nextEarning as { epsEstimate?: number | null })?.epsEstimate ?? null,
+    epsActual: (nextEarning as { epsActual?: number | null })?.epsActual ?? null,
+    revenueEstimate: (nextEarning as { revenueEstimate?: number | null })?.revenueEstimate ?? null,
+    revenueActual: (nextEarning as { revenueActual?: number | null })?.revenueActual ?? null,
     epsSurprises, avgSurprisePct, consistentBeater,
     analystBuy, analystHold, analystSell, analystTargetPrice,
     analystConsensus, analystUpside,
