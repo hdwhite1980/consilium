@@ -394,7 +394,7 @@ function buildLeadSystemPrompt(bundle: SignalBundle, lens: 'technical' | 'fundam
   if (isForexPair) {
     return `You are the Lead Analyst in an elite AI council analyzing ${bundle.ticker}. This is a FOREX currency pair. Analysis focuses on: central bank policy divergence, macroeconomic data (inflation, employment, GDP), interest rate differentials, technical price action, and global risk sentiment. There are no earnings, P/E, or insider data for forex. Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data — only use what you have. IMPORTANT: If price data shows period change >±200%, treat as potential data error.
 
-${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}`
   }
 
   const personaIdentity = {
@@ -411,7 +411,9 @@ ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}`
 
 Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data — only use what you have. IMPORTANT: If the price data shows a period change exceeding ±200%, treat this as a potential data error and note it explicitly rather than building your analysis on it.
 
-${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}`
+NEWS RECENCY: Weight news by freshness. Last 24 hours is current and actionable. Last 48-72 hours is recent context. Anything older is background unless it's a structural development (M&A close, leadership change, regulatory ruling). Breaking news from the last 6 hours overrides older narrative coverage.
+
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}`
 }
 
 /**
@@ -447,8 +449,10 @@ Your job is to make the Lead DEFEND their technical thesis against the fundament
 ${baseCalibration}
 
 6. Cross-pressure discipline: Your challenges should primarily cite fundamental/earnings/analyst/valuation evidence, not re-argue the chart. Let the Lead have their chart — attack on fundamentals.
+7. Earnings proximity: When earnings are within 7 days (see EARNINGS PROXIMITY context if present), pressure-test specifically how much earnings risk is being priced in. A bullish technical thesis 3 days before a print needs to address: (a) what's the implied move? (b) what's analyst revision trend? (c) is the entry level above or below the implied-move band? Don't let the Lead skip past binary catalyst risk.
+8. News recency: Weight news by freshness same as the Lead — last 24h current, 24-72h recent, older background. Don't cite stale narrative as a reason to disagree.
 
-${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}`
   }
 
   if (lens === 'fundamental') {
@@ -465,7 +469,7 @@ ${baseCalibration}
 
 6. Cross-pressure discipline: Your challenges should primarily cite chart patterns, price action, technical indicators, and flow evidence — not re-argue the fundamentals. Let the Lead have their fundamental thesis — attack on technicals.
 
-${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}`
   }
 
   // balanced — original calibrated prompt (attack on whatever is weakest)
@@ -479,7 +483,7 @@ SELECTION DISCIPLINE:
 
 ${baseCalibration}
 
-${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}`
 }
 
 function timeframeContext(tf: string): string {
@@ -530,6 +534,65 @@ function extendedHoursContext(bundle: SignalBundle): string {
   if (!eh || !eh.promptContext) return ''
   return `\n\nEXTENDED HOURS CONTEXT:\n${eh.promptContext}`
 }
+
+/**
+ * Earnings-time awareness for prompts.
+ *
+ * Surfaces granular earnings proximity so the Council can adjust
+ * weight on technicals vs catalysts. Pre-earnings windows have
+ * structurally different price dynamics than mid-quarter periods.
+ *
+ * Wired into all 9 prompt assembly sites alongside extendedHoursContext.
+ *
+ * Tier breakdown:
+ *   today       — earnings reporting today (highest catalyst risk)
+ *   tomorrow    — earnings tomorrow (positioning dominates)
+ *   imminent    — earnings in 2-3 days (implied move pricing in)
+ *   this_week   — earnings in 4-7 days (drift + IV expansion)
+ *   next_week   — earnings in 8-14 days (approaching catalyst)
+ *   this_month  — earnings in 15-30 days (on horizon)
+ *   distant     — >30 days or unknown (no injection)
+ */
+function earningsContext(bundle: SignalBundle): string {
+  const days = bundle.fundamentals?.daysToEarnings
+  if (days === null || days === undefined || days < 0 || days > 30) return ''
+
+  const impliedMove = bundle.fundamentals?.earningsImpliedMove ?? null
+  const historicalMove = bundle.fundamentals?.earningsHistoricalMove ?? null
+  const earningsDate = bundle.fundamentals?.nextEarningsDate ?? null
+  const dateStr = earningsDate ? ` on ${earningsDate}` : ''
+  const moveCtx = (impliedMove !== null && historicalMove !== null)
+    ? ` Options market is pricing a ±${impliedMove.toFixed(1)}% move (historical avg: ±${historicalMove.toFixed(1)}%).`
+    : (impliedMove !== null)
+    ? ` Options market is pricing a ±${impliedMove.toFixed(1)}% move.`
+    : ''
+
+  let header: string
+  let guidance: string
+
+  if (days === 0) {
+    header = `EARNINGS REPORTING TODAY${dateStr}.`
+    guidance = `Technical patterns and chart-based targets are unreliable through the print. Pre-earnings drift may already be baked in. Catalysts dominate price action for the next session.`
+  } else if (days === 1) {
+    header = `EARNINGS TOMORROW${dateStr}.`
+    guidance = `The next 24h price action is dominated by positioning into the print, not technicals. Targets and stops should reflect post-earnings volatility, not chart levels.`
+  } else if (days >= 2 && days <= 3) {
+    header = `EARNINGS IN ${days} DAYS${dateStr}.`
+    guidance = `Pre-earnings positioning is active. Implied move should bound any near-term price target. Bullish technical setups face binary catalyst risk in 48-72h.`
+  } else if (days >= 4 && days <= 7) {
+    header = `EARNINGS IN ${days} DAYS${dateStr}.`
+    guidance = `Earnings within the analysis window. Pre-earnings drift can dominate intraday signals. Options flow and analyst revisions become primary signal; pure chart patterns are weaker than usual.`
+  } else if (days >= 8 && days <= 14) {
+    header = `EARNINGS IN ${days} DAYS${dateStr}.`
+    guidance = `Approaching catalyst. IV expansion likely in coming sessions. Multi-week swing targets must factor in event risk before fill.`
+  } else {
+    header = `EARNINGS IN ${days} DAYS${dateStr}.`
+    guidance = `Catalyst on horizon but not immediate. Note for time-horizon planning, especially on multi-week setups.`
+  }
+
+  return `\n\nEARNINGS PROXIMITY: ${header}${moveCtx} ${guidance}`
+}
+
 
 
 function repairJSON(raw: string): string {
@@ -913,7 +976,7 @@ export async function runClaude(bundle: SignalBundle, gemini: GeminiResult, soci
       role: 'user',
       content: `TICKER: ${bundle.ticker} | TIMEFRAME: ${bundle.timeframe} | PRICE: $${bundle.currentPrice.toFixed(2)} | LENS: ${lens.toUpperCase()}${isPersonaExplicit(persona) ? ' (user-selected)' : ' (timeframe default)'}
 
-${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}
 
 NEWS SCOUT BRIEF:
 ${gemini.summary}
@@ -1164,7 +1227,7 @@ PROCEDURAL RULES:
 - Never cite missing or unavailable data as a reason for lower conviction. If a metric is unavailable, ignore it entirely rather than mentioning its absence.
 - Refer to council members by their role names only.
 
-${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}`
 }
 
 function buildJudgeUserPrompt(
@@ -1238,7 +1301,7 @@ Reward honest NEUTRAL calls when data warranted them. Penalize aggressive positi
 
   return `TICKER: ${bundle.ticker} | PRICE: $${bundle.currentPrice.toFixed(2)} | ROUND: ${round} | LEAD LENS: ${lens.toUpperCase()} | TIMEFRAME: ${bundle.timeframe}
 
-${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}
 
 ${newsScout}
 
@@ -1381,7 +1444,7 @@ CALIBRATION PRINCIPLES:
 
 6. Your recommendation is ADVISORY. The Judge will still produce the final verdict. But a well-reasoned recommendation should rarely be ignored.
 
-${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}`
 }
 
 async function runCalibrator(
