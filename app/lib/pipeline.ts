@@ -1431,7 +1431,7 @@ async function runJudgeClaude(
 
   const msg = await getAnthropic().messages.create({
     model: 'claude-opus-4-7',
-    max_tokens: 4000,
+    max_tokens: 6000,
     system: systemPrompt,
     messages: [{ role: 'user', content: userPrompt }]
   })
@@ -1460,7 +1460,7 @@ async function runJudgeGemini(
     model: 'gemini-2.5-pro',
     generationConfig: {
       temperature: 0.2,
-      maxOutputTokens: 4096,
+      maxOutputTokens: 8192,
       responseMimeType: 'application/json',
     },
   })
@@ -1806,7 +1806,7 @@ Keep your verdict structure identical to the draft. Primarily update the confide
       model: 'gemini-2.5-pro',
       generationConfig: {
         temperature: 0.2,
-        maxOutputTokens: 4096,
+        maxOutputTokens: 8192,
         responseMimeType: 'application/json',
       },
     })
@@ -1820,7 +1820,7 @@ Keep your verdict structure identical to the draft. Primarily update the confide
 
     const msg = await getAnthropic().messages.create({
       model: 'claude-opus-4-7',
-      max_tokens: 4000,
+      max_tokens: 6000,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }]
     })
