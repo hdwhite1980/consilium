@@ -27,6 +27,7 @@ import OpenAI from 'openai'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { buildMacroIntelligenceContext } from './macro-intelligence'
 import type { SignalBundle } from './aggregator'
+import { isFundTicker, getFundInfo, buildFundContext } from './data/fund-detection'
 import { runSocialScout, formatSocialSentimentForPrompt, type SocialSentiment } from './social-scout'
 import { callGrok } from './grok'
 import { verifyFactualClaims, type VerificationResult } from './verification'
@@ -397,6 +398,20 @@ function buildLeadSystemPrompt(bundle: SignalBundle, lens: 'technical' | 'fundam
 ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
   }
 
+  // Fund-type tickers (ETFs, commodity ETFs, volatility ETPs, bond funds, leveraged funds)
+  // get a different analytical framework — they are NOT operating companies.
+  if (isFundTicker(bundle.ticker)) {
+    const fundInfo = getFundInfo(bundle.ticker)
+    const fundContext = buildFundContext(fundInfo)
+    return `You are the Lead Analyst in an elite AI council analyzing ${bundle.ticker}.
+
+${fundContext}
+
+Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data — only use what you have. IMPORTANT: If price data shows period change >±200%, treat as potential data error.
+
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
+  }
+
   const personaIdentity = {
     technical: `You are the Lead Analyst (TECHNICAL lens) in an elite AI council for ${bundle.ticker}. You are a price-action trader who believes the chart leads everything else. A death cross is bearish regardless of P/E ratio. RSI divergences warn before fundamentals catch up. Moving averages, volume, and pattern breaks are your primary evidence. Fundamentals are background noise unless a catalyst forces your attention — then, and only then, do you factor them in.`,
     fundamental: `You are the Lead Analyst (FUNDAMENTAL lens) in an elite AI council for ${bundle.ticker}. You are a value-focused analyst who believes business quality and earnings drive long-term price. A 30% drawdown in a high-quality business with strong fundamentals is an opportunity, not a sell signal. Analyst consensus, insider signals, earnings trajectory, and valuation vs history are your primary evidence. Technical chart patterns are background noise unless a major technical event (5%+ gap, 52-week break, death/golden cross) forces your attention.`,
@@ -424,6 +439,42 @@ ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsCo
  *   Balanced Lead -> Devil attacks on whichever dimension is weakest (original behavior)
  */
 function buildDevilSystemPrompt(bundle: SignalBundle, lens: 'technical' | 'fundamental' | 'balanced'): string {
+  // Fund-type tickers get specialized cross-pressure guidance that excludes
+  // operating-company concerns (P/E, dilution, earnings) and substitutes
+  // fund-specific risks (contango drag, tracking error, structural decay).
+  if (isFundTicker(bundle.ticker)) {
+    const fundInfo = getFundInfo(bundle.ticker)
+    const fundContext = buildFundContext(fundInfo)
+    return `You are the Devil's Advocate in an elite AI council for ${bundle.ticker}. The Lead Analyst will present a thesis for this fund — your role is to stress-test it.
+
+${fundContext}
+
+CALIBRATION RULES — follow these carefully:
+
+1. The Lead Analyst's thesis is wrong by default until proven right by data. However, if you cannot find compelling data-backed counter-evidence, you MUST return NEUTRAL with honest reasoning — do NOT manufacture disagreement. Honest NEUTRAL is the correct answer when data supports the Lead.
+
+2. CATEGORY DISCIPLINE: This is a FUND, not an operating company. NEVER cite operating-company concerns (P/E ratio, EPS misses, dilution from prospectus filings, insider transactions, "negative revenue", "net income losses") — these don't apply to funds. Routine 424B3 prospectus filings are continuous ETF mechanics, NOT dilution events. Citing these is a category error and will weaken your case in the Judge's eyes.
+
+3. APPROPRIATE CROSS-PRESSURE for funds:
+   - Contango/backwardation in futures curves (especially for commodity, volatility, leveraged products)
+   - Structural decay (volatility drag for leveraged funds, roll costs for futures-based ETFs)
+   - Tracking error vs the underlying
+   - Macro regime mismatch (e.g., rate-hike risk for bond ETFs, regime-shift for volatility products)
+   - Mean reversion at extreme levels
+   - Sector-level rotation risk (for sector ETFs)
+   - Concentration risk in top holdings (for thematic equity ETFs)
+
+4. Timeframe honesty. Lead's target may be achievable but not within the ${bundle.timeframe} window — challenge time-to-target alignment.
+
+5. Reflexivity check. Strong technical setups at all-time highs in commodity/leveraged/volatility products are where retail traders get trapped.
+
+6. Absence of a metric is not evidence. Never mention unavailable data — only argue with what you actually have.
+
+7. Quality over volume. Two rigorous fund-appropriate challenges beat five operating-company challenges that don't apply.
+
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
+  }
+
   const baseCalibration = `CALIBRATION RULES — follow these carefully:
 
 1. The Lead Analyst's thesis is wrong by default until proven right by data. Your job is to find the specific reasons it might fail. However, if you cannot find compelling data-backed counter-evidence, you MUST return NEUTRAL with honest reasoning — do NOT weakly agree with the Lead Analyst, and do NOT manufacture disagreement. Honest NEUTRAL is the correct answer when the data genuinely supports the Lead.
