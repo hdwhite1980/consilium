@@ -1886,6 +1886,64 @@ function sanitizeJudgeResult(judge: JudgeResult, bundle: SignalBundle): JudgeRes
   const tp     = extractPrice(judge.takeProfit)
   const atr    = bundle.technicals?.atr14 ?? 0
 
+  // ── Earnings tier enforcement (Tier 0-3) ───────────────────────
+  // When earnings are imminent, prompt-level directives are unreliable
+  // (LLM can ignore them when conviction is high). Code-level
+  // enforcement is the only consistent guardrail.
+  //
+  //   Tier 0 (0d, TODAY)     → full no-entry block
+  //   Tier 1 (1d, TOMORROW)  → full no-entry block
+  //   Tier 2 (2d)            → entry allowed, action plan force-prefixed
+  //                            with binary risk acknowledgment + sizing
+  //                            guidance
+  //   Tier 3 (3d)            → same as Tier 2, milder language
+  //
+  // Signal/confidence/scenarios/thesis preserved across all tiers.
+  const daysToEarnings = bundle.fundamentals?.daysToEarnings ?? null
+
+  // Tier 0 + Tier 1: full block
+  if (daysToEarnings !== null && daysToEarnings >= 0 && daysToEarnings <= 1) {
+    const tierLabel = daysToEarnings === 0 ? 'TODAY' : 'TOMORROW'
+    const blockedEntry = `No entry before earnings (reports ${tierLabel}) — wait for post-earnings reaction`
+    const blockedStop  = `N/A — stop level depends on post-earnings price discovery`
+    const blockedTp    = `N/A — target level depends on post-earnings price discovery`
+    const guard        = `IMPORTANT: ${bundle.ticker} reports ${tierLabel}. Do not enter before the catalyst. Wait for post-earnings price action to establish a new trend, then re-evaluate using the directional thesis below as a starting hypothesis.\n\n`
+    const wasOverridden = (
+      extractPrice(judge.entryPrice) !== null ||
+      extractPrice(judge.stopLoss) !== null ||
+      extractPrice(judge.takeProfit) !== null
+    )
+    if (wasOverridden) {
+      console.warn(`[pipeline] earnings tier ${tierLabel} (${daysToEarnings}d) — overriding actionable fields, preserving thesis`)
+      logJudgeCorrection(bundle, judge.judgeModel, signal, 'stopLoss', judge.stopLoss, blockedStop, atr, entry)
+    }
+    return {
+      ...judge,
+      entryPrice: blockedEntry,
+      stopLoss:   blockedStop,
+      takeProfit: blockedTp,
+      actionPlan: guard + (judge.actionPlan ?? ''),
+    }
+  }
+
+  // Tier 2 + Tier 3: entry allowed, but force binary-risk acknowledgment
+  // and position-sizing guidance into the action plan. We do NOT override
+  // the entry/stop/target prices themselves — they fall through to the
+  // BULLISH/BEARISH direction validation below.
+  if (daysToEarnings !== null && daysToEarnings >= 2 && daysToEarnings <= 3) {
+    const dayWord = daysToEarnings === 2 ? '2 trading days' : '3 trading days'
+    const guardTier23 = `BINARY EVENT WARNING: ${bundle.ticker} reports earnings in ${dayWord}. The options market is pricing a meaningful move (see implied move in fundamentals). If you take this trade, use REDUCED POSITION SIZE (target ~50% of normal sizing) and define a clear pre-earnings invalidation level. Plan to either close the position before the report or accept full binary risk through the catalyst.\n\n`
+    const wasGuarded = (judge.actionPlan ?? '').startsWith('BINARY EVENT WARNING')
+    if (!wasGuarded) {
+      console.warn(`[pipeline] earnings tier ${daysToEarnings}d — prefixing action plan with binary-risk acknowledgment`)
+    }
+    // Fall through to normal BULLISH/BEARISH validation, but mutate the
+    // action plan as we pass through. We capture judge here, run the
+    // normal sanitization below, and apply the prefix at the end.
+    // Cleanest: set the prefix flag and check at the end.
+    judge = wasGuarded ? judge : { ...judge, actionPlan: guardTier23 + (judge.actionPlan ?? '') }
+  }
+
   if (signal === 'BULLISH') {
     let fixedStop   = judge.stopLoss
     let fixedTarget = judge.takeProfit
