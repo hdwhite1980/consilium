@@ -212,7 +212,8 @@ interface CacheRow {
 async function getCachedClassification(ticker: string): Promise<CacheRow | null> {
   try {
     const sb = getSupabase()
-    const { data, error } = await sb
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (sb as any)
       .from('ticker_sector_peers')
       .select('*')
       .eq('ticker', ticker)
@@ -234,7 +235,8 @@ async function upsertClassification(
 ): Promise<void> {
   try {
     const sb = getSupabase()
-    await sb.from('ticker_sector_peers').upsert({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (sb as any).from('ticker_sector_peers').upsert({
       ticker,
       sector,
       industry,
