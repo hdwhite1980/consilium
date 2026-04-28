@@ -14,6 +14,70 @@ function alpacaHeaders() {
   }
 }
 
+
+// ── Pagination helpers ─────────────────────────────────────────
+// Alpaca's /v2/stocks bars endpoint paginates results via next_page_token.
+// Without following the token, we get the first ~5-6 weeks of data only,
+// truncating large date ranges silently. These helpers loop through pages.
+//
+// Safety cap: 10 pages (~100k bars max) prevents runaway loops.
+const MAX_PAGES = 10
+
+async function fetchPaginatedBars(baseUrl: string): Promise<AlpacaBar[]> {
+  const allBars: AlpacaBar[] = []
+  let pageToken: string | null = null
+  let pages = 0
+
+  while (pages < MAX_PAGES) {
+    const url = pageToken
+      ? `${baseUrl}&page_token=${encodeURIComponent(pageToken)}`
+      : baseUrl
+    const res = await fetch(url, { headers: alpacaHeaders(), next: { revalidate: 300 } })
+    if (!res.ok) break
+
+    const data = await res.json()
+    const pageBars = (data.bars || []) as AlpacaBar[]
+    allBars.push(...pageBars)
+
+    pageToken = data.next_page_token || null
+    pages++
+
+    if (!pageToken) break
+  }
+
+  return allBars
+}
+
+async function fetchPaginatedMultiBars(baseUrl: string): Promise<Record<string, AlpacaBar[]>> {
+  const result: Record<string, AlpacaBar[]> = {}
+  let pageToken: string | null = null
+  let pages = 0
+
+  while (pages < MAX_PAGES) {
+    const url = pageToken
+      ? `${baseUrl}&page_token=${encodeURIComponent(pageToken)}`
+      : baseUrl
+    const res = await fetch(url, { headers: alpacaHeaders(), next: { revalidate: 300 } })
+    if (!res.ok) break
+
+    const data = await res.json()
+    const pageBars = (data.bars || {}) as Record<string, AlpacaBar[]>
+
+    // Merge page bars into result
+    for (const [symbol, bars] of Object.entries(pageBars)) {
+      if (!result[symbol]) result[symbol] = []
+      result[symbol].push(...bars)
+    }
+
+    pageToken = data.next_page_token || null
+    pages++
+
+    if (!pageToken) break
+  }
+
+  return result
+}
+
 // ── News ───────────────────────────────────────────────────────
 export async function fetchNews(ticker: string, limit = 15): Promise<AlpacaNewsItem[]> {
   try {
@@ -41,22 +105,17 @@ export async function fetchBars(ticker: string, timeframe: string): Promise<Alpa
 
     // Trader Plus: SIP = real-time consolidated tape from all US exchanges
     try {
-      const url = `${BASE}/v2/stocks/${ticker}/bars?timeframe=${tf}&start=${startStr}&end=${endStr}&limit=10000&adjustment=all&feed=sip`
-      const res = await fetch(url, { headers: alpacaHeaders(), next: { revalidate: 300 } })
-      if (res.ok) {
-        const data = await res.json()
-        const bars = (data.bars || []) as AlpacaBar[]
-        if (bars.length >= 5) return bars
-      }
+      const allBars = await fetchPaginatedBars(
+        `${BASE}/v2/stocks/${ticker}/bars?timeframe=${tf}&start=${startStr}&end=${endStr}&limit=10000&adjustment=all&feed=sip`
+      )
+      if (allBars.length >= 5) return allBars
     } catch { /* fallthrough */ }
     // IEX fallback for non-SIP-covered tickers (OTC etc)
     try {
-      const url = `${BASE}/v2/stocks/${ticker}/bars?timeframe=${tf}&start=${startStr}&end=${endStr}&limit=10000&adjustment=all&feed=iex`
-      const res = await fetch(url, { headers: alpacaHeaders(), next: { revalidate: 300 } })
-      if (res.ok) {
-        const data = await res.json()
-        return (data.bars || []) as AlpacaBar[]
-      }
+      const allBars = await fetchPaginatedBars(
+        `${BASE}/v2/stocks/${ticker}/bars?timeframe=${tf}&start=${startStr}&end=${endStr}&limit=10000&adjustment=all&feed=iex`
+      )
+      return allBars
     } catch { /* ignore */ }
     return []
   } catch {
@@ -91,20 +150,16 @@ export async function fetchMultiBars(tickers: string[], timeframe: string): Prom
     const endStr   = end.toISOString().split('T')[0]
 
     try {
-      const url = `${BASE}/v2/stocks/bars?symbols=${symbols}&timeframe=${tf}&start=${startStr}&end=${endStr}&limit=10000&adjustment=all&feed=sip`
-      const res = await fetch(url, { headers: alpacaHeaders(), next: { revalidate: 300 } })
-      if (res.ok) {
-        const data = await res.json()
-        if (data.bars && Object.keys(data.bars).length > 0) return data.bars
-      }
+      const result = await fetchPaginatedMultiBars(
+        `${BASE}/v2/stocks/bars?symbols=${symbols}&timeframe=${tf}&start=${startStr}&end=${endStr}&limit=10000&adjustment=all&feed=sip`
+      )
+      if (Object.keys(result).length > 0) return result
     } catch { /* fallthrough */ }
     try {
-      const url = `${BASE}/v2/stocks/bars?symbols=${symbols}&timeframe=${tf}&start=${startStr}&end=${endStr}&limit=10000&adjustment=all&feed=iex`
-      const res = await fetch(url, { headers: alpacaHeaders(), next: { revalidate: 300 } })
-      if (res.ok) {
-        const data = await res.json()
-        if (data.bars && Object.keys(data.bars).length > 0) return data.bars
-      }
+      const result = await fetchPaginatedMultiBars(
+        `${BASE}/v2/stocks/bars?symbols=${symbols}&timeframe=${tf}&start=${startStr}&end=${endStr}&limit=10000&adjustment=all&feed=iex`
+      )
+      if (Object.keys(result).length > 0) return result
     } catch { /* ignore */ }
     return {}
   } catch {
