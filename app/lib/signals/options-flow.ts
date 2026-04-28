@@ -71,7 +71,16 @@ async function fetchOptionsChain(ticker: string) {
     )
     if (!expRes.ok) return null
     const expData = await expRes.json()
-    const expiry = expData?.expirations?.date?.[1] ?? expData?.expirations?.date?.[0]
+    // Tradier returns expirations.date as either an array (multiple expiries)
+    // or a single string (one expiry). Handle both shapes.
+    const dateField = expData?.expirations?.date
+    let expiry: string | null = null
+    if (Array.isArray(dateField)) {
+      // Prefer 2nd expiry (typically next monthly, less weeklies-noise) with [0] fallback
+      expiry = dateField[1] ?? dateField[0] ?? null
+    } else if (typeof dateField === 'string') {
+      expiry = dateField
+    }
     if (!expiry) return null
 
     const chainRes = await fetch(
@@ -106,11 +115,15 @@ async function fetchShortInterest(ticker: string): Promise<{ pct: number | null;
         const data = await res.json()
         // Finnhub returns { data: [{ date, shortInterest, shortRatio }] }
         const latest = data?.data?.[0]
-        if (latest?.shortInterest && latest?.shortPercentOfFloat) {
-          return {
-            pct: parseFloat(latest.shortPercentOfFloat) * 100,
-            ratio: latest.shortRatio ?? null
-          }
+        if (latest?.shortInterest && latest?.shortPercentOfFloat !== undefined && latest?.shortPercentOfFloat !== null) {
+          // Defensive: shortPercentOfFloat may be returned as decimal (0.15)
+          // or percentage (15.0). Distinguish by magnitude.
+          const raw = parseFloat(latest.shortPercentOfFloat)
+          const pct = Number.isFinite(raw) ? (raw <= 1 ? raw * 100 : raw) : null
+          // shortRatio in this endpoint = days to cover, sanity-check 0-100 range
+          const rawRatio = Number(latest.shortRatio)
+          const ratio = Number.isFinite(rawRatio) && rawRatio > 0 && rawRatio < 100 ? rawRatio : null
+          return { pct, ratio }
         }
       }
     }
@@ -127,15 +140,24 @@ async function fetchShortInterest(ticker: string): Promise<{ pct: number | null;
       if (res.ok) {
         const data = await res.json()
         const m = data?.metric ?? {}
-        // Finnhub metric keys: shortRatio, shortInterest, sharesShort, etc.
-        const pct = m['shortRatio'] ?? m['10DayAverageTradingVolume'] ? null : null
-        const ratio = typeof m['shortRatio'] === 'number' ? m['shortRatio'] : null
-        // sharesShortPercentOfFloat is the key we want
-        const floatPct = typeof m['sharesShortPercentOfFloat'] === 'number'
-          ? m['sharesShortPercentOfFloat'] * 100
+        // Finnhub metric keys for short interest:
+        //   sharesShortPercentOfFloat - % of float sold short (decimal or %)
+        //   shortPercent              - alias seen on some tickers
+        //   shortRatio                - days to cover (typically 0-30)
+        // We extract pct (% of float) and ratio (days to cover) separately.
+        // Defensive: pct may be returned as decimal (0.15) or percentage (15.0).
+        const pctRaw = typeof m['sharesShortPercentOfFloat'] === 'number'
+          ? m['sharesShortPercentOfFloat']
           : typeof m['shortPercent'] === 'number'
-          ? m['shortPercent'] * 100
+          ? m['shortPercent']
           : null
+        const floatPct = pctRaw === null
+          ? null
+          : (pctRaw <= 1 ? pctRaw * 100 : pctRaw)
+        // shortRatio = days to cover; only accept if in a sane range (avoid
+        // accidentally picking up % values that share the same field name)
+        const rawRatio = typeof m['shortRatio'] === 'number' ? m['shortRatio'] : null
+        const ratio = rawRatio !== null && rawRatio > 0 && rawRatio < 100 ? rawRatio : null
         if (floatPct !== null || ratio !== null) {
           return { pct: floatPct, ratio }
         }
