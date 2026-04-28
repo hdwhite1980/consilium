@@ -211,11 +211,25 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
     .map(r => ({ firm: r.firm, fromGrade: r.fromGrade, toGrade: r.toGrade, action: 'downgrade', date: r.gradeDate }))
 
   // ── Insider transactions ──────────────────────────────────
+  // Finnhub /stock/insider-transactions returns:
+  //   share         = shares HELD AFTER transaction (running total)
+  //   change        = signed transaction size (+ buy, - sell)
+  //   transactionCode = single letter ('P' = Purchase, 'S' = Sale, 'A' = Award, etc.)
+  //
+  // We use change (transaction size) NOT share (holdings) for $ valuation.
+  // We accept transactionCode 'P' for purchase and 'S' for sale.
+  // Other codes (A=Award, M=Conversion, F=Tax-related) are ignored as they're
+  // not market-signal events.
   let insiderBuyValue = 0, insiderSellValue = 0
-  for (const tx of insiders?.data ?? []) {
-    const val = Math.abs(tx.transactionPrice * tx.share)
-    if (tx.transactionType === 'P - Purchase') insiderBuyValue += val
-    else if (tx.transactionType === 'S - Sale') insiderSellValue += val
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const tx of (insiders?.data ?? []) as any[]) {
+    const code = String(tx.transactionCode ?? '').trim().toUpperCase()
+    const txShares = Math.abs(Number(tx.change) || 0)
+    const txPrice  = Number(tx.transactionPrice) || 0
+    if (txShares === 0 || txPrice === 0) continue
+    const val = txShares * txPrice
+    if (code === 'P') insiderBuyValue += val
+    else if (code === 'S') insiderSellValue += val
   }
   const insiderSignal: FundamentalSignals['insiderSignal'] =
     insiderBuyValue > insiderSellValue * 2 ? 'buying' :
