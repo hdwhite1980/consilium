@@ -1917,12 +1917,24 @@ function sanitizeJudgeResult(judge: JudgeResult, bundle: SignalBundle): JudgeRes
       console.warn(`[pipeline] earnings tier ${tierLabel} (${daysToEarnings}d) — overriding actionable fields, preserving thesis`)
       logJudgeCorrection(bundle, judge.judgeModel, signal, 'stopLoss', judge.stopLoss, blockedStop, atr, entry)
     }
+    // Strip price-bearing sentences from the action plan body so it
+    // doesn't contradict the blocked structured fields. The LLM may
+    // have written 'enter at $X / stop $Y / target $Z' even though
+    // the directive says wait — remove those.
+    const stripPriceSentences = (s: string): string => {
+      if (!s) return s
+      // Split on sentence terminators while keeping the structure;
+      // drop any sentence containing a dollar price.
+      const parts = s.split(/(?<=[.!?])\s+/)
+      return parts.filter(p => !/\$\d{1,6}(?:\.\d{1,2})?/.test(p)).join(' ').trim()
+    }
+    const cleanedActionPlan = stripPriceSentences(judge.actionPlan ?? '')
     return {
       ...judge,
       entryPrice: blockedEntry,
       stopLoss:   blockedStop,
       takeProfit: blockedTp,
-      actionPlan: guard + (judge.actionPlan ?? ''),
+      actionPlan: guard + cleanedActionPlan,
     }
   }
 
