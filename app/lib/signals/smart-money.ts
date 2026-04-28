@@ -209,21 +209,16 @@ export async function fetchSmartMoney(ticker: string): Promise<SmartMoneySignals
     congBuys > congSells ? 'buying' : congSells > congBuys ? 'selling' : 'none'
 
   // ── Build summary ──────────────────────────────────────────
+  // NOTE: Insider aggregate is intentionally NOT included in this summary.
+  // fundamentals.ts is the single source of truth for insider net buy/sell
+  // values. Including the same data here in a different format caused LLM
+  // personas to anchor on inconsistent numbers (ref: REGN incident
+  // 2026-04-28 where $93K vs $3.1M appeared in same verdict). The data
+  // structures remain on the returned object for downstream consumers,
+  // but the prompt-visible summary now focuses on what smart-money.ts
+  // uniquely contributes: institutional ownership + congressional trades.
   const lines = [
     `=== SMART MONEY SIGNALS ===`,
-    ``,
-    `Insider activity (90d from SEC EDGAR Form 4):`,
-    insiderTxns.length > 0
-      ? (() => {
-          const buys  = insiderTxns.filter(t => t.type === 'buy')
-          const sells = insiderTxns.filter(t => t.type === 'sell')
-          const netStr = insiderNetValue >= 0
-            ? `net buying $${(insiderNetValue/1000).toFixed(0)}K`
-            : `net selling $${(Math.abs(insiderNetValue)/1000).toFixed(0)}K`
-          return `  ${insiderTxns.length} filing(s): ${buys.length} buy(s), ${sells.length} sell(s). ${netStr}. Signal: ${insiderSignal.toUpperCase()}`
-        })()
-      : `  No insider transactions filed in the last 90 days`,
-    insiderHighlight ? `  Notable: ${insiderHighlight}` : '',
     ``,
     `Institutional ownership:`,
     institutionalOwnership.length > 0
