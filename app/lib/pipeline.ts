@@ -394,7 +394,7 @@ function buildLeadSystemPrompt(bundle: SignalBundle, lens: 'technical' | 'fundam
   if (isForexPair) {
     return `You are the Lead Analyst in an elite AI council analyzing ${bundle.ticker}. This is a FOREX currency pair. Analysis focuses on: central bank policy divergence, macroeconomic data (inflation, employment, GDP), interest rate differentials, technical price action, and global risk sentiment. There are no earnings, P/E, or insider data for forex. Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data — only use what you have. IMPORTANT: If price data shows period change >±200%, treat as potential data error.
 
-${timeframeContext(bundle.timeframe)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}`
   }
 
   const personaIdentity = {
@@ -411,7 +411,7 @@ ${timeframeContext(bundle.timeframe)}`
 
 Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data — only use what you have. IMPORTANT: If the price data shows a period change exceeding ±200%, treat this as a potential data error and note it explicitly rather than building your analysis on it.
 
-${timeframeContext(bundle.timeframe)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}`
 }
 
 /**
@@ -448,7 +448,7 @@ ${baseCalibration}
 
 6. Cross-pressure discipline: Your challenges should primarily cite fundamental/earnings/analyst/valuation evidence, not re-argue the chart. Let the Lead have their chart — attack on fundamentals.
 
-${timeframeContext(bundle.timeframe)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}`
   }
 
   if (lens === 'fundamental') {
@@ -465,7 +465,7 @@ ${baseCalibration}
 
 6. Cross-pressure discipline: Your challenges should primarily cite chart patterns, price action, technical indicators, and flow evidence — not re-argue the fundamentals. Let the Lead have their fundamental thesis — attack on technicals.
 
-${timeframeContext(bundle.timeframe)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}`
   }
 
   // balanced — original calibrated prompt (attack on whatever is weakest)
@@ -479,7 +479,7 @@ SELECTION DISCIPLINE:
 
 ${baseCalibration}
 
-${timeframeContext(bundle.timeframe)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}`
 }
 
 function timeframeContext(tf: string): string {
@@ -517,6 +517,20 @@ NOTE: Minor technical noise is acceptable in a strong fundamental thesis. What m
     default: return ''
   }
 }
+
+/**
+ * Extended-hours context for prompts.
+ * Returns a markdown-formatted section ready to inject after timeframeContext().
+ * Empty string when there's nothing meaningful (regular session, no significant move).
+ *
+ * Wired into all 9 prompt assembly sites in this file.
+ */
+function extendedHoursContext(bundle: SignalBundle): string {
+  const eh = bundle.extendedHours
+  if (!eh || !eh.promptContext) return ''
+  return `\n\nEXTENDED HOURS CONTEXT:\n${eh.promptContext}`
+}
+
 
 function repairJSON(raw: string): string {
   let s = raw.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
@@ -899,7 +913,7 @@ export async function runClaude(bundle: SignalBundle, gemini: GeminiResult, soci
       role: 'user',
       content: `TICKER: ${bundle.ticker} | TIMEFRAME: ${bundle.timeframe} | PRICE: $${bundle.currentPrice.toFixed(2)} | LENS: ${lens.toUpperCase()}${isPersonaExplicit(persona) ? ' (user-selected)' : ' (timeframe default)'}
 
-${timeframeContext(bundle.timeframe)}
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}
 
 NEWS SCOUT BRIEF:
 ${gemini.summary}
@@ -1150,7 +1164,7 @@ PROCEDURAL RULES:
 - Never cite missing or unavailable data as a reason for lower conviction. If a metric is unavailable, ignore it entirely rather than mentioning its absence.
 - Refer to council members by their role names only.
 
-${timeframeContext(bundle.timeframe)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}`
 }
 
 function buildJudgeUserPrompt(
@@ -1224,7 +1238,7 @@ Reward honest NEUTRAL calls when data warranted them. Penalize aggressive positi
 
   return `TICKER: ${bundle.ticker} | PRICE: $${bundle.currentPrice.toFixed(2)} | ROUND: ${round} | LEAD LENS: ${lens.toUpperCase()} | TIMEFRAME: ${bundle.timeframe}
 
-${timeframeContext(bundle.timeframe)}
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}
 
 ${newsScout}
 
@@ -1367,7 +1381,7 @@ CALIBRATION PRINCIPLES:
 
 6. Your recommendation is ADVISORY. The Judge will still produce the final verdict. But a well-reasoned recommendation should rarely be ignored.
 
-${timeframeContext(bundle.timeframe)}`
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}`
 }
 
 async function runCalibrator(
