@@ -2,8 +2,7 @@
 // app/api/scanner/route.ts
 //
 // Stock scanner — scores liquid tickers (currently SCANNER_UNIVERSE.length)
-// on directional setup + relative strength vs SPY, returns top 15 picks
-// with key setup.
+// on directional setup + relative strength vs SPY, returns top 15 picks.
 //
 // GET  /api/scanner              — list available universes + filters
 // POST /api/scanner               — run a scan
@@ -12,18 +11,19 @@
 //     filter?: ScannerFilter       (optional filter overlay)
 //     mode?: 'bullish'|'bearish'|'both'   (default 'both')
 //     limit?: number               (default 15, max 50)
+//     newsBoost?: boolean          (default false; folds news exposure into composite)
 //   }
 //
 // Architecture:
 //   - Fetch SPY bars first (for rel strength baseline) — 1 call
-//   - Fetch all universe ticker bars in parallel batches of 25 — ~5-10s total
-//   - Compute calculateTechnicals + true 10d/30d % changes for each
-//   - scoreTicker() against each — microseconds
-//   - Sort by composite score, filter by mode, return top N
+//   - Fetch all universe ticker bars in parallel batches of 25
+//   - If newsBoost: also fetch news exposure bundle once (1 round trip)
+//   - Compute calculateTechnicals + true 10d/30d % changes per ticker
+//   - scoreTicker() → optionally apply news exposure → sort → return top N
 //
 // Typical total time: 5-15 seconds for full universe.
-// 5-minute cache shared across all users (the underlying bar data is
-// the same regardless of who asked).
+// 5-minute cache shared across users; cache key includes newsBoost flag
+// so boosted and non-boosted scans don't share cache entries.
 // ═════════════════════════════════════════════════════════════
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -39,41 +39,36 @@ import {
   type UniverseEntry,
 } from '@/app/lib/scanner-universe'
 import { scoreTicker, pctChangeOverDays, type TickerScore } from '@/app/lib/scanner-scoring'
+import {
+  buildNewsExposureMap,
+  applyExposureToComposite,
+  type NewsExposureContext,
+} from '@/app/lib/news-exposure'
 
 // ─────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────
 
-// Minimum bars required to confidently compute a 30-day change.
-// 30 trading days + a couple of buffer bars.
 const MIN_BARS_FOR_30D = 32
-
-// Per-user rate limit: max scans per minute. Each scan can spawn 200+
-// upstream API calls + LLM token budget if user adds news boost later,
-// so this prevents accidental hammering.
 const RATE_LIMIT_PER_MINUTE = 10
 
 // ─────────────────────────────────────────────────────────────
 // Cache (in-memory, per-process) — SHARED across users
 // ─────────────────────────────────────────────────────────────
-// The cached bars/scores depend only on (universe, mode, filterHash),
-// not on who asked. Including userId in the key was wasteful — every
-// new user paid the full scan cost on first request.
 
 interface ScanCacheEntry {
   result: ScanResult
   fetchedAt: number
 }
 const scanCache = new Map<string, ScanCacheEntry>()
-const CACHE_TTL_MS = 5 * 60 * 1000  // 5 minutes
+const CACHE_TTL_MS = 5 * 60 * 1000
 
-function cacheKey(universe: string, mode: string, filterHash: string): string {
-  return `${universe}:${mode}:${filterHash}`
+function cacheKey(universe: string, mode: string, filterHash: string, newsBoost: boolean): string {
+  return `${universe}:${mode}:${filterHash}:${newsBoost ? 'nb1' : 'nb0'}`
 }
 
 function hashFilter(f: ScannerFilter | undefined): string {
   if (!f) return 'nofilter'
-  // Simple deterministic serialization
   return JSON.stringify({
     s: f.sectors?.slice().sort(),
     c: f.caps?.slice().sort(),
@@ -87,9 +82,9 @@ function hashFilter(f: ScannerFilter | undefined): string {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Per-user rate limiting — naive sliding window
+// Per-user rate limiting
 // ─────────────────────────────────────────────────────────────
-const rateLimitState = new Map<string, number[]>()  // userId -> timestamps in ms
+const rateLimitState = new Map<string, number[]>()
 
 function checkRateLimit(userId: string): { allowed: boolean; retryAfterSec?: number } {
   const now = Date.now()
@@ -107,7 +102,6 @@ function checkRateLimit(userId: string): { allowed: boolean; retryAfterSec?: num
   return { allowed: true }
 }
 
-// Periodic cleanup of stale rate limit entries (every ~5 min, lazy)
 let lastRateLimitCleanup = Date.now()
 function maybeCleanupRateLimits(): void {
   const now = Date.now()
@@ -129,6 +123,14 @@ interface EnrichedScore extends TickerScore {
   cap: string
   priceTier: string
   tags: string[]
+
+  // News exposure fields (populated when newsBoost=true)
+  newsExposureScore?: number       // -100..+100 raw aggregate
+  newsAlignedBoost?: number        // signed by direction
+  compositeWithNews?: number       // blended composite when boost applied
+  newsSummary?: string             // short tooltip text
+  newsReasons?: string[]           // up to 3 theme/event titles
+  newsMatchType?: 'direct' | 'sector' | 'digest' | 'none'
 }
 
 export interface ScanResult {
@@ -143,12 +145,12 @@ export interface ScanResult {
   elapsedMs: number
   cached: boolean
   ageMinutes?: number
+  newsBoost: boolean               // echoed back so UI can confirm
   error?: string
 }
 
 // ─────────────────────────────────────────────────────────────
 // Fetch SPY context for the rel-strength baseline
-// Returns true 10d / 30d changes, NOT roc10/priceChangePeriod.
 // ─────────────────────────────────────────────────────────────
 async function fetchSpyContext(): Promise<{ change10d: number; change30d: number } | null> {
   try {
@@ -166,7 +168,6 @@ async function fetchSpyContext(): Promise<{ change10d: number; change30d: number
 
 // ─────────────────────────────────────────────────────────────
 // Fetch + calculate technicals for a single ticker
-// Returns null on any failure or insufficient bars — caller filters.
 // ─────────────────────────────────────────────────────────────
 async function computeTickerTechnicals(ticker: string): Promise<{
   ticker: string
@@ -175,8 +176,6 @@ async function computeTickerTechnicals(ticker: string): Promise<{
 } | null> {
   try {
     const bars = await fetchBars(ticker, '1M')
-    // Require enough bars for a meaningful 30-day change calculation.
-    // Without this, freshly listed tickers get garbage rel-strength.
     if (!bars || bars.length < MIN_BARS_FOR_30D) return null
     const t = calculateTechnicals(bars)
     if (!t.currentPrice || t.currentPrice <= 0) return null
@@ -193,6 +192,7 @@ async function scanTickers(
   entries: UniverseEntry[],
   spyChange10d: number,
   spyChange30d: number,
+  newsExposureMap: Map<string, NewsExposureContext> | null,
 ): Promise<EnrichedScore[]> {
   const BATCH_SIZE = 25
   const results: EnrichedScore[] = []
@@ -204,9 +204,6 @@ async function scanTickers(
       const data = await computeTickerTechnicals(entry.ticker)
       if (!data) return null
 
-      // Compute TRUE 10d and 30d changes from the actual bar data,
-      // rather than relying on technicals.priceChangePeriod (which is
-      // the full ~500-day window for this timeframe).
       const tickerChange10d = pctChangeOverDays(data.closes, 10)
       const tickerChange30d = pctChangeOverDays(data.closes, 30)
 
@@ -225,6 +222,24 @@ async function scanTickers(
         cap: entry.cap,
         priceTier: entry.priceTier,
         tags: entry.tags,
+      }
+
+      // ── Optional news exposure overlay ──
+      if (newsExposureMap) {
+        const ctx = newsExposureMap.get(entry.ticker)
+        if (ctx) {
+          const applied = applyExposureToComposite({
+            composite: score.compositeScore,
+            direction: score.direction,
+            exposureScore: ctx.score,
+          })
+          enriched.newsExposureScore = ctx.score
+          enriched.newsAlignedBoost = applied.alignedBoost
+          enriched.compositeWithNews = applied.compositeWithNews
+          enriched.newsSummary = ctx.summary
+          enriched.newsReasons = ctx.reasons
+          enriched.newsMatchType = ctx.matchType
+        }
       }
 
       return enriched
@@ -263,9 +278,12 @@ export async function GET() {
         commonTags: ['ai', 'semis', 'growth', 'dividend', 'defensive', 'ev',
           'crypto', 'cloud', 'biotech', 'cybersec', 'volatile', 'meme'],
       },
-      // Surface dynamic universe size so the UI can show truth instead
-      // of a hardcoded "~500" that drifts as we add/remove tickers.
       universeSize: SCANNER_UNIVERSE.length,
+      // Tells the UI whether news boost is even available (it depends on
+      // the macro intelligence layer being populated). Cheap check: the
+      // toggle is always available; the boost just degrades to 0 if
+      // there are no themes/events. So always true here.
+      newsBoostAvailable: true,
     })
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message?.slice(0, 200) }, { status: 500 })
@@ -284,15 +302,11 @@ export async function POST(req: NextRequest) {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    // Per-user rate limit
     maybeCleanupRateLimits()
     const rl = checkRateLimit(user.id)
     if (!rl.allowed) {
       return NextResponse.json(
-        {
-          error: `Too many scans. Try again in ${rl.retryAfterSec}s.`,
-          retryAfterSec: rl.retryAfterSec,
-        },
+        { error: `Too many scans. Try again in ${rl.retryAfterSec}s.`, retryAfterSec: rl.retryAfterSec },
         { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } },
       )
     }
@@ -303,32 +317,27 @@ export async function POST(req: NextRequest) {
     const filter: ScannerFilter = (typeof body?.filter === 'object' && body.filter !== null ? body.filter : {}) as ScannerFilter
     const mode: 'bullish' | 'bearish' | 'both' = ['bullish', 'bearish', 'both'].includes(body?.mode) ? body.mode : 'both'
     const limit = Math.max(1, Math.min(50, typeof body?.limit === 'number' ? body.limit : 15))
+    const newsBoost: boolean = body?.newsBoost === true
 
-    // Merge universe into filter.predefined if not already set
     const effectiveFilter: ScannerFilter = { ...filter, predefined: filter.predefined ?? universe }
 
-    // Cache check — shared across users
-    const key = cacheKey(universe, mode, hashFilter(effectiveFilter))
+    const key = cacheKey(universe, mode, hashFilter(effectiveFilter), newsBoost)
     const cached = scanCache.get(key)
     if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
       const age = Math.round((Date.now() - cached.fetchedAt) / 60000)
-      console.log(`[scanner] cache hit (age ${age}m)`)
+      console.log(`[scanner] cache hit (age ${age}m, newsBoost=${newsBoost})`)
       return NextResponse.json({ ...cached.result, cached: true, ageMinutes: age })
     }
 
-    // Resolve which tickers to scan
     const entries = applyFilter(effectiveFilter)
     if (entries.length === 0) {
       return NextResponse.json({
         error: 'No tickers match your filter. Try a broader universe or remove some constraints.',
       }, { status: 400 })
     }
-    console.log(`[scanner] scanning ${entries.length} tickers (universe: ${universe}, mode: ${mode})`)
+    console.log(`[scanner] scanning ${entries.length} tickers (universe: ${universe}, mode: ${mode}, newsBoost: ${newsBoost})`)
 
-    // Fetch SPY context FIRST — we cannot compute rel-strength scores
-    // without it. The previous version used a fake `Promise.all` here
-    // with the second slot as `Promise.resolve(null)`, which did
-    // nothing useful. Removed; replaced with a plain await.
+    // Fetch SPY context first (still needs to be sequential before scoring)
     const spyStart = Date.now()
     const spyContext = await fetchSpyContext()
     if (!spyContext) {
@@ -339,23 +348,42 @@ export async function POST(req: NextRequest) {
     const spyChange10d = spyContext?.change10d ?? 0
     const spyChange30d = spyContext?.change30d ?? 0
 
+    // Fetch news exposure bundle in parallel with the rest of the work
+    // when the toggle is on. The bundle is small (<30 records) and cached,
+    // so this rarely costs more than ~50ms.
+    let newsExposureMap: Map<string, NewsExposureContext> | null = null
+    if (newsBoost) {
+      try {
+        const newsStart = Date.now()
+        newsExposureMap = await buildNewsExposureMap({
+          entries: entries.map(e => ({ ticker: e.ticker, sector: e.sector, tags: e.tags })),
+        })
+        console.log(`[scanner] news exposure map built in ${Date.now() - newsStart}ms`)
+      } catch (e) {
+        console.warn('[scanner] news exposure failed, continuing without boost:', (e as Error).message?.slice(0, 200))
+        // Don't fail the whole scan — news boost is best-effort
+        newsExposureMap = null
+      }
+    }
+
     // Scan all tickers
     const scanStart = Date.now()
-    const allScores = await scanTickers(entries, spyChange10d, spyChange30d)
+    const allScores = await scanTickers(entries, spyChange10d, spyChange30d, newsExposureMap)
     console.log(`[scanner] scored ${allScores.length}/${entries.length} tickers in ${Date.now() - scanStart}ms`)
 
     // Filter by mode
     let filtered = allScores
     if (mode === 'bullish') filtered = allScores.filter(s => s.direction === 'bullish')
     else if (mode === 'bearish') filtered = allScores.filter(s => s.direction === 'bearish')
-    // mode === 'both' includes mixed too
 
     // Sort by composite score (highest first).
-    // NOTE: compositeScore is direction-AGNOSTIC — a high score means
-    // "strong setup in the picked direction". For mode='bearish', we've
-    // already filtered to bearish picks above, so sorting by composite
-    // here returns the strongest bearish setups (which is what we want).
-    filtered.sort((a, b) => b.compositeScore - a.compositeScore)
+    // When newsBoost is on, compositeWithNews supersedes compositeScore for ranking.
+    // (compositeScore is direction-agnostic — see Track A note.)
+    filtered.sort((a, b) => {
+      const aScore = newsBoost ? (a.compositeWithNews ?? a.compositeScore) : a.compositeScore
+      const bScore = newsBoost ? (b.compositeWithNews ?? b.compositeScore) : b.compositeScore
+      return bScore - aScore
+    })
 
     const picks = filtered.slice(0, limit)
 
@@ -370,19 +398,18 @@ export async function POST(req: NextRequest) {
       generatedAt: new Date().toISOString(),
       elapsedMs: Date.now() - started,
       cached: false,
+      newsBoost,
     }
 
-    // Cache
     scanCache.set(key, { result, fetchedAt: Date.now() })
 
-    // Log scan to DB for performance tracking (fire-and-forget, never throws)
+    // Log scan to DB for performance tracking (fire-and-forget)
     void (async () => {
       try {
         const admin = createAdmin(
           process.env.NEXT_PUBLIC_SUPABASE_URL!,
           process.env.SUPABASE_SERVICE_ROLE_KEY!,
         )
-        // Insert the scan record
         const { data: scanRow, error: logErr } = await admin
           .from('scanner_log')
           .insert({
@@ -394,6 +421,8 @@ export async function POST(req: NextRequest) {
             picks: picks.map(p => ({
               ticker: p.ticker,
               compositeScore: p.compositeScore,
+              compositeWithNews: p.compositeWithNews ?? null,
+              newsExposureScore: p.newsExposureScore ?? null,
               directionalScore: p.directionalScore,
               relStrengthScore: p.relStrengthScore,
               direction: p.direction,
@@ -401,6 +430,7 @@ export async function POST(req: NextRequest) {
             })),
             spy_change_10d: spyChange10d,
             spy_change_30d: spyChange30d,
+            news_boost: newsBoost,
             generated_at: result.generatedAt,
             elapsed_ms: result.elapsedMs,
           })
@@ -412,8 +442,6 @@ export async function POST(req: NextRequest) {
           return
         }
 
-        // Insert pick outcomes stubs (return_1d etc. start as null,
-        // backfilled by the /api/scanner/outcomes cron)
         if (picks.length > 0) {
           const stubs = picks.map(p => ({
             scan_id: scanRow.id,
@@ -429,7 +457,7 @@ export async function POST(req: NextRequest) {
       }
     })()
 
-    console.log(`[scanner] DONE in ${result.elapsedMs}ms — ${picks.length} picks`)
+    console.log(`[scanner] DONE in ${result.elapsedMs}ms — ${picks.length} picks (newsBoost=${newsBoost})`)
     return NextResponse.json(result)
 
   } catch (e) {
