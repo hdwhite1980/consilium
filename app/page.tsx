@@ -1742,29 +1742,36 @@ function HomeInner() {
                         let tpVal    = jud.takeProfit
                         let stopFixed = false, tpFixed = false
 
-                        if (!isBearish) {
-                          // BULLISH: stop must be < entry, target must be > entry
-                          if (stopP !== null && stopP >= entryP) {
-                            const c = (atr > 0 ? entryP - atr * 2 : entryP * 0.93).toFixed(2)
-                            stopVal = `$${c} — 2× ATR below entry`
-                            stopFixed = true
-                          }
-                          if (tpP !== null && tpP <= entryP) {
-                            const c = (atr > 0 ? entryP + atr * 3 : entryP * 1.08).toFixed(2)
-                            tpVal = `$${c} first target (3× ATR above entry)`
-                            tpFixed = true
-                          }
-                        } else {
-                          // BEARISH: stop must be > entry, target must be < entry
-                          if (stopP !== null && stopP <= entryP) {
-                            const c = (atr > 0 ? entryP + atr * 2 : entryP * 1.07).toFixed(2)
-                            stopVal = `$${c} — 2× ATR above entry`
-                            stopFixed = true
-                          }
-                          if (tpP !== null && tpP >= entryP) {
-                            const c = (atr > 0 ? entryP - atr * 3 : entryP * 0.92).toFixed(2)
-                            tpVal = `$${c} first target (3× ATR below entry)`
-                            tpFixed = true
+                        // NEUTRAL signals have no defined direction — skip correction.
+                        // The LLM's levels are kept as-is. (If they contradict each other,
+                        // that's a different bug, but at least we don't flip a short-shaped
+                        // plan into a long-shaped one with this auto-correction.)
+                        const isNeutralSignal = jud.signal === 'NEUTRAL'
+                        if (!isNeutralSignal) {
+                          if (!isBearish) {
+                            // BULLISH: stop must be < entry, target must be > entry
+                            if (stopP !== null && stopP >= entryP) {
+                              const c = (atr > 0 ? entryP - atr * 2 : entryP * 0.93).toFixed(2)
+                              stopVal = `$${c} — 2× ATR below entry`
+                              stopFixed = true
+                            }
+                            if (tpP !== null && tpP <= entryP) {
+                              const c = (atr > 0 ? entryP + atr * 3 : entryP * 1.08).toFixed(2)
+                              tpVal = `$${c} first target (3× ATR above entry)`
+                              tpFixed = true
+                            }
+                          } else {
+                            // BEARISH: stop must be > entry, target must be < entry
+                            if (stopP !== null && stopP <= entryP) {
+                              const c = (atr > 0 ? entryP + atr * 2 : entryP * 1.07).toFixed(2)
+                              stopVal = `$${c} — 2× ATR above entry`
+                              stopFixed = true
+                            }
+                            if (tpP !== null && tpP >= entryP) {
+                              const c = (atr > 0 ? entryP - atr * 3 : entryP * 0.92).toFixed(2)
+                              tpVal = `$${c} first target (3× ATR below entry)`
+                              tpFixed = true
+                            }
                           }
                         }
 
@@ -1930,8 +1937,10 @@ function HomeInner() {
                   const entryP2 = xP(jud.entryPrice) ?? currentP2
                   const stopWrong2 = (() => { const p = xP(jud.stopLoss); return p !== null && (!isBearish2 ? p >= entryP2 : p <= entryP2) })()
                   const tpWrong2   = (() => { const p = xP(jud.takeProfit); return p !== null && (!isBearish2 ? p <= entryP2 : p >= entryP2) })()
-                  const cStop = stopWrong2 ? `$${(atr2 > 0 ? (isBearish2 ? entryP2 + atr2 * 2 : entryP2 - atr2 * 2) : entryP2 * (isBearish2 ? 1.07 : 0.93)).toFixed(2)}` : null
-                  const cTp   = tpWrong2   ? `$${(atr2 > 0 ? (isBearish2 ? entryP2 - atr2 * 3 : entryP2 + atr2 * 3) : entryP2 * (isBearish2 ? 0.92 : 1.08)).toFixed(2)}` : null
+                  // NEUTRAL signals: skip correction (no defined direction)
+                  const isNeutral2 = jud.signal === 'NEUTRAL'
+                  const cStop = (!isNeutral2 && stopWrong2) ? `$${(atr2 > 0 ? (isBearish2 ? entryP2 + atr2 * 2 : entryP2 - atr2 * 2) : entryP2 * (isBearish2 ? 1.07 : 0.93)).toFixed(2)}` : null
+                  const cTp   = (!isNeutral2 && tpWrong2)   ? `$${(atr2 > 0 ? (isBearish2 ? entryP2 - atr2 * 3 : entryP2 + atr2 * 3) : entryP2 * (isBearish2 ? 0.92 : 1.08)).toFixed(2)}` : null
                   return (
                     <div className="rounded-xl p-4" style={{ background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)' }}>
                       <div className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: '#fbbf24' }}>Action plan</div>
