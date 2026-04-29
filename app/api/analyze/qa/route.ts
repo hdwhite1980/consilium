@@ -17,6 +17,13 @@
 // roughly 6K tokens before the oldest gets trimmed.
 //
 // Cost per turn: ~$0.02-0.04 (3K input + 500 output @ Sonnet pricing)
+//
+// DATE GROUNDING (added 2026-04-29):
+// The system prompt now leads with an authoritative "today is" anchor
+// computed from server time, plus a "trust the user's stated dates"
+// rule. Without this the model assumed "today" was somewhere near its
+// training cutoff and either argued with the user about dates or
+// said it didn't know what today was.
 // =============================================================
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -36,6 +43,13 @@ interface QAMessage {
 interface AnalysisContext {
   ticker: string
   currentPrice: number
+  /**
+   * ISO timestamp of when the Council analysis was generated.
+   * Optional for back-compat with older client builds. When supplied,
+   * the QA model is told how stale the underlying analysis is so it
+   * can reason about price/indicator drift between then and now.
+   */
+  generatedAt?: string | null
   // Final verdict
   verdict: {
     signal: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
@@ -129,6 +143,71 @@ function getAnthropic(): Anthropic {
 }
 
 /**
+ * Build a date-grounding block for the top of the system prompt.
+ * Inlined here (rather than imported from a shared helper) to keep
+ * this fix as a single-file drop-in. If you later want this in
+ * other endpoints (exit-signals, portfolio/check), extract this
+ * into app/lib/prompt-grounding.ts and import it.
+ */
+function dateGroundingBlock(analysisTimestamp: string | null | undefined): string {
+  const now = new Date()
+  const isoDate = now.toISOString().split('T')[0]                       // 2026-04-29
+  const longDate = now.toUTCString().split(' ').slice(0, 4).join(' ')   // Wed, 29 Apr 2026
+  const utcTime = now.toISOString().split('T')[1].slice(0, 5)           // 13:42
+
+  const lines: string[] = []
+
+  lines.push(`Today is ${longDate} (ISO: ${isoDate}, ${utcTime} UTC).`)
+  lines.push(
+    `This is the actual current date, supplied by the server. Your training data ` +
+    `may be older, but the date above is authoritative. Whenever you need "today's ` +
+    `date" — for computing days-to-expiry, days-since-an-event, or answering "what ` +
+    `is today" — use this. Never substitute your training cutoff.`
+  )
+  lines.push('')
+  lines.push(
+    `When the user states a date (e.g. an option expiration, a transaction date, ` +
+    `"today is X"), TRUST IT. Do not tell the user their date "can't be right" or ` +
+    `"must be a typo" — even if it conflicts with what your training data suggests. ` +
+    `The user has access to a calendar; you do not. If the user's stated date is in ` +
+    `your future relative to training, that just means time has passed since you ` +
+    `were trained — accept it and reason from there.`
+  )
+
+  // Optional: if we know when the underlying analysis was generated,
+  // tell the model how stale it is so it can reason about price drift.
+  if (analysisTimestamp) {
+    const analysisDate = new Date(analysisTimestamp)
+    if (!Number.isNaN(analysisDate.getTime())) {
+      const ageMs = now.getTime() - analysisDate.getTime()
+      const ageMinutes = Math.round(ageMs / 60_000)
+      const ageHours = Math.round(ageMs / 3_600_000)
+      const ageDays = Math.round(ageMs / 86_400_000)
+
+      let ageStr: string
+      if (ageMinutes < 60) {
+        ageStr = `${ageMinutes} minute${ageMinutes === 1 ? '' : 's'} ago`
+      } else if (ageHours < 48) {
+        ageStr = `${ageHours} hour${ageHours === 1 ? '' : 's'} ago`
+      } else {
+        ageStr = `${ageDays} day${ageDays === 1 ? '' : 's'} ago`
+      }
+
+      lines.push('')
+      lines.push(
+        `The Council analysis you are referencing was generated ${ageStr} ` +
+        `(at ${analysisDate.toISOString()}). Prices and indicator values inside ` +
+        `that analysis are from then, not now. If the user mentions a current ` +
+        `price that differs from the verdict's entry/stop/target levels, both ` +
+        `can be true — the price has moved since the analysis ran.`
+      )
+    }
+  }
+
+  return lines.join('\n')
+}
+
+/**
  * Trim conversation history to stay within ~6K tokens.
  * Rough approximation: 4 chars per token.
  * Keeps most recent exchanges, drops oldest if over budget.
@@ -164,11 +243,20 @@ function trimHistory(history: QAMessage[]): QAMessage[] {
 /**
  * Build the system prompt — defines Claude's role and includes the
  * full Council analysis context.
+ *
+ * Order matters: date grounding goes FIRST (before role description)
+ * so the model treats it as foundational context rather than a
+ * footnote it can override with training-data assumptions.
  */
 function buildSystemPrompt(ctx: AnalysisContext): string {
   const v = ctx.verdict
   const sections: string[] = []
 
+  // ── Date grounding — MUST be first so the model anchors on it ──
+  sections.push(dateGroundingBlock(ctx.generatedAt))
+  sections.push(``)
+
+  // ── Role description ──
   sections.push(`You are a senior market analyst answering follow-up questions about a Council analysis you helped produce for ${ctx.ticker} at $${ctx.currentPrice.toFixed(2)}.`)
   sections.push(``)
   sections.push(`Your job is to answer questions clearly and directly using the analysis below. Stay grounded in the evidence already gathered. If asked something the data doesn't support, say so plainly. Do not speculate beyond what the analysis shows.`)
