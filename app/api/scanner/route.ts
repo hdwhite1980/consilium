@@ -7,23 +7,26 @@
 // GET  /api/scanner              — list available universes + filters
 // POST /api/scanner               — run a scan
 //   body: {
-//     universe?: string            (predefined id, defaults to 'all')
-//     filter?: ScannerFilter       (optional filter overlay)
-//     mode?: 'bullish'|'bearish'|'both'   (default 'both')
-//     limit?: number               (default 15, max 50)
-//     newsBoost?: boolean          (default false; folds news exposure into composite)
+//     universe?: string                    (predefined id, defaults to 'all')
+//     filter?: ScannerFilter               (optional filter overlay)
+//     mode?: 'bullish'|'bearish'|'both'    (default 'both')
+//     scanType?: 'directional'|'fast_movers'  (default 'directional')
+//     horizon?: 'day'|'week'                (only used when scanType='fast_movers')
+//     priceCeiling?: number                 (only fast_movers; default 20)
+//     limit?: number                        (default 15, max 50)
+//     newsBoost?: boolean                   (default false)
 //   }
 //
-// Architecture:
-//   - Fetch SPY bars first (for rel strength baseline) — 1 call
-//   - Fetch all universe ticker bars in parallel batches of 25
-//   - If newsBoost: also fetch news exposure bundle once (1 round trip)
-//   - Compute calculateTechnicals + true 10d/30d % changes per ticker
-//   - scoreTicker() → optionally apply news exposure → sort → return top N
+// SCAN TYPES
+//   - directional   : original Track A/B scoring (60% directional + 40% rel-strength)
+//   - fast_movers   : new mode — surfaces sub-priceCeiling tickers that look ready
+//                     to move fast, scoring momentum + coiled potential together,
+//                     respecting the user's "no liquidity floor" choice but
+//                     surfacing a liquidity badge on every pick.
 //
-// Typical total time: 5-15 seconds for full universe.
-// 5-minute cache shared across users; cache key includes newsBoost flag
-// so boosted and non-boosted scans don't share cache entries.
+// CACHE
+//   5-minute cache shared across users. Key includes scanType, horizon,
+//   priceCeiling, newsBoost so different combinations don't collide.
 // ═════════════════════════════════════════════════════════════
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -40,6 +43,13 @@ import {
 } from '@/app/lib/scanner-universe'
 import { scoreTicker, pctChangeOverDays, type TickerScore } from '@/app/lib/scanner-scoring'
 import {
+  scoreMomentum,
+  computeLiquidity,
+  type Horizon,
+  type SetupType,
+  type LiquidityTier,
+} from '@/app/lib/scanner-momentum'
+import {
   buildNewsExposureMap,
   applyExposureToComposite,
   type NewsExposureContext,
@@ -51,9 +61,10 @@ import {
 
 const MIN_BARS_FOR_30D = 32
 const RATE_LIMIT_PER_MINUTE = 10
+const DEFAULT_FAST_MOVER_PRICE_CEILING = 20
 
 // ─────────────────────────────────────────────────────────────
-// Cache (in-memory, per-process) — SHARED across users
+// Cache
 // ─────────────────────────────────────────────────────────────
 
 interface ScanCacheEntry {
@@ -63,8 +74,11 @@ interface ScanCacheEntry {
 const scanCache = new Map<string, ScanCacheEntry>()
 const CACHE_TTL_MS = 5 * 60 * 1000
 
-function cacheKey(universe: string, mode: string, filterHash: string, newsBoost: boolean): string {
-  return `${universe}:${mode}:${filterHash}:${newsBoost ? 'nb1' : 'nb0'}`
+function cacheKey(
+  universe: string, mode: string, filterHash: string, newsBoost: boolean,
+  scanType: ScanType, horizon: Horizon, priceCeiling: number,
+): string {
+  return `${universe}:${mode}:${filterHash}:${newsBoost ? 'nb1' : 'nb0'}:${scanType}:${horizon}:${priceCeiling}`
 }
 
 function hashFilter(f: ScannerFilter | undefined): string {
@@ -90,13 +104,11 @@ function checkRateLimit(userId: string): { allowed: boolean; retryAfterSec?: num
   const now = Date.now()
   const windowStart = now - 60_000
   const timestamps = (rateLimitState.get(userId) ?? []).filter(t => t > windowStart)
-
   if (timestamps.length >= RATE_LIMIT_PER_MINUTE) {
     const oldest = timestamps[0]
     const retryAfterSec = Math.ceil((oldest + 60_000 - now) / 1000)
     return { allowed: false, retryAfterSec: Math.max(1, retryAfterSec) }
   }
-
   timestamps.push(now)
   rateLimitState.set(userId, timestamps)
   return { allowed: true }
@@ -118,24 +130,43 @@ function maybeCleanupRateLimits(): void {
 // ─────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────
+
+export type ScanType = 'directional' | 'fast_movers'
+
 interface EnrichedScore extends TickerScore {
   sector: string
   cap: string
   priceTier: string
   tags: string[]
 
-  // News exposure fields (populated when newsBoost=true)
-  newsExposureScore?: number       // -100..+100 raw aggregate
-  newsAlignedBoost?: number        // signed by direction
-  compositeWithNews?: number       // blended composite when boost applied
-  newsSummary?: string             // short tooltip text
-  newsReasons?: string[]           // up to 3 theme/event titles
+  // News exposure (from Track B)
+  newsExposureScore?: number
+  newsAlignedBoost?: number
+  compositeWithNews?: number
+  newsSummary?: string
+  newsReasons?: string[]
   newsMatchType?: 'direct' | 'sector' | 'digest' | 'none'
+
+  // Fast-mover fields (only populated when scanType='fast_movers')
+  momentumScore?: number
+  setupType?: SetupType
+  activeMomentum?: number
+  coiledPotential?: number
+  setupQuality?: number
+  momentumReasons?: string[]
+
+  // Liquidity (always computed when scanType='fast_movers')
+  dollarVolumeAvg?: number
+  liquidityTier?: LiquidityTier
+  liquidityLabel?: string
 }
 
 export interface ScanResult {
   universe: string
   mode: 'bullish' | 'bearish' | 'both'
+  scanType: ScanType
+  horizon?: Horizon
+  priceCeiling?: number
   scannedCount: number
   withTechnicalsCount: number
   picks: EnrichedScore[]
@@ -145,12 +176,12 @@ export interface ScanResult {
   elapsedMs: number
   cached: boolean
   ageMinutes?: number
-  newsBoost: boolean               // echoed back so UI can confirm
+  newsBoost: boolean
   error?: string
 }
 
 // ─────────────────────────────────────────────────────────────
-// Fetch SPY context for the rel-strength baseline
+// SPY context
 // ─────────────────────────────────────────────────────────────
 async function fetchSpyContext(): Promise<{ change10d: number; change30d: number } | null> {
   try {
@@ -167,7 +198,7 @@ async function fetchSpyContext(): Promise<{ change10d: number; change30d: number
 }
 
 // ─────────────────────────────────────────────────────────────
-// Fetch + calculate technicals for a single ticker
+// Per-ticker fetch
 // ─────────────────────────────────────────────────────────────
 async function computeTickerTechnicals(ticker: string): Promise<{
   ticker: string
@@ -186,13 +217,16 @@ async function computeTickerTechnicals(ticker: string): Promise<{
 }
 
 // ─────────────────────────────────────────────────────────────
-// Scan a set of tickers in parallel batches
+// Scan tickers — handles both scan types in one pass
 // ─────────────────────────────────────────────────────────────
 async function scanTickers(
   entries: UniverseEntry[],
   spyChange10d: number,
   spyChange30d: number,
   newsExposureMap: Map<string, NewsExposureContext> | null,
+  scanType: ScanType,
+  horizon: Horizon,
+  priceCeiling: number,
 ): Promise<EnrichedScore[]> {
   const BATCH_SIZE = 25
   const results: EnrichedScore[] = []
@@ -203,6 +237,13 @@ async function scanTickers(
     const batchResults = await Promise.all(batch.map(async (entry) => {
       const data = await computeTickerTechnicals(entry.ticker)
       if (!data) return null
+
+      // ── Fast-mover price gate ──
+      // Done with FRESH price, not stale priceTier metadata. A ticker
+      // tagged 'under50' last month might be $19 today (or $52).
+      if (scanType === 'fast_movers' && data.technicals.currentPrice > priceCeiling) {
+        return null
+      }
 
       const tickerChange10d = pctChangeOverDays(data.closes, 10)
       const tickerChange30d = pctChangeOverDays(data.closes, 30)
@@ -224,7 +265,7 @@ async function scanTickers(
         tags: entry.tags,
       }
 
-      // ── Optional news exposure overlay ──
+      // ── News exposure overlay ──
       if (newsExposureMap) {
         const ctx = newsExposureMap.get(entry.ticker)
         if (ctx) {
@@ -242,6 +283,35 @@ async function scanTickers(
         }
       }
 
+      // ── Fast-mover scoring ──
+      if (scanType === 'fast_movers') {
+        const change5d = pctChangeOverDays(data.closes, 5)
+        const mom = scoreMomentum({
+          technicals: data.technicals,
+          horizon,
+          change5d,
+        })
+        enriched.momentumScore = mom.score
+        enriched.setupType = mom.setupType
+        enriched.activeMomentum = mom.parts.activeMomentum
+        enriched.coiledPotential = mom.parts.coiledPotential
+        enriched.setupQuality = mom.parts.setupQuality
+        enriched.momentumReasons = mom.reasons
+
+        // Override direction if momentum scorer disagrees and it has
+        // a confident view — momentum knows about coiled bias and
+        // active breakouts in ways the directional scorer doesn't.
+        if (mom.direction !== 'unclear' && mom.score >= 40) {
+          enriched.direction = mom.direction === 'bullish' ? 'bullish' : 'bearish'
+        }
+
+        // Liquidity always computed for fast movers
+        const liq = computeLiquidity(data.technicals)
+        enriched.dollarVolumeAvg = liq.avgDollarVolume
+        enriched.liquidityTier = liq.tier
+        enriched.liquidityLabel = liq.label
+      }
+
       return enriched
     }))
 
@@ -254,7 +324,7 @@ async function scanTickers(
 }
 
 // ═════════════════════════════════════════════════════════════
-// GET /api/scanner — return universe options + filter schema
+// GET
 // ═════════════════════════════════════════════════════════════
 export async function GET() {
   try {
@@ -279,11 +349,11 @@ export async function GET() {
           'crypto', 'cloud', 'biotech', 'cybersec', 'volatile', 'meme'],
       },
       universeSize: SCANNER_UNIVERSE.length,
-      // Tells the UI whether news boost is even available (it depends on
-      // the macro intelligence layer being populated). Cheap check: the
-      // toggle is always available; the boost just degrades to 0 if
-      // there are no themes/events. So always true here.
       newsBoostAvailable: true,
+      scanTypes: [
+        { id: 'directional', label: 'Directional', description: 'Setup + rel-strength vs SPY (default)' },
+        { id: 'fast_movers', label: 'Fast Movers', description: 'Sub-$20 stocks ready to move (day or week horizon)' },
+      ],
     })
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message?.slice(0, 200) }, { status: 500 })
@@ -291,7 +361,7 @@ export async function GET() {
 }
 
 // ═════════════════════════════════════════════════════════════
-// POST /api/scanner — run a scan
+// POST
 // ═════════════════════════════════════════════════════════════
 export async function POST(req: NextRequest) {
   const started = Date.now()
@@ -318,14 +388,19 @@ export async function POST(req: NextRequest) {
     const mode: 'bullish' | 'bearish' | 'both' = ['bullish', 'bearish', 'both'].includes(body?.mode) ? body.mode : 'both'
     const limit = Math.max(1, Math.min(50, typeof body?.limit === 'number' ? body.limit : 15))
     const newsBoost: boolean = body?.newsBoost === true
+    const scanType: ScanType = body?.scanType === 'fast_movers' ? 'fast_movers' : 'directional'
+    const horizon: Horizon = body?.horizon === 'day' ? 'day' : 'week'
+    const priceCeiling: number = scanType === 'fast_movers'
+      ? Math.max(1, Math.min(500, typeof body?.priceCeiling === 'number' ? body.priceCeiling : DEFAULT_FAST_MOVER_PRICE_CEILING))
+      : 0
 
     const effectiveFilter: ScannerFilter = { ...filter, predefined: filter.predefined ?? universe }
 
-    const key = cacheKey(universe, mode, hashFilter(effectiveFilter), newsBoost)
+    const key = cacheKey(universe, mode, hashFilter(effectiveFilter), newsBoost, scanType, horizon, priceCeiling)
     const cached = scanCache.get(key)
     if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
       const age = Math.round((Date.now() - cached.fetchedAt) / 60000)
-      console.log(`[scanner] cache hit (age ${age}m, newsBoost=${newsBoost})`)
+      console.log(`[scanner] cache hit (age ${age}m, scanType=${scanType})`)
       return NextResponse.json({ ...cached.result, cached: true, ageMinutes: age })
     }
 
@@ -335,22 +410,19 @@ export async function POST(req: NextRequest) {
         error: 'No tickers match your filter. Try a broader universe or remove some constraints.',
       }, { status: 400 })
     }
-    console.log(`[scanner] scanning ${entries.length} tickers (universe: ${universe}, mode: ${mode}, newsBoost: ${newsBoost})`)
+    console.log(`[scanner] scanning ${entries.length} tickers (universe: ${universe}, mode: ${mode}, scanType: ${scanType}, horizon: ${horizon}, ceiling: $${priceCeiling}, newsBoost: ${newsBoost})`)
 
-    // Fetch SPY context first (still needs to be sequential before scoring)
+    // SPY context
     const spyStart = Date.now()
     const spyContext = await fetchSpyContext()
     if (!spyContext) {
       console.warn('[scanner] SPY context unavailable — rel strength scores will be neutral')
     }
     console.log(`[scanner] SPY context in ${Date.now() - spyStart}ms`)
-
     const spyChange10d = spyContext?.change10d ?? 0
     const spyChange30d = spyContext?.change30d ?? 0
 
-    // Fetch news exposure bundle in parallel with the rest of the work
-    // when the toggle is on. The bundle is small (<30 records) and cached,
-    // so this rarely costs more than ~50ms.
+    // News exposure (best-effort)
     let newsExposureMap: Map<string, NewsExposureContext> | null = null
     if (newsBoost) {
       try {
@@ -361,35 +433,52 @@ export async function POST(req: NextRequest) {
         console.log(`[scanner] news exposure map built in ${Date.now() - newsStart}ms`)
       } catch (e) {
         console.warn('[scanner] news exposure failed, continuing without boost:', (e as Error).message?.slice(0, 200))
-        // Don't fail the whole scan — news boost is best-effort
         newsExposureMap = null
       }
     }
 
-    // Scan all tickers
+    // Scan
     const scanStart = Date.now()
-    const allScores = await scanTickers(entries, spyChange10d, spyChange30d, newsExposureMap)
+    const allScores = await scanTickers(
+      entries, spyChange10d, spyChange30d, newsExposureMap,
+      scanType, horizon, priceCeiling,
+    )
     console.log(`[scanner] scored ${allScores.length}/${entries.length} tickers in ${Date.now() - scanStart}ms`)
 
-    // Filter by mode
+    // ── Filter by mode ──
+    // For fast_movers, the momentum scorer overrides direction so this still
+    // works correctly. 'mixed' picks are included in 'both' but excluded
+    // from 'bullish'/'bearish' (they explicitly couldn't pick a side).
     let filtered = allScores
     if (mode === 'bullish') filtered = allScores.filter(s => s.direction === 'bullish')
     else if (mode === 'bearish') filtered = allScores.filter(s => s.direction === 'bearish')
 
-    // Sort by composite score (highest first).
-    // When newsBoost is on, compositeWithNews supersedes compositeScore for ranking.
-    // (compositeScore is direction-agnostic — see Track A note.)
-    filtered.sort((a, b) => {
-      const aScore = newsBoost ? (a.compositeWithNews ?? a.compositeScore) : a.compositeScore
-      const bScore = newsBoost ? (b.compositeWithNews ?? b.compositeScore) : b.compositeScore
-      return bScore - aScore
-    })
+    // ── Sort ──
+    if (scanType === 'fast_movers') {
+      // Sort by combined: 0.6 × momentumScore + 0.4 × directionalScore
+      // so structure still matters but momentum dominates
+      filtered.sort((a, b) => {
+        const aScore = (a.momentumScore ?? 0) * 0.6 + a.directionalScore * 0.4
+        const bScore = (b.momentumScore ?? 0) * 0.6 + b.directionalScore * 0.4
+        return bScore - aScore
+      })
+    } else {
+      // Directional mode — use compositeWithNews when present
+      filtered.sort((a, b) => {
+        const aScore = newsBoost ? (a.compositeWithNews ?? a.compositeScore) : a.compositeScore
+        const bScore = newsBoost ? (b.compositeWithNews ?? b.compositeScore) : b.compositeScore
+        return bScore - aScore
+      })
+    }
 
     const picks = filtered.slice(0, limit)
 
     const result: ScanResult = {
       universe,
       mode,
+      scanType,
+      horizon: scanType === 'fast_movers' ? horizon : undefined,
+      priceCeiling: scanType === 'fast_movers' ? priceCeiling : undefined,
       scannedCount: entries.length,
       withTechnicalsCount: allScores.length,
       picks,
@@ -403,7 +492,7 @@ export async function POST(req: NextRequest) {
 
     scanCache.set(key, { result, fetchedAt: Date.now() })
 
-    // Log scan to DB for performance tracking (fire-and-forget)
+    // Log scan to DB
     void (async () => {
       try {
         const admin = createAdmin(
@@ -423,6 +512,9 @@ export async function POST(req: NextRequest) {
               compositeScore: p.compositeScore,
               compositeWithNews: p.compositeWithNews ?? null,
               newsExposureScore: p.newsExposureScore ?? null,
+              momentumScore: p.momentumScore ?? null,
+              setupType: p.setupType ?? null,
+              liquidityTier: p.liquidityTier ?? null,
               directionalScore: p.directionalScore,
               relStrengthScore: p.relStrengthScore,
               direction: p.direction,
@@ -431,6 +523,9 @@ export async function POST(req: NextRequest) {
             spy_change_10d: spyChange10d,
             spy_change_30d: spyChange30d,
             news_boost: newsBoost,
+            scan_type: scanType,
+            horizon: scanType === 'fast_movers' ? horizon : null,
+            price_ceiling: scanType === 'fast_movers' ? priceCeiling : null,
             generated_at: result.generatedAt,
             elapsed_ms: result.elapsedMs,
           })
@@ -457,7 +552,7 @@ export async function POST(req: NextRequest) {
       }
     })()
 
-    console.log(`[scanner] DONE in ${result.elapsedMs}ms — ${picks.length} picks (newsBoost=${newsBoost})`)
+    console.log(`[scanner] DONE in ${result.elapsedMs}ms — ${picks.length} picks (scanType=${scanType})`)
     return NextResponse.json(result)
 
   } catch (e) {

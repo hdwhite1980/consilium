@@ -3,20 +3,19 @@
 // ═════════════════════════════════════════════════════════════
 // app/scanner/page.tsx
 //
-// Stock scanner — pick a universe + mode + optional filters,
-// get a ranked leaderboard of the top 15 tickers by composite score.
+// Stock scanner with TWO scan modes:
 //
-// Composite combines:
-//   - Directional setup (60% weight) — multiple indicators agreeing
-//   - Relative strength vs SPY (40% weight) — 10d + 30d outperformance
+//   Directional — original scoring: 60% directional + 40% rel-strength.
+//                 Optional news boost overlay.
 //
-// Optional News boost (Track B): when toggled, the API folds in a
-// per-ticker news exposure score derived from active macro themes,
-// recent macro events, and the latest market digest. The boost can
-// confirm or contradict a pick depending on direction alignment.
+//   Fast Movers — surfaces sub-$X tickers (default $20) that look ready
+//                 to move FAST. Combines:
+//                   - Active momentum (already breaking out / volume surging)
+//                   - Coiled potential (squeezing, near key levels)
+//                 Both kinds rank together. User picks horizon (day/week).
+//                 Liquidity badge shown on every pick — no hard filter.
 //
-// Each row click expands to show all reasons + allows click-through
-// to /analyze for full Council treatment or add-to-watchlist.
+// News boost works on top of either mode.
 // ═════════════════════════════════════════════════════════════
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
@@ -26,13 +25,18 @@ import {
   ArrowLeft, Search, Zap, TrendingUp, TrendingDown, Minus,
   Filter, X, LogOut, ChevronDown, BarChart3,
   Activity, Target, Eye, Play, Clock, Globe,
-  Star, StarOff, Save, Download, Check, Newspaper,
+  Star, StarOff, Save, Download, Check, Newspaper, Flame, Droplet,
 } from 'lucide-react'
 import { AddToWatchlistButton } from '@/app/components/AddToWatchlistButton'
 
 // ─────────────────────────────────────────────────────────────
 // Types (must match /api/scanner response)
 // ─────────────────────────────────────────────────────────────
+type ScanType = 'directional' | 'fast_movers'
+type Horizon = 'day' | 'week'
+type SetupType = 'breakout' | 'coiled' | 'continuation' | 'mixed'
+type LiquidityTier = 'high' | 'moderate' | 'low' | 'illiquid'
+
 interface ScanPick {
   ticker: string
   compositeScore: number
@@ -60,18 +64,34 @@ interface ScanPick {
   priceTier: string
   tags: string[]
 
-  // News exposure (Track B) — populated only when newsBoost was true on the scan
-  newsExposureScore?: number       // -100..+100 raw aggregate
-  newsAlignedBoost?: number        // signed by direction
-  compositeWithNews?: number       // blended composite when boost applied
-  newsSummary?: string             // short tooltip text
-  newsReasons?: string[]           // up to 3 theme/event titles
+  // News exposure (Track B)
+  newsExposureScore?: number
+  newsAlignedBoost?: number
+  compositeWithNews?: number
+  newsSummary?: string
+  newsReasons?: string[]
   newsMatchType?: 'direct' | 'sector' | 'digest' | 'none'
+
+  // Fast-mover fields
+  momentumScore?: number
+  setupType?: SetupType
+  activeMomentum?: number
+  coiledPotential?: number
+  setupQuality?: number
+  momentumReasons?: string[]
+
+  // Liquidity (fast-mover scans only)
+  dollarVolumeAvg?: number
+  liquidityTier?: LiquidityTier
+  liquidityLabel?: string
 }
 
 interface ScanResult {
   universe: string
   mode: 'bullish' | 'bearish' | 'both'
+  scanType: ScanType
+  horizon?: Horizon
+  priceCeiling?: number
   scannedCount: number
   withTechnicalsCount: number
   picks: ScanPick[]
@@ -98,11 +118,18 @@ interface FilterSchema {
   commonTags: string[]
 }
 
+interface ScanTypeOption {
+  id: ScanType
+  label: string
+  description: string
+}
+
 interface ScannerConfig {
   universes: UniverseOption[]
   filterSchema: FilterSchema
   universeSize?: number
   newsBoostAvailable?: boolean
+  scanTypes?: ScanTypeOption[]
 }
 
 interface CustomFilter {
@@ -155,17 +182,41 @@ function fmt$(n: number | null | undefined, decimals = 2): string {
 }
 
 function scoreColor(score: number): string {
-  if (score >= 75) return '#34d399'   // green — strong
-  if (score >= 60) return '#a7f3d0'   // light green — good
-  if (score >= 45) return '#fbbf24'   // amber — moderate
-  if (score >= 30) return '#fb923c'   // orange — weak
-  return '#94a3b8'                    // gray — poor
+  if (score >= 75) return '#34d399'
+  if (score >= 60) return '#a7f3d0'
+  if (score >= 45) return '#fbbf24'
+  if (score >= 30) return '#fb923c'
+  return '#94a3b8'
 }
 
 function directionColor(d: 'bullish' | 'bearish' | 'mixed'): string {
   if (d === 'bullish') return '#34d399'
   if (d === 'bearish') return '#f87171'
   return '#94a3b8'
+}
+
+function liquidityColor(tier: LiquidityTier | undefined): string {
+  if (!tier) return '#94a3b8'
+  if (tier === 'high') return '#34d399'
+  if (tier === 'moderate') return '#fbbf24'
+  if (tier === 'low') return '#fb923c'
+  return '#f87171'  // illiquid
+}
+
+function setupTypeLabel(s: SetupType | undefined): string {
+  if (!s) return ''
+  if (s === 'breakout') return 'Breakout'
+  if (s === 'coiled') return 'Coiled'
+  if (s === 'continuation') return 'Continuation'
+  return 'Mixed'
+}
+
+function setupTypeColor(s: SetupType | undefined): string {
+  if (!s) return '#94a3b8'
+  if (s === 'breakout') return '#34d399'      // green — active fire
+  if (s === 'coiled') return '#fbbf24'        // amber — coiled spring
+  if (s === 'continuation') return '#60a5fa'  // blue — riding
+  return '#a78bfa'                            // purple — mixed
 }
 
 const SECTOR_LABEL: Record<string, string> = {
@@ -198,23 +249,29 @@ const CAP_LABEL: Record<string, string> = {
 // Individual pick row
 // ─────────────────────────────────────────────────────────────
 function PickRow({
-  pick, rank, onAnalyze,
+  pick, rank, onAnalyze, scanType,
 }: {
   pick: ScanPick
   rank: number
   onAnalyze: (ticker: string) => void
+  scanType: ScanType
 }) {
   const [expanded, setExpanded] = useState(false)
 
   const dirColor = directionColor(pick.direction)
 
-  // When news boost was applied, show the boosted composite as the
-  // primary number (compositeWithNews); fall back to compositeScore.
-  const displayedComposite = pick.compositeWithNews ?? pick.compositeScore
-  const compColor = scoreColor(displayedComposite)
+  // For fast-movers, the headline number is momentumScore (or a blended ranking).
+  // For directional, it's compositeScore (or compositeWithNews when news-boosted).
+  const isFast = scanType === 'fast_movers'
+  const headlineScore = isFast
+    ? Math.round((pick.momentumScore ?? 0) * 0.6 + pick.directionalScore * 0.4)
+    : (pick.compositeWithNews ?? pick.compositeScore)
+  const compColor = scoreColor(headlineScore)
+
   const hasNewsBoost = pick.compositeWithNews !== undefined
     && pick.compositeWithNews !== pick.compositeScore
   const hasNewsContext = pick.newsSummary && pick.newsMatchType !== 'none'
+  const hasMomentum = pick.momentumScore !== undefined
 
   return (
     <div className="rounded-xl border transition-all"
@@ -255,10 +312,35 @@ function PickRow({
                 style={{ background: 'rgba(148,163,184,0.1)', color: '#94a3b8' }}>
                 {SECTOR_LABEL[pick.sector] ?? pick.sector} · {CAP_LABEL[pick.cap] ?? pick.cap}
               </span>
+
+              {/* Fast-mover: setup type + liquidity badges */}
+              {isFast && pick.setupType && (
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded flex items-center gap-1"
+                  style={{
+                    background: `${setupTypeColor(pick.setupType)}18`,
+                    color: setupTypeColor(pick.setupType),
+                    border: `1px solid ${setupTypeColor(pick.setupType)}30`,
+                  }}>
+                  <Flame size={9} />
+                  {setupTypeLabel(pick.setupType)}
+                </span>
+              )}
+              {isFast && pick.liquidityTier && (
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded flex items-center gap-1"
+                  title={`Avg dollar volume: ${pick.liquidityLabel ?? '—'}. ${pick.liquidityTier === 'illiquid' ? 'Be careful — limited liquidity.' : pick.liquidityTier === 'low' ? 'Limited liquidity.' : pick.liquidityTier === 'moderate' ? 'Moderate liquidity.' : 'Easily tradeable.'}`}
+                  style={{
+                    background: `${liquidityColor(pick.liquidityTier)}15`,
+                    color: liquidityColor(pick.liquidityTier),
+                    border: `1px solid ${liquidityColor(pick.liquidityTier)}25`,
+                  }}>
+                  <Droplet size={9} />
+                  {pick.liquidityLabel ?? pick.liquidityTier}
+                </span>
+              )}
             </div>
             <p className="text-xs text-white/55 mt-1 truncate">{pick.keySetup}</p>
 
-            {/* News exposure badge — single line, only when news matched */}
+            {/* News exposure badge */}
             {hasNewsContext && (
               <div className="text-[10px] font-mono mt-0.5 flex items-center gap-1.5"
                 style={{
@@ -277,12 +359,12 @@ function PickRow({
             )}
           </div>
 
-          {/* Composite score — BIG (boosted when applicable) */}
+          {/* Headline score — BIG */}
           <div className="shrink-0 text-right">
             <div className="text-xl font-bold font-mono" style={{ color: compColor }}>
-              {displayedComposite}
+              {headlineScore}
             </div>
-            {hasNewsBoost && (
+            {hasNewsBoost && !isFast && (
               <div className="text-[9px] font-mono"
                 style={{
                   color: (pick.compositeWithNews ?? 0) > pick.compositeScore ? '#34d399' : '#f87171'
@@ -291,21 +373,34 @@ function PickRow({
               </div>
             )}
             <div className="text-[9px] font-mono text-white/40 uppercase tracking-widest">
-              score
+              {isFast ? 'mover' : 'score'}
             </div>
           </div>
 
           {/* Sub-scores (hidden on mobile) */}
           <div className="hidden sm:flex shrink-0 flex-col items-end gap-0.5 text-[10px] font-mono"
             style={{ minWidth: '80px' }}>
-            <span className="text-white/40">
-              dir: <span className="text-white/70">{pick.directionalScore}</span>
-            </span>
-            <span className="text-white/40">
-              rel: <span style={{ color: pick.relStrengthScore >= 50 ? '#34d399' : '#f87171' }}>
-                {pick.relStrength30d >= 0 ? '+' : ''}{pick.relStrength30d.toFixed(0)}%
-              </span>
-            </span>
+            {isFast && hasMomentum ? (
+              <>
+                <span className="text-white/40">
+                  active: <span className="text-white/70">{pick.activeMomentum}</span>
+                </span>
+                <span className="text-white/40">
+                  coiled: <span className="text-white/70">{pick.coiledPotential}</span>
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="text-white/40">
+                  dir: <span className="text-white/70">{pick.directionalScore}</span>
+                </span>
+                <span className="text-white/40">
+                  rel: <span style={{ color: pick.relStrengthScore >= 50 ? '#34d399' : '#f87171' }}>
+                    {pick.relStrength30d >= 0 ? '+' : ''}{pick.relStrength30d.toFixed(0)}%
+                  </span>
+                </span>
+              </>
+            )}
           </div>
 
           <span className="text-white/25 text-xs">{expanded ? '▲' : '▼'}</span>
@@ -315,44 +410,103 @@ function PickRow({
       {expanded && (
         <div className="px-3 sm:px-4 pb-4 space-y-3 border-t" style={{ borderColor: `${dirColor}15` }}>
 
-          {/* Score breakdown */}
-          <div className="pt-3 grid grid-cols-3 gap-2">
-            <div className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.03)' }}>
-              <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">Composite</div>
-              <div className="text-lg font-bold font-mono mt-0.5" style={{ color: compColor }}>
-                {displayedComposite}
-              </div>
-              {hasNewsBoost && (
-                <div className="text-[9px] font-mono mt-0.5"
-                  style={{
-                    color: (pick.compositeWithNews ?? 0) > pick.compositeScore ? '#34d399' : '#f87171'
-                  }}>
-                  was {pick.compositeScore}
+          {/* Score breakdown — different layout per scan type */}
+          {isFast && hasMomentum ? (
+            <div className="pt-3 grid grid-cols-3 gap-2">
+              <div className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">Active momentum</div>
+                <div className="text-lg font-bold font-mono mt-0.5" style={{ color: scoreColor(pick.activeMomentum ?? 0) }}>
+                  {pick.activeMomentum}
                 </div>
-              )}
+                <div className="text-[9px] font-mono mt-0.5 text-white/50">
+                  in motion now
+                </div>
+              </div>
+              <div className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">Coiled potential</div>
+                <div className="text-lg font-bold font-mono mt-0.5" style={{ color: scoreColor(pick.coiledPotential ?? 0) }}>
+                  {pick.coiledPotential}
+                </div>
+                <div className="text-[9px] font-mono mt-0.5 text-white/50">
+                  ready to pop
+                </div>
+              </div>
+              <div className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">Setup quality</div>
+                <div className="text-lg font-bold font-mono mt-0.5" style={{ color: scoreColor(pick.setupQuality ?? 0) }}>
+                  {pick.setupQuality}
+                </div>
+                <div className="text-[9px] font-mono mt-0.5 text-white/50">
+                  context bonus
+                </div>
+              </div>
             </div>
-            <div className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.03)' }}>
-              <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">Directional</div>
-              <div className="text-lg font-bold font-mono mt-0.5" style={{ color: scoreColor(pick.directionalScore) }}>
-                {pick.directionalScore}
+          ) : (
+            <div className="pt-3 grid grid-cols-3 gap-2">
+              <div className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">Composite</div>
+                <div className="text-lg font-bold font-mono mt-0.5" style={{ color: compColor }}>
+                  {pick.compositeWithNews ?? pick.compositeScore}
+                </div>
+                {hasNewsBoost && (
+                  <div className="text-[9px] font-mono mt-0.5"
+                    style={{
+                      color: (pick.compositeWithNews ?? 0) > pick.compositeScore ? '#34d399' : '#f87171'
+                    }}>
+                    was {pick.compositeScore}
+                  </div>
+                )}
               </div>
-              <div className="text-[9px] font-mono mt-0.5" style={{ color: dirColor }}>
-                {pick.direction}
+              <div className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">Directional</div>
+                <div className="text-lg font-bold font-mono mt-0.5" style={{ color: scoreColor(pick.directionalScore) }}>
+                  {pick.directionalScore}
+                </div>
+                <div className="text-[9px] font-mono mt-0.5" style={{ color: dirColor }}>
+                  {pick.direction}
+                </div>
+              </div>
+              <div className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">Rel Strength</div>
+                <div className="text-lg font-bold font-mono mt-0.5"
+                  style={{ color: pick.relStrengthScore >= 60 ? '#34d399' : pick.relStrengthScore >= 40 ? '#fbbf24' : '#f87171' }}>
+                  {pick.relStrengthScore}
+                </div>
+                <div className="text-[9px] font-mono mt-0.5 text-white/50">
+                  {pick.relStrength30d >= 0 ? '+' : ''}{pick.relStrength30d.toFixed(0)}% vs SPY
+                </div>
               </div>
             </div>
-            <div className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.03)' }}>
-              <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">Rel Strength</div>
-              <div className="text-lg font-bold font-mono mt-0.5"
-                style={{ color: pick.relStrengthScore >= 60 ? '#34d399' : pick.relStrengthScore >= 40 ? '#fbbf24' : '#f87171' }}>
-                {pick.relStrengthScore}
-              </div>
-              <div className="text-[9px] font-mono mt-0.5 text-white/50">
-                {pick.relStrength30d >= 0 ? '+' : ''}{pick.relStrength30d.toFixed(0)}% vs SPY
-              </div>
-            </div>
-          </div>
+          )}
 
-          {/* News exposure detail card — only when news boost was active */}
+          {/* Liquidity detail (fast-mover only) */}
+          {isFast && pick.liquidityTier && (
+            <div className="rounded-lg p-2.5 flex items-center gap-3"
+              style={{
+                background: `${liquidityColor(pick.liquidityTier)}08`,
+                border: `1px solid ${liquidityColor(pick.liquidityTier)}20`,
+              }}>
+              <Droplet size={14} style={{ color: liquidityColor(pick.liquidityTier) }} />
+              <div className="flex-1 min-w-0">
+                <div className="text-[10px] font-mono uppercase tracking-widest text-white/40">Liquidity</div>
+                <div className="text-sm font-bold font-mono"
+                  style={{ color: liquidityColor(pick.liquidityTier) }}>
+                  {pick.liquidityLabel}
+                  <span className="ml-2 text-[10px] uppercase tracking-widest">
+                    {pick.liquidityTier}
+                  </span>
+                </div>
+              </div>
+              <div className="text-[10px] font-mono text-white/45 text-right max-w-[180px]">
+                {pick.liquidityTier === 'illiquid' && 'Very thin — your order can move the price.'}
+                {pick.liquidityTier === 'low' && 'Limited depth — small share counts only.'}
+                {pick.liquidityTier === 'moderate' && 'Tradeable but watch the spread.'}
+                {pick.liquidityTier === 'high' && 'Plenty of volume — slippage minimal.'}
+              </div>
+            </div>
+          )}
+
+          {/* News exposure detail card */}
           {pick.newsExposureScore !== undefined && pick.newsExposureScore !== 0 && (
             <div className="rounded-lg p-2.5"
               style={{
@@ -393,12 +547,14 @@ function PickRow({
             </div>
           )}
 
-          {/* Reasons */}
-          {pick.reasons.length > 0 && (
+          {/* Reasons — combine momentum reasons (fast) + technical reasons */}
+          {(pick.momentumReasons?.length || pick.reasons.length) > 0 && (
             <div>
-              <div className="text-[10px] font-mono uppercase tracking-widest text-white/40 mb-1.5">Why this score</div>
+              <div className="text-[10px] font-mono uppercase tracking-widest text-white/40 mb-1.5">
+                {isFast ? 'Why this is moving' : 'Why this score'}
+              </div>
               <div className="space-y-1">
-                {pick.reasons.map((r, i) => (
+                {(isFast && pick.momentumReasons ? pick.momentumReasons : pick.reasons).map((r, i) => (
                   <div key={i} className="text-xs flex items-start gap-1.5" style={{ color: 'var(--text2)' }}>
                     <span className="text-white/30 font-mono">·</span>
                     <span>{r}</span>
@@ -603,19 +759,48 @@ export default function ScannerPage() {
     sectors: [], caps: [], priceTiers: [], tagsIncludeAny: [], tagsExcludeAny: [],
   })
 
-  // News boost toggle (Track B) — persisted to localStorage so it survives reloads
+  // Scan type — directional (default) vs fast_movers
+  const [scanType, setScanType] = useState<ScanType>('directional')
+  const [horizon, setHorizon] = useState<Horizon>('week')
+  const [priceCeiling, setPriceCeiling] = useState<number>(20)
+
+  // News boost — persisted
   const [newsBoost, setNewsBoost] = useState<boolean>(false)
   useEffect(() => {
     try {
       const saved = localStorage.getItem('wali_scanner_news_boost')
       if (saved === 'true') setNewsBoost(true)
-    } catch { /* localStorage may be unavailable */ }
+    } catch { /* ignore */ }
   }, [])
   useEffect(() => {
     try {
       localStorage.setItem('wali_scanner_news_boost', String(newsBoost))
     } catch { /* ignore */ }
   }, [newsBoost])
+
+  // Persist scan-type/horizon/ceiling too — same pattern
+  useEffect(() => {
+    try {
+      const savedType = localStorage.getItem('wali_scanner_scan_type')
+      if (savedType === 'fast_movers') setScanType('fast_movers')
+      const savedHorizon = localStorage.getItem('wali_scanner_horizon')
+      if (savedHorizon === 'day' || savedHorizon === 'week') setHorizon(savedHorizon)
+      const savedCeil = localStorage.getItem('wali_scanner_price_ceiling')
+      if (savedCeil) {
+        const n = parseFloat(savedCeil)
+        if (Number.isFinite(n) && n > 0 && n <= 500) setPriceCeiling(n)
+      }
+    } catch { /* ignore */ }
+  }, [])
+  useEffect(() => {
+    try { localStorage.setItem('wali_scanner_scan_type', scanType) } catch { /* ignore */ }
+  }, [scanType])
+  useEffect(() => {
+    try { localStorage.setItem('wali_scanner_horizon', horizon) } catch { /* ignore */ }
+  }, [horizon])
+  useEffect(() => {
+    try { localStorage.setItem('wali_scanner_price_ceiling', String(priceCeiling)) } catch { /* ignore */ }
+  }, [priceCeiling])
 
   // Presets
   const [presets, setPresets] = useState<PresetRow[]>([])
@@ -626,7 +811,7 @@ export default function ScannerPage() {
   // Hit rate telemetry
   const [hitRate, setHitRate] = useState<ScannerHitRate | null>(null)
 
-  // Sort state
+  // Sort
   const [sortBy, setSortBy] = useState<'composite' | 'directional' | 'rel_strength'>('composite')
 
   // Auth gate
@@ -640,7 +825,7 @@ export default function ScannerPage() {
     return () => { mounted = false }
   }, [supabase])
 
-  // Load scanner config (universes + filter schema)
+  // Load config
   useEffect(() => {
     if (!authLoaded) return
     fetch('/api/scanner', { credentials: 'include' })
@@ -649,7 +834,6 @@ export default function ScannerPage() {
       .catch((e) => console.warn('Failed to load scanner config:', e))
   }, [authLoaded])
 
-  // Load presets + hit rate
   const loadPresets = useCallback(async () => {
     try {
       const res = await fetch('/api/scanner/presets', { credentials: 'include' })
@@ -672,7 +856,6 @@ export default function ScannerPage() {
     void loadHitRate()
   }, [authLoaded, loadPresets, loadHitRate])
 
-  // Apply a preset to the scan form
   const applyPreset = useCallback(async (preset: PresetRow) => {
     setUniverse(preset.universe)
     setMode(preset.mode)
@@ -683,7 +866,6 @@ export default function ScannerPage() {
       tagsIncludeAny: preset.filter.tagsIncludeAny ?? [],
       tagsExcludeAny: preset.filter.tagsExcludeAny ?? [],
     })
-    // Mark as used
     try {
       await fetch('/api/scanner/presets', {
         method: 'PATCH',
@@ -693,7 +875,6 @@ export default function ScannerPage() {
     } catch { /* ignore */ }
   }, [])
 
-  // Save current config as a preset
   const savePreset = useCallback(async () => {
     const name = presetName.trim()
     if (!name) return
@@ -703,9 +884,7 @@ export default function ScannerPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name,
-          universe,
-          mode,
+          name, universe, mode,
           filter: {
             sectors: filter.sectors.length > 0 ? filter.sectors : undefined,
             caps: filter.caps.length > 0 ? filter.caps : undefined,
@@ -723,18 +902,14 @@ export default function ScannerPage() {
     }
   }, [presetName, universe, mode, filter, loadPresets])
 
-  // Delete a preset
   const deletePreset = useCallback(async (name: string) => {
     if (!confirm(`Delete preset "${name}"?`)) return
     try {
-      await fetch(`/api/scanner/presets?name=${encodeURIComponent(name)}`, {
-        method: 'DELETE',
-      })
+      await fetch(`/api/scanner/presets?name=${encodeURIComponent(name)}`, { method: 'DELETE' })
       await loadPresets()
     } catch { /* ignore */ }
   }, [loadPresets])
 
-  // Toggle favorite status
   const toggleFavorite = useCallback(async (preset: PresetRow) => {
     try {
       await fetch('/api/scanner/presets', {
@@ -746,32 +921,40 @@ export default function ScannerPage() {
     } catch { /* ignore */ }
   }, [loadPresets])
 
-  // CSV export — RFC-4180-ish quoting on every cell that needs it.
   const exportCsv = useCallback(() => {
     if (!result?.picks || result.picks.length === 0) return
 
     const csvCell = (v: string | number | null | undefined): string => {
       if (v === null || v === undefined) return ''
       const s = String(v)
-      if (/[",\n\r]/.test(s)) {
-        return `"${s.replace(/"/g, '""')}"`
-      }
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`
       return s
     }
 
     const headers = [
-      'Rank', 'Ticker', 'Direction', 'CompositeScore', 'CompositeWithNews', 'DirectionalScore', 'RelStrengthScore',
+      'Rank', 'Ticker', 'Direction', 'CompositeScore', 'CompositeWithNews',
+      'MomentumScore', 'SetupType', 'ActiveMomentum', 'CoiledPotential',
+      'LiquidityTier', 'AvgDollarVolume',
+      'DirectionalScore', 'RelStrengthScore',
       'NewsExposure', 'NewsAlignedBoost', 'NewsMatch',
-      'Price', 'Change1d', 'Change10d', 'Change30d', 'SPY10d', 'SPY30d', 'RelStrength10d', 'RelStrength30d',
-      'RSI', 'VsSMA20', 'VsSMA50', 'MACD', 'VolumeRatio', 'TechBias', 'Sector', 'Cap', 'Tags', 'KeySetup',
+      'Price', 'Change1d', 'Change10d', 'Change30d', 'SPY10d', 'SPY30d',
+      'RelStrength10d', 'RelStrength30d',
+      'RSI', 'VsSMA20', 'VsSMA50', 'MACD', 'VolumeRatio', 'TechBias',
+      'Sector', 'Cap', 'Tags', 'KeySetup',
     ]
     const rows = result.picks.map((p, i) => [
       i + 1, p.ticker, p.direction, p.compositeScore,
-      p.compositeWithNews ?? '', p.directionalScore, p.relStrengthScore,
+      p.compositeWithNews ?? '',
+      p.momentumScore ?? '', p.setupType ?? '', p.activeMomentum ?? '', p.coiledPotential ?? '',
+      p.liquidityTier ?? '', p.dollarVolumeAvg ?? '',
+      p.directionalScore, p.relStrengthScore,
       p.newsExposureScore ?? '', p.newsAlignedBoost ?? '', p.newsMatchType ?? '',
-      p.currentPrice.toFixed(2), p.priceChange1d.toFixed(2), p.priceChange10d.toFixed(2), p.priceChange30d.toFixed(2),
-      p.spyChange10d.toFixed(2), p.spyChange30d.toFixed(2), p.relStrength10d.toFixed(2), p.relStrength30d.toFixed(2),
-      p.rsi.toFixed(1), p.priceVsSma20.toFixed(2), p.priceVsSma50.toFixed(2), p.macdTrend, p.volumeRatio.toFixed(2),
+      p.currentPrice.toFixed(2), p.priceChange1d.toFixed(2),
+      p.priceChange10d.toFixed(2), p.priceChange30d.toFixed(2),
+      p.spyChange10d.toFixed(2), p.spyChange30d.toFixed(2),
+      p.relStrength10d.toFixed(2), p.relStrength30d.toFixed(2),
+      p.rsi.toFixed(1), p.priceVsSma20.toFixed(2), p.priceVsSma50.toFixed(2),
+      p.macdTrend, p.volumeRatio.toFixed(2),
       p.technicalBias, p.sector, p.cap, p.tags.join('|'), p.keySetup,
     ])
     const csv = [
@@ -782,7 +965,7 @@ export default function ScannerPage() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `scanner_${result.universe}_${result.mode}_${new Date().toISOString().slice(0, 10)}.csv`
+    a.download = `scanner_${result.scanType}_${result.universe}_${result.mode}_${new Date().toISOString().slice(0, 10)}.csv`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -793,11 +976,9 @@ export default function ScannerPage() {
     setErr(null)
     setScanning(true)
     try {
-      const body = {
-        universe,
-        mode,
-        limit,
-        newsBoost,
+      const body: Record<string, unknown> = {
+        universe, mode, limit, newsBoost,
+        scanType,
         filter: {
           sectors: filter.sectors.length > 0 ? filter.sectors : undefined,
           caps: filter.caps.length > 0 ? filter.caps : undefined,
@@ -806,6 +987,10 @@ export default function ScannerPage() {
           tagsExcludeAny: filter.tagsExcludeAny.length > 0 ? filter.tagsExcludeAny : undefined,
         },
       }
+      if (scanType === 'fast_movers') {
+        body.horizon = horizon
+        body.priceCeiling = priceCeiling
+      }
 
       const res = await fetch('/api/scanner', {
         method: 'POST',
@@ -813,16 +998,14 @@ export default function ScannerPage() {
         body: JSON.stringify(body),
       })
       const resBody: ScanResult = await res.json()
-      if (!res.ok) {
-        throw new Error(resBody?.error ?? 'Scan failed')
-      }
+      if (!res.ok) throw new Error(resBody?.error ?? 'Scan failed')
       setResult(resBody)
     } catch (e) {
       setErr((e as Error).message?.slice(0, 200) ?? 'Network error')
     } finally {
       setScanning(false)
     }
-  }, [universe, mode, limit, newsBoost, filter])
+  }, [universe, mode, limit, newsBoost, scanType, horizon, priceCeiling, filter])
 
   const handleAnalyze = useCallback((ticker: string) => {
     router.push(`/?ticker=${encodeURIComponent(ticker)}`)
@@ -834,7 +1017,6 @@ export default function ScannerPage() {
     window.location.replace('/login')
   }
 
-  // Sort picks by selected column
   const sortedPicks = useMemo(() => {
     if (!result?.picks) return []
     const sorted = [...result.picks]
@@ -843,19 +1025,26 @@ export default function ScannerPage() {
     } else if (sortBy === 'rel_strength') {
       sorted.sort((a, b) => b.relStrengthScore - a.relStrengthScore)
     } else {
-      // Composite — prefer compositeWithNews when present (news boost active)
-      sorted.sort((a, b) => {
-        const aScore = a.compositeWithNews ?? a.compositeScore
-        const bScore = b.compositeWithNews ?? b.compositeScore
-        return bScore - aScore
-      })
+      // 'composite' — but for fast_movers we sort by the blended momentum score
+      if (result.scanType === 'fast_movers') {
+        sorted.sort((a, b) => {
+          const aS = (a.momentumScore ?? 0) * 0.6 + a.directionalScore * 0.4
+          const bS = (b.momentumScore ?? 0) * 0.6 + b.directionalScore * 0.4
+          return bS - aS
+        })
+      } else {
+        sorted.sort((a, b) => {
+          const aScore = a.compositeWithNews ?? a.compositeScore
+          const bScore = b.compositeWithNews ?? b.compositeScore
+          return bScore - aScore
+        })
+      }
     }
     return sorted
   }, [result, sortBy])
 
   const filterActive = filter.sectors.length > 0 || filter.caps.length > 0
     || filter.priceTiers.length > 0 || filter.tagsIncludeAny.length > 0 || filter.tagsExcludeAny.length > 0
-
   const filterChipCount = filter.sectors.length + filter.caps.length + filter.priceTiers.length
     + filter.tagsIncludeAny.length + filter.tagsExcludeAny.length
 
@@ -874,7 +1063,6 @@ export default function ScannerPage() {
 
   return (
     <main className="min-h-screen flex flex-col" style={{ background: 'var(--bg)', color: 'var(--text1)' }}>
-      {/* Header */}
       <header className="flex items-center justify-between px-3 sm:px-5 py-3 border-b"
         style={{ background: 'var(--nav-bg)', borderColor: 'var(--border)' }}>
         <div className="flex items-center gap-3">
@@ -1006,16 +1194,105 @@ export default function ScannerPage() {
               <span className="text-sm font-bold">Scan configuration</span>
             </div>
 
+            {/* Scan type toggle (Directional vs Fast Movers) */}
+            <div className="flex gap-1.5">
+              <button
+                type="button"
+                onClick={() => setScanType('directional')}
+                disabled={scanning}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-all"
+                style={{
+                  background: scanType === 'directional' ? 'rgba(167,139,250,0.18)' : 'var(--surface2)',
+                  color: scanType === 'directional' ? '#a78bfa' : 'var(--text3)',
+                  border: `1px solid ${scanType === 'directional' ? 'rgba(167,139,250,0.35)' : 'rgba(255,255,255,0.08)'}`,
+                }}>
+                <Target size={11} />
+                Directional
+              </button>
+              <button
+                type="button"
+                onClick={() => setScanType('fast_movers')}
+                disabled={scanning}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-all"
+                style={{
+                  background: scanType === 'fast_movers' ? 'rgba(251,146,60,0.18)' : 'var(--surface2)',
+                  color: scanType === 'fast_movers' ? '#fb923c' : 'var(--text3)',
+                  border: `1px solid ${scanType === 'fast_movers' ? 'rgba(251,146,60,0.35)' : 'rgba(255,255,255,0.08)'}`,
+                }}>
+                <Flame size={11} />
+                Fast Movers
+              </button>
+            </div>
+
             <p className="text-xs text-white/50 leading-relaxed">
-              Scans{' '}
-              {config?.universeSize ? `${config.universeSize} liquid tickers` : 'all liquid tickers'}{' '}
-              for high-confidence directional setups + relative strength vs SPY.
-              Composite score (0-100) combines both. Runs in 10-20 seconds. Cached 5 minutes.
+              {scanType === 'directional' ? (
+                <>
+                  Scans{' '}
+                  {config?.universeSize ? `${config.universeSize} liquid tickers` : 'all liquid tickers'}{' '}
+                  for high-confidence directional setups + relative strength vs SPY.
+                  Composite score (0-100) combines both.
+                </>
+              ) : (
+                <>
+                  Surfaces sub-${priceCeiling} stocks ready to move FAST — both already-moving
+                  breakouts and coiled spring setups, ranked together. Liquidity tier shown
+                  on every pick (no hard filter — you decide what to chase).
+                </>
+              )}
             </p>
+
+            {/* Fast-mover specific controls — only shown in that mode */}
+            {scanType === 'fast_movers' && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-mono uppercase tracking-widest text-white/40 block mb-1">
+                    Horizon
+                  </label>
+                  <div className="flex gap-1">
+                    {(['day', 'week'] as const).map(h => (
+                      <button
+                        key={h}
+                        onClick={() => setHorizon(h)}
+                        disabled={scanning}
+                        className="flex-1 px-2 py-2 rounded-lg text-xs font-mono transition-all"
+                        style={{
+                          background: horizon === h ? 'rgba(251,146,60,0.15)' : 'var(--surface2)',
+                          color: horizon === h ? '#fb923c' : 'var(--text3)',
+                          border: `1px solid ${horizon === h ? 'rgba(251,146,60,0.3)' : 'rgba(255,255,255,0.1)'}`,
+                        }}>
+                        {h === 'day' ? 'Today' : 'This week'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[10px] font-mono uppercase tracking-widest text-white/40 block mb-1">
+                    Price ceiling
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm font-mono"
+                      style={{ color: 'var(--text3)' }}>$</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={500}
+                      step={1}
+                      value={priceCeiling}
+                      onChange={(e) => {
+                        const n = parseFloat(e.target.value)
+                        if (Number.isFinite(n)) setPriceCeiling(Math.max(1, Math.min(500, n)))
+                      }}
+                      disabled={scanning}
+                      className="w-full pl-6 pr-3 py-2 rounded-lg text-sm font-mono"
+                      style={{ background: 'var(--surface2)', color: 'var(--text1)', border: '1px solid rgba(255,255,255,0.1)' }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Universe + Mode + Limit grid */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {/* Universe picker */}
               <div>
                 <label className="text-[10px] font-mono uppercase tracking-widest text-white/40 block mb-1">
                   Universe
@@ -1035,7 +1312,6 @@ export default function ScannerPage() {
                 </div>
               </div>
 
-              {/* Mode */}
               <div>
                 <label className="text-[10px] font-mono uppercase tracking-widest text-white/40 block mb-1">
                   Direction
@@ -1070,7 +1346,6 @@ export default function ScannerPage() {
                 </div>
               </div>
 
-              {/* Limit */}
               <div>
                 <label className="text-[10px] font-mono uppercase tracking-widest text-white/40 block mb-1">
                   Top N
@@ -1094,7 +1369,7 @@ export default function ScannerPage() {
               </div>
             </div>
 
-            {/* News boost toggle (Track B) */}
+            {/* News boost toggle */}
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
@@ -1146,31 +1421,33 @@ export default function ScannerPage() {
               )}
             </div>
 
-            {/* Run scan button + Save preset */}
+            {/* Run scan + Save preset */}
             <div className="flex gap-2">
               <button
                 onClick={runScan}
                 disabled={scanning || !config}
                 className="flex-1 py-3 rounded-lg text-sm font-semibold transition-all hover:opacity-90 disabled:opacity-50"
                 style={{
-                  background: scanning ? 'var(--surface2)' : 'rgba(167,139,250,0.18)',
-                  color: scanning ? 'var(--text3)' : '#a78bfa',
-                  border: '1px solid rgba(167,139,250,0.3)',
+                  background: scanning ? 'var(--surface2)' : (
+                    scanType === 'fast_movers' ? 'rgba(251,146,60,0.18)' : 'rgba(167,139,250,0.18)'
+                  ),
+                  color: scanning ? 'var(--text3)' : (scanType === 'fast_movers' ? '#fb923c' : '#a78bfa'),
+                  border: `1px solid ${scanType === 'fast_movers' ? 'rgba(251,146,60,0.3)' : 'rgba(167,139,250,0.3)'}`,
                 }}>
                 {scanning ? (
                   <span className="flex items-center justify-center gap-2">
                     <span className="inline-flex gap-1">
                       {[0, 1, 2].map(i => (
                         <span key={i} className="w-1.5 h-1.5 rounded-full thinking-dot"
-                          style={{ background: '#a78bfa', animationDelay: `${i * 0.15}s` }} />
+                          style={{ background: scanType === 'fast_movers' ? '#fb923c' : '#a78bfa', animationDelay: `${i * 0.15}s` }} />
                       ))}
                     </span>
                     Scanning universe…
                   </span>
                 ) : (
                   <span className="flex items-center justify-center gap-2">
-                    <Search size={14} />
-                    Run scan
+                    {scanType === 'fast_movers' ? <Flame size={14} /> : <Search size={14} />}
+                    {scanType === 'fast_movers' ? `Find fast movers under $${priceCeiling}` : 'Run scan'}
                   </span>
                 )}
               </button>
@@ -1187,7 +1464,6 @@ export default function ScannerPage() {
               </button>
             </div>
 
-            {/* Save preset inline form */}
             {showPresetSave && (
               <div className="flex gap-2 items-center">
                 <input
@@ -1231,6 +1507,15 @@ export default function ScannerPage() {
               <div className="flex items-center gap-2 flex-wrap text-[10px] font-mono text-white/50">
                 <Globe size={11} style={{ color: '#a78bfa' }} />
                 <span>Universe: <span className="text-white/80">{result.universe}</span></span>
+                {result.scanType === 'fast_movers' && (
+                  <>
+                    <span className="text-white/25">·</span>
+                    <span style={{ color: '#fb923c' }}>
+                      <Flame size={9} className="inline mr-0.5" />
+                      Fast movers · {result.horizon} · ≤ ${result.priceCeiling}
+                    </span>
+                  </>
+                )}
                 <span className="text-white/25">·</span>
                 <span>Scanned <span className="text-white/80">{result.scannedCount}</span></span>
                 <span className="text-white/25">·</span>
@@ -1257,12 +1542,12 @@ export default function ScannerPage() {
             </section>
           )}
 
-          {/* Sort controls + Export (shown when results present) */}
+          {/* Sort + Export */}
           {result && result.picks.length > 0 && (
             <div className="flex items-center gap-2 text-xs flex-wrap">
               <span className="text-white/40 font-mono">Sort:</span>
               {[
-                { key: 'composite' as const, label: 'Composite' },
+                { key: 'composite' as const, label: result.scanType === 'fast_movers' ? 'Mover' : 'Composite' },
                 { key: 'directional' as const, label: 'Directional' },
                 { key: 'rel_strength' as const, label: 'Rel Strength' },
               ].map(s => (
@@ -1291,19 +1576,23 @@ export default function ScannerPage() {
           {result && sortedPicks.length > 0 && (
             <section className="space-y-2">
               {sortedPicks.map((pick, i) => (
-                <PickRow key={pick.ticker} pick={pick} rank={i + 1} onAnalyze={handleAnalyze} />
+                <PickRow key={pick.ticker} pick={pick} rank={i + 1}
+                  onAnalyze={handleAnalyze}
+                  scanType={result.scanType} />
               ))}
             </section>
           )}
 
-          {/* Empty state — no results */}
+          {/* Empty state */}
           {result && sortedPicks.length === 0 && (
             <div className="rounded-2xl border p-8 text-center"
               style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
               <Target size={20} className="mx-auto mb-2 opacity-50" style={{ color: '#94a3b8' }} />
               <p className="text-sm text-white/70 font-semibold mb-1">No tickers match</p>
               <p className="text-xs text-white/50 max-w-md mx-auto">
-                Try broadening the universe, switching mode to Both, or removing some filter constraints.
+                {result.scanType === 'fast_movers'
+                  ? `No tickers under $${result.priceCeiling} matched. Try raising the ceiling or switching to "Both" mode.`
+                  : 'Try broadening the universe, switching mode to Both, or removing some filter constraints.'}
               </p>
             </div>
           )}
@@ -1320,6 +1609,15 @@ export default function ScannerPage() {
                 <div className="flex gap-2">
                   <span className="shrink-0 font-mono font-bold" style={{ color: '#60a5fa' }}>1.</span>
                   <span>
+                    <span className="font-semibold text-white/80">Mode:</span>{' '}
+                    <span className="text-white/80">Directional</span> ranks setups by trend + rel-strength;{' '}
+                    <span style={{ color: '#fb923c' }}>Fast Movers</span> finds sub-$X stocks ready to move
+                    (combines active momentum and coiled-spring signals).
+                  </span>
+                </div>
+                <div className="flex gap-2">
+                  <span className="shrink-0 font-mono font-bold" style={{ color: '#60a5fa' }}>2.</span>
+                  <span>
                     <span className="font-semibold text-white/80">Universe:</span> pick a predefined universe (All Liquid, Tech, AI theme, etc.) or add custom filters.
                     Default is{' '}
                     {config?.universeSize
@@ -1329,38 +1627,37 @@ export default function ScannerPage() {
                   </span>
                 </div>
                 <div className="flex gap-2">
-                  <span className="shrink-0 font-mono font-bold" style={{ color: '#60a5fa' }}>2.</span>
-                  <span>
-                    <span className="font-semibold text-white/80">Fetch:</span> pulls daily bars for each ticker in parallel (25 at a time).
-                    Fetches SPY for relative-strength baseline.
-                  </span>
-                </div>
-                <div className="flex gap-2">
                   <span className="shrink-0 font-mono font-bold" style={{ color: '#60a5fa' }}>3.</span>
                   <span>
-                    <span className="font-semibold text-white/80">Score:</span> each ticker gets a directional score (trend + momentum + volume + patterns)
-                    and a relative-strength score (outperformance vs SPY over 10d/30d).
-                    Composite = 60% directional + 40% rel-strength.
+                    <span className="font-semibold text-white/80">Fetch:</span> pulls daily bars for each ticker in parallel (25 at a time).
+                    Fetches SPY for relative-strength baseline. Fast-mover mode also gates each ticker on FRESH price (not stale metadata).
                   </span>
                 </div>
                 <div className="flex gap-2">
                   <span className="shrink-0 font-mono font-bold" style={{ color: '#60a5fa' }}>4.</span>
                   <span>
-                    <span className="font-semibold text-white/80">News boost (optional):</span> when toggled,
-                    the API folds in a per-ticker news exposure score (-100..+100) from currently-active
-                    macro themes, recent macro events, and the latest market digest. Aligned with your
-                    pick&apos;s direction so news can confirm or contradict the technical setup.
+                    <span className="font-semibold text-white/80">Score:</span> Directional mode = 60% directional + 40% rel-strength.
+                    Fast-mover mode = 60% momentum (active + coiled) + 40% directional.
                   </span>
                 </div>
                 <div className="flex gap-2">
                   <span className="shrink-0 font-mono font-bold" style={{ color: '#60a5fa' }}>5.</span>
                   <span>
-                    <span className="font-semibold text-white/80">Rank:</span> returns the top N by composite score.
-                    Each pick shows the specific reasons (MACD cross, golden cross, oversold bounce, etc.).
+                    <span className="font-semibold text-white/80">News boost (optional):</span> when toggled,
+                    folds in a per-ticker news exposure score from active macro themes.
+                    Aligned with direction so news can confirm or contradict the technical setup.
                   </span>
                 </div>
                 <div className="flex gap-2">
                   <span className="shrink-0 font-mono font-bold" style={{ color: '#60a5fa' }}>6.</span>
+                  <span>
+                    <span className="font-semibold text-white/80">Liquidity (fast-mover mode):</span>{' '}
+                    every pick gets a colored badge showing avg dollar volume.
+                    No hard filter — illiquid names still surface, you decide what to chase.
+                  </span>
+                </div>
+                <div className="flex gap-2">
+                  <span className="shrink-0 font-mono font-bold" style={{ color: '#60a5fa' }}>7.</span>
                   <span>
                     <span className="font-semibold text-white/80">Drill in:</span> click any pick to see full breakdown.
                     Click &quot;Run full Council&quot; for the expensive but thorough /analyze treatment,
@@ -1391,7 +1688,7 @@ export default function ScannerPage() {
           <div className="text-center py-4">
             <p className="text-[10px] text-white/30 leading-relaxed max-w-md mx-auto">
               Scanner scores are directional heuristics, not recommendations.
-              Rule-based indicators have known failure modes in choppy markets.
+              Fast-mover mode surfaces small-cap volatile names — liquidity tier shown but no hard filter.
               Click through to Council for deeper analysis before acting.
             </p>
           </div>
