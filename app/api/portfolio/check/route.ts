@@ -947,8 +947,42 @@ async function buildCheck(pos: any, userId: string): Promise<PositionCheck> {
   const contracts = pos.contracts || 1
   const entryPremium = pos.entry_premium || null
 
+  // ── Days to expiry — calendar-day count from today (midnight ET) to
+  //    expiry (midnight ET), NOT 24-hour windows. Traders think in calendar
+  //    days remaining ("expires Friday" = 2 days when checked Wednesday
+  //    afternoon), not in 24h chunks. The hoursUntilExpiry from
+  //    buildDeadlineLabel below is the right field for sub-day urgency.
+  //
+  //    Old bug: Math.floor((new Date('2026-05-01') - Date.now()) / 86400000)
+  //    parses the expiry as midnight UTC and rounds down, so checking
+  //    Wednesday afternoon for a Friday expiry returned 1 instead of 2.
   const daysToExpiry = expiry
-    ? Math.floor((new Date(expiry).getTime() - Date.now()) / 86400000)
+    ? (() => {
+        // Parse expiry as a calendar date in ET (where the option actually
+        // expires at 4pm). We compare midnight-ET to midnight-ET so partial
+        // hours don't bleed off a day.
+        const [y, m, d] = expiry.split('-').map(Number)
+        if (!y || !m || !d) return null
+        // Build a Date for midnight-ET on expiry (handle as UTC offset; ET
+        // is UTC-4 during DST, UTC-5 during standard time. We approximate
+        // at UTC-4 — matches what buildDeadlineLabel uses).
+        const expiryMidnightET = new Date(Date.UTC(y, m - 1, d, 4, 0, 0))
+        // Today's midnight-ET (server time, projected to ET).
+        const now = new Date()
+        const todayMidnightET = new Date(Date.UTC(
+          now.getUTCFullYear(),
+          now.getUTCMonth(),
+          now.getUTCDate(),
+          4, 0, 0,
+        ))
+        // If we're already past today's "midnight ET" (i.e., past 4 UTC = past
+        // midnight ET), step back one day so we count from yesterday's midnight.
+        // Otherwise we double-count today.
+        const todayAnchor = now.getTime() < todayMidnightET.getTime()
+          ? new Date(todayMidnightET.getTime() - 86400000)
+          : todayMidnightET
+        return Math.round((expiryMidnightET.getTime() - todayAnchor.getTime()) / 86400000)
+      })()
     : null
   const timeDecayUrgent = daysToExpiry !== null && daysToExpiry <= 7
 
