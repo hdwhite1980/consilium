@@ -126,13 +126,22 @@ function computeOutcomeUpdates(
     // Direction correctness:
     //   bullish + up = correct, bullish + down = wrong
     //   bearish + down = correct, bearish + up = wrong
-    //   mixed: correct if absolute return > 2% in either direction (useful signal)
+    //
+    //   mixed: NOT counted toward hit rate (correct_Nd = null).
+    //
+    //   Rationale: a "mixed" pick is the scanner saying "I don't have a
+    //   directional view." The previous rule counted any move > 2% as
+    //   "correct," which gave free wins to picks that lucked into volatility
+    //   in either direction. Either include them honestly (you can't be
+    //   right when you didn't predict a direction) or exclude them. We
+    //   exclude — the SQL views that compute hit rate already treat null
+    //   as "not evaluated."
     if (pending.direction === 'bullish') {
       updates[`correct_${days}d`] = tickerReturn > 0
     } else if (pending.direction === 'bearish') {
       updates[`correct_${days}d`] = tickerReturn < 0
     } else {
-      updates[`correct_${days}d`] = Math.abs(tickerReturn) > 2
+      updates[`correct_${days}d`] = null
     }
   }
 
