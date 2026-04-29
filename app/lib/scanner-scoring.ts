@@ -19,6 +19,14 @@
 //
 // Every score includes reasons + key-setup string so UI can show
 // the "why" without any LLM call.
+//
+// HISTORICAL NOTE (fixed 2026-04): An earlier version used
+// `technicals.priceChangePeriod` as the "30d change". Because the
+// scanner fetches 1M timeframe (= 500 calendar days of daily bars),
+// priceChangePeriod was actually a ~500-day change. This produced
+// wildly wrong rel-strength scores. The fix: callers now compute
+// true 10d/30d changes from the bars and pass them in directly via
+// `tickerChange10d`/`tickerChange30d` in ScoreInput.
 // ═════════════════════════════════════════════════════════════
 
 import type { TechnicalSignals } from '@/app/lib/signals/technicals'
@@ -42,26 +50,13 @@ export interface TickerScore {
   technicalBias: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
   currentPrice: number
   priceChange1d: number
-  // Relative strength detail
+  // Relative strength detail (TRUE 10d/30d changes — see HISTORICAL NOTE above)
   priceChange10d: number
   priceChange30d: number
   spyChange10d: number
   spyChange30d: number
   relStrength10d: number        // ticker 10d - spy 10d
   relStrength30d: number        // ticker 30d - spy 30d
-}
-
-// ─────────────────────────────────────────────────────────────
-// Compute price change N days ago from technicals
-// Uses the bar window behind calculateTechnicals
-// ─────────────────────────────────────────────────────────────
-function pctChangeOverDays(t: TechnicalSignals, days: number): number {
-  // calculateTechnicals already computes priceChangePeriod for the full window.
-  // For ROC we have 10d and 20d directly.
-  if (days === 10 && typeof t.roc10 === 'number') return t.roc10
-  if (days === 20 && typeof t.roc20 === 'number') return t.roc20
-  // Fallback — use priceChangePeriod for the full window if it's close
-  return t.priceChangePeriod
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -154,89 +149,46 @@ function scoreDirection(t: TechnicalSignals): DirectionalResult {
   bearPoints += Math.min(25, momBear)
   factors.momentum = momBull - momBear
 
-  // ── 3. Volume confirmation (15 points max) ────────────────
-  let volBull = 0, volBear = 0
-
-  if (t.volumeSignal === 'high') {
-    // High volume confirms whatever direction price is moving
-    if (t.priceChange1D > 0) {
-      if (t.volumeRatio >= 2.0) {
-        volBull += 10
-        reasons.push(`Volume surge ${t.volumeRatio.toFixed(1)}x on up day`)
-      } else {
-        volBull += 6
-        reasons.push(`Above-avg volume ${t.volumeRatio.toFixed(1)}x on up day`)
-      }
-    } else if (t.priceChange1D < 0) {
-      if (t.volumeRatio >= 2.0) {
-        volBear += 10
-        reasons.push(`Volume surge ${t.volumeRatio.toFixed(1)}x on down day`)
-      } else {
-        volBear += 6
-        reasons.push(`Above-avg volume ${t.volumeRatio.toFixed(1)}x on down day`)
-      }
-    }
-  } else if (t.volumeSignal === 'low') {
-    volBull -= 2
-    volBear -= 2
+  // ── 3. Volume confirmation (10 points max) ────────────────
+  // Volume spike with positive price action = bullish confirmation
+  if (t.volumeRatio > 1.5 && t.priceChange1D > 1) {
+    bullPoints += 6
+    reasons.push(`Volume spike +${((t.volumeRatio - 1) * 100).toFixed(0)}%`)
+  } else if (t.volumeRatio > 1.5 && t.priceChange1D < -1) {
+    bearPoints += 6
+    reasons.push(`Volume spike on selling`)
   }
 
-  // OBV divergence
+  // OBV trend
+  if (t.obvTrend === 'rising') bullPoints += 2
+  else if (t.obvTrend === 'falling') bearPoints += 2
   if (t.obvDivergence === 'bullish') {
-    volBull += 5
-    reasons.push('Bullish OBV divergence')
+    bullPoints += 2
+    reasons.push('OBV bullish divergence')
   } else if (t.obvDivergence === 'bearish') {
-    volBear += 5
-    reasons.push('Bearish OBV divergence')
+    bearPoints += 2
+    reasons.push('OBV bearish divergence')
   }
 
-  bullPoints += Math.max(0, Math.min(15, volBull))
-  bearPoints += Math.max(0, Math.min(15, volBear))
-  factors.volume = volBull - volBear
+  factors.volume = (t.volumeRatio > 1.5 ? (t.priceChange1D > 0 ? 6 : -6) : 0) +
+                   (t.obvTrend === 'rising' ? 2 : t.obvTrend === 'falling' ? -2 : 0)
 
-  // ── 4. Volatility quality (10 points) ─────────────────────
-  // Penalize extreme volatility (both directions) — we want clean moves
-  if (t.atrPct > 8) {
-    bullPoints -= 3
-    bearPoints -= 3
-  } else if (t.atrPct < 1) {
-    // Very low volatility — compression, could break either way but not actionable now
-    bullPoints -= 2
-    bearPoints -= 2
-  }
-
-  // Bollinger squeeze can be bonus — pending directional break
+  // ── 4. Pattern + Bollinger (5 points max) ─────────────────
   if (t.bbSignal === 'squeeze') {
-    reasons.push('Bollinger squeeze (compression)')
-  } else if (t.bbSignal === 'expansion' && t.priceChange1D > 0) {
-    bullPoints += 3
-    reasons.push('Bollinger expansion up')
-  } else if (t.bbSignal === 'expansion' && t.priceChange1D < 0) {
-    bearPoints += 3
-    reasons.push('Bollinger expansion down')
+    // Squeeze itself is neutral — adds energy to whichever direction breaks
+    // Lean slightly toward existing trend
+    if (factors.trend > 0) bullPoints += 2
+    else if (factors.trend < 0) bearPoints += 2
+  }
+  if (t.bbPosition > 0.85) {
+    bullPoints += 2 // riding upper band
+    reasons.push('Riding upper Bollinger band')
+  } else if (t.bbPosition < 0.15) {
+    bearPoints += 2 // riding lower band
+    reasons.push('Riding lower Bollinger band')
   }
 
-  // ── 5. Pattern bonuses (up to 10 points) ──────────────────
-  if (t.candlePattern) {
-    if (t.candlePattern.type === 'bullish') {
-      bullPoints += 4
-      reasons.push(`${t.candlePattern.name} (bullish)`)
-    } else if (t.candlePattern.type === 'bearish') {
-      bearPoints += 4
-      reasons.push(`${t.candlePattern.name} (bearish)`)
-    }
-  }
-  if (t.chartPattern) {
-    if (t.chartPattern.type === 'bullish') {
-      bullPoints += 5
-      reasons.push(`${t.chartPattern.name} pattern`)
-    } else if (t.chartPattern.type === 'bearish') {
-      bearPoints += 5
-      reasons.push(`${t.chartPattern.name} pattern`)
-    }
-  }
-
-  // ── 6. Ichimoku confirmation (up to 5 points) ──────────────
+  // ── 5. Ichimoku confirmation (up to 5 points) ──────────────
   if (t.ichimokuSignal === 'above_cloud') {
     bullPoints += 3
     reasons.push('Above Ichimoku cloud')
@@ -303,19 +255,21 @@ function scoreRelStrength(
 export interface ScoreInput {
   ticker: string
   technicals: TechnicalSignals
-  spyChange10d: number      // % change SPY over last 10 days
-  spyChange30d: number      // % change SPY over last 30 days
+  // CALLER MUST PROVIDE TRUE 10d/30d CHANGES, not technicals.priceChangePeriod
+  // (which is the full bar window — see HISTORICAL NOTE at top of file).
+  tickerChange10d: number   // % change for the ticker over last 10 trading days
+  tickerChange30d: number   // % change for the ticker over last 30 trading days
+  spyChange10d: number      // % change SPY over last 10 trading days
+  spyChange30d: number      // % change SPY over last 30 trading days
 }
 
 export function scoreTicker(input: ScoreInput): TickerScore {
-  const { ticker, technicals, spyChange10d, spyChange30d } = input
+  const { ticker, technicals, tickerChange10d, tickerChange30d, spyChange10d, spyChange30d } = input
 
   // Directional score
   const dir = scoreDirection(technicals)
 
-  // Relative strength score
-  const tickerChange10d = technicals.roc10 ?? 0
-  const tickerChange30d = technicals.priceChangePeriod ?? 0
+  // Relative strength score — uses caller-supplied true 10d/30d changes
   const rel = scoreRelStrength(tickerChange10d, tickerChange30d, spyChange10d, spyChange30d)
 
   // Composite — weight direction more, but adjust UP if direction agrees with rel strength
@@ -375,4 +329,21 @@ export function scoreTicker(input: ScoreInput): TickerScore {
     relStrength10d: rel.relStrength10d,
     relStrength30d: rel.relStrength30d,
   }
+}
+
+// ═════════════════════════════════════════════════════════════
+// Helper: compute true N-day percent change from daily bars
+// ═════════════════════════════════════════════════════════════
+// Exported so the API route can compute these once per ticker before
+// calling scoreTicker(). Uses the last `days+1` bars.
+//
+// Returns 0 if there aren't enough bars — caller should already have
+// rejected the ticker via MIN_BARS_FOR_30D, so this is just a guard.
+
+export function pctChangeOverDays(closes: number[], days: number): number {
+  if (closes.length <= days) return 0
+  const last = closes[closes.length - 1]
+  const prior = closes[closes.length - 1 - days]
+  if (!prior || prior <= 0) return 0
+  return ((last - prior) / prior) * 100
 }

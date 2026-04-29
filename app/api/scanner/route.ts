@@ -1,8 +1,9 @@
 // ═════════════════════════════════════════════════════════════
 // app/api/scanner/route.ts
 //
-// Stock scanner — scores ~500 liquid tickers on directional setup
-// + relative strength vs SPY, returns top 15 picks with key setup.
+// Stock scanner — scores liquid tickers (currently SCANNER_UNIVERSE.length)
+// on directional setup + relative strength vs SPY, returns top 15 picks
+// with key setup.
 //
 // GET  /api/scanner              — list available universes + filters
 // POST /api/scanner               — run a scan
@@ -16,12 +17,13 @@
 // Architecture:
 //   - Fetch SPY bars first (for rel strength baseline) — 1 call
 //   - Fetch all universe ticker bars in parallel batches of 25 — ~5-10s total
-//   - Compute calculateTechnicals for each — microseconds
+//   - Compute calculateTechnicals + true 10d/30d % changes for each
 //   - scoreTicker() against each — microseconds
 //   - Sort by composite score, filter by mode, return top N
 //
-// Typical total time: 5-15 seconds for 500 tickers.
-// 5-minute cache per (user, universe+filter+mode hash).
+// Typical total time: 5-15 seconds for full universe.
+// 5-minute cache shared across all users (the underlying bar data is
+// the same regardless of who asked).
 // ═════════════════════════════════════════════════════════════
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -32,15 +34,32 @@ import { calculateTechnicals, type TechnicalSignals } from '@/app/lib/signals/te
 import {
   applyFilter,
   PREDEFINED_UNIVERSES,
-  getUniverseEntry,
+  SCANNER_UNIVERSE,
   type ScannerFilter,
   type UniverseEntry,
 } from '@/app/lib/scanner-universe'
-import { scoreTicker, type TickerScore } from '@/app/lib/scanner-scoring'
+import { scoreTicker, pctChangeOverDays, type TickerScore } from '@/app/lib/scanner-scoring'
 
 // ─────────────────────────────────────────────────────────────
-// Cache (in-memory, per-process)
+// Constants
 // ─────────────────────────────────────────────────────────────
+
+// Minimum bars required to confidently compute a 30-day change.
+// 30 trading days + a couple of buffer bars.
+const MIN_BARS_FOR_30D = 32
+
+// Per-user rate limit: max scans per minute. Each scan can spawn 200+
+// upstream API calls + LLM token budget if user adds news boost later,
+// so this prevents accidental hammering.
+const RATE_LIMIT_PER_MINUTE = 10
+
+// ─────────────────────────────────────────────────────────────
+// Cache (in-memory, per-process) — SHARED across users
+// ─────────────────────────────────────────────────────────────
+// The cached bars/scores depend only on (universe, mode, filterHash),
+// not on who asked. Including userId in the key was wasteful — every
+// new user paid the full scan cost on first request.
+
 interface ScanCacheEntry {
   result: ScanResult
   fetchedAt: number
@@ -48,8 +67,8 @@ interface ScanCacheEntry {
 const scanCache = new Map<string, ScanCacheEntry>()
 const CACHE_TTL_MS = 5 * 60 * 1000  // 5 minutes
 
-function cacheKey(userId: string, universe: string, mode: string, filterHash: string): string {
-  return `${userId}:${universe}:${mode}:${filterHash}`
+function cacheKey(universe: string, mode: string, filterHash: string): string {
+  return `${universe}:${mode}:${filterHash}`
 }
 
 function hashFilter(f: ScannerFilter | undefined): string {
@@ -65,6 +84,41 @@ function hashFilter(f: ScannerFilter | undefined): string {
     t: f.tickers?.slice().sort(),
     pd: f.predefined,
   })
+}
+
+// ─────────────────────────────────────────────────────────────
+// Per-user rate limiting — naive sliding window
+// ─────────────────────────────────────────────────────────────
+const rateLimitState = new Map<string, number[]>()  // userId -> timestamps in ms
+
+function checkRateLimit(userId: string): { allowed: boolean; retryAfterSec?: number } {
+  const now = Date.now()
+  const windowStart = now - 60_000
+  const timestamps = (rateLimitState.get(userId) ?? []).filter(t => t > windowStart)
+
+  if (timestamps.length >= RATE_LIMIT_PER_MINUTE) {
+    const oldest = timestamps[0]
+    const retryAfterSec = Math.ceil((oldest + 60_000 - now) / 1000)
+    return { allowed: false, retryAfterSec: Math.max(1, retryAfterSec) }
+  }
+
+  timestamps.push(now)
+  rateLimitState.set(userId, timestamps)
+  return { allowed: true }
+}
+
+// Periodic cleanup of stale rate limit entries (every ~5 min, lazy)
+let lastRateLimitCleanup = Date.now()
+function maybeCleanupRateLimits(): void {
+  const now = Date.now()
+  if (now - lastRateLimitCleanup < 5 * 60_000) return
+  lastRateLimitCleanup = now
+  const cutoff = now - 60_000
+  for (const [userId, timestamps] of rateLimitState.entries()) {
+    const recent = timestamps.filter(t => t > cutoff)
+    if (recent.length === 0) rateLimitState.delete(userId)
+    else rateLimitState.set(userId, recent)
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -89,19 +143,21 @@ export interface ScanResult {
   elapsedMs: number
   cached: boolean
   ageMinutes?: number
+  error?: string
 }
 
 // ─────────────────────────────────────────────────────────────
-// Fetch SPY technicals for the rel-strength baseline
+// Fetch SPY context for the rel-strength baseline
+// Returns true 10d / 30d changes, NOT roc10/priceChangePeriod.
 // ─────────────────────────────────────────────────────────────
 async function fetchSpyContext(): Promise<{ change10d: number; change30d: number } | null> {
   try {
     const bars = await fetchBars('SPY', '1M')
-    if (!bars || bars.length < 20) return null
-    const t = calculateTechnicals(bars)
+    if (!bars || bars.length < MIN_BARS_FOR_30D) return null
+    const closes = bars.map(b => b.c)
     return {
-      change10d: t.roc10 ?? 0,
-      change30d: t.priceChangePeriod ?? 0,
+      change10d: pctChangeOverDays(closes, 10),
+      change30d: pctChangeOverDays(closes, 30),
     }
   } catch {
     return null
@@ -110,18 +166,21 @@ async function fetchSpyContext(): Promise<{ change10d: number; change30d: number
 
 // ─────────────────────────────────────────────────────────────
 // Fetch + calculate technicals for a single ticker
-// Returns null on any failure — caller filters out nulls
+// Returns null on any failure or insufficient bars — caller filters.
 // ─────────────────────────────────────────────────────────────
 async function computeTickerTechnicals(ticker: string): Promise<{
   ticker: string
   technicals: TechnicalSignals
+  closes: number[]
 } | null> {
   try {
     const bars = await fetchBars(ticker, '1M')
-    if (!bars || bars.length < 20) return null
+    // Require enough bars for a meaningful 30-day change calculation.
+    // Without this, freshly listed tickers get garbage rel-strength.
+    if (!bars || bars.length < MIN_BARS_FOR_30D) return null
     const t = calculateTechnicals(bars)
     if (!t.currentPrice || t.currentPrice <= 0) return null
-    return { ticker, technicals: t }
+    return { ticker, technicals: t, closes: bars.map(b => b.c) }
   } catch {
     return null
   }
@@ -145,9 +204,17 @@ async function scanTickers(
       const data = await computeTickerTechnicals(entry.ticker)
       if (!data) return null
 
+      // Compute TRUE 10d and 30d changes from the actual bar data,
+      // rather than relying on technicals.priceChangePeriod (which is
+      // the full ~500-day window for this timeframe).
+      const tickerChange10d = pctChangeOverDays(data.closes, 10)
+      const tickerChange30d = pctChangeOverDays(data.closes, 30)
+
       const score = scoreTicker({
         ticker: data.ticker,
         technicals: data.technicals,
+        tickerChange10d,
+        tickerChange30d,
         spyChange10d,
         spyChange30d,
       })
@@ -196,6 +263,9 @@ export async function GET() {
         commonTags: ['ai', 'semis', 'growth', 'dividend', 'defensive', 'ev',
           'crypto', 'cloud', 'biotech', 'cybersec', 'volatile', 'meme'],
       },
+      // Surface dynamic universe size so the UI can show truth instead
+      // of a hardcoded "~500" that drifts as we add/remove tickers.
+      universeSize: SCANNER_UNIVERSE.length,
     })
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message?.slice(0, 200) }, { status: 500 })
@@ -214,6 +284,19 @@ export async function POST(req: NextRequest) {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+    // Per-user rate limit
+    maybeCleanupRateLimits()
+    const rl = checkRateLimit(user.id)
+    if (!rl.allowed) {
+      return NextResponse.json(
+        {
+          error: `Too many scans. Try again in ${rl.retryAfterSec}s.`,
+          retryAfterSec: rl.retryAfterSec,
+        },
+        { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } },
+      )
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const body: any = await req.json().catch(() => ({}))
     const universe: string = typeof body?.universe === 'string' ? body.universe : 'all'
@@ -224,8 +307,8 @@ export async function POST(req: NextRequest) {
     // Merge universe into filter.predefined if not already set
     const effectiveFilter: ScannerFilter = { ...filter, predefined: filter.predefined ?? universe }
 
-    // Cache check
-    const key = cacheKey(user.id, universe, mode, hashFilter(effectiveFilter))
+    // Cache check — shared across users
+    const key = cacheKey(universe, mode, hashFilter(effectiveFilter))
     const cached = scanCache.get(key)
     if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
       const age = Math.round((Date.now() - cached.fetchedAt) / 60000)
@@ -242,16 +325,12 @@ export async function POST(req: NextRequest) {
     }
     console.log(`[scanner] scanning ${entries.length} tickers (universe: ${universe}, mode: ${mode})`)
 
-    // Fetch SPY context + scan in parallel
+    // Fetch SPY context FIRST — we cannot compute rel-strength scores
+    // without it. The previous version used a fake `Promise.all` here
+    // with the second slot as `Promise.resolve(null)`, which did
+    // nothing useful. Removed; replaced with a plain await.
     const spyStart = Date.now()
-    const [spyContext, scanResultsAll] = await Promise.all([
-      fetchSpyContext(),
-      // Will start scanning in parallel — SPY context reused in scoreTicker
-      // but because scoreTicker needs SPY changes, we actually need SPY first.
-      // Workaround: pass 0 for now, re-score later. Simpler: await SPY first.
-      Promise.resolve(null),
-    ])
-
+    const spyContext = await fetchSpyContext()
     if (!spyContext) {
       console.warn('[scanner] SPY context unavailable — rel strength scores will be neutral')
     }
@@ -271,8 +350,11 @@ export async function POST(req: NextRequest) {
     else if (mode === 'bearish') filtered = allScores.filter(s => s.direction === 'bearish')
     // mode === 'both' includes mixed too
 
-    // Sort: for bullish, highest composite; for bearish, highest composite where direction=bearish;
-    // for both, sort by composite regardless of direction
+    // Sort by composite score (highest first).
+    // NOTE: compositeScore is direction-AGNOSTIC — a high score means
+    // "strong setup in the picked direction". For mode='bearish', we've
+    // already filtered to bearish picks above, so sorting by composite
+    // here returns the strongest bearish setups (which is what we want).
     filtered.sort((a, b) => b.compositeScore - a.compositeScore)
 
     const picks = filtered.slice(0, limit)
@@ -330,30 +412,31 @@ export async function POST(req: NextRequest) {
           return
         }
 
-        // Insert pick outcomes stubs (return_1d etc. populated later by cron)
-        const outcomeRows = picks.map(p => ({
-          scan_id: scanRow.id,
-          ticker: p.ticker,
-          direction: p.direction,
-          composite_score: p.compositeScore,
-          price_at_scan: p.currentPrice,
-        }))
-
-        if (outcomeRows.length > 0) {
-          const { error: outErr } = await admin.from('scanner_pick_outcomes').insert(outcomeRows)
-          if (outErr) console.warn('[scanner] outcomes insert failed:', outErr.message)
+        // Insert pick outcomes stubs (return_1d etc. start as null,
+        // backfilled by the /api/scanner/outcomes cron)
+        if (picks.length > 0) {
+          const stubs = picks.map(p => ({
+            scan_id: scanRow.id,
+            ticker: p.ticker,
+            direction: p.direction,
+            composite_score: p.compositeScore,
+            price_at_scan: p.currentPrice,
+          }))
+          await admin.from('scanner_pick_outcomes').insert(stubs)
         }
       } catch (e) {
-        console.warn('[scanner] logging error:', (e as Error).message?.slice(0, 100))
+        console.warn('[scanner] log task failed:', (e as Error).message?.slice(0, 200))
       }
     })()
 
-    console.log(`[scanner] TOTAL ${result.elapsedMs}ms (${(result.elapsedMs / 1000).toFixed(1)}s) — returned ${picks.length} picks`)
+    console.log(`[scanner] DONE in ${result.elapsedMs}ms — ${picks.length} picks`)
     return NextResponse.json(result)
+
   } catch (e) {
-    console.error('[scanner] error:', e)
-    return NextResponse.json({
-      error: (e as Error).message?.slice(0, 300) ?? 'scanner failed',
-    }, { status: 500 })
+    console.error('[scanner] ERROR:', (e as Error).message)
+    return NextResponse.json(
+      { error: (e as Error).message?.slice(0, 200) ?? 'Scanner failed' },
+      { status: 500 },
+    )
   }
 }
