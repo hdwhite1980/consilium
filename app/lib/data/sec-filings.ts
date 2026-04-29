@@ -710,7 +710,7 @@ export async function getInsiderActivity(ticker: string, days = 90) {
     .gte('transaction_date', since)
     .eq('is_open_market', true)
     .order('transaction_date', { ascending: false })
-    .limit(20)
+    .limit(200)
 
   return data || []
 }
@@ -739,24 +739,20 @@ export async function buildSecFilingsContext(ticker: string): Promise<string> {
     }
   }
 
+  // NOTE: Aggregate totals (buy $, sell $, signal) come from fundamentals.ts
+  // which uses Finnhub directly with no truncation. Here we surface only
+  // per-insider PURCHASE detail (names + dates) — useful color the
+  // aggregate doesn't capture. Sales detail intentionally omitted to keep
+  // prompt size focused; the aggregate from fundamentals already conveys
+  // selling pressure.
   if (insiders.length > 0) {
     const buys = insiders.filter((t: any) => t.transaction_type === 'P')
-    const sells = insiders.filter((t: any) => t.transaction_type === 'S')
-    const totalBuyValue = buys.reduce((s: number, t: any) => s + (t.total_value || 0), 0)
-    const totalSellValue = sells.reduce((s: number, t: any) => s + (t.total_value || 0), 0)
-
-    lines.push('\nINSIDER TRANSACTIONS (Last 90 Days, Open-Market Only):')
     if (buys.length > 0) {
-      lines.push(`  Purchases: ${buys.length} transactions, total $${(totalBuyValue / 1000).toFixed(0)}K`)
-      for (const b of buys.slice(0, 3)) {
+      lines.push('\nINSIDER PURCHASES (Last 90 Days, per-insider detail):')
+      for (const b of buys.slice(0, 5)) {
         lines.push(`  • ${b.insider_name} (${b.title || 'Insider'}): Bought ${b.shares?.toLocaleString()} shares @ $${b.price_per_share} = $${((b.total_value || 0) / 1000).toFixed(0)}K on ${b.transaction_date}`)
       }
     }
-    if (sells.length > 0) {
-      lines.push(`  Sales: ${sells.length} transactions, total $${(totalSellValue / 1000).toFixed(0)}K`)
-    }
-    if (buys.length > 0 && sells.length === 0) lines.push('  ⭐ Net insider BUYING — no sales in this period')
-    if (sells.length > buys.length * 2) lines.push('  ⚠ Net insider SELLING — more selling than buying')
   }
 
   if (institutions.length > 0) {
