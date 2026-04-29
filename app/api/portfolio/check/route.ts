@@ -1175,8 +1175,24 @@ async function buildCheck(pos: any, userId: string): Promise<PositionCheck> {
       action = 'Exit position — exit criteria met'
     }
   } else if (verdict === 'WATCH') {
-    if (daysToExpiry !== null && daysToExpiry <= 7) {
-      action = `${daysToExpiry}d left — decide: exit, roll to later expiry, or hold through expiry`
+    // Compute daily theta as percent of current premium for EV discipline.
+    // If theta exceeds 20%/day on a near-expiry contract, "hold and watch"
+    // is mathematically wrong — premium decays faster than the underlying
+    // can plausibly recover (absent a known catalyst).
+    const dailyDecayPct = optData?.theta && currentPremium && currentPremium > 0
+      ? Math.abs(optData.theta) / currentPremium * 100
+      : null
+    const proceedsHint = proceeds.low !== null && proceeds.high !== null && proceeds.high > 0
+      ? ` Realistic proceeds today: $${proceeds.low.toFixed(0)}-$${proceeds.high.toFixed(0)}.`
+      : ''
+
+    if (daysToExpiry !== null && daysToExpiry <= 2 && dailyDecayPct !== null && dailyDecayPct > 20) {
+      // High-theta near-expiry: today's bid > tomorrow's bid, almost always.
+      action = `${daysToExpiry}d left and theta is ${dailyDecayPct.toFixed(0)}%/day — close TODAY, not tomorrow. Tomorrow's premium will be smaller, not larger.${proceedsHint}`
+    } else if (daysToExpiry !== null && daysToExpiry <= 2) {
+      action = `${daysToExpiry}d left — close today unless a scheduled catalyst before expiry could move the underlying.${proceedsHint}`
+    } else if (daysToExpiry !== null && daysToExpiry <= 7) {
+      action = `${daysToExpiry}d left — decide now: exit at current proceeds, or roll to a later expiry that matches your thesis horizon. Avoid "hold and see" — theta accelerates from here.${proceedsHint}`
     } else if (optionPnlPct !== null && optionPnlPct >= 50) {
       action = 'Consider selling half to lock in gains, let rest ride'
     } else {
@@ -1313,7 +1329,30 @@ When the snapshot includes "Council history," weave it into your reasoning. If t
 
 When the snapshot includes "Save path," reference the probability band and any catalyst note in your reason. Do not invent probability numbers; use the verbal band given.
 
-When the snapshot includes "Realistic proceeds," cite the bid-ask range in your action — never quote mid-price as if it's transactable.`
+When the snapshot includes "Realistic proceeds," cite the bid-ask range in your action — never quote mid-price as if it's transactable.
+
+═════════════════════════════════════════════════════════════
+EXPECTED-VALUE DISCIPLINE — apply rigorously to near-expiry options
+═════════════════════════════════════════════════════════════
+
+Before writing the "action" field for any option position, ask: does waiting have positive expected value? For most near-expiry options, the answer is no, and the action must reflect that. The following rules are not suggestions — they are constraints on what you may write.
+
+RULE 1 — Theta is not "time value to salvage by waiting"
+  Theta is the rate at which premium DISAPPEARS. A position with theta of -$0.05/day on a $0.10 premium loses 50% of its value per day. Suggesting the user "wait until tomorrow to salvage time value" is mathematically backwards: tomorrow's premium will be SMALLER than today's, not larger, absent a directional move. Do not use language like "salvage remaining time value by waiting" — that's the opposite of what waiting does.
+
+RULE 2 — Don't recommend hope-trades
+  When the save-path probability is "very unlikely" or "unlikely" AND there is no scheduled catalyst before expiry, you must NOT recommend the user "wait to see if the move happens." A 2-5% probability event is, by definition, the move you should not bet on. For these positions, the action is exit-now, not wait-and-see. If you find yourself writing "wait for a gap on overnight news" or similar, stop — you are recommending a hope-trade.
+
+RULE 3 — For high-theta near-expiry options, exit timing optimizes for CURRENT bid, not future bid
+  When daysToExpiry ≤ 2 and the daily theta exceeds 20% of current premium, recommend closing today, not tomorrow. The premium will decay overnight and again into expiry; current proceeds will almost always exceed future proceeds. The only exceptions are (a) a scheduled catalyst before expiry that could move the underlying, or (b) the position is already deep ITM and intrinsic value protects it.
+
+RULE 4 — When the bid is non-zero and daysToExpiry ≤ 2, the action template is:
+  "Place a limit sell at $X-$Y today. If unfilled by close, drop to bid. Do not carry into [next trading day]." — where X and Y come from the realistic-proceeds range. Do not add "wait for overnight news" or "see if a gap forms" — those are hope-trades that violate Rule 2.
+
+RULE 5 — Council alignment does not save a structurally broken contract
+  If the Council called bearish and the user holds bearish puts, the alignment is good — but if those puts expire before the Council's predicted move has time to play out, the contract is still structurally wrong for the thesis. The action should acknowledge the alignment AND note the timing mismatch: "Council was right directionally, but this contract expires before the move has time to develop. Close and consider re-entering with longer expiry if the bearish thesis still holds."
+
+These rules apply to the "action" field. The "reason" field can include nuance and explain the alignment with Council, the save-path probability, and the structural timing problem. But the action must be a clear, EV-positive instruction.`
 
     const msg = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
@@ -1321,7 +1360,7 @@ When the snapshot includes "Realistic proceeds," cite the bid-ask range in your 
       system: systemPrompt,
       messages: [{
         role: 'user',
-        content: `${snapshot}\n\nReturn JSON array, same order as snapshot:\n[\n  {\n    "ticker": "NVDA",\n    "verdict": "HOLD",\n    "conviction": "high",\n    "reason": "specific reason with actual numbers, including council-history alignment if present and save-path probability if relevant",\n    "action": "specific action step including bid-ask reality if option",\n    "flags": ["any additional flags"]\n  }\n]\nJSON only, no markdown.`,
+        content: `${snapshot}\n\nReturn JSON array, same order as snapshot:\n[\n  {\n    "ticker": "NVDA",\n    "verdict": "HOLD",\n    "conviction": "high",\n    "reason": "specific reason with actual numbers, including council-history alignment if present and save-path probability if relevant",\n    "action": "specific action step. For options near expiry (≤2d) with high theta (>20%/day), the action should be a limit-sell-today instruction citing the realistic-proceeds range, NOT a wait-for-overnight-move suggestion. See EV-discipline rules in the system prompt.",\n    "flags": ["any additional flags"]\n  }\n]\n\nBefore returning, audit each \\"action\\" field: does it contain phrases like \\"wait until tomorrow,\\" \\"hold for overnight news,\\" \\"see if a gap forms,\\" or \\"salvage remaining time value\\"? If yes AND the position has daysToExpiry ≤ 2 AND theta > 20% of premium AND the save-path probability is unlikely/very unlikely, rewrite the action to be a today-exit instruction. Hope-trades are banned for these positions.\n\nJSON only, no markdown.`,
       }],
     })
 
