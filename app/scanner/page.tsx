@@ -10,6 +10,11 @@
 //   - Directional setup (60% weight) — multiple indicators agreeing
 //   - Relative strength vs SPY (40% weight) — 10d + 30d outperformance
 //
+// Optional News boost (Track B): when toggled, the API folds in a
+// per-ticker news exposure score derived from active macro themes,
+// recent macro events, and the latest market digest. The boost can
+// confirm or contradict a pick depending on direction alignment.
+//
 // Each row click expands to show all reasons + allows click-through
 // to /analyze for full Council treatment or add-to-watchlist.
 // ═════════════════════════════════════════════════════════════
@@ -21,7 +26,7 @@ import {
   ArrowLeft, Search, Zap, TrendingUp, TrendingDown, Minus,
   Filter, X, LogOut, ChevronDown, BarChart3,
   Activity, Target, Eye, Play, Clock, Globe,
-  Star, StarOff, Save, Download, Check,
+  Star, StarOff, Save, Download, Check, Newspaper,
 } from 'lucide-react'
 import { AddToWatchlistButton } from '@/app/components/AddToWatchlistButton'
 
@@ -54,6 +59,14 @@ interface ScanPick {
   cap: string
   priceTier: string
   tags: string[]
+
+  // News exposure (Track B) — populated only when newsBoost was true on the scan
+  newsExposureScore?: number       // -100..+100 raw aggregate
+  newsAlignedBoost?: number        // signed by direction
+  compositeWithNews?: number       // blended composite when boost applied
+  newsSummary?: string             // short tooltip text
+  newsReasons?: string[]           // up to 3 theme/event titles
+  newsMatchType?: 'direct' | 'sector' | 'digest' | 'none'
 }
 
 interface ScanResult {
@@ -68,6 +81,7 @@ interface ScanResult {
   elapsedMs: number
   cached: boolean
   ageMinutes?: number
+  newsBoost?: boolean
   error?: string
 }
 
@@ -87,6 +101,8 @@ interface FilterSchema {
 interface ScannerConfig {
   universes: UniverseOption[]
   filterSchema: FilterSchema
+  universeSize?: number
+  newsBoostAvailable?: boolean
 }
 
 interface CustomFilter {
@@ -191,7 +207,14 @@ function PickRow({
   const [expanded, setExpanded] = useState(false)
 
   const dirColor = directionColor(pick.direction)
-  const compColor = scoreColor(pick.compositeScore)
+
+  // When news boost was applied, show the boosted composite as the
+  // primary number (compositeWithNews); fall back to compositeScore.
+  const displayedComposite = pick.compositeWithNews ?? pick.compositeScore
+  const compColor = scoreColor(displayedComposite)
+  const hasNewsBoost = pick.compositeWithNews !== undefined
+    && pick.compositeWithNews !== pick.compositeScore
+  const hasNewsContext = pick.newsSummary && pick.newsMatchType !== 'none'
 
   return (
     <div className="rounded-xl border transition-all"
@@ -234,13 +257,39 @@ function PickRow({
               </span>
             </div>
             <p className="text-xs text-white/55 mt-1 truncate">{pick.keySetup}</p>
+
+            {/* News exposure badge — single line, only when news matched */}
+            {hasNewsContext && (
+              <div className="text-[10px] font-mono mt-0.5 flex items-center gap-1.5"
+                style={{
+                  color: (pick.newsAlignedBoost ?? 0) > 0 ? '#34d399'
+                       : (pick.newsAlignedBoost ?? 0) < 0 ? '#f87171'
+                       : 'rgba(255,255,255,0.45)'
+                }}>
+                <Newspaper size={9} />
+                <span>{pick.newsSummary}</span>
+                {pick.newsReasons && pick.newsReasons.length > 0 && (
+                  <span className="text-white/30 truncate">
+                    — {pick.newsReasons.slice(0, 2).join(' · ')}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
-          {/* Composite score — BIG */}
+          {/* Composite score — BIG (boosted when applicable) */}
           <div className="shrink-0 text-right">
             <div className="text-xl font-bold font-mono" style={{ color: compColor }}>
-              {pick.compositeScore}
+              {displayedComposite}
             </div>
+            {hasNewsBoost && (
+              <div className="text-[9px] font-mono"
+                style={{
+                  color: (pick.compositeWithNews ?? 0) > pick.compositeScore ? '#34d399' : '#f87171'
+                }}>
+                was {pick.compositeScore}
+              </div>
+            )}
             <div className="text-[9px] font-mono text-white/40 uppercase tracking-widest">
               score
             </div>
@@ -271,8 +320,16 @@ function PickRow({
             <div className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.03)' }}>
               <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">Composite</div>
               <div className="text-lg font-bold font-mono mt-0.5" style={{ color: compColor }}>
-                {pick.compositeScore}
+                {displayedComposite}
               </div>
+              {hasNewsBoost && (
+                <div className="text-[9px] font-mono mt-0.5"
+                  style={{
+                    color: (pick.compositeWithNews ?? 0) > pick.compositeScore ? '#34d399' : '#f87171'
+                  }}>
+                  was {pick.compositeScore}
+                </div>
+              )}
             </div>
             <div className="rounded-lg p-2.5" style={{ background: 'rgba(255,255,255,0.03)' }}>
               <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">Directional</div>
@@ -290,75 +347,72 @@ function PickRow({
                 {pick.relStrengthScore}
               </div>
               <div className="text-[9px] font-mono mt-0.5 text-white/50">
-                {pick.relStrength30d >= 0 ? '+' : ''}{pick.relStrength30d.toFixed(1)}% vs SPY 30d
+                {pick.relStrength30d >= 0 ? '+' : ''}{pick.relStrength30d.toFixed(0)}% vs SPY
               </div>
             </div>
           </div>
+
+          {/* News exposure detail card — only when news boost was active */}
+          {pick.newsExposureScore !== undefined && pick.newsExposureScore !== 0 && (
+            <div className="rounded-lg p-2.5"
+              style={{
+                background: (pick.newsAlignedBoost ?? 0) > 0
+                  ? 'rgba(52,211,153,0.05)'
+                  : (pick.newsAlignedBoost ?? 0) < 0
+                  ? 'rgba(248,113,113,0.05)'
+                  : 'rgba(255,255,255,0.03)',
+                border: `1px solid ${(pick.newsAlignedBoost ?? 0) > 0
+                  ? 'rgba(52,211,153,0.15)'
+                  : (pick.newsAlignedBoost ?? 0) < 0
+                  ? 'rgba(248,113,113,0.15)'
+                  : 'rgba(255,255,255,0.06)'}`,
+              }}>
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <Newspaper size={10} style={{ color: 'rgba(255,255,255,0.5)' }} />
+                <span className="text-[9px] font-mono uppercase tracking-widest text-white/45">
+                  News exposure {pick.newsMatchType ? `· ${pick.newsMatchType}` : ''}
+                </span>
+                <span className="ml-auto text-sm font-bold font-mono"
+                  style={{
+                    color: (pick.newsAlignedBoost ?? 0) > 0 ? '#34d399'
+                         : (pick.newsAlignedBoost ?? 0) < 0 ? '#f87171'
+                         : 'rgba(255,255,255,0.5)'
+                  }}>
+                  {pick.newsExposureScore > 0 ? '+' : ''}{pick.newsExposureScore}
+                </span>
+              </div>
+              {pick.newsReasons && pick.newsReasons.length > 0 && (
+                <div className="space-y-0.5">
+                  {pick.newsReasons.map((r, i) => (
+                    <div key={i} className="text-[10px] font-mono text-white/55 truncate">
+                      {r}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Reasons */}
           {pick.reasons.length > 0 && (
             <div>
-              <div className="flex items-center gap-1.5 mb-1.5">
-                <Activity size={11} style={{ color: dirColor }} />
-                <div className="text-[10px] font-mono uppercase tracking-widest" style={{ color: dirColor }}>
-                  Why this score
-                </div>
-              </div>
-              <ul className="space-y-1">
+              <div className="text-[10px] font-mono uppercase tracking-widest text-white/40 mb-1.5">Why this score</div>
+              <div className="space-y-1">
                 {pick.reasons.map((r, i) => (
-                  <li key={i} className="text-xs text-white/75 flex items-start gap-2">
-                    <span className="mt-1.5 inline-block w-1 h-1 rounded-full shrink-0"
-                      style={{ background: dirColor }} />
+                  <div key={i} className="text-xs flex items-start gap-1.5" style={{ color: 'var(--text2)' }}>
+                    <span className="text-white/30 font-mono">·</span>
                     <span>{r}</span>
-                  </li>
+                  </div>
                 ))}
-              </ul>
+              </div>
             </div>
           )}
 
-          {/* Quick technicals snapshot */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <div className="rounded-lg p-2" style={{ background: 'rgba(255,255,255,0.03)' }}>
-              <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">RSI</div>
-              <div className="text-sm font-mono mt-0.5"
-                style={{ color: pick.rsi > 70 ? '#f87171' : pick.rsi < 30 ? '#34d399' : 'white' }}>
-                {pick.rsi.toFixed(1)}
-              </div>
-            </div>
-            <div className="rounded-lg p-2" style={{ background: 'rgba(255,255,255,0.03)' }}>
-              <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">vs SMA50</div>
-              <div className="text-sm font-mono mt-0.5"
-                style={{ color: pick.priceVsSma50 >= 0 ? '#34d399' : '#f87171' }}>
-                {fmtPct(pick.priceVsSma50)}
-              </div>
-            </div>
-            <div className="rounded-lg p-2" style={{ background: 'rgba(255,255,255,0.03)' }}>
-              <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">MACD</div>
-              <div className="text-sm font-mono mt-0.5"
-                style={{ color: pick.macdTrend === 'bullish' ? '#34d399' : pick.macdTrend === 'bearish' ? '#f87171' : '#94a3b8' }}>
-                {pick.macdTrend === 'bullish' ? '▲ pos' : pick.macdTrend === 'bearish' ? '▼ neg' : '— flat'}
-              </div>
-            </div>
-            <div className="rounded-lg p-2" style={{ background: 'rgba(255,255,255,0.03)' }}>
-              <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">Volume</div>
-              <div className="text-sm font-mono mt-0.5 text-white/80">
-                {pick.volumeRatio.toFixed(2)}x
-              </div>
-            </div>
-          </div>
-
-          {/* Price history strip */}
+          {/* Performance */}
           <div className="grid grid-cols-3 gap-2">
-            <div className="rounded-lg p-2" style={{ background: 'rgba(255,255,255,0.03)' }}>
-              <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">1 day</div>
-              <div className="text-sm font-mono mt-0.5"
-                style={{ color: pick.priceChange1d >= 0 ? '#34d399' : '#f87171' }}>
-                {fmtPct(pick.priceChange1d, 2)}
-              </div>
-            </div>
-            <div className="rounded-lg p-2" style={{ background: 'rgba(255,255,255,0.03)' }}>
-              <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">10 day</div>
-              <div className="text-sm font-mono mt-0.5"
+            <div className="rounded-lg p-2" style={{ background: 'rgba(255,255,255,0.02)' }}>
+              <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">10-day</div>
+              <div className="text-sm font-bold font-mono mt-0.5"
                 style={{ color: pick.priceChange10d >= 0 ? '#34d399' : '#f87171' }}>
                 {fmtPct(pick.priceChange10d)}
               </div>
@@ -366,9 +420,19 @@ function PickRow({
                 vs SPY {pick.relStrength10d >= 0 ? '+' : ''}{pick.relStrength10d.toFixed(1)}%
               </div>
             </div>
-            <div className="rounded-lg p-2" style={{ background: 'rgba(255,255,255,0.03)' }}>
-              <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">30 day</div>
-              <div className="text-sm font-mono mt-0.5"
+            <div className="rounded-lg p-2" style={{ background: 'rgba(255,255,255,0.02)' }}>
+              <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">RSI</div>
+              <div className="text-sm font-bold font-mono mt-0.5"
+                style={{ color: pick.rsi > 70 ? '#f87171' : pick.rsi < 30 ? '#fbbf24' : '#94a3b8' }}>
+                {pick.rsi.toFixed(0)}
+              </div>
+              <div className="text-[9px] font-mono text-white/40 mt-0.5">
+                vol {pick.volumeRatio.toFixed(1)}x
+              </div>
+            </div>
+            <div className="rounded-lg p-2" style={{ background: 'rgba(255,255,255,0.02)' }}>
+              <div className="text-[9px] font-mono uppercase tracking-widest text-white/30">30-day</div>
+              <div className="text-sm font-bold font-mono mt-0.5"
                 style={{ color: pick.priceChange30d >= 0 ? '#34d399' : '#f87171' }}>
                 {fmtPct(pick.priceChange30d)}
               </div>
@@ -448,7 +512,7 @@ function FilterPanel({
       </div>
 
       <div>
-        <div className="text-[10px] font-mono uppercase tracking-widest text-white/40 mb-1.5">Cap Tier</div>
+        <div className="text-[10px] font-mono uppercase tracking-widest text-white/40 mb-1.5">Cap tier</div>
         <div className="flex flex-wrap gap-1.5">
           {schema.caps.map(c => (
             <Chip key={c}
@@ -460,25 +524,21 @@ function FilterPanel({
       </div>
 
       <div>
-        <div className="text-[10px] font-mono uppercase tracking-widest text-white/40 mb-1.5">Price Tier</div>
+        <div className="text-[10px] font-mono uppercase tracking-widest text-white/40 mb-1.5">Price tier</div>
         <div className="flex flex-wrap gap-1.5">
-          {schema.priceTiers.map(p => {
-            const label: Record<string, string> = {
-              sub10: '< $10', under50: '< $50', under100: '< $100',
-              under500: '< $500', over500: '> $500',
-            }
-            return (
-              <Chip key={p}
-                label={label[p] ?? p}
-                active={filter.priceTiers.includes(p)}
-                onClick={() => onChange({ ...filter, priceTiers: toggleItem(filter.priceTiers, p) })} />
-            )
-          })}
+          {schema.priceTiers.map(p => (
+            <Chip key={p}
+              label={p.replace('sub', '< $').replace('under', '< $').replace('over', '> $')}
+              active={filter.priceTiers.includes(p)}
+              onClick={() => onChange({ ...filter, priceTiers: toggleItem(filter.priceTiers, p) })} />
+          ))}
         </div>
       </div>
 
       <div>
-        <div className="text-[10px] font-mono uppercase tracking-widest text-white/40 mb-1.5">Include tags (any)</div>
+        <div className="text-[10px] font-mono uppercase tracking-widest text-white/40 mb-1.5">
+          Tags <span className="text-white/30">(must include any)</span>
+        </div>
         <div className="flex flex-wrap gap-1.5">
           {schema.commonTags.map(t => (
             <Chip key={t}
@@ -490,7 +550,9 @@ function FilterPanel({
       </div>
 
       <div>
-        <div className="text-[10px] font-mono uppercase tracking-widest text-white/40 mb-1.5">Exclude tags</div>
+        <div className="text-[10px] font-mono uppercase tracking-widest text-white/40 mb-1.5">
+          Tags <span className="text-white/30">(exclude any)</span>
+        </div>
         <div className="flex flex-wrap gap-1.5">
           {schema.commonTags.map(t => (
             <button key={t}
@@ -540,6 +602,20 @@ export default function ScannerPage() {
   const [filter, setFilter] = useState<CustomFilter>({
     sectors: [], caps: [], priceTiers: [], tagsIncludeAny: [], tagsExcludeAny: [],
   })
+
+  // News boost toggle (Track B) — persisted to localStorage so it survives reloads
+  const [newsBoost, setNewsBoost] = useState<boolean>(false)
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('wali_scanner_news_boost')
+      if (saved === 'true') setNewsBoost(true)
+    } catch { /* localStorage may be unavailable */ }
+  }, [])
+  useEffect(() => {
+    try {
+      localStorage.setItem('wali_scanner_news_boost', String(newsBoost))
+    } catch { /* ignore */ }
+  }, [newsBoost])
 
   // Presets
   const [presets, setPresets] = useState<PresetRow[]>([])
@@ -670,24 +746,38 @@ export default function ScannerPage() {
     } catch { /* ignore */ }
   }, [loadPresets])
 
-  // CSV export
+  // CSV export — RFC-4180-ish quoting on every cell that needs it.
   const exportCsv = useCallback(() => {
     if (!result?.picks || result.picks.length === 0) return
+
+    const csvCell = (v: string | number | null | undefined): string => {
+      if (v === null || v === undefined) return ''
+      const s = String(v)
+      if (/[",\n\r]/.test(s)) {
+        return `"${s.replace(/"/g, '""')}"`
+      }
+      return s
+    }
+
     const headers = [
-      'Rank', 'Ticker', 'Direction', 'CompositeScore', 'DirectionalScore', 'RelStrengthScore',
+      'Rank', 'Ticker', 'Direction', 'CompositeScore', 'CompositeWithNews', 'DirectionalScore', 'RelStrengthScore',
+      'NewsExposure', 'NewsAlignedBoost', 'NewsMatch',
       'Price', 'Change1d', 'Change10d', 'Change30d', 'SPY10d', 'SPY30d', 'RelStrength10d', 'RelStrength30d',
       'RSI', 'VsSMA20', 'VsSMA50', 'MACD', 'VolumeRatio', 'TechBias', 'Sector', 'Cap', 'Tags', 'KeySetup',
     ]
     const rows = result.picks.map((p, i) => [
-      i + 1, p.ticker, p.direction, p.compositeScore, p.directionalScore, p.relStrengthScore,
+      i + 1, p.ticker, p.direction, p.compositeScore,
+      p.compositeWithNews ?? '', p.directionalScore, p.relStrengthScore,
+      p.newsExposureScore ?? '', p.newsAlignedBoost ?? '', p.newsMatchType ?? '',
       p.currentPrice.toFixed(2), p.priceChange1d.toFixed(2), p.priceChange10d.toFixed(2), p.priceChange30d.toFixed(2),
       p.spyChange10d.toFixed(2), p.spyChange30d.toFixed(2), p.relStrength10d.toFixed(2), p.relStrength30d.toFixed(2),
       p.rsi.toFixed(1), p.priceVsSma20.toFixed(2), p.priceVsSma50.toFixed(2), p.macdTrend, p.volumeRatio.toFixed(2),
-      p.technicalBias, p.sector, p.cap, p.tags.join('|'),
-      // Quote keySetup to protect commas
-      `"${p.keySetup.replace(/"/g, '""')}"`,
+      p.technicalBias, p.sector, p.cap, p.tags.join('|'), p.keySetup,
     ])
-    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
+    const csv = [
+      headers.map(csvCell).join(','),
+      ...rows.map(r => r.map(csvCell).join(',')),
+    ].join('\n')
     const blob = new Blob([csv], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -707,6 +797,7 @@ export default function ScannerPage() {
         universe,
         mode,
         limit,
+        newsBoost,
         filter: {
           sectors: filter.sectors.length > 0 ? filter.sectors : undefined,
           caps: filter.caps.length > 0 ? filter.caps : undefined,
@@ -731,7 +822,7 @@ export default function ScannerPage() {
     } finally {
       setScanning(false)
     }
-  }, [universe, mode, limit, filter])
+  }, [universe, mode, limit, newsBoost, filter])
 
   const handleAnalyze = useCallback((ticker: string) => {
     router.push(`/?ticker=${encodeURIComponent(ticker)}`)
@@ -752,7 +843,12 @@ export default function ScannerPage() {
     } else if (sortBy === 'rel_strength') {
       sorted.sort((a, b) => b.relStrengthScore - a.relStrengthScore)
     } else {
-      sorted.sort((a, b) => b.compositeScore - a.compositeScore)
+      // Composite — prefer compositeWithNews when present (news boost active)
+      sorted.sort((a, b) => {
+        const aScore = a.compositeWithNews ?? a.compositeScore
+        const bScore = b.compositeWithNews ?? b.compositeScore
+        return bScore - aScore
+      })
     }
     return sorted
   }, [result, sortBy])
@@ -911,7 +1007,9 @@ export default function ScannerPage() {
             </div>
 
             <p className="text-xs text-white/50 leading-relaxed">
-              Scans ~229 liquid tickers for high-confidence directional setups + relative strength vs SPY.
+              Scans{' '}
+              {config?.universeSize ? `${config.universeSize} liquid tickers` : 'all liquid tickers'}{' '}
+              for high-confidence directional setups + relative strength vs SPY.
               Composite score (0-100) combines both. Runs in 10-20 seconds. Cached 5 minutes.
             </p>
 
@@ -994,6 +1092,33 @@ export default function ScannerPage() {
                   ))}
                 </div>
               </div>
+            </div>
+
+            {/* News boost toggle (Track B) */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setNewsBoost(v => !v)}
+                disabled={scanning}
+                className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[11px] font-mono transition-all hover:opacity-90 disabled:opacity-50"
+                style={{
+                  background: newsBoost ? 'rgba(167,139,250,0.15)' : 'rgba(255,255,255,0.04)',
+                  color: newsBoost ? '#a78bfa' : 'rgba(255,255,255,0.55)',
+                  border: `1px solid ${newsBoost ? 'rgba(167,139,250,0.35)' : 'rgba(255,255,255,0.08)'}`,
+                }}
+                title="Fold active macro themes & news sentiment into the composite score">
+                <Newspaper size={11} />
+                <span style={{
+                  display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+                  background: newsBoost ? '#a78bfa' : 'rgba(255,255,255,0.2)',
+                }} />
+                News boost {newsBoost ? 'on' : 'off'}
+              </button>
+              {newsBoost && (
+                <span className="text-[10px] text-white/40 font-mono">
+                  Picks weighted by current macro themes / digest
+                </span>
+              )}
             </div>
 
             {/* Filter toggle */}
@@ -1112,6 +1237,14 @@ export default function ScannerPage() {
                 <span>Returned <span className="text-white/80">{result.picks.length}</span></span>
                 <span className="text-white/25">·</span>
                 <span>{(result.elapsedMs / 1000).toFixed(1)}s</span>
+                {result.newsBoost && (
+                  <>
+                    <span className="text-white/25">·</span>
+                    <span style={{ color: '#a78bfa' }}>
+                      <Newspaper size={9} className="inline mr-0.5" /> News boost
+                    </span>
+                  </>
+                )}
                 <span className="text-white/25">·</span>
                 <span>SPY 10d <span style={{ color: result.spyChange10d >= 0 ? '#34d399' : '#f87171' }}>
                   {fmtPct(result.spyChange10d)}
@@ -1188,7 +1321,11 @@ export default function ScannerPage() {
                   <span className="shrink-0 font-mono font-bold" style={{ color: '#60a5fa' }}>1.</span>
                   <span>
                     <span className="font-semibold text-white/80">Universe:</span> pick a predefined universe (All Liquid, Tech, AI theme, etc.) or add custom filters.
-                    Default is ~229 liquid tickers across sectors.
+                    Default is{' '}
+                    {config?.universeSize
+                      ? `${config.universeSize} liquid tickers`
+                      : 'all liquid tickers'}{' '}
+                    across sectors.
                   </span>
                 </div>
                 <div className="flex gap-2">
@@ -1209,16 +1346,25 @@ export default function ScannerPage() {
                 <div className="flex gap-2">
                   <span className="shrink-0 font-mono font-bold" style={{ color: '#60a5fa' }}>4.</span>
                   <span>
-                    <span className="font-semibold text-white/80">Rank:</span> returns the top N by composite score.
-                    Each pick shows the specific reasons (MACD cross, golden cross, oversold bounce, etc.).
+                    <span className="font-semibold text-white/80">News boost (optional):</span> when toggled,
+                    the API folds in a per-ticker news exposure score (-100..+100) from currently-active
+                    macro themes, recent macro events, and the latest market digest. Aligned with your
+                    pick&apos;s direction so news can confirm or contradict the technical setup.
                   </span>
                 </div>
                 <div className="flex gap-2">
                   <span className="shrink-0 font-mono font-bold" style={{ color: '#60a5fa' }}>5.</span>
                   <span>
+                    <span className="font-semibold text-white/80">Rank:</span> returns the top N by composite score.
+                    Each pick shows the specific reasons (MACD cross, golden cross, oversold bounce, etc.).
+                  </span>
+                </div>
+                <div className="flex gap-2">
+                  <span className="shrink-0 font-mono font-bold" style={{ color: '#60a5fa' }}>6.</span>
+                  <span>
                     <span className="font-semibold text-white/80">Drill in:</span> click any pick to see full breakdown.
-                    Click "Run full Council" for the expensive but thorough /analyze treatment,
-                    or "Add to watchlist" for 15-min exit monitoring.
+                    Click &quot;Run full Council&quot; for the expensive but thorough /analyze treatment,
+                    or &quot;Add to watchlist&quot; for 15-min exit monitoring.
                   </span>
                 </div>
               </div>
