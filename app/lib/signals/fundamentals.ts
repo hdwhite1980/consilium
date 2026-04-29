@@ -101,7 +101,10 @@ async function getBasicFinancials(ticker: string) {
 }
 
 async function getEarningsCalendar(ticker: string) {
-  const from = new Date().toISOString().split('T')[0]
+  // 14d backwards catches recently-reported earnings (so we can show
+  // post-earnings state for the just-printed quarter). 90d forward
+  // catches the next scheduled report for countdown.
+  const from = new Date(Date.now() - 14 * 86400000).toISOString().split('T')[0]
   const to = new Date(Date.now() + 90 * 86400000).toISOString().split('T')[0]
   return finnhubGet<{
     earningsCalendar: Array<{
@@ -227,10 +230,24 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
   // Take the SOONEST upcoming earnings (date >= today, ascending order).
   const todayMidnight = new Date()
   todayMidnight.setHours(0, 0, 0, 0)
-  const upcoming = (calendar?.earningsCalendar ?? [])
-    .filter(e => e?.date && new Date(e.date).getTime() >= todayMidnight.getTime())
+  // Build both candidates:
+  //   recentReported: just-reported within last 48h AND has actuals
+  //   nextFuture:     the soonest upcoming report
+  // Prefer recentReported for post-earnings UX (countdown UI shows
+  // "POST-EARNINGS · Reported Xh ago · EPS actual: Y") for ~2 days
+  // after a print, then falls back to next-future countdown.
+  const allCal = (calendar?.earningsCalendar ?? [])
+    .filter(e => e?.date)
+    .slice()
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-  const nextEarning = upcoming[0]
+  const nowMs = Date.now()
+  const TWO_DAYS_MS = 2 * 86400000
+  const recentReported = [...allCal].reverse().find(e => {
+    const t = new Date(e.date).getTime()
+    return (nowMs - t) >= 0 && (nowMs - t) <= TWO_DAYS_MS && (e as { epsActual?: number | null }).epsActual !== null && (e as { epsActual?: number | null }).epsActual !== undefined
+  })
+  const nextFuture = allCal.find(e => new Date(e.date).getTime() >= todayMidnight.getTime())
+  const nextEarning = recentReported ?? nextFuture
   const nextEarningsDate = nextEarning?.date ?? null
   const rawHour = ((nextEarning as { hour?: unknown })?.hour ?? '').toString().toLowerCase()
   const earningsHour: FundamentalSignals['earningsHour'] =
