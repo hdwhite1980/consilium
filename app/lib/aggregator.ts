@@ -22,6 +22,8 @@ import { getLatestDigestContext } from './market-digest'
 import { getLatestSocialContext } from './social-signals'
 import { getMonitorAlerts } from './market-monitor'
 
+
+
 export type SignalBundle = {
   ticker: string
   timeframe: string
@@ -32,6 +34,7 @@ export type SignalBundle = {
   bars: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }>
   news: Array<{ headline: string; summary: string; created_at: string; url: string }>
   currentPrice: number
+
 
   // Phase 1
   technicals: Awaited<ReturnType<typeof calculateTechnicals>>
