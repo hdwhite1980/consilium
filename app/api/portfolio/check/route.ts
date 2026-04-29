@@ -6,6 +6,22 @@
  * Stocks: RSI, volume, P&L vs entry/stop/target
  * Options: live Greeks (delta/theta/IV), intrinsic vs time value,
  *          moneyness, days to expiry, P&L on premium
+ *
+ * ─────────────────────────────────────────────────────────────
+ * 2026-04-29 — Major rewrite incorporating 9 improvements:
+ *
+ *   1. True directional exposure (delta-aware, not just shares)
+ *   2. (Lives in portfolio/route.ts) Skip summary on 1-position accounts
+ *   3. Lead-with-verdict structure (UI side, but reason/action ordered for it)
+ *   4. "Save-path" context — earnings/economic catalysts before expiry
+ *   5. Honest bid/ask math instead of mid-price hopium
+ *   6. Wall-clock deadline ("Expires Friday 4pm ET — 22h") not just "1d"
+ *   7. (Lives in portfolio/route.ts) Don't conflate position-level vs underlying-level
+ *   8. TERMINAL verdict tier — short-circuit LLM, emit static template
+ *   9. Council-history integration — pull verdict_log, surface alignment/contradiction
+ *
+ * Order of new sections in this file matches the order above.
+ * ─────────────────────────────────────────────────────────────
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -22,6 +38,8 @@ const TRADIER_KEY = process.env.TRADIER_API_KEY
 const TRADIER_BASE = TRADIER_KEY
   ? 'https://api.tradier.com/v1'
   : 'https://sandbox.tradier.com/v1'
+
+const FINNHUB_KEY = process.env.FINNHUB_API_KEY
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -51,53 +69,134 @@ export interface PositionCheck {
   expiry?: string
   contracts?: number
   entryPremium: number | null
-  currentPremium: number | null      // live bid/ask midpoint
-  optionPnlPct: number | null        // % change on premium
-  optionPnlDollar: number | null     // dollar P&L on all contracts
+  currentPremium: number | null
+  optionPnlPct: number | null
+  optionPnlDollar: number | null
   daysToExpiry: number | null
   timeDecayUrgent: boolean
-
-  // Greeks
-  delta: number | null               // directional exposure
-  theta: number | null               // daily time decay in $
-  gamma: number | null               // rate of delta change
-  vega: number | null                // IV sensitivity
-  impliedVolatility: number | null   // as decimal (0.45 = 45%)
-  intrinsicValue: number | null      // how much is in-the-money
-  timeValue: number | null           // premium above intrinsic
+  delta: number | null
+  theta: number | null
+  gamma: number | null
+  vega: number | null
+  impliedVolatility: number | null
+  intrinsicValue: number | null
+  timeValue: number | null
   moneyness: 'deep_itm' | 'itm' | 'atm' | 'otm' | 'deep_otm'
-  breakeven: number | null           // price underlying needs to reach by expiry
+  breakeven: number | null
 
-  verdict: 'HOLD' | 'EXIT' | 'ADD' | 'WATCH'
+  // ── NEW (2026-04-29) ────────────────────────────────────────
+
+  // (1) True directional exposure
+  /** Net dollar exposure to the underlying. Positive = long the underlying,
+   *  negative = short. For long puts on a $9 stock with 10 contracts and -0.287
+   *  delta, this is roughly -0.287 × 10 × 100 × 9 = -$258. */
+  directionalExposure: number | null
+  /** Total capital tied up in this position. Stock: shares × cost. Option: premium paid total.
+   *  Used to distinguish "money at risk" from "directional exposure" — they differ for options. */
+  capitalAtRisk: number | null
+
+  // (5) Honest bid/ask
+  bid: number | null
+  ask: number | null
+  /** Realistic dollar proceeds if you sold right now, accounting for bid-ask spread. */
+  realisticProceedsLow: number | null
+  realisticProceedsHigh: number | null
+  /** Plain-language note for the UI: "current bid is $0.05, you'd realistically net $40-$70" */
+  realisticProceedsNote: string | null
+
+  // (6) Wall-clock deadline
+  /** Hours until option expiry. Used for sub-day urgency display. */
+  hoursUntilExpiry: number | null
+  /** Pre-formatted deadline string for UI: "Expires Fri 4:00pm ET — 22h" */
+  deadlineLabel: string | null
+
+  // (4) Save-path context — what would actually save this trade?
+  savePathSummary: string | null
+  savePathProbabilityVerbal: string | null   // "very unlikely" / "unlikely" / "plausible" / "likely"
+  savePathProbabilityNumeric: string | null  // "~3%" / "5-10%" / "20-30%"
+
+  // (8) TERMINAL classification
+  /** True when the position has effectively no realistic recovery path.
+   *  When true, the LLM enrichment is skipped and a static template is used. */
+  terminal: boolean
+  /** Why the position is terminal. */
+  terminalReason: string | null
+
+  // (9) Council-history integration
+  councilHistory: CouncilHistoryContext | null
+
+  // Verdict + prose
+  verdict: 'EXIT' | 'WATCH' | 'HOLD' | 'ADD' | 'TERMINAL'
   conviction: 'high' | 'medium' | 'low'
   reason: string
   action: string
   flags: string[]
 }
 
-// ── Fetch underlying quote + technicals ────────────────────────────────────────
+export interface CouncilHistoryContext {
+  /** Most recent verdict for this ticker (matching the user). */
+  recentSignal: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
+  recentConfidence: number | null
+  recentEntry: number | null
+  recentStop: number | null
+  recentTarget: number | null
+  recentTimeframe: string | null
+  recentPersona: string | null
+  daysSinceVerdict: number
+  /** 'pending' | 'correct' | 'incorrect' from outcome_1w (preferred) or outcome_1m. */
+  outcomeStatus: 'pending' | 'correct' | 'incorrect' | 'unknown'
+  outcomeHorizon: '1w' | '1m' | null
+  /** True when the user's CURRENT position contradicts the Council's most recent direction.
+   *  E.g., user holds bearish puts but Council called BULLISH. */
+  positionContradictsCouncil: boolean
+  /** Plain-language summary of alignment/contradiction. */
+  alignmentNote: string
+  /** Set when there's a different-persona run from the same day with a different signal. */
+  personaDisagreement: string | null
+}
 
-async function fetchUnderlyingData(ticker: string) {
-  const key = process.env.FINNHUB_API_KEY
-  if (!key) return null
+interface OptionDataResult {
+  currentPremium: number | null
+  bid: number
+  ask: number
+  volume: number
+  openInterest: number
+  delta: number | null
+  theta: number | null
+  gamma: number | null
+  vega: number | null
+  impliedVolatility: number | null
+}
+
+interface UnderlyingData {
+  price: number
+  change1D: number
+  volumeRatio: number | null
+  rsi: number | null
+  volume: number | null
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Underlying data fetcher (Finnhub)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function fetchUnderlyingData(ticker: string): Promise<UnderlyingData | null> {
+  if (!FINNHUB_KEY) return null
   try {
     const [qr, mr, rr] = await Promise.all([
-      fetch(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${key}`),
-      fetch(`https://finnhub.io/api/v1/stock/metric?symbol=${ticker}&metric=all&token=${key}`),
-      fetch(`https://finnhub.io/api/v1/indicator?symbol=${ticker}&resolution=D&from=${Math.floor((Date.now()-60*86400000)/1000)}&to=${Math.floor(Date.now()/1000)}&indicator=rsi&timeperiod=14&token=${key}`),
+      fetch(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${FINNHUB_KEY}`),
+      fetch(`https://finnhub.io/api/v1/stock/metric?symbol=${ticker}&metric=all&token=${FINNHUB_KEY}`),
+      fetch(`https://finnhub.io/api/v1/indicator?symbol=${ticker}&resolution=D&from=${Math.floor(Date.now()/1000) - 30*86400}&to=${Math.floor(Date.now()/1000)}&indicator=rsi&timeperiod=14&token=${FINNHUB_KEY}`),
     ])
     if (!qr.ok) return null
     const q = await qr.json()
-    if (!q.c || q.c === 0) return null
+    const price = q.c || 0
+    const change1D = q.dp || 0
 
-    const price = parseFloat(q.c.toFixed(2))
-    const prev = q.pc || price
-    const change1D = parseFloat(((price - prev) / prev * 100).toFixed(2))
-
-    let volumeRatio = null
+    let volumeRatio: number | null = null
     if (mr.ok) {
       const m = await mr.json()
-      const avgVol = m.metric?.['10DayAverageTradingVolume']
+      const avgVol = m.metric && m.metric['10DayAverageTradingVolume']
         ? m.metric['10DayAverageTradingVolume'] * 1e6 : null
       if (avgVol && q.v) volumeRatio = parseFloat((q.v / avgVol).toFixed(2))
     }
@@ -114,31 +213,31 @@ async function fetchUnderlyingData(ticker: string) {
   } catch { return null }
 }
 
-// ── Fetch live option data from Tradier ────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Live option data (Tradier)
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function fetchOptionData(
   underlying: string,
   optionType: 'call' | 'put',
   strike: number,
-  expiry: string  // YYYY-MM-DD
-) {
+  expiry: string,
+): Promise<OptionDataResult | null> {
   try {
-    // Get the specific option chain for this expiry
     const chainRes = await fetch(
       `${TRADIER_BASE}/markets/options/chains?symbol=${underlying}&expiration=${expiry}&greeks=true`,
       { headers: { Authorization: `Bearer ${TRADIER_KEY}`, Accept: 'application/json' } }
     )
     if (!chainRes.ok) return null
     const chain = await chainRes.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const options: any[] = chain.options?.option ?? []
 
-    // Find exact contract
     const contract = options.find(o =>
       o.option_type === optionType &&
       Math.abs(o.strike - strike) < 0.01
     )
     if (!contract) {
-      // Try to find closest strike
       const sameType = options.filter(o => o.option_type === optionType)
       const closest = sameType.sort((a, b) => Math.abs(a.strike - strike) - Math.abs(b.strike - strike))[0]
       if (!closest) return null
@@ -148,7 +247,8 @@ async function fetchOptionData(
   } catch { return null }
 }
 
-function parseContractData(contract: any) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseContractData(contract: any): OptionDataResult {
   const bid = contract.bid || 0
   const ask = contract.ask || 0
   const midpoint = bid > 0 && ask > 0
@@ -169,12 +269,14 @@ function parseContractData(contract: any) {
   }
 }
 
-// ── Compute moneyness ─────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Moneyness
+// ─────────────────────────────────────────────────────────────────────────────
 
 function getMoneyness(
   optionType: 'call' | 'put',
   strike: number,
-  underlyingPrice: number
+  underlyingPrice: number,
 ): PositionCheck['moneyness'] {
   const diff = optionType === 'call'
     ? (underlyingPrice - strike) / strike
@@ -187,13 +289,551 @@ function getMoneyness(
   return 'deep_otm'
 }
 
-// ── Build check for a single position ─────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// (1) True directional exposure
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// For stocks: shares × current price = capital, sign always +
+// For long calls:  +|delta| × contracts × 100 × underlying_price (long the underlying)
+// For long puts:   -|delta| × contracts × 100 × underlying_price (short the underlying)
+//
+// Capital at risk:
+//   Stock: shares × entry (or current if no entry)
+//   Long option: entry_premium × contracts × 100 (the most you can lose)
 
-async function buildCheck(pos: any): Promise<PositionCheck> {
+interface ExposureResult {
+  directionalExposure: number | null
+  capitalAtRisk: number | null
+}
+
+function computeExposure(args: {
+  isOption: boolean
+  optionType?: 'call' | 'put'
+  shares?: number
+  contracts?: number
+  delta: number | null
+  entryPrice: number | null      // stock entry
+  entryPremium: number | null    // option entry premium
+  underlyingPrice: number
+}): ExposureResult {
+  const { isOption, optionType, shares, contracts, delta, entryPrice, entryPremium, underlyingPrice } = args
+
+  if (!isOption) {
+    if (!shares || shares <= 0) return { directionalExposure: null, capitalAtRisk: null }
+    const exposure = shares * underlyingPrice
+    const capital = entryPrice ? shares * entryPrice : exposure
+    return {
+      directionalExposure: parseFloat(exposure.toFixed(2)),
+      capitalAtRisk: parseFloat(capital.toFixed(2)),
+    }
+  }
+
+  // Option path
+  if (!contracts || contracts <= 0) return { directionalExposure: null, capitalAtRisk: null }
+
+  // Capital at risk for long options = total premium paid
+  const capital = entryPremium ? entryPremium * contracts * 100 : null
+
+  // Directional exposure needs delta
+  if (delta === null) return { directionalExposure: null, capitalAtRisk: capital }
+
+  // Long calls: delta is +, exposure is + (long the stock)
+  // Long puts:  delta is -, exposure is - (short the stock)
+  // We treat both long calls and long puts here. (Short options would flip signs;
+  // not currently supported in the schema as a position type.)
+  const exposureMagnitude = Math.abs(delta) * contracts * 100 * underlyingPrice
+  const sign = optionType === 'put' ? -1 : 1
+  const exposure = sign * exposureMagnitude
+
+  return {
+    directionalExposure: parseFloat(exposure.toFixed(2)),
+    capitalAtRisk: capital,
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// (5) Honest bid/ask math
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Mid-price implies you can transact there. You can't. The realistic close
+// price is the bid (or somewhere just above bid for marketable limits).
+
+interface ProceedsResult {
+  low: number | null
+  high: number | null
+  note: string | null
+}
+
+function computeRealisticProceeds(args: {
+  bid: number
+  ask: number
+  contracts: number
+  midpoint: number | null
+}): ProceedsResult {
+  const { bid, ask, contracts, midpoint } = args
+
+  // No contract data, no proceeds estimate
+  if (!contracts || contracts <= 0) return { low: null, high: null, note: null }
+
+  // No bid means no buyer. You'd have to negotiate or accept market disposal.
+  if (bid <= 0) {
+    if (midpoint && midpoint > 0) {
+      const midCents = midpoint * 100 * contracts
+      return {
+        low: 0,
+        high: parseFloat((midCents * 0.5).toFixed(2)),
+        note: `No bid — market makers won't quote. Mid is theoretical $${midpoint.toFixed(2)}; realistic exit is $0-$${(midCents * 0.5).toFixed(0)} via limit order, or expire worthless.`,
+      }
+    }
+    return {
+      low: 0,
+      high: 0,
+      note: `No bid available — likely zero recovery. Let it expire or close for whatever broker offers.`,
+    }
+  }
+
+  // Normal bid/ask path
+  const lowProceeds = bid * 100 * contracts                // sell at bid (instant)
+  const highProceeds = midpoint
+    ? Math.min(ask, midpoint) * 100 * contracts            // limit order at mid
+    : ask * 100 * contracts                                // limit at ask (unlikely fill)
+
+  // Spread sanity: if bid/ask spread is >50% of mid, flag it
+  const spread = ask - bid
+  const spreadPct = midpoint && midpoint > 0 ? (spread / midpoint) * 100 : 0
+  let note: string
+  if (spreadPct > 50) {
+    note = `Wide spread: bid $${bid.toFixed(2)} / ask $${ask.toFixed(2)} (${spreadPct.toFixed(0)}% wide). Realistic close: $${lowProceeds.toFixed(0)}-$${highProceeds.toFixed(0)}. Mid is theoretical.`
+  } else if (spread > 0) {
+    note = `Bid $${bid.toFixed(2)} / ask $${ask.toFixed(2)}. Selling at bid nets $${lowProceeds.toFixed(0)}; limit at mid might get $${highProceeds.toFixed(0)}.`
+  } else {
+    note = `Bid/ask data limited. Estimate: $${lowProceeds.toFixed(0)}-$${highProceeds.toFixed(0)} depending on order type.`
+  }
+
+  return {
+    low: parseFloat(lowProceeds.toFixed(2)),
+    high: parseFloat(highProceeds.toFixed(2)),
+    note,
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// (6) Wall-clock deadline
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// US options expire at 4:00 PM ET on the expiry date (15:00 CT, 21:00 UTC during DST).
+// We render in user-relative form: "Expires Fri 4:00pm ET — 22h" or "Expires today — 3h"
+
+function buildDeadlineLabel(expiry: string | null, daysToExpiry: number | null): {
+  hoursUntilExpiry: number | null
+  label: string | null
+} {
+  if (!expiry || daysToExpiry === null) return { hoursUntilExpiry: null, label: null }
+
+  // Options expire at 4pm ET. UTC offset: 20:00 UTC during DST, 21:00 UTC standard time.
+  // We approximate at 20:00 UTC (DST is more common in trading) — close enough for display.
+  const expiryDateUTC = new Date(`${expiry}T20:00:00Z`)
+  const now = new Date()
+  const msUntil = expiryDateUTC.getTime() - now.getTime()
+  const hoursUntil = msUntil / 3_600_000
+
+  if (msUntil < 0) {
+    return { hoursUntilExpiry: hoursUntil, label: 'Expired' }
+  }
+
+  // Day-of-week label
+  const dayOfWeek = expiryDateUTC.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'America/New_York' })
+
+  // Same calendar day in user's tz?
+  const expiryDay = expiryDateUTC.toLocaleDateString('en-US', { timeZone: 'America/New_York' })
+  const todayDay = now.toLocaleDateString('en-US', { timeZone: 'America/New_York' })
+  const isSameDay = expiryDay === todayDay
+
+  if (hoursUntil < 24) {
+    if (isSameDay) {
+      const hoursPart = Math.floor(hoursUntil)
+      const minutesPart = Math.round((hoursUntil - hoursPart) * 60)
+      return {
+        hoursUntilExpiry: parseFloat(hoursUntil.toFixed(2)),
+        label: `Expires today 4:00pm ET — ${hoursPart}h ${minutesPart}m`,
+      }
+    }
+    return {
+      hoursUntilExpiry: parseFloat(hoursUntil.toFixed(2)),
+      label: `Expires ${dayOfWeek} 4:00pm ET — ${hoursUntil.toFixed(0)}h`,
+    }
+  }
+
+  // > 24h, fall back to day-count + day-of-week
+  const dayLabel = daysToExpiry === 1 ? 'tomorrow'
+    : daysToExpiry <= 6 ? dayOfWeek
+    : `${daysToExpiry}d`
+  return {
+    hoursUntilExpiry: parseFloat(hoursUntil.toFixed(2)),
+    label: `Expires ${dayLabel} 4:00pm ET (${daysToExpiry}d)`,
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// (4) Save-path context — what would actually save this trade?
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// For a position to recover, the underlying needs to move enough in the right
+// direction before expiry. We compute:
+//   - move needed (in % of underlying)
+//   - days available
+//   - any scheduled catalysts in the window (earnings, econ events)
+//   - probability band
+//
+// The probability is informed by ATR-based expected move: if the move needed
+// is N×ATR over T days, we compare to the realized probability of that-or-larger
+// moves historically. We don't pull live ATR here — we use a heuristic from
+// daysToExpiry and the abs(breakevenDistPct).
+
+interface SavePathArgs {
+  isOption: boolean
+  optionType?: 'call' | 'put'
+  underlyingPrice: number
+  strike?: number
+  breakeven: number | null
+  daysToExpiry: number | null
+  hoursUntilExpiry: number | null
+  moneyness: PositionCheck['moneyness']
+  optionPnlPct: number | null
+  earningsContext: { hasEarningsBeforeExpiry: boolean; daysToEarnings: number | null }
+}
+
+interface SavePathResult {
+  summary: string | null
+  probabilityVerbal: string | null
+  probabilityNumeric: string | null
+}
+
+function computeSavePath(args: SavePathArgs): SavePathResult {
+  const { isOption, optionType, underlyingPrice, breakeven, daysToExpiry, hoursUntilExpiry, moneyness, earningsContext } = args
+
+  // Stock positions: not really a "save path" — they recover gradually with reversion.
+  // Skip this section entirely for stocks; their P&L recovery isn't binary.
+  if (!isOption) {
+    return { summary: null, probabilityVerbal: null, probabilityNumeric: null }
+  }
+
+  if (breakeven === null || daysToExpiry === null) {
+    return { summary: null, probabilityVerbal: null, probabilityNumeric: null }
+  }
+
+  // For options, the move-to-breakeven percentage is the gating number
+  const movePct = ((breakeven - underlyingPrice) / underlyingPrice) * 100
+  const direction = optionType === 'call'
+    ? (movePct > 0 ? 'up' : 'already past breakeven')
+    : (movePct < 0 ? 'down' : 'already past breakeven')
+  const movePctAbs = Math.abs(movePct)
+
+  // If the position is already past breakeven (deep ITM call when underlying > strike + premium,
+  // or deep ITM put when underlying < strike - premium), the save path is trivially "stay here."
+  if (direction === 'already past breakeven') {
+    return {
+      summary: `Already past breakeven. Position profits as long as underlying stays in-the-money through expiry.`,
+      probabilityVerbal: moneyness === 'deep_itm' ? 'likely' : 'plausible',
+      probabilityNumeric: moneyness === 'deep_itm' ? '60-80%' : '40-60%',
+    }
+  }
+
+  // Compute time horizon in fractional days for sub-day options
+  const timeHorizonDays = hoursUntilExpiry !== null && hoursUntilExpiry < 48
+    ? hoursUntilExpiry / 24
+    : daysToExpiry
+
+  // Heuristic probability of needing a move >= movePctAbs over timeHorizonDays.
+  // Stock daily moves are roughly Gaussian with stdev ~1.5% for major liquid names,
+  // up to ~4% for small-cap volatile names. We use 2% as a generic stdev and scale
+  // by sqrt(time). This isn't Black-Scholes — it's a back-of-envelope sanity check
+  // appropriate for "probability band" output, not a precise forecast.
+  const dailyStdev = 2.0  // % per day, rough average
+  const horizonStdev = dailyStdev * Math.sqrt(Math.max(0.04, timeHorizonDays))  // floor at ~1h
+  const sigmas = movePctAbs / horizonStdev
+
+  // Convert sigmas to a verbal band. We're talking single-tail probability here
+  // (move in one specific direction, not "either direction").
+  let probabilityVerbal: string
+  let probabilityNumeric: string
+  if (sigmas > 3.0) {
+    probabilityVerbal = 'very unlikely'
+    probabilityNumeric = '<2%'
+  } else if (sigmas > 2.0) {
+    probabilityVerbal = 'very unlikely'
+    probabilityNumeric = '~2-5%'
+  } else if (sigmas > 1.5) {
+    probabilityVerbal = 'unlikely'
+    probabilityNumeric = '~5-10%'
+  } else if (sigmas > 1.0) {
+    probabilityVerbal = 'unlikely'
+    probabilityNumeric = '~10-20%'
+  } else if (sigmas > 0.5) {
+    probabilityVerbal = 'plausible'
+    probabilityNumeric = '~25-35%'
+  } else {
+    probabilityVerbal = 'plausible'
+    probabilityNumeric = '~35-45%'
+  }
+
+  // Catalyst boost: earnings before expiry can produce moves >2 sigma routinely.
+  // If earnings is in window, bump probability up one tier and note it.
+  let catalystNote = ''
+  if (earningsContext.hasEarningsBeforeExpiry) {
+    catalystNote = ` Earnings ${earningsContext.daysToEarnings === 0 ? 'today' : earningsContext.daysToEarnings === 1 ? 'tomorrow' : `in ${earningsContext.daysToEarnings} days`} could trigger the needed move (binary risk works both ways).`
+    // Bump up one tier
+    if (probabilityVerbal === 'very unlikely') {
+      probabilityVerbal = 'unlikely'
+      probabilityNumeric = '~10-20%'
+    } else if (probabilityVerbal === 'unlikely') {
+      probabilityVerbal = 'plausible'
+      probabilityNumeric = '~25-35%'
+    } else {
+      probabilityVerbal = 'plausible'
+      probabilityNumeric = '~35-50%'
+    }
+  } else if (timeHorizonDays < 2) {
+    catalystNote = ` No scheduled catalysts before close — would need an unscheduled news event.`
+  }
+
+  const horizonLabel = hoursUntilExpiry !== null && hoursUntilExpiry < 24
+    ? `${hoursUntilExpiry.toFixed(0)}h`
+    : `${daysToExpiry}d`
+
+  const summary = `Underlying needs to move ${direction} ${movePctAbs.toFixed(1)}% in ${horizonLabel} to reach breakeven. ${probabilityVerbal} (${probabilityNumeric}).${catalystNote}`
+
+  return { summary, probabilityVerbal, probabilityNumeric }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// (4b) Earnings catalyst lookup
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Quick lookup against Finnhub's earnings calendar to see if the underlying
+// reports earnings between now and expiry. Used by computeSavePath above.
+
+async function fetchEarningsBeforeExpiry(
+  ticker: string,
+  expiry: string | null,
+): Promise<{ hasEarningsBeforeExpiry: boolean; daysToEarnings: number | null }> {
+  if (!expiry || !FINNHUB_KEY) return { hasEarningsBeforeExpiry: false, daysToEarnings: null }
+
+  try {
+    const today = new Date().toISOString().split('T')[0]
+    const url = `https://finnhub.io/api/v1/calendar/earnings?from=${today}&to=${expiry}&symbol=${ticker}&token=${FINNHUB_KEY}`
+    const res = await fetch(url)
+    if (!res.ok) return { hasEarningsBeforeExpiry: false, daysToEarnings: null }
+    const data = await res.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const events: any[] = data.earningsCalendar ?? []
+    if (!events.length) return { hasEarningsBeforeExpiry: false, daysToEarnings: null }
+
+    const earningsDate = events[0].date
+    const daysToEarnings = Math.floor(
+      (new Date(earningsDate).getTime() - Date.now()) / 86400000
+    )
+    return { hasEarningsBeforeExpiry: true, daysToEarnings }
+  } catch {
+    return { hasEarningsBeforeExpiry: false, daysToEarnings: null }
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// (8) TERMINAL classification
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Some positions are mathematically over. Hard-coding these saves an LLM call,
+// runs faster, and prevents Claude from accidentally suggesting hope.
+
+function checkTerminal(args: {
+  daysToExpiry: number | null
+  hoursUntilExpiry: number | null
+  moneyness: PositionCheck['moneyness']
+  optionPnlPct: number | null
+  bid: number | null
+  isOption: boolean
+}): { terminal: boolean; reason: string | null } {
+  const { daysToExpiry, hoursUntilExpiry, moneyness, optionPnlPct, bid, isOption } = args
+
+  if (!isOption) return { terminal: false, reason: null }
+
+  // Already expired
+  if (daysToExpiry !== null && daysToExpiry < 0) {
+    return { terminal: true, reason: 'Position has expired. Settle/close to clear from your account.' }
+  }
+
+  // Same-day OTM
+  if (hoursUntilExpiry !== null && hoursUntilExpiry < 6 && (moneyness === 'otm' || moneyness === 'deep_otm')) {
+    return { terminal: true, reason: `Less than 6 hours to expiry and out-of-the-money. Will expire worthless absent a major catalyst.` }
+  }
+
+  // <= 1 day deep OTM
+  if (daysToExpiry !== null && daysToExpiry <= 1 && moneyness === 'deep_otm') {
+    return { terminal: true, reason: `Deep out-of-the-money with ≤1 day to expiry. Statistically expires worthless.` }
+  }
+
+  // No bid + close to expiry = nobody will buy this from you
+  if (bid !== null && bid <= 0 && daysToExpiry !== null && daysToExpiry <= 3) {
+    return { terminal: true, reason: `No bid quoted. Market makers won't pay for this contract; let it expire.` }
+  }
+
+  // 95%+ premium gone, OTM, < 5 days left
+  if (
+    optionPnlPct !== null && optionPnlPct <= -90 &&
+    (moneyness === 'otm' || moneyness === 'deep_otm') &&
+    daysToExpiry !== null && daysToExpiry <= 5
+  ) {
+    return { terminal: true, reason: `Premium down ${Math.abs(optionPnlPct).toFixed(0)}%, OTM, ≤${daysToExpiry}d to expiry. Effectively zero recovery path.` }
+  }
+
+  return { terminal: false, reason: null }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// (9) Council-history integration
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Pulls the most recent verdict_log row(s) for this user/ticker and computes
+// alignment with the current position direction.
+
+async function fetchCouncilHistory(
+  userId: string,
+  ticker: string,
+  positionDirection: 'long' | 'short' | 'neutral',
+): Promise<CouncilHistoryContext | null> {
+  try {
+    const admin = getAdmin()
+
+    // Pull last 14 days of verdicts for this ticker for this user.
+    // We need the most recent one, but also any that are from the SAME date
+    // but a different persona (to detect persona disagreement).
+    const since = new Date(Date.now() - 14 * 86400000).toISOString().split('T')[0]
+    const { data: verdicts } = await admin
+      .from('verdict_log')
+      .select('signal, confidence, entry_price, stop_loss, take_profit, time_horizon, persona, timeframe, outcome_1w, outcome_1m, verdict_date, created_at')
+      .eq('user_id', userId)
+      .eq('ticker', ticker.toUpperCase())
+      .gte('verdict_date', since)
+      .order('created_at', { ascending: false })
+      .limit(10)
+
+    if (!verdicts || verdicts.length === 0) return null
+
+    const recent = verdicts[0]
+    const verdictDate = new Date(recent.created_at)
+    const daysSinceVerdict = Math.max(0, Math.floor(
+      (Date.now() - verdictDate.getTime()) / 86400000
+    ))
+
+    // Outcome status — prefer 1w if available
+    let outcomeStatus: CouncilHistoryContext['outcomeStatus'] = 'unknown'
+    let outcomeHorizon: CouncilHistoryContext['outcomeHorizon'] = null
+    if (recent.outcome_1w === 'correct' || recent.outcome_1w === 'incorrect') {
+      outcomeStatus = recent.outcome_1w
+      outcomeHorizon = '1w'
+    } else if (recent.outcome_1w === 'pending') {
+      outcomeStatus = 'pending'
+      outcomeHorizon = '1w'
+    } else if (recent.outcome_1m === 'correct' || recent.outcome_1m === 'incorrect') {
+      outcomeStatus = recent.outcome_1m
+      outcomeHorizon = '1m'
+    }
+
+    // Position-vs-Council alignment:
+    //   Council BULLISH + user long      → aligned
+    //   Council BULLISH + user short     → contradicts (e.g., bearish puts)
+    //   Council BEARISH + user short     → aligned
+    //   Council BEARISH + user long      → contradicts
+    //   Council NEUTRAL                  → no alignment claim
+    const councilBullish = recent.signal === 'BULLISH'
+    const councilBearish = recent.signal === 'BEARISH'
+    let positionContradictsCouncil = false
+    if (councilBullish && positionDirection === 'short') positionContradictsCouncil = true
+    if (councilBearish && positionDirection === 'long') positionContradictsCouncil = true
+
+    // Build alignment note
+    let alignmentNote: string
+    if (recent.signal === 'NEUTRAL') {
+      alignmentNote = `Council ran NEUTRAL ${recent.confidence ?? '?'}% on ${ticker} ${daysSinceVerdict === 0 ? 'today' : daysSinceVerdict === 1 ? 'yesterday' : `${daysSinceVerdict} days ago`} — no directional claim.`
+    } else if (positionContradictsCouncil) {
+      const positionDesc = positionDirection === 'short' ? 'bearish position' : 'bullish position'
+      const councilDesc = recent.signal.toLowerCase()
+      const outcomeDesc = outcomeStatus === 'correct'
+        ? ` Council was right (outcome confirmed) — your position fights the validated thesis.`
+        : outcomeStatus === 'incorrect'
+        ? ` Council turned out to be wrong (outcome confirmed) — your contrarian bet was correct.`
+        : outcomeStatus === 'pending'
+        ? ` Council outcome still pending — your position is contrarian but the thesis hasn't resolved.`
+        : ''
+      alignmentNote = `Council called ${councilDesc} ${recent.confidence ?? '?'}% on ${ticker} ${daysSinceVerdict === 0 ? 'today' : daysSinceVerdict === 1 ? 'yesterday' : `${daysSinceVerdict} days ago`}. Your ${positionDesc} contradicts that direction.${outcomeDesc}`
+    } else {
+      const councilDesc = recent.signal.toLowerCase()
+      const outcomeDesc = outcomeStatus === 'correct'
+        ? ` Council was right (outcome confirmed) — your position aligns with a validated thesis.`
+        : outcomeStatus === 'incorrect'
+        ? ` Council turned out to be wrong (outcome confirmed) — your aligned position is at risk.`
+        : outcomeStatus === 'pending'
+        ? ` Council outcome pending; your position aligns with the active thesis.`
+        : ''
+      alignmentNote = `Council called ${councilDesc} ${recent.confidence ?? '?'}% on ${ticker} ${daysSinceVerdict === 0 ? 'today' : daysSinceVerdict === 1 ? 'yesterday' : `${daysSinceVerdict} days ago`}. Your position aligns with that direction.${outcomeDesc}`
+    }
+
+    // Persona disagreement: did a different-persona run on the same day produce a different signal?
+    let personaDisagreement: string | null = null
+    const sameDay = verdicts.filter(v => v.verdict_date === recent.verdict_date)
+    if (sameDay.length > 1) {
+      const otherSignals = sameDay
+        .filter(v => v.persona !== recent.persona && v.signal !== recent.signal)
+      if (otherSignals.length > 0) {
+        const conflict = otherSignals[0]
+        personaDisagreement = `Same-day ${conflict.persona ?? 'alternate'}-lens run was ${conflict.signal} ${conflict.confidence ?? '?'}% — internal disagreement on ${ticker}.`
+      }
+    }
+
+    return {
+      recentSignal: recent.signal as CouncilHistoryContext['recentSignal'],
+      recentConfidence: recent.confidence ?? null,
+      recentEntry: recent.entry_price ?? null,
+      recentStop: recent.stop_loss ?? null,
+      recentTarget: recent.take_profit ?? null,
+      recentTimeframe: recent.timeframe ?? null,
+      recentPersona: recent.persona ?? null,
+      daysSinceVerdict,
+      outcomeStatus,
+      outcomeHorizon,
+      positionContradictsCouncil,
+      alignmentNote,
+      personaDisagreement,
+    }
+  } catch (e) {
+    console.warn('[portfolio/check] councilHistory lookup failed:', (e as Error).message?.slice(0, 100))
+    return null
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Position-direction inference (for council-history alignment)
+// ═════════════════════════════════════════════════════════════════════════════
+function inferPositionDirection(args: {
+  isOption: boolean
+  optionType?: 'call' | 'put'
+}): 'long' | 'short' | 'neutral' {
+  if (!args.isOption) return 'long'                 // owning shares = long
+  if (args.optionType === 'call') return 'long'     // long call = bullish on underlying
+  if (args.optionType === 'put') return 'short'     // long put = bearish on underlying
+  return 'neutral'
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Build check for a single position
+// ─────────────────────────────────────────────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function buildCheck(pos: any, userId: string): Promise<PositionCheck> {
   const isOption = pos.position_type === 'option'
   const underlying = (pos.underlying || pos.ticker).toUpperCase()
 
-  // Always fetch underlying data
   const uData = await fetchUnderlyingData(underlying)
   if (!uData) {
     return buildErrorCheck(pos, 'Could not fetch live data')
@@ -201,8 +841,8 @@ async function buildCheck(pos: any): Promise<PositionCheck> {
 
   const flags: string[] = []
 
+  // ── STOCK PATH ─────────────────────────────────────────────────────────────
   if (!isOption) {
-    // ── STOCK PATH ────────────────────────────────────────────────────────────
     const entryPrice = pos.avg_cost || null
     const pnlPct = entryPrice
       ? parseFloat(((uData.price - entryPrice) / entryPrice * 100).toFixed(2))
@@ -218,7 +858,6 @@ async function buildCheck(pos: any): Promise<PositionCheck> {
       ? parseFloat(((pos.take_profit - uData.price) / uData.price * 100).toFixed(2))
       : null
 
-    // Stock flags
     if (pnlPct !== null && pnlPct <= -8)  flags.push(`down ${Math.abs(pnlPct).toFixed(1)}% from entry`)
     if (pnlPct !== null && pnlPct >= 25)  flags.push(`up ${pnlPct.toFixed(1)}% — consider partial profits`)
     if (pctFromStop !== null && pctFromStop < 0)    flags.push('⚠ STOP LOSS BREACHED')
@@ -236,6 +875,23 @@ async function buildCheck(pos: any): Promise<PositionCheck> {
     else if (pctFromStop !== null && pctFromStop <= 3) { verdict = 'WATCH'; conviction = 'high' }
     else if (pnlPct !== null && pnlPct >= 15 && uData.rsi !== null && uData.rsi > 70) { verdict = 'WATCH'; conviction = 'medium' }
     else if (pnlPct !== null && pnlPct > 0 && uData.rsi !== null && uData.rsi < 60 && uData.volumeRatio !== null && uData.volumeRatio > 1.5) { verdict = 'ADD'; conviction = 'low' }
+
+    const exposure = computeExposure({
+      isOption: false,
+      shares: pos.shares,
+      delta: null,
+      entryPrice, entryPremium: null,
+      underlyingPrice: uData.price,
+      contracts: undefined,
+    })
+
+    const positionDirection = inferPositionDirection({ isOption: false })
+    const councilHistory = await fetchCouncilHistory(userId, pos.ticker, positionDirection)
+
+    // Add council-history flag if it contradicts position
+    if (councilHistory?.positionContradictsCouncil) {
+      flags.push(`Council ${councilHistory.recentSignal} ${councilHistory.daysSinceVerdict}d ago — your position is contrarian`)
+    }
 
     const parts = [
       pnlPct !== null ? `${pnlPct >= 0 ? '+' : ''}${pnlPct}% P&L` : null,
@@ -262,6 +918,17 @@ async function buildCheck(pos: any): Promise<PositionCheck> {
       delta: null, theta: null, gamma: null, vega: null,
       impliedVolatility: null, intrinsicValue: null, timeValue: null,
       moneyness: 'atm', breakeven: null,
+
+      // New fields
+      directionalExposure: exposure.directionalExposure,
+      capitalAtRisk: exposure.capitalAtRisk,
+      bid: null, ask: null,
+      realisticProceedsLow: null, realisticProceedsHigh: null, realisticProceedsNote: null,
+      hoursUntilExpiry: null, deadlineLabel: null,
+      savePathSummary: null, savePathProbabilityVerbal: null, savePathProbabilityNumeric: null,
+      terminal: false, terminalReason: null,
+      councilHistory,
+
       verdict, conviction,
       reason: parts || `$${uData.price} (${uData.change1D >= 0 ? '+' : ''}${uData.change1D}% today)`,
       action: verdict === 'EXIT'
@@ -273,20 +940,22 @@ async function buildCheck(pos: any): Promise<PositionCheck> {
     }
   }
 
-  // ── OPTIONS PATH ──────────────────────────────────────────────────────────
+  // ── OPTIONS PATH ───────────────────────────────────────────────────────────
   const optionType = (pos.option_type || 'call') as 'call' | 'put'
   const strike = pos.strike || 0
   const expiry = pos.expiry || ''
   const contracts = pos.contracts || 1
   const entryPremium = pos.entry_premium || null
 
-  // Days to expiry
   const daysToExpiry = expiry
     ? Math.floor((new Date(expiry).getTime() - Date.now()) / 86400000)
     : null
   const timeDecayUrgent = daysToExpiry !== null && daysToExpiry <= 7
 
-  // Fetch live option data
+  // Wall-clock countdown (improvement #6)
+  const { hoursUntilExpiry, label: deadlineLabel } = buildDeadlineLabel(expiry, daysToExpiry)
+
+  // Live option data
   const optData = await fetchOptionData(underlying, optionType, strike, expiry)
 
   const currentPremium = optData?.currentPremium ?? null
@@ -297,7 +966,6 @@ async function buildCheck(pos: any): Promise<PositionCheck> {
     ? parseFloat(((currentPremium - entryPremium) * contracts * 100).toFixed(2))
     : null
 
-  // Intrinsic value and time value
   let intrinsicValue: number | null = null
   let timeValue: number | null = null
   if (currentPremium !== null) {
@@ -317,9 +985,56 @@ async function buildCheck(pos: any): Promise<PositionCheck> {
     ? parseFloat(((uData.price - breakeven) / breakeven * 100).toFixed(2))
     : null
 
-  // Options flags
+  // Honest bid/ask proceeds (improvement #5)
+  const proceeds = computeRealisticProceeds({
+    bid: optData?.bid ?? 0,
+    ask: optData?.ask ?? 0,
+    contracts,
+    midpoint: currentPremium,
+  })
+
+  // Earnings catalyst lookup (used by save-path)
+  const earningsContext = await fetchEarningsBeforeExpiry(underlying, expiry)
+
+  // Save-path computation (improvement #4)
+  const savePath = computeSavePath({
+    isOption: true,
+    optionType,
+    underlyingPrice: uData.price,
+    strike,
+    breakeven,
+    daysToExpiry,
+    hoursUntilExpiry,
+    moneyness,
+    optionPnlPct,
+    earningsContext,
+  })
+
+  // Exposure (improvement #1)
+  const exposure = computeExposure({
+    isOption: true,
+    optionType,
+    contracts,
+    delta: optData?.delta ?? null,
+    entryPrice: null,
+    entryPremium,
+    underlyingPrice: uData.price,
+    shares: undefined,
+  })
+
+  // TERMINAL check (improvement #8)
+  const terminalCheck = checkTerminal({
+    daysToExpiry,
+    hoursUntilExpiry,
+    moneyness,
+    optionPnlPct,
+    bid: optData?.bid ?? null,
+    isOption: true,
+  })
+
+  // Flags ────────────────────────────────────────
   if (daysToExpiry !== null && daysToExpiry < 0) flags.push('⚠ OPTION EXPIRED')
-  else if (daysToExpiry !== null && daysToExpiry <= 3) flags.push(`⚠ ${daysToExpiry}d to expiry — exit or roll`)
+  else if (daysToExpiry !== null && daysToExpiry <= 3) flags.push(`⚠ ${deadlineLabel ?? `${daysToExpiry}d to expiry`}`)
   else if (timeDecayUrgent) flags.push(`${daysToExpiry}d to expiry — theta accelerating`)
 
   if (moneyness === 'deep_otm') flags.push('Deep OTM — high risk of expiring worthless')
@@ -361,26 +1076,36 @@ async function buildCheck(pos: any): Promise<PositionCheck> {
     if (optionType === 'put' && uData.price > breakeven) flags.push(`Underlying needs -${needsToMove}% to reach breakeven $${breakeven}`)
   }
 
-  // Options verdict logic
+  // Council history (improvement #9)
+  const positionDirection = inferPositionDirection({ isOption: true, optionType })
+  const councilHistory = await fetchCouncilHistory(userId, underlying, positionDirection)
+  if (councilHistory?.positionContradictsCouncil) {
+    flags.push(`Council ${councilHistory.recentSignal} ${councilHistory.daysSinceVerdict}d ago — your ${optionType === 'put' ? 'puts' : 'position'} contradict that direction`)
+  }
+
+  // Verdict logic — TERMINAL takes precedence
   let verdict: PositionCheck['verdict'] = 'HOLD'
   let conviction: PositionCheck['conviction'] = 'medium'
 
-  if (daysToExpiry !== null && daysToExpiry < 0) {
+  if (terminalCheck.terminal) {
+    verdict = 'TERMINAL'
+    conviction = 'high'
+  } else if (daysToExpiry !== null && daysToExpiry < 0) {
     verdict = 'EXIT'; conviction = 'high'
   } else if (daysToExpiry !== null && daysToExpiry <= 2) {
     verdict = 'EXIT'; conviction = 'high'
   } else if (optionPnlPct !== null && optionPnlPct <= -70) {
-    verdict = 'EXIT'; conviction = 'high'   // most of premium gone
+    verdict = 'EXIT'; conviction = 'high'
   } else if (optionPnlPct !== null && optionPnlPct >= 100) {
-    verdict = 'EXIT'; conviction = 'high'   // doubled — take it
+    verdict = 'EXIT'; conviction = 'high'
   } else if (moneyness === 'deep_otm' && timeDecayUrgent) {
-    verdict = 'EXIT'; conviction = 'high'   // no path to profit
+    verdict = 'EXIT'; conviction = 'high'
   } else if (daysToExpiry !== null && daysToExpiry <= 7) {
     verdict = 'WATCH'; conviction = 'high'
   } else if (optionPnlPct !== null && optionPnlPct <= -40) {
     verdict = 'WATCH'; conviction = 'medium'
   } else if (optionPnlPct !== null && optionPnlPct >= 50) {
-    verdict = 'WATCH'; conviction = 'medium'  // nice profit, decide whether to hold
+    verdict = 'WATCH'; conviction = 'medium'
   }
 
   const parts = [
@@ -390,20 +1115,41 @@ async function buildCheck(pos: any): Promise<PositionCheck> {
     optData?.theta != null ? `θ ${optData.theta.toFixed(3)}/day` : null,
     optData?.impliedVolatility != null ? `IV ${(optData.impliedVolatility * 100).toFixed(0)}%` : null,
     moneyness.replace('_', ' '),
-    daysToExpiry !== null ? `${daysToExpiry}d left` : null,
+    deadlineLabel ?? (daysToExpiry !== null ? `${daysToExpiry}d left` : null),
     uData.rsi !== null ? `RSI ${uData.rsi}` : null,
   ].filter(Boolean).join(' · ')
 
-  let action = 'Hold — thesis intact'
-  if (verdict === 'EXIT') {
-    if (daysToExpiry !== null && daysToExpiry <= 2) action = 'Exit immediately — expiring soon, sell to recover any remaining value'
-    else if (optionPnlPct !== null && optionPnlPct >= 100) action = 'Take profit — premium has doubled. Sell and lock in gains'
-    else if (optionPnlPct !== null && optionPnlPct <= -70) action = 'Cut loss — premium down 70%+. Exit to preserve remaining capital'
-    else action = 'Exit position — exit criteria met'
+  // Action prose — TERMINAL gets a static template (improvement #8 short-circuit)
+  let action: string
+  if (verdict === 'TERMINAL') {
+    if (proceeds.low !== null && proceeds.high !== null && proceeds.high > 0) {
+      action = `TERMINAL — ${terminalCheck.reason} Realistic close proceeds: $${proceeds.low.toFixed(0)}-$${proceeds.high.toFixed(0)}. Sell or let expire.`
+    } else {
+      action = `TERMINAL — ${terminalCheck.reason} Close for whatever bid exists or let expire.`
+    }
+  } else if (verdict === 'EXIT') {
+    if (daysToExpiry !== null && daysToExpiry <= 2) {
+      const proceedsHint = proceeds.low !== null && proceeds.high !== null
+        ? ` Realistic proceeds: $${proceeds.low.toFixed(0)}-$${proceeds.high.toFixed(0)}.`
+        : ''
+      action = `Exit immediately — expiring soon, sell to recover any remaining value.${proceedsHint}`
+    } else if (optionPnlPct !== null && optionPnlPct >= 100) {
+      action = 'Take profit — premium has doubled. Sell and lock in gains.'
+    } else if (optionPnlPct !== null && optionPnlPct <= -70) {
+      action = 'Cut loss — premium down 70%+. Exit to preserve remaining capital.'
+    } else {
+      action = 'Exit position — exit criteria met'
+    }
   } else if (verdict === 'WATCH') {
-    if (daysToExpiry !== null && daysToExpiry <= 7) action = `${daysToExpiry}d left — decide: exit, roll to later expiry, or hold through expiry`
-    else if (optionPnlPct !== null && optionPnlPct >= 50) action = 'Consider selling half to lock in gains, let rest ride'
-    else action = 'Monitor closely — set alert if premium drops another 20%'
+    if (daysToExpiry !== null && daysToExpiry <= 7) {
+      action = `${daysToExpiry}d left — decide: exit, roll to later expiry, or hold through expiry`
+    } else if (optionPnlPct !== null && optionPnlPct >= 50) {
+      action = 'Consider selling half to lock in gains, let rest ride'
+    } else {
+      action = 'Monitor closely — set alert if premium drops another 20%'
+    }
+  } else {
+    action = 'Hold — thesis intact'
   }
 
   return {
@@ -429,12 +1175,32 @@ async function buildCheck(pos: any): Promise<PositionCheck> {
     vega: optData?.vega ?? null,
     impliedVolatility: optData?.impliedVolatility ?? null,
     intrinsicValue, timeValue, moneyness, breakeven,
+
+    // New fields
+    directionalExposure: exposure.directionalExposure,
+    capitalAtRisk: exposure.capitalAtRisk,
+    bid: optData?.bid ?? null,
+    ask: optData?.ask ?? null,
+    realisticProceedsLow: proceeds.low,
+    realisticProceedsHigh: proceeds.high,
+    realisticProceedsNote: proceeds.note,
+    hoursUntilExpiry,
+    deadlineLabel,
+    savePathSummary: savePath.summary,
+    savePathProbabilityVerbal: savePath.probabilityVerbal,
+    savePathProbabilityNumeric: savePath.probabilityNumeric,
+    terminal: terminalCheck.terminal,
+    terminalReason: terminalCheck.reason,
+    councilHistory,
+
     verdict, conviction,
     reason: parts || `${optionType.toUpperCase()} $${strike} exp ${expiry}`,
-    action, flags,
+    action,
+    flags,
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function buildErrorCheck(pos: any, msg: string): PositionCheck {
   return {
     ticker: pos.ticker, position_type: pos.position_type || 'stock',
@@ -446,65 +1212,119 @@ function buildErrorCheck(pos: any, msg: string): PositionCheck {
     delta: null, theta: null, gamma: null, vega: null,
     impliedVolatility: null, intrinsicValue: null, timeValue: null,
     moneyness: 'atm', breakeven: null,
+    directionalExposure: null, capitalAtRisk: null,
+    bid: null, ask: null,
+    realisticProceedsLow: null, realisticProceedsHigh: null, realisticProceedsNote: null,
+    hoursUntilExpiry: null, deadlineLabel: null,
+    savePathSummary: null, savePathProbabilityVerbal: null, savePathProbabilityNumeric: null,
+    terminal: false, terminalReason: null,
+    councilHistory: null,
     verdict: 'HOLD', conviction: 'low', reason: msg, action: 'Retry later', flags: [msg],
   }
 }
 
-// ── AI enrichment ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// AI enrichment — skipped entirely for TERMINAL positions (improvement #8)
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function enrichWithAI(checks: PositionCheck[]): Promise<PositionCheck[]> {
   if (!checks.length) return checks
+
+  // Skip TERMINAL positions — their action prose is already correct from the static template
+  const enrichable = checks.filter(c => !c.terminal)
+  if (!enrichable.length) return checks
+
   try {
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
-    const snapshot = checks.map(c => {
+    const snapshot = enrichable.map(c => {
       if (c.position_type === 'option') {
-        return [
+        const lines = [
           `${c.ticker} ${c.optionType?.toUpperCase()} $${c.strike} exp ${c.expiry} (${c.contracts}x contracts)`,
           `  Underlying: $${c.underlyingPrice} (${c.underlyingChange1D >= 0 ? '+' : ''}${c.underlyingChange1D}% today) | RSI ${c.underlyingRsi ?? 'N/A'}`,
-          `  Entry premium: ${c.entryPremium ? `$${c.entryPremium}` : 'N/A'} | Current: ${c.currentPremium ? `$${c.currentPremium}` : 'N/A'} | P&L: ${c.optionPnlPct !== null ? `${c.optionPnlPct >= 0 ? '+' : ''}${c.optionPnlPct}% ($${c.optionPnlDollar})` : 'N/A'}`,
+          `  Entry premium: ${c.entryPremium ? `$${c.entryPremium}` : 'N/A'} | Current mid: ${c.currentPremium ? `$${c.currentPremium}` : 'N/A'} | P&L on premium: ${c.optionPnlPct !== null ? `${c.optionPnlPct >= 0 ? '+' : ''}${c.optionPnlPct}% ($${c.optionPnlDollar})` : 'N/A'}`,
+          `  Bid/Ask: ${c.bid !== null ? `$${c.bid.toFixed(2)}/$${c.ask?.toFixed(2)}` : 'N/A'}${c.realisticProceedsNote ? ` | Realistic proceeds: $${c.realisticProceedsLow?.toFixed(0)}-$${c.realisticProceedsHigh?.toFixed(0)}` : ''}`,
           `  Greeks: Delta ${c.delta ?? 'N/A'} | Theta ${c.theta ?? 'N/A'}/day | IV ${c.impliedVolatility ? `${(c.impliedVolatility*100).toFixed(0)}%` : 'N/A'}`,
-          `  ${c.daysToExpiry}d to expiry | ${c.moneyness.replace('_',' ')} | Intrinsic $${c.intrinsicValue ?? 0} | Time value $${c.timeValue ?? 0}`,
+          `  ${c.deadlineLabel ?? `${c.daysToExpiry}d to expiry`} | ${c.moneyness.replace('_',' ')} | Intrinsic $${c.intrinsicValue ?? 0} | Time value $${c.timeValue ?? 0}`,
           `  Breakeven: $${c.breakeven ?? 'N/A'}`,
+          `  Directional exposure: ${c.directionalExposure !== null ? '$' + c.directionalExposure.toFixed(0) : 'N/A'} (${c.directionalExposure !== null && c.directionalExposure < 0 ? 'bearish' : c.directionalExposure !== null && c.directionalExposure > 0 ? 'bullish' : 'flat'} on underlying via ${c.optionType})`,
+          c.savePathSummary ? `  Save path: ${c.savePathSummary}` : '',
+          c.councilHistory ? `  Council history: ${c.councilHistory.alignmentNote}${c.councilHistory.personaDisagreement ? ' ' + c.councilHistory.personaDisagreement : ''}` : '',
           c.flags.length ? `  Flags: ${c.flags.join(', ')}` : '',
-        ].filter(Boolean).join('\n')
+        ]
+        return lines.filter(Boolean).join('\n')
       } else {
-        return [
+        const lines = [
           `${c.ticker} stock (${c.shares} shares @ $${c.entryPrice ?? '?'})`,
           `  Price: $${c.underlyingPrice} (${c.underlyingChange1D >= 0 ? '+' : ''}${c.underlyingChange1D}% today) | P&L: ${c.pnlPct !== null ? `${c.pnlPct >= 0 ? '+' : ''}${c.pnlPct}%` : 'N/A'} ($${c.pnlDollar ?? 0})`,
           `  RSI ${c.underlyingRsi ?? 'N/A'} | Volume ${c.underlyingVolumeRatio ?? 'N/A'}x avg`,
+          `  Directional exposure: ${c.directionalExposure !== null ? '$' + c.directionalExposure.toFixed(0) : 'N/A'} (long stock)`,
           c.stopLoss ? `  Stop: $${c.stopLoss} (${c.pctFromStop?.toFixed(1)}% away)` : '  No stop set',
           c.takeProfit ? `  Target: $${c.takeProfit} (${c.pctFromTarget?.toFixed(1)}% away)` : '  No target set',
+          c.councilHistory ? `  Council history: ${c.councilHistory.alignmentNote}${c.councilHistory.personaDisagreement ? ' ' + c.councilHistory.personaDisagreement : ''}` : '',
           c.flags.length ? `  Flags: ${c.flags.join(', ')}` : '',
-        ].filter(Boolean).join('\n')
+        ]
+        return lines.filter(Boolean).join('\n')
       }
     }).join('\n\n')
 
+    // System prompt — date grounding inlined (same pattern as the QA fix)
+    const today = new Date().toUTCString().split(' ').slice(0, 4).join(' ')
+    const todayISO = new Date().toISOString().split('T')[0]
+    const systemPrompt = `Today is ${today} (ISO: ${todayISO}). This is the actual current date from server time. Trust user-supplied dates (option expirations, transaction dates) without arguing — they have a calendar, you don't.
+
+You are a trading coach reviewing live positions. Be direct and specific — cite the actual numbers from the snapshot. No fluff. For options, consider delta (directional exposure), theta (daily decay cost), IV level, moneyness, and days to expiry together. A 0.25 delta OTM call with 5 days left and 60% IV is a very different situation than a 0.55 delta ITM call with 30 days.
+
+When the snapshot includes "Council history," weave it into your reasoning. If the user's position contradicts the most recent Council direction, name the contradiction and explain what it means for the exit decision. If the Council outcome is confirmed (correct/incorrect), use that to weight the alignment note.
+
+When the snapshot includes "Save path," reference the probability band and any catalyst note in your reason. Do not invent probability numbers; use the verbal band given.
+
+When the snapshot includes "Realistic proceeds," cite the bid-ask range in your action — never quote mid-price as if it's transactable.`
+
     const msg = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 1200,
-      messages: [{ role: 'user', content: `You are a trading coach reviewing live positions. Be direct and specific — cite the actual numbers. No fluff.\n\n${snapshot}\n\nFor options: consider delta (directional exposure), theta (daily decay cost), IV level, moneyness, and days to expiry together. A 0.25 delta OTM call with 5 days left and 60% IV is a very different situation than a 0.55 delta ITM call with 30 days.\n\nJSON array, same order:\n[\n  {\n    "ticker": "NVDA",\n    "verdict": "HOLD",\n    "conviction": "high",\n    "reason": "specific reason with actual numbers",\n    "action": "specific action step",\n    "flags": ["any additional flags"]\n  }\n]\nJSON only.` }]
+      max_tokens: 1500,
+      system: systemPrompt,
+      messages: [{
+        role: 'user',
+        content: `${snapshot}\n\nReturn JSON array, same order as snapshot:\n[\n  {\n    "ticker": "NVDA",\n    "verdict": "HOLD",\n    "conviction": "high",\n    "reason": "specific reason with actual numbers, including council-history alignment if present and save-path probability if relevant",\n    "action": "specific action step including bid-ask reality if option",\n    "flags": ["any additional flags"]\n  }\n]\nJSON only, no markdown.`,
+      }],
     })
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const text = (msg.content.find((b: any) => b.type === 'text') as any)?.text || ''
     const clean = text.replace(/```json|```/g, '').trim()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ai: any[] = JSON.parse(clean.slice(clean.indexOf('['), clean.lastIndexOf(']') + 1))
-    return checks.map((c, i) => {
+
+    // Map AI results back to enrichable checks by ticker (TERMINAL passes through unchanged)
+    const aiByTicker = new Map<string, typeof ai[number]>()
+    enrichable.forEach((c, i) => {
       const a = ai[i]
-      if (!a || a.ticker !== c.ticker) return c
-      return { ...c,
-        verdict: a.verdict || c.verdict,
-        conviction: a.conviction || c.conviction,
+      if (a && a.ticker === c.ticker) aiByTicker.set(c.ticker, a)
+    })
+
+    return checks.map(c => {
+      if (c.terminal) return c  // Static template wins — improvement #8
+      const a = aiByTicker.get(c.ticker)
+      if (!a) return c
+      return {
+        ...c,
+        verdict: (a.verdict as PositionCheck['verdict']) || c.verdict,
+        conviction: (a.conviction as PositionCheck['conviction']) || c.conviction,
         reason: a.reason || c.reason,
         action: a.action || c.action,
         flags: [...new Set([...c.flags, ...(a.flags || [])])],
       }
     })
-  } catch { return checks }
+  } catch {
+    return checks
+  }
 }
 
-// ── Shared helpers ────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared helpers
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function getPositionsAndJournal(userId: string) {
   const admin = getAdmin()
@@ -517,11 +1337,13 @@ async function getPositionsAndJournal(userId: string) {
     .select('ticker,stop_loss,take_profit,entry_price,entry_premium,position_type,option_type,strike,expiry,contracts')
     .eq('user_id', userId)
     .eq('outcome', 'pending')
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const jMap = new Map<string, any>()
   for (const j of (journal || [])) jMap.set(j.ticker, j)
   return { positions, jMap }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mergeWithJournal(pos: any, j: any) {
   return {
     ...pos,
@@ -536,7 +1358,9 @@ function mergeWithJournal(pos: any, j: any) {
   }
 }
 
-// ── GET — single ticker ───────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// GET — single ticker
+// ─────────────────────────────────────────────────────────────────────────────
 
 export async function GET(req: NextRequest) {
   const supabase = await createClient()
@@ -547,17 +1371,20 @@ export async function GET(req: NextRequest) {
   if (!ticker) return NextResponse.json({ error: 'ticker required' }, { status: 400 })
 
   const { positions, jMap } = await getPositionsAndJournal(user.id)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const pos = positions.find((p: any) => p.ticker === ticker) || { ticker, shares: 1, position_type: 'stock' }
   const merged = mergeWithJournal(pos, jMap.get(ticker))
 
-  const check = await buildCheck(merged)
+  const check = await buildCheck(merged, user.id)
   const [enriched] = await enrichWithAI([check])
   return NextResponse.json({ check: enriched })
 }
 
-// ── POST — all positions ──────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// POST — all positions
+// ─────────────────────────────────────────────────────────────────────────────
 
-export async function POST(req: NextRequest) {
+export async function POST(_req: NextRequest) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -565,16 +1392,17 @@ export async function POST(req: NextRequest) {
   const { positions: jPositions, jMap } = await getPositionsAndJournal(user.id)
   if (!jPositions.length) return NextResponse.json({ checks: [] })
 
-  // Sequential with rate-limit delay (3 Finnhub calls per position)
+  // Sequential with rate-limit delay (3 Finnhub calls + verdict_log lookup per position)
   const checks: PositionCheck[] = []
   for (const pos of jPositions) {
     const merged = mergeWithJournal(pos, jMap.get(pos.ticker))
-    checks.push(await buildCheck(merged))
+    checks.push(await buildCheck(merged, user.id))
     await new Promise(r => setTimeout(r, 400))
   }
 
   const enriched = await enrichWithAI(checks)
-  const order = { EXIT: 0, WATCH: 1, HOLD: 2, ADD: 3 }
+  // Sort: TERMINAL first (most urgent), then EXIT, WATCH, HOLD, ADD
+  const order = { TERMINAL: 0, EXIT: 1, WATCH: 2, HOLD: 3, ADD: 4 }
   enriched.sort((a, b) => (order[a.verdict] ?? 9) - (order[b.verdict] ?? 9))
   return NextResponse.json({ checks: enriched, checkedAt: new Date().toISOString() })
 }
