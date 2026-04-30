@@ -73,6 +73,24 @@ interface Journey {
   floor_seen_at?: string | null
 }
 
+interface SkillGateRequirement {
+  id: string
+  label: string
+  current: number | string
+  target: number | string
+  met: boolean
+  progressPct: number
+}
+
+interface SkillGate {
+  currentTierName: string
+  nextTierName: string | null
+  capitalReady: boolean
+  skillReady: boolean
+  readyToPromote: boolean
+  requirements: SkillGateRequirement[]
+}
+
 interface Tier {
   name: string
   color: string
@@ -83,6 +101,7 @@ interface Tier {
   progressPct: number
   toNext: number
   nextTierName: string | null
+  skillGate?: SkillGate
 }
 
 interface TierMeta {
@@ -866,6 +885,101 @@ function DeskNoteBell({ lesson, onOpen, onDismiss }: { lesson: InvestLesson; onO
 }
 
 // ══════════════════════════════════════════════════════════════
+// SKILL GATE BLOCK — shown inside TierLadder
+// ══════════════════════════════════════════════════════════════
+function SkillGateBlock({ gate, nextTierColor }: {
+  gate: SkillGate
+  nextTierColor: string
+}) {
+  if (!gate.nextTierName) return null
+
+  const allEmpty = gate.requirements.every(r =>
+    typeof r.current === 'number' ? r.current === 0 : r.current === '—'
+  )
+  if (allEmpty) {
+    return (
+      <div className="fl-skill-gate fl-sg-empty">
+        <div className="fl-sg-head">
+          <span className="fl-sg-eyebrow">desk qualifications</span>
+        </div>
+        <p className="fl-sg-empty-msg">
+          Close your first trade to begin building qualifications for{' '}
+          <span style={{ color: nextTierColor }}>{gate.nextTierName}</span>.
+        </p>
+      </div>
+    )
+  }
+
+  if (gate.readyToPromote) {
+    return (
+      <div className="fl-skill-gate fl-sg-ready" style={{ borderColor: `${nextTierColor}66` }}>
+        <div className="fl-sg-head">
+          <span className="fl-sg-eyebrow">desk qualifications</span>
+          <span className="fl-sg-status fl-sg-status-met" style={{ color: nextTierColor }}>
+            cleared
+          </span>
+        </div>
+        <p className="fl-sg-ready-msg">
+          All bars met. Promotion to{' '}
+          <span style={{ color: nextTierColor, fontWeight: 600 }}>{gate.nextTierName}</span>{' '}
+          opens on your next deposit at the capital threshold.
+        </p>
+      </div>
+    )
+  }
+
+  const metCount = gate.requirements.filter(r => r.met).length
+  const totalCount = gate.requirements.length
+
+  let statusLine: string
+  if (gate.capitalReady && !gate.skillReady) {
+    statusLine = 'Capital cleared · skill pending'
+  } else if (!gate.capitalReady && gate.skillReady) {
+    statusLine = 'Skill cleared · capital pending'
+  } else {
+    statusLine = `${metCount} of ${totalCount} cleared`
+  }
+
+  return (
+    <div className="fl-skill-gate">
+      <div className="fl-sg-head">
+        <span className="fl-sg-eyebrow">desk qualifications</span>
+        <span className="fl-sg-status">
+          for <span style={{ color: nextTierColor }}>{gate.nextTierName}</span>
+        </span>
+      </div>
+
+      <ul className="fl-sg-list">
+        {gate.requirements.map(r => (
+          <li key={r.id} className={`fl-sg-item ${r.met ? 'fl-sg-met' : 'fl-sg-unmet'}`}>
+            <div className="fl-sg-item-row">
+              <span className="fl-sg-mark" aria-hidden>
+                {r.met ? '✓' : '○'}
+              </span>
+              <span className="fl-sg-label">{r.label}</span>
+              <span className="fl-sg-value mono">
+                {r.current}{' / '}{r.target}
+              </span>
+            </div>
+            <div className="fl-sg-bar">
+              <div
+                className="fl-sg-bar-fill"
+                style={{
+                  width: `${Math.max(2, Math.min(100, r.progressPct))}%`,
+                  background: r.met ? nextTierColor : 'rgba(212, 168, 87, 0.5)',
+                }}
+              />
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      <p className="fl-sg-status-line">{statusLine}</p>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════
 // TIER LADDER (left column — skyline silhouettes)
 // ══════════════════════════════════════════════════════════════
 function TierLadder({ tiers, tier, stats, value }: {
@@ -904,7 +1018,12 @@ function TierLadder({ tiers, tier, stats, value }: {
             <button className="fl-tier-rules-close" onClick={() => setRulesOpen(false)}>×</button>
           </div>
           <div className="fl-tier-rules-body">
-            <p>Tiers unlock based on your <strong>total realized profit</strong> (wins minus losses from closed trades). Nothing is gated by time or subscription — only by compounding.</p>
+            <p>Tiers unlock when <strong>both</strong> are true:</p>
+            <ul style={{ marginBottom: 12 }}>
+              <li><strong>Capital</strong> — your total book value clears the next threshold</li>
+              <li><strong>Skill</strong> — you&apos;ve demonstrated the discipline that tier requires (closed trades, average process grade, stop discipline)</li>
+            </ul>
+            <p>Either alone won&apos;t promote you. Reach both and the next tier opens on your next mark-to-market.</p>
             <ul>
               {tiers.map((t) => (
                 <li key={t.name}>
@@ -966,6 +1085,13 @@ function TierLadder({ tiers, tier, stats, value }: {
           <div className="fl-bar-fill" style={{ width: `${tier.progressPct}%` }} />
         </div>
       </div>
+
+      {tier.skillGate && (
+        <SkillGateBlock
+          gate={tier.skillGate}
+          nextTierColor={tiers.find(t => t.name === tier.skillGate!.nextTierName)?.color ?? '#d4a857'}
+        />
+      )}
 
       <div className="fl-metric-block">
         <div className="fl-metric-row"><span className="k">win rate</span><span className="v mono">{stats.winRate}%</span></div>
@@ -2116,6 +2242,101 @@ function FloorStyles() {
       .fl-bar-fill {
         height: 100%; background: #d4a857;
         transition: width 1s cubic-bezier(0.22, 1, 0.36, 1);
+      }
+
+      /* ── Skill gate block (Desk Qualifications) ───────────── */
+      .fl-skill-gate {
+        margin-top: 14px;
+        padding: 12px 14px;
+        border-radius: 4px;
+        background: rgba(15, 23, 42, 0.5);
+        border: 1px solid rgba(148, 163, 184, 0.1);
+        transition: border-color 0.6s ease;
+      }
+      .fl-skill-gate.fl-sg-ready {
+        background: rgba(15, 23, 42, 0.65);
+      }
+      .fl-sg-head {
+        display: flex; justify-content: space-between; align-items: baseline;
+        margin-bottom: 10px;
+      }
+      .fl-sg-eyebrow {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase;
+        color: rgba(148, 163, 184, 0.6);
+      }
+      .fl-sg-status {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase;
+        color: rgba(148, 163, 184, 0.45);
+      }
+      .fl-sg-status-met {
+        font-weight: 600;
+      }
+      .fl-sg-empty-msg, .fl-sg-ready-msg {
+        font-size: 11px;
+        line-height: 1.6;
+        color: rgba(226, 232, 240, 0.75);
+        margin: 0;
+      }
+      .fl-sg-list {
+        list-style: none;
+        padding: 0;
+        margin: 0 0 8px 0;
+      }
+      .fl-sg-item {
+        margin-bottom: 10px;
+      }
+      .fl-sg-item:last-child {
+        margin-bottom: 6px;
+      }
+      .fl-sg-item-row {
+        display: flex; align-items: baseline; gap: 8px;
+        margin-bottom: 4px;
+      }
+      .fl-sg-mark {
+        font-size: 11px;
+        line-height: 1;
+        width: 12px; flex-shrink: 0;
+        color: rgba(148, 163, 184, 0.5);
+      }
+      .fl-sg-met .fl-sg-mark {
+        color: #10b981;
+      }
+      .fl-sg-label {
+        flex: 1;
+        font-size: 11px;
+        color: rgba(226, 232, 240, 0.85);
+      }
+      .fl-sg-met .fl-sg-label {
+        color: rgba(226, 232, 240, 0.55);
+      }
+      .fl-sg-value {
+        font-size: 10px;
+        color: rgba(148, 163, 184, 0.75);
+        flex-shrink: 0;
+      }
+      .fl-sg-met .fl-sg-value {
+        color: rgba(16, 185, 129, 0.85);
+      }
+      .fl-sg-bar {
+        height: 2px;
+        background: rgba(148, 163, 184, 0.08);
+        border-radius: 1px;
+        overflow: hidden;
+        margin-left: 20px;
+      }
+      .fl-sg-bar-fill {
+        height: 100%;
+        transition: width 0.8s cubic-bezier(0.22, 1, 0.36, 1), background 0.4s ease;
+      }
+      .fl-sg-status-line {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase;
+        color: rgba(148, 163, 184, 0.55);
+        margin: 0;
+        padding-top: 8px;
+        border-top: 1px solid rgba(148, 163, 184, 0.06);
       }
 
       /* ── Center column ──────────────────────────── */
