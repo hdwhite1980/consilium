@@ -1,44 +1,32 @@
 // ═════════════════════════════════════════════════════════════
 // app/api/scanner/route.ts
 //
-// Stock scanner — scores liquid tickers on directional setup
-// + relative strength vs SPY, returns top picks with key setup.
+// Stock scanner — scores liquid tickers (currently SCANNER_UNIVERSE.length)
+// on directional setup + relative strength vs SPY, returns top 15 picks.
 //
-// SOURCES (selected via predefined universe id):
-//   curated          — static SCANNER_UNIVERSE (~500 hand-picked tickers)
-//   screener-actives — Alpaca most-actives endpoint (~100 by volume)
-//   screener-gainers — Alpaca movers gainers (~50)
-//   screener-losers  — Alpaca movers losers (~50)
-//   screener-all     — most-actives + gainers + losers, deduped (~150-250)
-//   union            — curated joined with screener-all (~600-650, deduped)
-//
-// FILTERS:
-//   priceMin / priceMax — applied POST-bars-fetch using actual current price
-//                         (works for any source, including curated)
-//   priceTiers          — legacy, applied to curated entries by tag
-//   sectors / caps      — applied to curated entries (no-op for screener
-//                         entries since they have no metadata)
-//   tags                — applied to curated entries
-//
-// GET  /api/scanner              — list available universes + filter schema
+// GET  /api/scanner              — list available universes + filters
 // POST /api/scanner               — run a scan
 //   body: {
-//     universe?: string            (predefined id, defaults to 'all')
-//     filter?: ScannerFilter       (optional filter overlay)
-//     mode?: 'bullish'|'bearish'|'both'   (default 'both')
-//     limit?: number               (default 15, max 50)
+//     universe?: string                    (predefined id, defaults to 'all')
+//     filter?: ScannerFilter               (optional filter overlay)
+//     mode?: 'bullish'|'bearish'|'both'    (default 'both')
+//     scanType?: 'directional'|'fast_movers'  (default 'directional')
+//     horizon?: 'day'|'week'                (only used when scanType='fast_movers')
+//     priceCeiling?: number                 (only fast_movers; default 20)
+//     limit?: number                        (default 15, max 50)
+//     newsBoost?: boolean                   (default false)
 //   }
 //
-// Architecture:
-//   - Resolve ticker list from chosen source (curated/screener/union)
-//   - Fetch SPY bars first (for rel strength baseline) — 1 call
-//   - Fetch all ticker bars in parallel batches of 25
-//   - Compute calculateTechnicals for each
-//   - Apply priceMin/priceMax filter using technicals.currentPrice
-//   - scoreTicker() against each
-//   - Sort by composite score, filter by mode, return top N
+// SCAN TYPES
+//   - directional   : original Track A/B scoring (60% directional + 40% rel-strength)
+//   - fast_movers   : new mode — surfaces sub-priceCeiling tickers that look ready
+//                     to move fast, scoring momentum + coiled potential together,
+//                     respecting the user's "no liquidity floor" choice but
+//                     surfacing a liquidity badge on every pick.
 //
-// 5-minute cache per (user, universe+filter+mode hash).
+// CACHE
+//   5-minute cache shared across users. Key includes scanType, horizon,
+//   priceCeiling, newsBoost so different combinations don't collide.
 // ═════════════════════════════════════════════════════════════
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -57,25 +45,48 @@ import {
 } from '@/app/lib/scanner-universe'
 import { scoreTicker, pctChangeOverDays, type TickerScore } from '@/app/lib/scanner-scoring'
 import {
+  scoreMomentum,
+  computeLiquidity,
+  type Horizon,
+  type SetupType,
+  type LiquidityTier,
+} from '@/app/lib/scanner-momentum'
+import {
+  buildNewsExposureMap,
+  applyExposureToComposite,
+  type NewsExposureContext,
+} from '@/app/lib/news-exposure'
+import {
   getMostActives,
   getMovers,
   getAllScreenerMovers,
   isAlpacaConfigured,
-  type ScreenerMover,
 } from '@/app/lib/alpaca-screener'
 
 // ─────────────────────────────────────────────────────────────
-// Cache (in-memory, per-process)
+// Constants
 // ─────────────────────────────────────────────────────────────
+
+const MIN_BARS_FOR_30D = 32
+const RATE_LIMIT_PER_MINUTE = 10
+const DEFAULT_FAST_MOVER_PRICE_CEILING = 20
+
+// ─────────────────────────────────────────────────────────────
+// Cache
+// ─────────────────────────────────────────────────────────────
+
 interface ScanCacheEntry {
   result: ScanResult
   fetchedAt: number
 }
 const scanCache = new Map<string, ScanCacheEntry>()
-const CACHE_TTL_MS = 5 * 60 * 1000  // 5 minutes
+const CACHE_TTL_MS = 5 * 60 * 1000
 
-function cacheKey(userId: string, universe: string, mode: string, filterHash: string): string {
-  return `${userId}:${universe}:${mode}:${filterHash}`
+function cacheKey(
+  universe: string, mode: string, filterHash: string, newsBoost: boolean,
+  scanType: ScanType, horizon: Horizon, priceCeiling: number,
+): string {
+  return `${universe}:${mode}:${filterHash}:${newsBoost ? 'nb1' : 'nb0'}:${scanType}:${horizon}:${priceCeiling}`
 }
 
 function hashFilter(f: ScannerFilter | undefined): string {
@@ -84,8 +95,6 @@ function hashFilter(f: ScannerFilter | undefined): string {
     s: f.sectors?.slice().sort(),
     c: f.caps?.slice().sort(),
     p: f.priceTiers?.slice().sort(),
-    pmin: f.priceMin ?? null,
-    pmax: f.priceMax ?? null,
     any: f.tagsIncludeAny?.slice().sort(),
     all: f.tagsIncludeAll?.slice().sort(),
     ex: f.tagsExcludeAny?.slice().sort(),
@@ -95,21 +104,77 @@ function hashFilter(f: ScannerFilter | undefined): string {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Per-user rate limiting
+// ─────────────────────────────────────────────────────────────
+const rateLimitState = new Map<string, number[]>()
+
+function checkRateLimit(userId: string): { allowed: boolean; retryAfterSec?: number } {
+  const now = Date.now()
+  const windowStart = now - 60_000
+  const timestamps = (rateLimitState.get(userId) ?? []).filter(t => t > windowStart)
+  if (timestamps.length >= RATE_LIMIT_PER_MINUTE) {
+    const oldest = timestamps[0]
+    const retryAfterSec = Math.ceil((oldest + 60_000 - now) / 1000)
+    return { allowed: false, retryAfterSec: Math.max(1, retryAfterSec) }
+  }
+  timestamps.push(now)
+  rateLimitState.set(userId, timestamps)
+  return { allowed: true }
+}
+
+let lastRateLimitCleanup = Date.now()
+function maybeCleanupRateLimits(): void {
+  const now = Date.now()
+  if (now - lastRateLimitCleanup < 5 * 60_000) return
+  lastRateLimitCleanup = now
+  const cutoff = now - 60_000
+  for (const [userId, timestamps] of rateLimitState.entries()) {
+    const recent = timestamps.filter(t => t > cutoff)
+    if (recent.length === 0) rateLimitState.delete(userId)
+    else rateLimitState.set(userId, recent)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────
+
+export type ScanType = 'directional' | 'fast_movers'
+
 interface EnrichedScore extends TickerScore {
   sector: string
   cap: string
   priceTier: string
   tags: string[]
-  // Where this ticker came from in the scan (informational)
-  origin: 'curated' | 'screener'
+
+  // News exposure (from Track B)
+  newsExposureScore?: number
+  newsAlignedBoost?: number
+  compositeWithNews?: number
+  newsSummary?: string
+  newsReasons?: string[]
+  newsMatchType?: 'direct' | 'sector' | 'digest' | 'none'
+
+  // Fast-mover fields (only populated when scanType='fast_movers')
+  momentumScore?: number
+  setupType?: SetupType
+  activeMomentum?: number
+  coiledPotential?: number
+  setupQuality?: number
+  momentumReasons?: string[]
+
+  // Liquidity (always computed when scanType='fast_movers')
+  dollarVolumeAvg?: number
+  liquidityTier?: LiquidityTier
+  liquidityLabel?: string
 }
 
 export interface ScanResult {
   universe: string
-  source: UniverseSource           // NEW: which source produced these tickers
   mode: 'bullish' | 'bearish' | 'both'
+  scanType: ScanType
+  horizon?: Horizon
+  priceCeiling?: number
   scannedCount: number
   withTechnicalsCount: number
   picks: EnrichedScore[]
@@ -119,105 +184,21 @@ export interface ScanResult {
   elapsedMs: number
   cached: boolean
   ageMinutes?: number
+  newsBoost: boolean
   error?: string
 }
 
 // ─────────────────────────────────────────────────────────────
-// Resolve ticker list from a UniverseSource
-// Returns UniverseEntry[] — for screener-sourced tickers we
-// synthesize stub entries with sector='unknown' etc so the
-// downstream pipeline (which expects UniverseEntry) works.
-// ─────────────────────────────────────────────────────────────
-
-function makeStubEntry(ticker: string): UniverseEntry {
-  return {
-    ticker: ticker.toUpperCase(),
-    sector: 'tech',           // placeholder — won't pass sector filters
-    cap: 'small',             // placeholder
-    priceTier: 'sub10',       // placeholder — actual price filtered post-bars
-    tags: [],
-  }
-}
-
-function dedupeEntries(entries: UniverseEntry[]): UniverseEntry[] {
-  const seen = new Set<string>()
-  const out: UniverseEntry[] = []
-  for (const e of entries) {
-    const t = e.ticker.toUpperCase()
-    if (!seen.has(t)) {
-      seen.add(t)
-      out.push(e)
-    }
-  }
-  return out
-}
-
-async function resolveEntriesFromSource(
-  source: UniverseSource,
-  filter: ScannerFilter,
-  presetId: string,
-): Promise<{ entries: UniverseEntry[]; screenerTickers: Set<string> }> {
-  // For pure curated, just apply the filter and return
-  if (source === 'curated') {
-    const entries = applyFilter(filter)
-    return { entries, screenerTickers: new Set() }
-  }
-
-  // For screener-sourced, fetch from Alpaca
-  if (!isAlpacaConfigured()) {
-    console.warn('[scanner] Alpaca not configured — falling back to curated')
-    const entries = applyFilter({ ...filter, predefined: 'all' })
-    return { entries, screenerTickers: new Set() }
-  }
-
-  let movers: ScreenerMover[] = []
-
-  if (source === 'screener-actives') {
-    movers = await getMostActives(100)
-  } else if (source === 'screener-gainers') {
-    const m = await getMovers(50)
-    movers = m.gainers
-  } else if (source === 'screener-losers') {
-    const m = await getMovers(50)
-    movers = m.losers
-  } else if (source === 'screener-all') {
-    movers = await getAllScreenerMovers({ mostActiveTop: 100, moversTop: 50 })
-  } else if (source === 'union') {
-    // Curated + screener-all, deduped
-    movers = await getAllScreenerMovers({ mostActiveTop: 100, moversTop: 50 })
-  }
-
-  // Convert screener movers to stub UniverseEntry, but reuse curated metadata
-  // when we have it (so e.g. NVDA showing up in most-actives keeps its 'tech' tag)
-  const screenerTickers = new Set(movers.map(m => m.ticker))
-  const screenerEntries: UniverseEntry[] = movers.map(m => {
-    const curated = SCANNER_UNIVERSE.find(e => e.ticker === m.ticker)
-    return curated ?? makeStubEntry(m.ticker)
-  })
-
-  if (source === 'union') {
-    // Apply filter to curated side, then merge with screener
-    const curatedFiltered = applyFilter(filter)
-    const combined = dedupeEntries([...curatedFiltered, ...screenerEntries])
-    return { entries: combined, screenerTickers }
-  }
-
-  // Pure screener — no curated filtering applies (sector/tag filters can't
-  // narrow tickers we don't have metadata for). Return all screener entries.
-  return { entries: dedupeEntries(screenerEntries), screenerTickers }
-}
-
-// ─────────────────────────────────────────────────────────────
-// Fetch SPY technicals for the rel-strength baseline
+// SPY context
 // ─────────────────────────────────────────────────────────────
 async function fetchSpyContext(): Promise<{ change10d: number; change30d: number } | null> {
   try {
     const bars = await fetchBars('SPY', '1M')
-    if (!bars || bars.length < 20) return null
-    const t = calculateTechnicals(bars)
+    if (!bars || bars.length < MIN_BARS_FOR_30D) return null
+    const closes = bars.map(b => b.c)
     return {
-      change10d: t.roc10 ?? 0,
-      change30d: t.priceChangePeriod ?? 0,
+      change10d: pctChangeOverDays(closes, 10),
+      change30d: pctChangeOverDays(closes, 30),
     }
   } catch {
     return null
@@ -225,8 +206,7 @@ async function fetchSpyContext(): Promise<{ change10d: number; change30d: number
 }
 
 // ─────────────────────────────────────────────────────────────
-// Fetch + calculate technicals for a single ticker
-// Returns null on any failure — caller filters out nulls
+// Per-ticker fetch
 // ─────────────────────────────────────────────────────────────
 async function computeTickerTechnicals(ticker: string): Promise<{
   ticker: string
@@ -235,33 +215,31 @@ async function computeTickerTechnicals(ticker: string): Promise<{
 } | null> {
   try {
     const bars = await fetchBars(ticker, '1M')
-    if (!bars || bars.length < 20) return null
+    if (!bars || bars.length < MIN_BARS_FOR_30D) return null
     const t = calculateTechnicals(bars)
     if (!t.currentPrice || t.currentPrice <= 0) return null
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const closes = bars.map((b: any) => b.c).filter((c: number) => typeof c === 'number')
-    return { ticker, technicals: t, closes }
+    return { ticker, technicals: t, closes: bars.map(b => b.c) }
   } catch {
     return null
   }
 }
 
 // ─────────────────────────────────────────────────────────────
-// Scan a set of tickers in parallel batches
+// Scan tickers — handles both scan types in one pass
 // ─────────────────────────────────────────────────────────────
 async function scanTickers(
   entries: UniverseEntry[],
   spyChange10d: number,
   spyChange30d: number,
-  screenerTickers: Set<string>,
-  filter: ScannerFilter,
+  newsExposureMap: Map<string, NewsExposureContext> | null,
+  scanType: ScanType,
+  horizon: Horizon,
+  priceCeiling: number,
+  priceMin: number | null,
+  priceMax: number | null,
 ): Promise<EnrichedScore[]> {
   const BATCH_SIZE = 25
   const results: EnrichedScore[] = []
-
-  // Precompute price filter bounds (post-bars price filtering)
-  const pmin = typeof filter.priceMin === 'number' && filter.priceMin > 0 ? filter.priceMin : null
-  const pmax = typeof filter.priceMax === 'number' && filter.priceMax > 0 ? filter.priceMax : null
 
   for (let i = 0; i < entries.length; i += BATCH_SIZE) {
     const batch = entries.slice(i, i + BATCH_SIZE)
@@ -270,10 +248,18 @@ async function scanTickers(
       const data = await computeTickerTechnicals(entry.ticker)
       if (!data) return null
 
-      // Apply live price filter (works for curated + screener sources)
-      const price = data.technicals.currentPrice
-      if (pmin !== null && price < pmin) return null
-      if (pmax !== null && price > pmax) return null
+      // ── Fast-mover price gate ──
+      // Done with FRESH price, not stale priceTier metadata. A ticker
+      // tagged 'under50' last month might be $19 today (or $52).
+      if (scanType === 'fast_movers' && data.technicals.currentPrice > priceCeiling) {
+        return null
+      }
+
+      // ── Live priceMin/priceMax filter (works on any scan type) ──
+      // Uses actual current price from bars, not stale priceTier metadata.
+      const livePrice = data.technicals.currentPrice
+      if (priceMin !== null && livePrice < priceMin) return null
+      if (priceMax !== null && livePrice > priceMax) return null
 
       const tickerChange10d = pctChangeOverDays(data.closes, 10)
       const tickerChange30d = pctChangeOverDays(data.closes, 30)
@@ -293,7 +279,53 @@ async function scanTickers(
         cap: entry.cap,
         priceTier: entry.priceTier,
         tags: entry.tags,
-        origin: screenerTickers.has(entry.ticker) ? 'screener' : 'curated',
+      }
+
+      // ── News exposure overlay ──
+      if (newsExposureMap) {
+        const ctx = newsExposureMap.get(entry.ticker)
+        if (ctx) {
+          const applied = applyExposureToComposite({
+            composite: score.compositeScore,
+            direction: score.direction,
+            exposureScore: ctx.score,
+          })
+          enriched.newsExposureScore = ctx.score
+          enriched.newsAlignedBoost = applied.alignedBoost
+          enriched.compositeWithNews = applied.compositeWithNews
+          enriched.newsSummary = ctx.summary
+          enriched.newsReasons = ctx.reasons
+          enriched.newsMatchType = ctx.matchType
+        }
+      }
+
+      // ── Fast-mover scoring ──
+      if (scanType === 'fast_movers') {
+        const change5d = pctChangeOverDays(data.closes, 5)
+        const mom = scoreMomentum({
+          technicals: data.technicals,
+          horizon,
+          change5d,
+        })
+        enriched.momentumScore = mom.score
+        enriched.setupType = mom.setupType
+        enriched.activeMomentum = mom.parts.activeMomentum
+        enriched.coiledPotential = mom.parts.coiledPotential
+        enriched.setupQuality = mom.parts.setupQuality
+        enriched.momentumReasons = mom.reasons
+
+        // Override direction if momentum scorer disagrees and it has
+        // a confident view — momentum knows about coiled bias and
+        // active breakouts in ways the directional scorer doesn't.
+        if (mom.direction !== 'unclear' && mom.score >= 40) {
+          enriched.direction = mom.direction === 'bullish' ? 'bullish' : 'bearish'
+        }
+
+        // Liquidity always computed for fast movers
+        const liq = computeLiquidity(data.technicals)
+        enriched.dollarVolumeAvg = liq.avgDollarVolume
+        enriched.liquidityTier = liq.tier
+        enriched.liquidityLabel = liq.label
       }
 
       return enriched
@@ -307,8 +339,72 @@ async function scanTickers(
   return results
 }
 
+// ─────────────────────────────────────────────────────────────
+// Screener-sourced universe resolution
+// ─────────────────────────────────────────────────────────────
+// For 'curated' source, applyFilter() handles everything.
+// For 'screener-*' sources, fetch live tickers from Alpaca and
+// synthesize UniverseEntry stubs (reusing curated metadata when
+// the ticker is in both lists).
+// For 'union', merge curated-filtered with screener-all, deduped.
+
+function makeStubEntry(ticker: string): UniverseEntry {
+  return {
+    ticker: ticker.toUpperCase(),
+    sector: 'tech',
+    cap: 'small',
+    priceTier: 'sub10',
+    tags: [],
+  }
+}
+
+function dedupeEntries(entries: UniverseEntry[]): UniverseEntry[] {
+  const seen = new Set<string>()
+  const out: UniverseEntry[] = []
+  for (const e of entries) {
+    const t = e.ticker.toUpperCase()
+    if (!seen.has(t)) { seen.add(t); out.push(e) }
+  }
+  return out
+}
+
+async function resolveScreenerEntries(
+  source: UniverseSource,
+  filter: ScannerFilter,
+): Promise<UniverseEntry[]> {
+  if (!isAlpacaConfigured()) {
+    console.warn('[scanner] Alpaca not configured — falling back to curated all')
+    return applyFilter({ ...filter, predefined: 'all' })
+  }
+
+  let tickers: string[] = []
+
+  if (source === 'screener-actives') {
+    tickers = (await getMostActives(100)).map(m => m.ticker)
+  } else if (source === 'screener-gainers') {
+    tickers = (await getMovers(50)).gainers.map(m => m.ticker)
+  } else if (source === 'screener-losers') {
+    tickers = (await getMovers(50)).losers.map(m => m.ticker)
+  } else if (source === 'screener-all' || source === 'union') {
+    tickers = (await getAllScreenerMovers({ mostActiveTop: 100, moversTop: 50 })).map(m => m.ticker)
+  }
+
+  // Convert to UniverseEntry — reuse curated metadata when ticker is in SCANNER_UNIVERSE
+  const screenerEntries: UniverseEntry[] = tickers.map(t => {
+    const curated = SCANNER_UNIVERSE.find(e => e.ticker === t)
+    return curated ?? makeStubEntry(t)
+  })
+
+  if (source === 'union') {
+    const curatedFiltered = applyFilter(filter)
+    return dedupeEntries([...curatedFiltered, ...screenerEntries])
+  }
+
+  return dedupeEntries(screenerEntries)
+}
+
 // ═════════════════════════════════════════════════════════════
-// GET /api/scanner — return universe options + filter schema
+// GET
 // ═════════════════════════════════════════════════════════════
 export async function GET() {
   try {
@@ -321,7 +417,6 @@ export async function GET() {
         id: u.id,
         label: u.label,
         description: u.description,
-        source: u.source ?? 'curated',
       })),
       filterSchema: {
         sectors: ['tech', 'healthcare', 'financials', 'energy', 'consumer_disc',
@@ -332,10 +427,13 @@ export async function GET() {
         priceTiers: ['sub10', 'under50', 'under100', 'under500', 'over500'],
         commonTags: ['ai', 'semis', 'growth', 'dividend', 'defensive', 'ev',
           'crypto', 'cloud', 'biotech', 'cybersec', 'volatile', 'meme'],
-        // Live price filter range — supersedes priceTiers when set
-        supportsPriceRange: true,
       },
-      alpacaConfigured: isAlpacaConfigured(),
+      universeSize: SCANNER_UNIVERSE.length,
+      newsBoostAvailable: true,
+      scanTypes: [
+        { id: 'directional', label: 'Directional', description: 'Setup + rel-strength vs SPY (default)' },
+        { id: 'fast_movers', label: 'Fast Movers', description: 'Sub-$20 stocks ready to move (day or week horizon)' },
+      ],
     })
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message?.slice(0, 200) }, { status: 500 })
@@ -343,7 +441,7 @@ export async function GET() {
 }
 
 // ═════════════════════════════════════════════════════════════
-// POST /api/scanner — run a scan
+// POST
 // ═════════════════════════════════════════════════════════════
 export async function POST(req: NextRequest) {
   const started = Date.now()
@@ -354,38 +452,49 @@ export async function POST(req: NextRequest) {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+    maybeCleanupRateLimits()
+    const rl = checkRateLimit(user.id)
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { error: `Too many scans. Try again in ${rl.retryAfterSec}s.`, retryAfterSec: rl.retryAfterSec },
+        { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } },
+      )
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const body: any = await req.json().catch(() => ({}))
     const universe: string = typeof body?.universe === 'string' ? body.universe : 'all'
     const filter: ScannerFilter = (typeof body?.filter === 'object' && body.filter !== null ? body.filter : {}) as ScannerFilter
     const mode: 'bullish' | 'bearish' | 'both' = ['bullish', 'bearish', 'both'].includes(body?.mode) ? body.mode : 'both'
     const limit = Math.max(1, Math.min(50, typeof body?.limit === 'number' ? body.limit : 15))
+    const newsBoost: boolean = body?.newsBoost === true
+    const scanType: ScanType = body?.scanType === 'fast_movers' ? 'fast_movers' : 'directional'
+    const horizon: Horizon = body?.horizon === 'day' ? 'day' : 'week'
+    const priceCeiling: number = scanType === 'fast_movers'
+      ? Math.max(1, Math.min(500, typeof body?.priceCeiling === 'number' ? body.priceCeiling : DEFAULT_FAST_MOVER_PRICE_CEILING))
+      : 0
 
-    // Merge universe into filter.predefined if not already set
     const effectiveFilter: ScannerFilter = { ...filter, predefined: filter.predefined ?? universe }
 
-    // ── Special handling for penny_movers — auto-set priceMax=5 ──
+    // Auto-set priceMax=5 for the penny_movers preset
     if (universe === 'penny_movers' && typeof effectiveFilter.priceMax !== 'number') {
       effectiveFilter.priceMax = 5
     }
 
-    // Resolve which source to use
     const source = getUniverseSource(universe)
-    console.log(`[scanner] universe='${universe}' source='${source}'`)
 
-    // Cache check
-    const key = cacheKey(user.id, universe, mode, hashFilter(effectiveFilter))
+    const key = cacheKey(universe, mode, hashFilter(effectiveFilter), newsBoost, scanType, horizon, priceCeiling)
     const cached = scanCache.get(key)
     if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
       const age = Math.round((Date.now() - cached.fetchedAt) / 60000)
-      console.log(`[scanner] cache hit (age ${age}m)`)
+      console.log(`[scanner] cache hit (age ${age}m, scanType=${scanType}, source=${source})`)
       return NextResponse.json({ ...cached.result, cached: true, ageMinutes: age })
     }
 
-    // Resolve ticker list
-    const resolveStart = Date.now()
-    const { entries, screenerTickers } = await resolveEntriesFromSource(source, effectiveFilter, universe)
-    console.log(`[scanner] resolved ${entries.length} tickers in ${Date.now() - resolveStart}ms (${screenerTickers.size} from screener)`)
+    // Resolve entries — curated path uses applyFilter; screener paths fetch live
+    const entries = source === 'curated'
+      ? applyFilter(effectiveFilter)
+      : await resolveScreenerEntries(source, effectiveFilter)
 
     if (entries.length === 0) {
       return NextResponse.json({
@@ -394,37 +503,77 @@ export async function POST(req: NextRequest) {
           : 'No tickers returned from screener. The market may be closed or Alpaca is unavailable.',
       }, { status: 400 })
     }
+    console.log(`[scanner] scanning ${entries.length} tickers (universe: ${universe}, source: ${source}, mode: ${mode}, scanType: ${scanType}, horizon: ${horizon}, ceiling: $${priceCeiling}, newsBoost: ${newsBoost})`)
 
-    // Fetch SPY context
+    // SPY context
     const spyStart = Date.now()
     const spyContext = await fetchSpyContext()
     if (!spyContext) {
       console.warn('[scanner] SPY context unavailable — rel strength scores will be neutral')
     }
     console.log(`[scanner] SPY context in ${Date.now() - spyStart}ms`)
-
     const spyChange10d = spyContext?.change10d ?? 0
     const spyChange30d = spyContext?.change30d ?? 0
 
-    // Scan all tickers
+    // News exposure (best-effort)
+    let newsExposureMap: Map<string, NewsExposureContext> | null = null
+    if (newsBoost) {
+      try {
+        const newsStart = Date.now()
+        newsExposureMap = await buildNewsExposureMap({
+          entries: entries.map(e => ({ ticker: e.ticker, sector: e.sector, tags: e.tags })),
+        })
+        console.log(`[scanner] news exposure map built in ${Date.now() - newsStart}ms`)
+      } catch (e) {
+        console.warn('[scanner] news exposure failed, continuing without boost:', (e as Error).message?.slice(0, 200))
+        newsExposureMap = null
+      }
+    }
+
+    // Scan
     const scanStart = Date.now()
-    const allScores = await scanTickers(entries, spyChange10d, spyChange30d, screenerTickers, effectiveFilter)
+    const pmin = typeof effectiveFilter.priceMin === 'number' && effectiveFilter.priceMin > 0 ? effectiveFilter.priceMin : null
+    const pmax = typeof effectiveFilter.priceMax === 'number' && effectiveFilter.priceMax > 0 ? effectiveFilter.priceMax : null
+    const allScores = await scanTickers(
+      entries, spyChange10d, spyChange30d, newsExposureMap,
+      scanType, horizon, priceCeiling, pmin, pmax,
+    )
     console.log(`[scanner] scored ${allScores.length}/${entries.length} tickers in ${Date.now() - scanStart}ms`)
 
-    // Filter by mode
+    // ── Filter by mode ──
+    // For fast_movers, the momentum scorer overrides direction so this still
+    // works correctly. 'mixed' picks are included in 'both' but excluded
+    // from 'bullish'/'bearish' (they explicitly couldn't pick a side).
     let filtered = allScores
     if (mode === 'bullish') filtered = allScores.filter(s => s.direction === 'bullish')
     else if (mode === 'bearish') filtered = allScores.filter(s => s.direction === 'bearish')
 
-    // Sort by composite score
-    filtered.sort((a, b) => b.compositeScore - a.compositeScore)
+    // ── Sort ──
+    if (scanType === 'fast_movers') {
+      // Sort by combined: 0.6 × momentumScore + 0.4 × directionalScore
+      // so structure still matters but momentum dominates
+      filtered.sort((a, b) => {
+        const aScore = (a.momentumScore ?? 0) * 0.6 + a.directionalScore * 0.4
+        const bScore = (b.momentumScore ?? 0) * 0.6 + b.directionalScore * 0.4
+        return bScore - aScore
+      })
+    } else {
+      // Directional mode — use compositeWithNews when present
+      filtered.sort((a, b) => {
+        const aScore = newsBoost ? (a.compositeWithNews ?? a.compositeScore) : a.compositeScore
+        const bScore = newsBoost ? (b.compositeWithNews ?? b.compositeScore) : b.compositeScore
+        return bScore - aScore
+      })
+    }
 
     const picks = filtered.slice(0, limit)
 
     const result: ScanResult = {
       universe,
-      source,
       mode,
+      scanType,
+      horizon: scanType === 'fast_movers' ? horizon : undefined,
+      priceCeiling: scanType === 'fast_movers' ? priceCeiling : undefined,
       scannedCount: entries.length,
       withTechnicalsCount: allScores.length,
       picks,
@@ -433,12 +582,12 @@ export async function POST(req: NextRequest) {
       generatedAt: new Date().toISOString(),
       elapsedMs: Date.now() - started,
       cached: false,
+      newsBoost,
     }
 
-    // Cache
     scanCache.set(key, { result, fetchedAt: Date.now() })
 
-    // Log scan to DB for performance tracking (fire-and-forget, never throws)
+    // Log scan to DB
     void (async () => {
       try {
         const admin = createAdmin(
@@ -456,14 +605,22 @@ export async function POST(req: NextRequest) {
             picks: picks.map(p => ({
               ticker: p.ticker,
               compositeScore: p.compositeScore,
+              compositeWithNews: p.compositeWithNews ?? null,
+              newsExposureScore: p.newsExposureScore ?? null,
+              momentumScore: p.momentumScore ?? null,
+              setupType: p.setupType ?? null,
+              liquidityTier: p.liquidityTier ?? null,
               directionalScore: p.directionalScore,
               relStrengthScore: p.relStrengthScore,
               direction: p.direction,
               currentPrice: p.currentPrice,
-              origin: p.origin,
             })),
             spy_change_10d: spyChange10d,
             spy_change_30d: spyChange30d,
+            news_boost: newsBoost,
+            scan_type: scanType,
+            horizon: scanType === 'fast_movers' ? horizon : null,
+            price_ceiling: scanType === 'fast_movers' ? priceCeiling : null,
             generated_at: result.generatedAt,
             elapsed_ms: result.elapsedMs,
           })
@@ -475,29 +632,29 @@ export async function POST(req: NextRequest) {
           return
         }
 
-        // Insert pick outcome stubs
         if (picks.length > 0) {
           const stubs = picks.map(p => ({
             scan_id: scanRow.id,
-            user_id: user.id,
             ticker: p.ticker,
-            pick_at_price: p.currentPrice,
             direction: p.direction,
             composite_score: p.compositeScore,
+            price_at_scan: p.currentPrice,
           }))
           await admin.from('scanner_pick_outcomes').insert(stubs)
         }
       } catch (e) {
-        console.warn('[scanner] async log error:', (e as Error).message?.slice(0, 100))
+        console.warn('[scanner] log task failed:', (e as Error).message?.slice(0, 200))
       }
     })()
 
-    console.log(`[scanner] DONE in ${Date.now() - started}ms — ${picks.length} picks from ${source}`)
+    console.log(`[scanner] DONE in ${result.elapsedMs}ms — ${picks.length} picks (scanType=${scanType})`)
     return NextResponse.json(result)
 
   } catch (e) {
-    const msg = (e as Error).message?.slice(0, 200) ?? 'unknown error'
-    console.error('[scanner] error:', msg)
-    return NextResponse.json({ error: msg }, { status: 500 })
+    console.error('[scanner] ERROR:', (e as Error).message)
+    return NextResponse.json(
+      { error: (e as Error).message?.slice(0, 200) ?? 'Scanner failed' },
+      { status: 500 },
+    )
   }
 }
