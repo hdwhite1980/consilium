@@ -29,6 +29,7 @@ import { buildMacroIntelligenceContext } from './macro-intelligence'
 import type { SignalBundle } from './aggregator'
 import { isFundTicker, getFundInfo, buildFundContext } from './data/fund-detection'
 import { runSocialScout, formatSocialSentimentForPrompt, type SocialSentiment } from './social-scout'
+import { runAggregatorScout, formatAggregatorForPrompt, type AggregatorScoutResult } from './news-aggregator-scout'
 import { callGrok } from './grok'
 import { verifyFactualClaims, type VerificationResult } from './verification'
 
@@ -141,6 +142,7 @@ export interface PipelineResult {
   counter?: CounterResult
   judge: JudgeResult
   calibration?: CalibrationResult
+  aggregator: AggregatorScoutResult
   verifications?: {
     lead?: VerificationResult
     devil?: VerificationResult
@@ -1025,7 +1027,7 @@ Respond JSON ONLY (no fences):
 // ─────────────────────────────────────────────────────────────
 // LEAD ANALYST — persona-aware evidence filtering (Gap #7)
 // ─────────────────────────────────────────────────────────────
-export async function runClaude(bundle: SignalBundle, gemini: GeminiResult, social?: SocialSentiment): Promise<ClaudeResult> {
+export async function runClaude(bundle: SignalBundle, gemini: GeminiResult, social?: SocialSentiment, aggregator?: AggregatorScoutResult): Promise<ClaudeResult> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const persona = ((bundle as any).persona ?? 'balanced') as PersonaKey
   const lens = resolveLens(persona, bundle.timeframe)
@@ -1052,6 +1054,8 @@ Events: ${gemini.keyEvents.join('; ')}
 
 ${social ? formatSocialSentimentForPrompt(social, 'lead') : ''}
 
+${aggregator ? formatAggregatorForPrompt(aggregator, 'lead') : ''}
+
 YOUR EVIDENCE (filtered for ${lens} lens):
 ${evidenceBlock}
 
@@ -1068,7 +1072,7 @@ JSON ONLY:
 // ─────────────────────────────────────────────────────────────
 // DEVIL'S ADVOCATE — cross-pressure by Lead's lens (Gap #7)
 // ─────────────────────────────────────────────────────────────
-export async function runGPT(bundle: SignalBundle, gemini: GeminiResult, claude: ClaudeResult, social?: SocialSentiment): Promise<GptResult> {
+export async function runGPT(bundle: SignalBundle, gemini: GeminiResult, claude: ClaudeResult, social?: SocialSentiment, aggregator?: AggregatorScoutResult): Promise<GptResult> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const persona = ((bundle as any).persona ?? 'balanced') as PersonaKey
   const lens = resolveLens(persona, bundle.timeframe)
@@ -1127,6 +1131,8 @@ LEAD ANALYST (${claude.signal}, ${claude.confidence}%): ${claude.reasoning}
 Target: ${claude.target} | Risks: ${claude.keyRisks.join('; ')}
 
 ${social ? formatSocialSentimentForPrompt(social, 'devil') : ''}
+
+${aggregator ? formatAggregatorForPrompt(aggregator, 'devil') : ''}
 
 ${devilEvidence}
 
@@ -1306,6 +1312,7 @@ function buildJudgeUserPrompt(
   counter: CounterResult | undefined,
   round: number,
   social: SocialSentiment | undefined,
+  aggregator: AggregatorScoutResult | undefined,
 ): string {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const persona = ((bundle as any).persona ?? 'balanced') as PersonaKey
@@ -1317,6 +1324,7 @@ Sentiment: ${gemini.sentiment} | Confidence: ${gemini.confidence}% | Regime: ${g
 Key events: ${gemini.keyEvents.join('; ')}`
 
   const socialBlock = social ? formatSocialSentimentForPrompt(social, 'judge') : ''
+  const aggregatorBlock = aggregator ? formatAggregatorForPrompt(aggregator, 'judge') : ''
 
   const round1 = `━━━ ROUND 1 — Initial Positions ━━━
 
@@ -1373,6 +1381,7 @@ ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsCo
 ${newsScout}
 
 ${socialBlock}
+${aggregatorBlock}
 
 ${round1}${round2}${judgeTask}
 
@@ -1425,9 +1434,10 @@ async function runJudgeClaude(
   counter: CounterResult | undefined,
   round: number,
   social: SocialSentiment | undefined,
+  aggregator: AggregatorScoutResult | undefined,
 ): Promise<JudgeResult> {
   const systemPrompt = buildJudgeSystemPrompt(bundle)
-  const userPrompt   = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social)
+  const userPrompt   = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator)
 
   const msg = await getAnthropic().messages.create({
     model: 'claude-opus-4-7',
@@ -1451,9 +1461,10 @@ async function runJudgeGemini(
   counter: CounterResult | undefined,
   round: number,
   social: SocialSentiment | undefined,
+  aggregator: AggregatorScoutResult | undefined,
 ): Promise<JudgeResult> {
   const systemPrompt = buildJudgeSystemPrompt(bundle)
-  const userPrompt   = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social)
+  const userPrompt   = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator)
   const fullPrompt = `${systemPrompt}\n\n${userPrompt}`
 
   const model = getGenAI().getGenerativeModel({
@@ -1678,12 +1689,13 @@ export async function runJudge(
   rebuttal?: RebuttalResult,
   counter?: CounterResult,
   round = 1,
-  social?: SocialSentiment
+  social?: SocialSentiment,
+  aggregator?: AggregatorScoutResult
 ): Promise<JudgeResult> {
   // Note: calibration result is stored on the returned judge via a side-channel
   // attached during pipeline orchestration. This function returns JudgeResult
   // for backward compatibility with any caller that just wants the final verdict.
-  return runJudgeWithCalibration(bundle, gemini, claude, gpt, rebuttal, counter, round, social)
+  return runJudgeWithCalibration(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator)
     .then(r => r.judge)
 }
 
@@ -1704,7 +1716,8 @@ export async function runJudgeWithCalibration(
   rebuttal?: RebuttalResult,
   counter?: CounterResult,
   round = 1,
-  social?: SocialSentiment
+  social?: SocialSentiment,
+  aggregator?: AggregatorScoutResult
 ): Promise<{ judge: JudgeResult; calibration: CalibrationResult }> {
 
   const useGemini = process.env.GEMINI_JUDGE !== 'false'
@@ -1713,11 +1726,11 @@ export async function runJudgeWithCalibration(
   // ── Step 1: Draft verdict from the primary Judge ──
   let draft: JudgeResult
   try {
-    draft = await judgeRunner(bundle, gemini, claude, gpt, rebuttal, counter, round, social)
+    draft = await judgeRunner(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator)
   } catch (err) {
     if (useGemini) {
       console.warn('[judge] Gemini failed on draft, falling back to Claude Opus:', (err as Error).message?.slice(0, 200))
-      draft = await runJudgeClaude(bundle, gemini, claude, gpt, rebuttal, counter, round, social)
+      draft = await runJudgeClaude(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator)
       draft.judgeModel = 'claude-opus-4-7-fallback'
     } else {
       throw err
@@ -1738,7 +1751,7 @@ export async function runJudgeWithCalibration(
     // Re-run Judge with calibration input
     try {
       finalJudge = await runJudgeWithCalibrationInput(
-        bundle, gemini, claude, gpt, rebuttal, counter, round, social,
+        bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator,
         draft, calibration, useGemini
       )
       finalJudge = sanitizeJudgeResult(finalJudge, bundle)
@@ -1773,6 +1786,7 @@ async function runJudgeWithCalibrationInput(
   counter: CounterResult | undefined,
   round: number,
   social: SocialSentiment | undefined,
+  aggregator: AggregatorScoutResult | undefined,
   draft: JudgeResult,
   calibration: CalibrationResult,
   useGemini: boolean,
@@ -1799,7 +1813,7 @@ Keep your verdict structure identical to the draft. Primarily update the confide
   // Build a user prompt that re-uses the main Judge logic but appends calibration guidance
   if (useGemini) {
     const systemPrompt = buildJudgeSystemPrompt(bundle)
-    const userPrompt = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social)
+    const userPrompt = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator)
     const fullPrompt = `${systemPrompt}\n\n${userPrompt}${calibrationGuidance}`
 
     const model = getGenAI().getGenerativeModel({
@@ -1816,7 +1830,7 @@ Keep your verdict structure identical to the draft. Primarily update the confide
     return { ...raw, judgeModel: 'gemini-2.5-pro-calibrated' }
   } else {
     const systemPrompt = buildJudgeSystemPrompt(bundle)
-    const userPrompt = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social) + calibrationGuidance
+    const userPrompt = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator) + calibrationGuidance
 
     const msg = await getAnthropic().messages.create({
       model: 'claude-opus-4-7',
@@ -2012,13 +2026,16 @@ export async function runPipeline(
 
   onProgress('gemini_start', {})
   onProgress('grok_start', {})
-  const [gemini, social] = await Promise.all([
+  onProgress('aggregator_start', {})
+  const [gemini, social, aggregator] = await Promise.all([
     runGemini(bundle),
     runSocialScout(bundle.ticker, bundle.currentPrice, bundle.timeframe),
+    runAggregatorScout(bundle.ticker, bundle.currentPrice, bundle.timeframe),
   ])
   transcript.push({ role: 'gemini', stage: 'news_macro', content: gemini.summary, confidence: gemini.confidence, timestamp: ts() })
   onProgress('gemini_done', gemini)
   onProgress('grok_done', social)
+  onProgress('aggregator_done', aggregator)
 
   const macroContext = await buildMacroIntelligenceContext(
     bundle.ticker,
@@ -2030,7 +2047,7 @@ export async function runPipeline(
   }
 
   onProgress('claude_start', { gemini })
-  const claude = await runClaude(bundle, gemini, social)
+  const claude = await runClaude(bundle, gemini, social, aggregator)
   transcript.push({ role: 'claude', stage: 'lead_analyst', content: claude.reasoning, signal: claude.signal, confidence: claude.confidence, timestamp: ts() })
   onProgress('claude_done', claude)
 
@@ -2040,7 +2057,7 @@ export async function runPipeline(
     .catch((e) => { console.warn('[verification/lead] failed:', (e as Error).message); return null })
 
   onProgress('gpt_start', { gemini, claude })
-  const gpt = await runGPT(bundle, gemini, claude, social)
+  const gpt = await runGPT(bundle, gemini, claude, social, aggregator)
   transcript.push({ role: 'gpt', stage: 'devils_advocate', content: gpt.reasoning, signal: gpt.signal, confidence: gpt.confidence, timestamp: ts() })
   onProgress('gpt_done', gpt)
 
@@ -2101,9 +2118,9 @@ export async function runPipeline(
   })
 
   onProgress('judge_start', {})
-  const { judge, calibration } = await runJudgeWithCalibration(bundle, gemini, claude, gpt, rebuttal, counter, 1, social)
+  const { judge, calibration } = await runJudgeWithCalibration(bundle, gemini, claude, gpt, rebuttal, counter, 1, social, aggregator)
   transcript.push({ role: 'judge', stage: 'arbitrator', content: judge.summary, signal: judge.signal, confidence: judge.confidence, timestamp: ts() })
   onProgress('judge_done', judge)
 
-  return { gemini, claude, gpt, rebuttal, counter, judge, calibration, verifications, transcript, social }
+  return { gemini, claude, gpt, rebuttal, counter, judge, calibration, verifications, transcript, social, aggregator }
 }
