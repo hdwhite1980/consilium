@@ -1,16 +1,67 @@
+/**
+ * Wali-OS — Portfolio Page (v3 Unified)
+ *
+ * 2026-04-29 — Full rewrite. Combines former Holdings + Dividends + Reinvest
+ * tabs into one unified surface. Each position is a row that expands inline
+ * to show a full per-position panel with health check, council history,
+ * dividends received, linked reinvest trades, and journal entries. Cross-
+ * linking is first-class: a dividend row shows what reinvest trade it
+ * funded; a reinvest row shows what dividend funded it.
+ *
+ * What changed:
+ *   - DROPPED: Holdings/Dividends/Reinvest tabs. Single unified page.
+ *   - DROPPED: Journal tab — Journal moved to its standalone page (see
+ *     /app/journal/page.tsx). The header now has a "Journal →" link.
+ *   - ADDED: Action Required strip — TERMINAL/EXIT/expiring/stop-breached/
+ *     unlogged-dividends, sorted by severity.
+ *   - ADDED: Recent Activity strip — pending Council outcomes, resolved
+ *     Council outcomes, recent reinvest opens/closes. Configurable window
+ *     (default 14 days, persisted to localStorage).
+ *   - ADDED: Inline-expanding position rows with 6 sub-sections:
+ *       1. Health Check (existing PositionCheck rendering)
+ *       2. Council History (verdict_log lookup)
+ *       3. Dividends (received + linked reinvest trades)
+ *       4. Reinvest trades (filtered to this ticker; "Log new" prefilled)
+ *       5. Linked journal entries (read-only summary, "View in Journal" link)
+ *       6. Actions footer (Run Council, Edit, Remove)
+ *   - ADDED: "Log dividend from position" workflow — opens existing modal
+ *     with ticker prefilled.
+ *   - ADDED: "Log reinvest from dividend" workflow — auto-populates
+ *     funded_by_dividend_id FK from Part 1.
+ *   - ADDED: localStorage persistence for expanded-rows state, recent-
+ *     activity window, and filter state.
+ *
+ * What's preserved (must keep working — verify after deploy):
+ *   - loadCachedAnalysis() SSE stream parsing (events: status,
+ *     position_data, complete, error)
+ *   - runAnalysis(forceRefresh) — same SSE flow
+ *   - addPosition() — both stock and option types, all field validation
+ *   - runHealthCheck(ticker?) — single position or all-positions
+ *   - removePosition() — with confirm
+ *   - All Drawer/FormField patterns
+ *   - saveDiv(), addReinvestTrade(), deleteDiv(), deleteReinvestTrade()
+ *   - Sort by ticker/value/day/pnl/alloc/signal
+ *   - Live ticker price enrichment for reinvest trades
+ *   - cachedAge display ('just analyzed' / 'Xm old' / 'Xh old')
+ *   - statusMsg display during streaming
+ *   - 'Add Position' / 'Health Check' / 'Analyze' top-level buttons
+ *   - AI Portfolio Summary card at bottom (existing render unchanged)
+ */
+
 'use client'
 
-import { useState, useEffect, useCallback, Suspense } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useState, useEffect, useCallback, useMemo, Suspense } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   ArrowLeft, Plus, Trash2, RefreshCw, TrendingUp, TrendingDown,
-  Minus, AlertTriangle, Calendar, DollarSign, Check, X, Clock,
+  AlertTriangle, Calendar, DollarSign, Check, X, Clock,
   Star, Repeat2, ChevronDown, ChevronRight, Activity, Briefcase,
-  BookOpen, RotateCw, Stethoscope, ArrowUpDown, ArrowUp, ArrowDown,
-  Zap, Flame, PieChart, Target
+  BookOpen, Stethoscope, Target, FileText, ExternalLink, Settings,
 } from 'lucide-react'
 
-// -- Types ----------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
 
 interface Position {
   id: string; ticker: string; shares: number; avg_cost: number | null
@@ -30,6 +81,10 @@ interface PortfolioMetrics {
   sectorConcentration: Array<{ sector: string; pct: number }>
   upcomingEarnings: PositionData[]
   signals: { BULLISH: number; NEUTRAL: number; BEARISH: number }
+  exposureByUnderlying?: Array<{
+    underlying: string; netExposure: number; totalCapitalAtRisk: number
+    positionCount: number; hasStock: boolean; hasOptions: boolean; description: string
+  }>
 }
 interface PortfolioAnalysis {
   overallSignal: string; overallConviction: string; headline: string; summary: string
@@ -38,20 +93,23 @@ interface PortfolioAnalysis {
   sectorAnalysis: string; earningsWatch: string; rebalancingSuggestions: string
   actionPlan: string; portfolioScore: number
 }
-interface JournalEntry {
-  id: string; ticker: string; signal: string; entry_price: number | null
-  stop_loss: number | null; take_profit: number | null; timeframe: string | null
-  confidence: number | null; exit_price: number | null; outcome: string
-  pnl_percent: number | null
-  position_type: 'stock' | 'option'
-  option_type: 'call' | 'put' | null
-  strike: number | null; expiry: string | null
-  contracts: number | null; entry_premium: number | null; exit_premium: number | null
-  underlying: string | null
-  postmortem: { what_worked: string; what_missed: string; key_lesson: string; signal_quality: string; council_grade: string; improve_next_time: string } | null
-  notes: string | null; tags: string[] | null; created_at: string
+
+// CouncilHistoryContext from PositionCheck v2
+interface CouncilHistoryContext {
+  recentSignal: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
+  recentConfidence: number | null
+  recentEntry: number | null
+  recentStop: number | null
+  recentTarget: number | null
+  recentTimeframe: string | null
+  recentPersona: string | null
+  daysSinceVerdict: number
+  outcomeStatus: 'pending' | 'correct' | 'incorrect' | 'unknown'
+  outcomeHorizon: '1w' | '1m' | null
+  positionContradictsCouncil: boolean
+  alignmentNote: string
+  personaDisagreement: string | null
 }
-interface JournalStats { winRate: number | null; avgPnl: number | null; totalTrades: number }
 
 interface PositionCheck {
   ticker: string; position_type: 'stock' | 'option'
@@ -67,44 +125,97 @@ interface PositionCheck {
   delta: number | null; theta: number | null; gamma: number | null; vega: number | null
   impliedVolatility: number | null; intrinsicValue: number | null; timeValue: number | null
   moneyness: string; breakeven: number | null
-  verdict: 'HOLD' | 'EXIT' | 'ADD' | 'WATCH'
+
+  // v2 added fields (all optional/nullable for back-compat)
+  directionalExposure?: number | null
+  capitalAtRisk?: number | null
+  bid?: number | null
+  ask?: number | null
+  realisticProceedsLow?: number | null
+  realisticProceedsHigh?: number | null
+  realisticProceedsNote?: string | null
+  hoursUntilExpiry?: number | null
+  deadlineLabel?: string | null
+  savePathSummary?: string | null
+  savePathProbabilityVerbal?: string | null
+  savePathProbabilityNumeric?: string | null
+  terminal?: boolean
+  terminalReason?: string | null
+  councilHistory?: CouncilHistoryContext | null
+
+  verdict: 'HOLD' | 'EXIT' | 'ADD' | 'WATCH' | 'TERMINAL'
   conviction: 'high' | 'medium' | 'low'; reason: string; action: string; flags: string[]
 }
+
+interface JournalEntry {
+  id: string; ticker: string; signal: string; entry_price: number | null
+  stop_loss: number | null; take_profit: number | null; timeframe: string | null
+  confidence: number | null; exit_price: number | null; outcome: string
+  pnl_percent: number | null; position_type: 'stock' | 'option'
+  option_type: 'call' | 'put' | null; strike: number | null; expiry: string | null
+  contracts: number | null; entry_premium: number | null; exit_premium: number | null
+  underlying: string | null
+  postmortem: {
+    what_worked: string; what_missed: string; key_lesson: string
+    signal_quality: string; council_grade: string; improve_next_time: string
+  } | null
+  notes: string | null; tags: string[] | null; created_at: string
+}
+
+interface LinkedReinvestTrade {
+  id: string; ticker: string; shares: number; entry_price: number
+  exit_price: number | null; exit_date: string | null
+  council_signal: string | null; confidence: number | null
+  notes: string | null; opened_at: string
+}
+
 interface Dividend {
   id: string; ticker: string; ex_date: string; pay_date: string | null
   amount_per_share: number; shares_held: number; total_received: number
-  reinvested: boolean; reinvest_shares: number | null; reinvest_price: number | null; notes: string | null
+  reinvested: boolean; reinvest_shares: number | null
+  reinvest_price: number | null; notes: string | null
+  // NEW from Part 1 — array of trades funded by this dividend
+  linkedReinvestTrades?: LinkedReinvestTrade[]
 }
+
 interface DividendSchedule {
   ticker: string; ex_date: string; pay_date: string | null
   amount: number | null; frequency: string | null
 }
+
 interface ReinvestTrade {
   id: string; ticker: string; shares: number; entry_price: number
   exit_price: number | null; exit_date: string | null
-  council_signal: string | null; confidence: number | null; notes: string | null; opened_at: string
+  council_signal: string | null; confidence: number | null
+  notes: string | null; opened_at: string
+  // NEW from Part 1
+  funded_by_dividend_id?: string | null
+  // Computed client-side
   currentPrice?: number | null; pnl?: number | null; pnlPct?: number | null
 }
 
-// -- Constants ----------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────────────────────────
 
 const UP = '#34d399'
 const DN = '#f87171'
 const FLAT = '#fbbf24'
 const ACCENT = '#a78bfa'
+const TERMINAL_RED = '#dc2626'
 
-const SIG_COLOR: Record<string, string> = { BULLISH: UP, BEARISH: DN, NEUTRAL: FLAT }
-const SEV_COLOR: Record<string, string> = { high: DN, medium: FLAT, low: '#94a3b8' }
-const VERDICT_COLOR: Record<string, string> = { EXIT: DN, WATCH: FLAT, HOLD: UP, ADD: '#60a5fa' }
-const VERDICT_BG: Record<string, string> = { EXIT: 'rgba(248,113,113,0.08)', WATCH: 'rgba(251,191,36,0.06)', HOLD: 'rgba(52,211,153,0.05)', ADD: 'rgba(96,165,250,0.06)' }
+const VERDICT_COLOR: Record<string, string> = {
+  TERMINAL: TERMINAL_RED, EXIT: DN, WATCH: FLAT, HOLD: UP, ADD: '#60a5fa',
+}
+const VERDICT_BG: Record<string, string> = {
+  TERMINAL: 'rgba(220,38,38,0.18)',
+  EXIT: 'rgba(248,113,113,0.08)',
+  WATCH: 'rgba(251,191,36,0.06)',
+  HOLD: 'rgba(52,211,153,0.05)',
+  ADD: 'rgba(96,165,250,0.06)',
+}
 
 const fmt = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-const fmtCompact = (n: number) => {
-  const abs = Math.abs(n)
-  if (abs >= 1_000_000) return `${n < 0 ? '-' : ''}$${(abs/1_000_000).toFixed(2)}M`
-  if (abs >= 10_000) return `${n < 0 ? '-' : ''}$${(abs/1000).toFixed(1)}k`
-  return `${n < 0 ? '-' : ''}$${fmt(abs)}`
-}
 const pct = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`
 const gradeColor = (g: string) => ({ A: UP, B: '#60a5fa', C: FLAT, D: '#f97316', F: DN }[g] || '#94a3b8')
 const pnlColor = (n: number | null | undefined) => {
@@ -112,19 +223,119 @@ const pnlColor = (n: number | null | undefined) => {
   return n > 0 ? UP : DN
 }
 
-// -- Main component ----------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// localStorage helpers — for persisted UI state
+// ─────────────────────────────────────────────────────────────────────────────
 
-type Tab = 'holdings' | 'dividends' | 'reinvest' | 'journal'
+const LS_KEYS = {
+  expandedRows: 'wali.portfolio.expandedRows',
+  recentActivityDays: 'wali.portfolio.recentActivityDays',
+  positionFilter: 'wali.portfolio.positionFilter',
+  sortPref: 'wali.portfolio.sortPref',
+  actionRequiredCollapsed: 'wali.portfolio.actionRequiredCollapsed',
+  recentActivityCollapsed: 'wali.portfolio.recentActivityCollapsed',
+}
+
+function lsGet<T>(key: string, fallback: T): T {
+  if (typeof window === 'undefined') return fallback
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (raw == null) return fallback
+    return JSON.parse(raw) as T
+  } catch { return fallback }
+}
+
+function lsSet(key: string, value: unknown) {
+  if (typeof window === 'undefined') return
+  try { window.localStorage.setItem(key, JSON.stringify(value)) } catch { /* quota or disabled */ }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Types continued — Action Required + Recent Activity items
+// ─────────────────────────────────────────────────────────────────────────────
+
 type SortKey = 'ticker' | 'value' | 'day' | 'pnl' | 'alloc' | 'signal'
 type SortDir = 'asc' | 'desc'
+type PositionFilter = 'all' | 'stocks' | 'options'
+
+interface ActionRequiredItem {
+  id: string                              // unique id for React key + dedup
+  severity: 'critical' | 'warning'
+  category: 'TERMINAL' | 'EXIT' | 'EXPIRING' | 'STOP_BREACH' | 'UNLOGGED_DIV' | 'WATCH'
+  ticker: string
+  primary: string                         // headline text
+  secondary?: string                      // subtext (the "why")
+  ctaLabel: string                        // button label
+  onClick: () => void                     // action handler
+}
+
+interface RecentActivityItem {
+  id: string
+  category: 'COUNCIL_RESOLVED' | 'COUNCIL_PENDING' | 'REINVEST_OPENED' | 'REINVEST_CLOSED' | 'DIV_RECEIVED'
+  ticker: string
+  primary: string
+  secondary?: string
+  date: Date                              // for sorting and 14-day filter
+  ctaLabel?: string
+  onClick?: () => void
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper components — Drawer + FormField (preserved from old page)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function FormField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="text-[10px] font-mono uppercase tracking-wider block mb-1.5" style={{ color: 'var(--text3)' }}>
+        {label}
+      </label>
+      {children}
+    </div>
+  )
+}
+
+function Drawer({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  return (
+    <>
+      <div onClick={onClose}
+        className="fixed inset-0 z-30"
+        style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(2px)' }}
+        aria-hidden="true" />
+      <div role="dialog" aria-modal="true" aria-labelledby="drawer-title"
+        className="fixed right-0 top-0 bottom-0 z-40 w-full sm:w-[480px] overflow-y-auto animate-slide-in-right"
+        style={{ background: 'var(--surface)', borderLeft: '1px solid var(--border)' }}>
+        <div className="flex items-center justify-between px-5 py-4 border-b sticky top-0"
+          style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+          <h3 id="drawer-title" className="text-sm font-bold" style={{ color: 'var(--text)' }}>{title}</h3>
+          <button onClick={onClose}
+            className="p-1.5 rounded-lg transition-all hover:opacity-80"
+            style={{ color: 'var(--text3)' }}
+            aria-label="Close">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="p-5">
+          {children}
+        </div>
+      </div>
+    </>
+  )
+}
+// ═════════════════════════════════════════════════════════════════════════════
+// Main component
+// ═════════════════════════════════════════════════════════════════════════════
 
 function PortfolioInner() {
   const router = useRouter()
-  const searchParams = useSearchParams()
-  const initialTab = (searchParams.get('tab') as Tab) || 'holdings'
-  const [tab, setTab] = useState<Tab>(initialTab)
 
-  // -- Holdings state
+  // ── Holdings state (preserved from old page) ─────────────────────
   const [positions, setPositions] = useState<Position[]>([])
   const [positionData, setPositionData] = useState<PositionData[]>([])
   const [metrics, setMetrics] = useState<PortfolioMetrics | null>(null)
@@ -133,6 +344,8 @@ function PortfolioInner() {
   const [analyzing, setAnalyzing] = useState(false)
   const [cachedAge, setCachedAge] = useState<number | null>(null)
   const [statusMsg, setStatusMsg] = useState('')
+
+  // Add-position drawer state (preserved)
   const [showAdd, setShowAdd] = useState(false)
   const [addType, setAddType] = useState<'stock' | 'option'>('stock')
   const [addTicker, setAddTicker] = useState('')
@@ -142,33 +355,27 @@ function PortfolioInner() {
   const [addStrike, setAddStrike] = useState('')
   const [addExpiry, setAddExpiry] = useState('')
   const [addContracts, setAddContracts] = useState('1')
+  const [addLoading, setAddLoading] = useState(false)
+
+  // Health check state (preserved)
   const [checks, setChecks] = useState<PositionCheck[]>([])
   const [checking, setChecking] = useState(false)
   const [checkedAt, setCheckedAt] = useState<string | null>(null)
   const [checkTicker, setCheckTicker] = useState<string | null>(null)
-  const [addLoading, setAddLoading] = useState(false)
-  const [expandedRow, setExpandedRow] = useState<string | null>(null)
+
+  // Sort state (persisted)
   const [sortKey, setSortKey] = useState<SortKey>('value')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
 
-  // -- Journal state
-  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([])
-  const [journalStats, setJournalStats] = useState<JournalStats>({ winRate: null, avgPnl: null, totalTrades: 0 })
-  const [loadingJournal, setLoadingJournal] = useState(false)
-  const [expandedEntry, setExpandedEntry] = useState<string | null>(null)
-  const [resolving, setResolving] = useState<string | null>(null)
-  const [showAddJournal, setShowAddJournal] = useState(false)
-  const [jTicker, setJTicker] = useState(''); const [jType, setJType] = useState<'stock'|'option'>('stock')
-  const [jSignal, setJSignal] = useState<'BULLISH'|'BEARISH'|'NEUTRAL'>('BULLISH')
-  const [jOptionType, setJOptionType] = useState<'call'|'put'>('call')
-  const [jStrike, setJStrike] = useState(''); const [jExpiry, setJExpiry] = useState('')
-  const [jContracts, setJContracts] = useState('1'); const [jPremium, setJPremium] = useState('')
-  const [jEntryPrice, setJEntryPrice] = useState(''); const [jStop, setJStop] = useState('')
-  const [jTarget, setJTarget] = useState(''); const [jTimeframe, setJTimeframe] = useState('1D')
-  const [jNotes, setJNotes] = useState('')
-  const [resolveData, setResolveData] = useState({ exit_price: '', exit_premium: '', outcome: 'win', notes: '' })
+  // ── NEW v3 state ────────────────────────────────────────────────
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
+  const [positionFilter, setPositionFilter] = useState<PositionFilter>('all')
+  const [recentActivityDays, setRecentActivityDays] = useState<number>(14)
+  const [actionRequiredCollapsed, setActionRequiredCollapsed] = useState<boolean>(false)
+  const [recentActivityCollapsed, setRecentActivityCollapsed] = useState<boolean>(false)
+  const [showSettings, setShowSettings] = useState<boolean>(false)
 
-  // -- Dividend state
+  // ── Dividend state (preserved + extended) ────────────────────────
   const [dividends, setDividends] = useState<Dividend[]>([])
   const [divSchedule, setDivSchedule] = useState<DividendSchedule[]>([])
   const [loadingDividends, setLoadingDividends] = useState(false)
@@ -183,7 +390,7 @@ function PortfolioInner() {
   const [divReinvestPrice, setDivReinvestPrice] = useState('')
   const [savingDiv, setSavingDiv] = useState(false)
 
-  // -- Reinvest state
+  // ── Reinvest state (preserved + extended) ────────────────────────
   const [reinvestTrades, setReinvestTrades] = useState<ReinvestTrade[]>([])
   const [loadingReinvest, setLoadingReinvest] = useState(false)
   const [showAddReinvest, setShowAddReinvest] = useState(false)
@@ -191,18 +398,55 @@ function PortfolioInner() {
   const [rShares, setRShares] = useState('')
   const [rEntry, setREntry] = useState('')
   const [rNotes, setRNotes] = useState('')
+  const [rFundedByDividendId, setRFundedByDividendId] = useState<string | null>(null)
   const [savingReinvest, setSavingReinvest] = useState(false)
 
-  // -- Holdings loading ----------------------------------------
+  // ── Journal state (read-only preview here; full management in /journal) ──
+  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([])
+  const [loadingJournal, setLoadingJournal] = useState(false)
 
+  // ── Hydrate persisted state on mount ────────────────────────────
+  useEffect(() => {
+    setExpandedRows(new Set(lsGet<string[]>(LS_KEYS.expandedRows, [])))
+    setRecentActivityDays(lsGet<number>(LS_KEYS.recentActivityDays, 14))
+    setPositionFilter(lsGet<PositionFilter>(LS_KEYS.positionFilter, 'all'))
+    setActionRequiredCollapsed(lsGet<boolean>(LS_KEYS.actionRequiredCollapsed, false))
+    setRecentActivityCollapsed(lsGet<boolean>(LS_KEYS.recentActivityCollapsed, false))
+    const sortPref = lsGet<{ key: SortKey; dir: SortDir }>(LS_KEYS.sortPref, { key: 'value', dir: 'desc' })
+    setSortKey(sortPref.key)
+    setSortDir(sortPref.dir)
+  }, [])
+
+  // ── Persist on change ────────────────────────────────────────────
+  useEffect(() => { lsSet(LS_KEYS.expandedRows, Array.from(expandedRows)) }, [expandedRows])
+  useEffect(() => { lsSet(LS_KEYS.recentActivityDays, recentActivityDays) }, [recentActivityDays])
+  useEffect(() => { lsSet(LS_KEYS.positionFilter, positionFilter) }, [positionFilter])
+  useEffect(() => { lsSet(LS_KEYS.actionRequiredCollapsed, actionRequiredCollapsed) }, [actionRequiredCollapsed])
+  useEffect(() => { lsSet(LS_KEYS.recentActivityCollapsed, recentActivityCollapsed) }, [recentActivityCollapsed])
+  useEffect(() => { lsSet(LS_KEYS.sortPref, { key: sortKey, dir: sortDir }) }, [sortKey, sortDir])
+
+  // ═════════════════════════════════════════════════════════════════
+  // PRESERVED HANDLERS — exactly the same behavior as the old page
+  // ═════════════════════════════════════════════════════════════════
+
+  // -- Cached analysis SSE flow (preserved) --
   const loadCachedAnalysis = useCallback(async (pos: typeof positions) => {
     if (!pos.length) return
     const res = await fetch('/api/portfolio', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ positions: pos.map(p => ({ ticker: p.ticker, shares: p.shares, avg_cost: p.avg_cost, position_type: p.position_type, option_type: p.option_type, strike: p.strike, expiry: p.expiry, contracts: p.contracts, entry_premium: p.entry_premium, underlying: p.underlying })), forceRefresh: false })
+      body: JSON.stringify({
+        positions: pos.map(p => ({
+          ticker: p.ticker, shares: p.shares, avg_cost: p.avg_cost,
+          position_type: p.position_type, option_type: p.option_type,
+          strike: p.strike, expiry: p.expiry, contracts: p.contracts,
+          entry_premium: p.entry_premium, underlying: p.underlying,
+        })),
+        forceRefresh: false,
+      }),
     })
-    const reader = res.body!.getReader()
+    if (!res.body) return
+    const reader = res.body.getReader()
     const dec = new TextDecoder()
     let buf = ''
     while (true) {
@@ -212,33 +456,54 @@ function PortfolioInner() {
       const parts = buf.split('\n\n'); buf = parts.pop() || ''
       for (const part of parts) {
         const ev = part.split('\n').find(l => l.startsWith('event:'))?.replace('event:', '').trim()
-        const d = (() => { try { return JSON.parse(part.split('\n').find(l => l.startsWith('data:'))?.replace('data:', '').trim() || '{}') } catch { return {} } })()
+        const d = (() => {
+          try { return JSON.parse(part.split('\n').find(l => l.startsWith('data:'))?.replace('data:', '').trim() || '{}') }
+          catch { return {} }
+        })()
         if (ev === 'position_data' && d.length) setPositionData(d)
-        if (ev === 'complete' && d.cached) { setPositionData(d.positionData ?? []); setMetrics(d.metrics); setAnalysis(d.analysis); setCachedAge(d.ageMinutes ?? null) }
+        if (ev === 'complete' && d.cached) {
+          setPositionData(d.positionData ?? [])
+          setMetrics(d.metrics)
+          setAnalysis(d.analysis)
+          setCachedAge(d.ageMinutes ?? null)
+        }
       }
     }
   }, [])
 
+  // -- Load positions (preserved) --
   const loadPositions = useCallback(async () => {
     setLoadingHoldings(true)
     const res = await fetch('/api/portfolio/positions')
     const data = await res.json()
-    const loaded = data.positions ?? []
+    const loaded: Position[] = data.positions ?? []
     setPositions(loaded)
     setLoadingHoldings(false)
     if (loaded.length > 0) loadCachedAnalysis(loaded)
   }, [loadCachedAnalysis])
 
+  // -- Run analysis (preserved) --
   const runAnalysis = useCallback(async (forceRefresh = false) => {
     if (!positions.length) return
-    setAnalyzing(true); setAnalysis(null); setPositionData([]); setMetrics(null); setCachedAge(null); setStatusMsg('Starting analysis...')
+    setAnalyzing(true); setAnalysis(null); setPositionData([]); setMetrics(null)
+    setCachedAge(null); setStatusMsg('Starting analysis...')
     const res = await fetch('/api/portfolio', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ positions: positions.map(p => ({ ticker: p.ticker, shares: p.shares, avg_cost: p.avg_cost, position_type: p.position_type, option_type: p.option_type, strike: p.strike, expiry: p.expiry, contracts: p.contracts, entry_premium: p.entry_premium, underlying: p.underlying })), forceRefresh })
+      body: JSON.stringify({
+        positions: positions.map(p => ({
+          ticker: p.ticker, shares: p.shares, avg_cost: p.avg_cost,
+          position_type: p.position_type, option_type: p.option_type,
+          strike: p.strike, expiry: p.expiry, contracts: p.contracts,
+          entry_premium: p.entry_premium, underlying: p.underlying,
+        })),
+        forceRefresh,
+      }),
     })
-    const reader = res.body!.getReader()
-    const dec = new TextDecoder(); let buf = ''
+    if (!res.body) { setAnalyzing(false); return }
+    const reader = res.body.getReader()
+    const dec = new TextDecoder()
+    let buf = ''
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
@@ -246,15 +511,25 @@ function PortfolioInner() {
       const parts = buf.split('\n\n'); buf = parts.pop() || ''
       for (const part of parts) {
         const ev = part.split('\n').find(l => l.startsWith('event:'))?.replace('event:', '').trim()
-        const d = (() => { try { return JSON.parse(part.split('\n').find(l => l.startsWith('data:'))?.replace('data:', '').trim() || '{}') } catch { return {} } })()
+        const d = (() => {
+          try { return JSON.parse(part.split('\n').find(l => l.startsWith('data:'))?.replace('data:', '').trim() || '{}') }
+          catch { return {} }
+        })()
         if (ev === 'status') setStatusMsg(d.message)
         if (ev === 'position_data') setPositionData(d)
-        if (ev === 'complete') { setPositionData(d.positionData); setMetrics(d.metrics); setAnalysis(d.analysis); setCachedAge(d.cached ? (d.ageMinutes ?? 0) : 0); setAnalyzing(false) }
+        if (ev === 'complete') {
+          setPositionData(d.positionData)
+          setMetrics(d.metrics)
+          setAnalysis(d.analysis)
+          setCachedAge(d.cached ? (d.ageMinutes ?? 0) : 0)
+          setAnalyzing(false)
+        }
         if (ev === 'error') { setStatusMsg(d.message); setAnalyzing(false) }
       }
     }
   }, [positions])
 
+  // -- Add position (preserved) --
   const addPosition = async () => {
     if (!addTicker) return
     const isOption = addType === 'option'
@@ -277,12 +552,17 @@ function PortfolioInner() {
       body.shares   = parseFloat(addShares)
       body.avg_cost = addCost ? parseFloat(addCost) : null
     }
-    await fetch('/api/portfolio/positions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    await fetch('/api/portfolio/positions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
     setAddTicker(''); setAddShares(''); setAddCost(''); setAddStrike(''); setAddExpiry('')
     setAddContracts('1'); setShowAdd(false); setAddLoading(false)
     await loadPositions()
   }
 
+  // -- Health check (preserved) --
   const runHealthCheck = async (ticker?: string) => {
     setChecking(true)
     try {
@@ -297,84 +577,41 @@ function PortfolioInner() {
           })
         }
       } else {
-        const res = await fetch('/api/portfolio/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
+        const res = await fetch('/api/portfolio/check', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        })
         const data = await res.json()
         setChecks(data.checks || [])
         setCheckedAt(data.checkedAt || null)
       }
-    } finally { setChecking(false); setCheckTicker(null) }
+    } finally {
+      setChecking(false)
+      setCheckTicker(null)
+    }
   }
 
+  // -- Remove position (preserved) --
   const removePosition = async (ticker: string) => {
     if (!confirm(`Remove ${ticker} from portfolio?`)) return
-    await fetch('/api/portfolio/positions', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) })
+    await fetch('/api/portfolio/positions', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker }),
+    })
     await loadPositions()
     setPositionData(prev => prev.filter(p => p.ticker !== ticker))
-  }
-
-  // -- Journal loading ----------------------------------------
-
-  const loadJournal = useCallback(async () => {
-    setLoadingJournal(true)
-    const res = await fetch('/api/trade-journal')
-    const data = await res.json()
-    setJournalEntries(data.entries || [])
-    setJournalStats(data.stats || { winRate: null, avgPnl: null, totalTrades: 0 })
-    setLoadingJournal(false)
-  }, [])
-
-  const handleDeleteJournal = async (id: string) => {
-    if (!confirm('Delete this trade from your journal?')) return
-    await fetch('/api/trade-journal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete', id }) })
-    await loadJournal()
-  }
-
-  const addJournalEntry = async () => {
-    if (!jTicker) return
-    const isOption = jType === 'option'
-    const body: Record<string, unknown> = {
-      action: 'add', ticker: jTicker.toUpperCase(), signal: jSignal,
-      position_type: jType, timeframe: jTimeframe, notes: jNotes || null,
-    }
-    if (isOption) {
-      body.option_type = jOptionType; body.strike = jStrike ? parseFloat(jStrike) : null
-      body.expiry = jExpiry || null; body.contracts = jContracts ? parseInt(jContracts) : 1
-      body.entry_premium = jPremium ? parseFloat(jPremium) : null
-      body.underlying = jTicker.toUpperCase()
-    } else {
-      body.entry_price = jEntryPrice ? parseFloat(jEntryPrice) : null
-      body.stop_loss = jStop ? parseFloat(jStop) : null
-      body.take_profit = jTarget ? parseFloat(jTarget) : null
-    }
-    await fetch('/api/trade-journal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-    setShowAddJournal(false)
-    setJTicker(''); setJStrike(''); setJExpiry(''); setJPremium(''); setJEntryPrice(''); setJStop(''); setJTarget(''); setJNotes('')
-    await loadJournal()
-  }
-
-  const handleResolve = async (id: string) => {
-    const entry = journalEntries.find(e => e.id === id)
-    const isOption = entry?.position_type === 'option'
-    if (!isOption && !resolveData.exit_price) return
-    if (isOption && !resolveData.exit_premium) return
-    setResolving(id)
-    await fetch('/api/trade-journal', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'resolve', id,
-        exit_price: resolveData.exit_price ? parseFloat(resolveData.exit_price) : null,
-        exit_premium: resolveData.exit_premium ? parseFloat(resolveData.exit_premium) : null,
-        outcome: resolveData.outcome, notes: resolveData.notes
-      })
+    setChecks(prev => prev.filter(c => c.ticker !== ticker))
+    // Also collapse the row if it was expanded
+    setExpandedRows(prev => {
+      const next = new Set(prev)
+      next.delete(ticker)
+      return next
     })
-    setResolving(null); setExpandedEntry(null)
-    await loadJournal()
   }
 
-  const outcomeIcon = (o: string) => o === 'win' ? <Check size={12} style={{ color: UP }} /> : o === 'loss' ? <X size={12} style={{ color: DN }} /> : <Clock size={12} style={{ color: FLAT }} />
-
-  // -- Dividend loading ----------------------------------------
-
+  // -- Load dividends (preserved + receives linkedReinvestTrades from Part 1) --
   const loadDividends = useCallback(async () => {
     setLoadingDividends(true)
     try {
@@ -389,6 +626,7 @@ function PortfolioInner() {
     }
   }, [])
 
+  // -- Save dividend (preserved) --
   const saveDiv = async () => {
     if (!divTicker || !divAmount || !divShares || !divExDate) return
     setSavingDiv(true)
@@ -407,7 +645,7 @@ function PortfolioInner() {
         reinvested: divReinvested,
         reinvest_shares: divReinvested && divReinvestShares ? parseFloat(divReinvestShares) : null,
         reinvest_price: divReinvested && divReinvestPrice ? parseFloat(divReinvestPrice) : null,
-      })
+      }),
     })
     setDivTicker(''); setDivAmount(''); setDivShares(''); setDivExDate(''); setDivPayDate('')
     setDivReinvested(false); setDivReinvestShares(''); setDivReinvestPrice('')
@@ -415,14 +653,18 @@ function PortfolioInner() {
     await loadDividends()
   }
 
+  // -- Delete dividend (preserved) --
   const deleteDiv = async (id: string) => {
     if (!confirm('Delete this dividend record?')) return
-    await fetch('/api/dividends', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
+    await fetch('/api/dividends', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    })
     await loadDividends()
   }
 
-  // -- Reinvest loading ----------------------------------------
-
+  // -- Load reinvest trades with live prices (preserved) --
   const loadReinvest = useCallback(async () => {
     setLoadingReinvest(true)
     try {
@@ -436,46 +678,73 @@ function PortfolioInner() {
             const qd = q.ok ? await q.json() : null
             const cpRaw = qd?.quote?.c || null
             const cp = cpRaw !== null ? parseFloat(cpRaw) : null
-            const pnl = cp && t.shares ? (cp - t.entry_price) * t.shares : null
+            const pnlVal = cp && t.shares ? (cp - t.entry_price) * t.shares : null
             const pPct = t.entry_price > 0 && cp ? ((cp - t.entry_price) / t.entry_price * 100) : null
-            return { ...t, currentPrice: cp, pnl, pnlPct: pPct }
+            return { ...t, currentPrice: cp, pnl: pnlVal, pnlPct: pPct }
           } catch { return t }
         }))
         setReinvestTrades(enriched)
       }
-    } finally { setLoadingReinvest(false) }
+    } finally {
+      setLoadingReinvest(false)
+    }
   }, [])
 
+  // -- Add reinvest trade (preserved + Part 1 linkage) --
   const addReinvestTrade = async () => {
     if (!rTicker || !rShares || !rEntry) return
     setSavingReinvest(true)
     await fetch('/api/reinvestment/trades', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ticker: rTicker.toUpperCase(), shares: parseFloat(rShares), entry_price: parseFloat(rEntry), notes: rNotes || null })
+      body: JSON.stringify({
+        ticker: rTicker.toUpperCase(),
+        shares: parseFloat(rShares),
+        entry_price: parseFloat(rEntry),
+        notes: rNotes || null,
+        funded_by_dividend_id: rFundedByDividendId,   // ← Part 1 FK
+      }),
     })
     setRTicker(''); setRShares(''); setREntry(''); setRNotes('')
+    setRFundedByDividendId(null)
     setShowAddReinvest(false); setSavingReinvest(false)
     await loadReinvest()
+    await loadDividends()  // Refresh so linkedReinvestTrades on dividends updates
   }
 
+  // -- Delete reinvest (preserved) --
   const deleteReinvestTrade = async (id: string) => {
     if (!confirm('Delete this reinvestment trade?')) return
     await fetch(`/api/reinvestment/trades?id=${id}`, { method: 'DELETE' })
     await loadReinvest()
+    await loadDividends()
   }
 
-  // -- Load on tab change ----------------------------------------
+  // -- Load journal (preserved, used for read-only preview in expanded rows) --
+  const loadJournal = useCallback(async () => {
+    setLoadingJournal(true)
+    try {
+      const res = await fetch('/api/trade-journal')
+      const data = await res.json()
+      setJournalEntries(data.entries || [])
+    } finally {
+      setLoadingJournal(false)
+    }
+  }, [])
 
+  // ── Initial load ────────────────────────────────────────────────
   useEffect(() => { loadPositions() }, [loadPositions])
 
+  // Load dividends, reinvest, journal eagerly — they're now used by the
+  // strips and per-position expansions, not gated by tab switch.
   useEffect(() => {
-    if (tab === 'journal' && journalEntries.length === 0) loadJournal()
-    if (tab === 'dividends' && dividends.length === 0) loadDividends()
-    if (tab === 'reinvest' && reinvestTrades.length === 0) loadReinvest()
-  }, [tab]) // eslint-disable-line
-
-  // -- Derived metrics ----------------------------------------
+    loadDividends()
+    loadReinvest()
+    loadJournal()
+  }, [loadDividends, loadReinvest, loadJournal])
+  // ═════════════════════════════════════════════════════════════════
+  // DERIVED METRICS (preserved + extended)
+  // ═════════════════════════════════════════════════════════════════
 
   const totalValue = positionData.reduce((s, p) => s + p.marketValue, 0)
   const totalGainLoss = positionData.reduce((s, p) => s + (p.gainLoss ?? 0), 0)
@@ -491,63 +760,302 @@ function PortfolioInner() {
   const dayChangePct = totalValue > 0 && (totalValue - dayChangeDollar) > 0
     ? (dayChangeDollar / (totalValue - dayChangeDollar)) * 100
     : 0
-  const totalDividends = dividends.reduce((s, d) => s + d.total_received, 0)
-  const reinvestedDividends = dividends.filter(d => d.reinvested).reduce((s, d) => s + d.total_received, 0)
-  const openReinvestTrades = reinvestTrades.filter(t => !t.exit_price)
-  const realizedReinvestPnL = reinvestTrades.filter(t => t.exit_price).reduce((s, t) => { const p = t.exit_price ? (t.exit_price - t.entry_price) * t.shares : 0; return s + p }, 0)
 
   const stockCount = positions.filter(p => p.position_type === 'stock').length
   const optionCount = positions.filter(p => p.position_type === 'option').length
 
-  // Sorted positions for table
-  const sortedPositions = [...positions].sort((a, b) => {
-    const aData = positionData.find(p => p.ticker === a.ticker)
-    const bData = positionData.find(p => p.ticker === b.ticker)
-    const mul = sortDir === 'asc' ? 1 : -1
-    switch (sortKey) {
-      case 'ticker': return a.ticker.localeCompare(b.ticker) * mul
-      case 'value': return ((aData?.marketValue ?? 0) - (bData?.marketValue ?? 0)) * mul
-      case 'day':   return ((aData?.priceChange1D ?? 0) - (bData?.priceChange1D ?? 0)) * mul
-      case 'pnl':   return ((aData?.gainLossPct ?? 0) - (bData?.gainLossPct ?? 0)) * mul
-      case 'alloc': return ((aData?.marketValue ?? 0) - (bData?.marketValue ?? 0)) * mul
-      case 'signal': {
-        const order: Record<string, number> = { BULLISH: 2, NEUTRAL: 1, BEARISH: 0 }
-        return ((order[aData?.signal ?? ''] ?? -1) - (order[bData?.signal ?? ''] ?? -1)) * mul
+  // ── Filter positions ─────────────────────────────────────────────
+  const filteredPositions = useMemo(() => {
+    if (positionFilter === 'all') return positions
+    if (positionFilter === 'stocks') return positions.filter(p => p.position_type === 'stock')
+    return positions.filter(p => p.position_type === 'option')
+  }, [positions, positionFilter])
+
+  // ── Sort ─────────────────────────────────────────────────────────
+  const sortedPositions = useMemo(() => {
+    return [...filteredPositions].sort((a, b) => {
+      const aData = positionData.find(p => p.ticker === a.ticker)
+      const bData = positionData.find(p => p.ticker === b.ticker)
+      const mul = sortDir === 'asc' ? 1 : -1
+      switch (sortKey) {
+        case 'ticker': return a.ticker.localeCompare(b.ticker) * mul
+        case 'value': return ((aData?.marketValue ?? 0) - (bData?.marketValue ?? 0)) * mul
+        case 'day':   return ((aData?.priceChange1D ?? 0) - (bData?.priceChange1D ?? 0)) * mul
+        case 'pnl':   return ((aData?.gainLossPct ?? 0) - (bData?.gainLossPct ?? 0)) * mul
+        case 'alloc': return ((aData?.marketValue ?? 0) - (bData?.marketValue ?? 0)) * mul
+        case 'signal': {
+          const order: Record<string, number> = { BULLISH: 2, NEUTRAL: 1, BEARISH: 0 }
+          return ((order[aData?.signal ?? ''] ?? -1) - (order[bData?.signal ?? ''] ?? -1)) * mul
+        }
+        default: return 0
       }
-      default: return 0
-    }
-  })
+    })
+  }, [filteredPositions, positionData, sortKey, sortDir])
 
   const toggleSort = (k: SortKey) => {
     if (sortKey === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortKey(k); setSortDir('desc') }
   }
 
-  const SortHeader = ({ k, label, align = 'right' }: { k: SortKey; label: string; align?: 'left' | 'right' }) => (
-    <button onClick={() => toggleSort(k)}
-      className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider transition-colors hover:opacity-80 w-full"
-      style={{
-        justifyContent: align === 'right' ? 'flex-end' : 'flex-start',
-        color: sortKey === k ? ACCENT : 'var(--text3)',
-      }}>
-      <span>{label}</span>
-      {sortKey === k
-        ? (sortDir === 'asc' ? <ArrowUp size={10} /> : <ArrowDown size={10} />)
-        : <ArrowUpDown size={10} style={{ opacity: 0.3 }} />}
-    </button>
-  )
+  // ── Toggle row expansion ─────────────────────────────────────────
+  const toggleRow = (ticker: string) => {
+    setExpandedRows(prev => {
+      const next = new Set(prev)
+      if (next.has(ticker)) next.delete(ticker)
+      else next.add(ticker)
+      return next
+    })
+  }
 
-  const TABS: Array<{ id: Tab; label: string; icon: React.ReactNode }> = [
-    { id: 'holdings',  label: 'Holdings',  icon: <Briefcase size={13} /> },
-    { id: 'dividends', label: 'Dividends', icon: <DollarSign size={13} /> },
-    { id: 'reinvest',  label: 'Reinvest',  icon: <RotateCw size={13} /> },
-    { id: 'journal',   label: 'Journal',   icon: <BookOpen size={13} /> },
-  ]
+  const expandAndScrollTo = (ticker: string) => {
+    setExpandedRows(prev => new Set(prev).add(ticker))
+    // Scroll to the row after a tick (let it render first)
+    setTimeout(() => {
+      const el = document.getElementById(`pos-row-${ticker}`)
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 50)
+  }
+
+  // ═════════════════════════════════════════════════════════════════
+  // ACTION REQUIRED — items needing attention now
+  // ═════════════════════════════════════════════════════════════════
+
+  const actionRequired = useMemo<ActionRequiredItem[]>(() => {
+    const items: ActionRequiredItem[] = []
+
+    // 1. Health check verdicts: TERMINAL, EXIT, WATCH (warning)
+    for (const c of checks) {
+      if (c.verdict === 'TERMINAL') {
+        items.push({
+          id: `terminal-${c.ticker}`,
+          severity: 'critical',
+          category: 'TERMINAL',
+          ticker: c.ticker,
+          primary: `${c.ticker} — ${c.terminalReason ?? c.reason ?? 'Position is mathematically over'}`,
+          secondary: c.action,
+          ctaLabel: 'Open',
+          onClick: () => expandAndScrollTo(c.ticker),
+        })
+      } else if (c.verdict === 'EXIT') {
+        items.push({
+          id: `exit-${c.ticker}`,
+          severity: 'critical',
+          category: 'EXIT',
+          ticker: c.ticker,
+          primary: `${c.ticker} — Exit criteria met`,
+          secondary: c.action,
+          ctaLabel: 'Open',
+          onClick: () => expandAndScrollTo(c.ticker),
+        })
+      } else if (c.verdict === 'WATCH') {
+        items.push({
+          id: `watch-${c.ticker}`,
+          severity: 'warning',
+          category: 'WATCH',
+          ticker: c.ticker,
+          primary: `${c.ticker} — Watch closely`,
+          secondary: c.action,
+          ctaLabel: 'Open',
+          onClick: () => expandAndScrollTo(c.ticker),
+        })
+      }
+    }
+
+    // 2. Options expiring ≤ 2 calendar days (regardless of health-check verdict)
+    for (const pos of positions) {
+      if (pos.position_type !== 'option' || !pos.expiry) continue
+      // Calendar-day count from today midnight ET to expiry midnight ET
+      const [y, m, d] = pos.expiry.split('-').map(Number)
+      if (!y || !m || !d) continue
+      const expMidnightET = new Date(Date.UTC(y, m - 1, d, 4, 0, 0))
+      const now = new Date()
+      const todayMidnightET = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 4, 0, 0))
+      const todayAnchor = now.getTime() < todayMidnightET.getTime()
+        ? new Date(todayMidnightET.getTime() - 86400000)
+        : todayMidnightET
+      const daysToExpiry = Math.round((expMidnightET.getTime() - todayAnchor.getTime()) / 86400000)
+      if (daysToExpiry < 0 || daysToExpiry > 2) continue
+
+      // Skip if already covered by TERMINAL/EXIT
+      if (items.find(i => i.ticker === pos.ticker && (i.category === 'TERMINAL' || i.category === 'EXIT'))) continue
+
+      const dayLabel = daysToExpiry === 0 ? 'today' : daysToExpiry === 1 ? 'tomorrow' : `${daysToExpiry}d`
+      items.push({
+        id: `expiring-${pos.ticker}`,
+        severity: 'critical',
+        category: 'EXPIRING',
+        ticker: pos.ticker,
+        primary: `${pos.ticker} ${pos.option_type?.toUpperCase()} $${pos.strike} expires ${dayLabel}`,
+        secondary: `Decide today: close, roll, or let expire.`,
+        ctaLabel: 'Open',
+        onClick: () => expandAndScrollTo(pos.ticker),
+      })
+    }
+
+    // 3. Stop-breached positions (from health checks)
+    for (const c of checks) {
+      if (c.pctFromStop !== null && c.pctFromStop !== undefined && c.pctFromStop < 0) {
+        // Skip if already covered by TERMINAL/EXIT
+        if (items.find(i => i.ticker === c.ticker && (i.category === 'TERMINAL' || i.category === 'EXIT'))) continue
+        items.push({
+          id: `stop-${c.ticker}`,
+          severity: 'critical',
+          category: 'STOP_BREACH',
+          ticker: c.ticker,
+          primary: `${c.ticker} — Stop loss breached`,
+          secondary: `Current $${c.underlyingPrice} vs stop $${c.stopLoss}. ${Math.abs(c.pctFromStop).toFixed(1)}% past stop.`,
+          ctaLabel: 'Open',
+          onClick: () => expandAndScrollTo(c.ticker),
+        })
+      }
+    }
+
+    // 4. Unlogged dividends — schedule entries with ex_date in the past
+    //    and no matching dividend in the user's dividends list
+    const today = new Date()
+    today.setUTCHours(0, 0, 0, 0)
+    for (const sched of divSchedule) {
+      const exDate = new Date(sched.ex_date)
+      if (exDate.getTime() > today.getTime()) continue   // future, not unlogged
+      // Match by ticker + ex_date (both stored as 'YYYY-MM-DD')
+      const matched = dividends.find(d =>
+        d.ticker === sched.ticker && d.ex_date === sched.ex_date
+      )
+      if (matched) continue
+
+      // Days since ex-date
+      const daysAgo = Math.floor((today.getTime() - exDate.getTime()) / 86400000)
+      if (daysAgo > 30) continue   // very old, probably user doesn't care
+
+      items.push({
+        id: `unlogged-${sched.ticker}-${sched.ex_date}`,
+        severity: 'warning',
+        category: 'UNLOGGED_DIV',
+        ticker: sched.ticker,
+        primary: `${sched.ticker} dividend paid ${daysAgo === 0 ? 'today' : daysAgo === 1 ? 'yesterday' : `${daysAgo}d ago`}${sched.amount ? ` ($${sched.amount.toFixed(2)}/sh)` : ''}`,
+        secondary: 'Log to track yield and reinvestment opportunity.',
+        ctaLabel: 'Log',
+        onClick: () => {
+          // Open the Log Dividend drawer prefilled with this ticker + ex-date
+          setDivTicker(sched.ticker)
+          setDivExDate(sched.ex_date)
+          setDivPayDate(sched.pay_date || '')
+          if (sched.amount) setDivAmount(String(sched.amount))
+          // Try to prefill shares from the position
+          const pos = positions.find(p => p.ticker === sched.ticker)
+          if (pos && pos.position_type === 'stock') setDivShares(String(pos.shares))
+          setShowLogDiv(true)
+        },
+      })
+    }
+
+    // Sort: critical first, then by ticker
+    items.sort((a, b) => {
+      if (a.severity !== b.severity) return a.severity === 'critical' ? -1 : 1
+      return a.ticker.localeCompare(b.ticker)
+    })
+    return items
+  }, [checks, positions, divSchedule, dividends])
+
+  // ═════════════════════════════════════════════════════════════════
+  // RECENT ACTIVITY — informational items (FYI, not actionable)
+  // ═════════════════════════════════════════════════════════════════
+
+  const recentActivity = useMemo<RecentActivityItem[]>(() => {
+    const items: RecentActivityItem[] = []
+    const cutoffMs = Date.now() - recentActivityDays * 86400000
+
+    // 1. Council history items (resolved + pending) — pulled from each PositionCheck
+    for (const c of checks) {
+      if (!c.councilHistory) continue
+      const ch = c.councilHistory
+      const verdictDate = new Date(Date.now() - ch.daysSinceVerdict * 86400000)
+      if (verdictDate.getTime() < cutoffMs) continue
+
+      if (ch.outcomeStatus === 'correct' || ch.outcomeStatus === 'incorrect') {
+        items.push({
+          id: `council-resolved-${c.ticker}`,
+          category: 'COUNCIL_RESOLVED',
+          ticker: c.ticker,
+          primary: `${c.ticker} — Council was ${ch.outcomeStatus} ${ch.outcomeHorizon ?? ''}`.trim(),
+          secondary: ch.alignmentNote,
+          date: verdictDate,
+          ctaLabel: 'View',
+          onClick: () => expandAndScrollTo(c.ticker),
+        })
+      } else if (ch.outcomeStatus === 'pending' && ch.daysSinceVerdict >= 1) {
+        items.push({
+          id: `council-pending-${c.ticker}`,
+          category: 'COUNCIL_PENDING',
+          ticker: c.ticker,
+          primary: `${c.ticker} — Council ${ch.recentSignal} from ${ch.daysSinceVerdict}d ago, outcome pending`,
+          secondary: ch.alignmentNote,
+          date: verdictDate,
+          ctaLabel: 'View',
+          onClick: () => expandAndScrollTo(c.ticker),
+        })
+      }
+    }
+
+    // 2. Reinvest trades opened/closed within window
+    for (const t of reinvestTrades) {
+      const openedAt = new Date(t.opened_at)
+      if (openedAt.getTime() >= cutoffMs) {
+        items.push({
+          id: `reinvest-opened-${t.id}`,
+          category: 'REINVEST_OPENED',
+          ticker: t.ticker,
+          primary: `${t.ticker} reinvest opened — ${t.shares} sh @ $${t.entry_price.toFixed(2)}`,
+          secondary: t.pnl !== null && t.pnl !== undefined
+            ? `Current P/L: ${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(0)}${t.pnlPct !== null && t.pnlPct !== undefined ? ` (${t.pnlPct >= 0 ? '+' : ''}${t.pnlPct.toFixed(1)}%)` : ''}`
+            : undefined,
+          date: openedAt,
+        })
+      }
+      if (t.exit_date) {
+        const closedAt = new Date(t.exit_date)
+        if (closedAt.getTime() >= cutoffMs) {
+          const pnl = t.exit_price ? (t.exit_price - t.entry_price) * t.shares : 0
+          items.push({
+            id: `reinvest-closed-${t.id}`,
+            category: 'REINVEST_CLOSED',
+            ticker: t.ticker,
+            primary: `${t.ticker} reinvest closed — ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(0)}`,
+            secondary: t.exit_price ? `Exit: $${t.exit_price.toFixed(2)} vs entry $${t.entry_price.toFixed(2)}` : undefined,
+            date: closedAt,
+          })
+        }
+      }
+    }
+
+    // 3. Dividends received within window
+    for (const d of dividends) {
+      const exDate = new Date(d.ex_date)
+      if (exDate.getTime() < cutoffMs) continue
+      items.push({
+        id: `div-${d.id}`,
+        category: 'DIV_RECEIVED',
+        ticker: d.ticker,
+        primary: `${d.ticker} dividend received — $${d.total_received.toFixed(2)}${d.reinvested ? ' (reinvested)' : ''}`,
+        secondary: `${d.shares_held} sh × $${d.amount_per_share.toFixed(4)}/sh`,
+        date: exDate,
+        ctaLabel: 'View',
+        onClick: () => expandAndScrollTo(d.ticker),
+      })
+    }
+
+    // Sort by date descending
+    items.sort((a, b) => b.date.getTime() - a.date.getTime())
+    return items
+  }, [checks, reinvestTrades, dividends, recentActivityDays])
+  // ═════════════════════════════════════════════════════════════════
+  // RENDER
+  // ═════════════════════════════════════════════════════════════════
 
   return (
     <div className="flex flex-col min-h-screen" style={{ background: 'var(--bg)', color: 'var(--text)' }}>
 
-      {/* -- Header ---------------------------------------- */}
+      {/* ─── Header ─── */}
       <header className="flex items-center gap-3 px-6 py-3 border-b sticky top-0 z-20"
         style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
         <button onClick={() => router.push('/')}
@@ -563,16 +1071,19 @@ function PortfolioInner() {
           <span className="text-[10px] font-mono px-2 py-0.5 rounded-full"
             style={{ background: 'rgba(167,139,250,0.12)', color: ACCENT, border: '1px solid rgba(167,139,250,0.2)' }}>
             {positions.length} {positions.length === 1 ? 'position' : 'positions'}
+            {stockCount > 0 && optionCount > 0 && (
+              <span style={{ color: 'var(--text3)' }}> · {stockCount}s/{optionCount}o</span>
+            )}
           </span>
         )}
 
-        {/* Tab-specific action buttons */}
+        {/* Action buttons (preserved) */}
         <div className="ml-auto flex items-center gap-2">
-          {tab === 'holdings' && positions.length > 0 && (
+          {positions.length > 0 && (
             <>
               {cachedAge !== null && !analyzing && (
                 <span className="text-[10px] hidden md:inline" style={{ color: 'var(--text3)' }}>
-                  {cachedAge === 0 ? 'just analyzed' : `${cachedAge < 60 ? `${cachedAge}m` : `${Math.round(cachedAge/60)}h`} old`}
+                  {cachedAge === 0 ? 'just analyzed' : `${cachedAge < 60 ? `${cachedAge}m` : `${Math.round(cachedAge / 60)}h`} old`}
                 </span>
               )}
               <button onClick={() => runHealthCheck()} disabled={checking || positions.length === 0}
@@ -593,25 +1104,31 @@ function PortfolioInner() {
               </button>
             </>
           )}
-          <button onClick={() => {
-            if (tab === 'holdings') setShowAdd(true)
-            else if (tab === 'dividends') setShowLogDiv(true)
-            else if (tab === 'reinvest') setShowAddReinvest(true)
-            else if (tab === 'journal') setShowAddJournal(true)
-          }}
+          <button onClick={() => setShowAdd(true)}
             className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
             style={{ background: ACCENT, color: '#0a0d12' }}
-            aria-label={tab === 'holdings' ? 'Add position' : tab === 'dividends' ? 'Log dividend' : tab === 'reinvest' ? 'Add trade' : 'Log journal entry'}>
+            aria-label="Add position">
             <Plus size={12} />
-            <span>
-              {tab === 'holdings' ? 'Add position' : tab === 'dividends' ? 'Log dividend' : tab === 'reinvest' ? 'Add trade' : 'Log trade'}
-            </span>
+            <span>Add</span>
+          </button>
+          <button onClick={() => router.push('/journal')}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
+            style={{ background: 'var(--surface2)', color: 'var(--text2)', border: '1px solid var(--border)' }}
+            aria-label="Open Journal">
+            <BookOpen size={12} /> <span className="hidden sm:inline">Journal</span>
+            <ExternalLink size={10} style={{ opacity: 0.5 }} />
+          </button>
+          <button onClick={() => setShowSettings(true)}
+            className="p-1.5 rounded-lg transition-all hover:opacity-80"
+            style={{ color: 'var(--text3)' }}
+            aria-label="Settings">
+            <Settings size={14} />
           </button>
         </div>
       </header>
 
-      {/* -- Hero strip (only for Holdings tab) ------------------------------- */}
-      {tab === 'holdings' && positions.length > 0 && (
+      {/* ─── Hero strip — portfolio totals (preserved) ─── */}
+      {positions.length > 0 && (
         <div className="border-b px-6 py-5" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
             <div>
@@ -624,11 +1141,10 @@ function PortfolioInner() {
               {cachedAge !== null && (
                 <div className="text-[10px] font-mono mt-1" style={{ color: 'var(--text3)' }}>
                   <Clock size={9} className="inline mr-1" style={{ verticalAlign: 'middle' }} />
-                  {cachedAge === 0 ? 'Live' : `as of ${cachedAge < 60 ? `${cachedAge}m` : `${Math.round(cachedAge/60)}h`} ago`}
+                  {cachedAge === 0 ? 'Live' : `as of ${cachedAge < 60 ? `${cachedAge}m` : `${Math.round(cachedAge / 60)}h`} ago`}
                 </div>
               )}
             </div>
-
             <div>
               <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: 'var(--text3)' }}>
                 Day change
@@ -641,7 +1157,6 @@ function PortfolioInner() {
                 {pct(dayChangePct)} today
               </div>
             </div>
-
             <div>
               <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: 'var(--text3)' }}>
                 Total P/L
@@ -649,12 +1164,10 @@ function PortfolioInner() {
               <div className="text-2xl md:text-3xl font-bold font-mono tabular-nums" style={{ color: pnlColor(totalGainLoss) }}>
                 {totalGainLoss >= 0 ? '+' : ''}${fmt(Math.abs(totalGainLoss))}
               </div>
-              <div className="text-xs font-mono mt-1 flex items-center gap-1" style={{ color: pnlColor(totalGainLoss) }}>
-                {totalGainLoss >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
-                {pct(totalGainLossPct)} all time
+              <div className="text-xs font-mono mt-1" style={{ color: pnlColor(totalGainLoss) }}>
+                {pct(totalGainLossPct)} all-time
               </div>
             </div>
-
             <div>
               <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: 'var(--text3)' }}>
                 Positions
@@ -663,978 +1176,83 @@ function PortfolioInner() {
                 {positions.length}
               </div>
               <div className="text-xs font-mono mt-1" style={{ color: 'var(--text3)' }}>
-                {stockCount} stock{stockCount !== 1 ? 's' : ''} · {optionCount} option{optionCount !== 1 ? 's' : ''}
+                {stockCount} stock{stockCount === 1 ? '' : 's'} · {optionCount} option{optionCount === 1 ? '' : 's'}
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* -- Tab bar ---------------------------------------- */}
-      <div className="flex border-b px-6 gap-1 sticky top-[49px] z-10"
-        style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-        {TABS.map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            className="flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold transition-all border-b-2 hover:opacity-90"
-            style={{
-              borderColor: tab === t.id ? ACCENT : 'transparent',
-              color: tab === t.id ? ACCENT : 'var(--text3)',
-            }}
-            aria-current={tab === t.id ? 'page' : undefined}>
-            {t.icon} {t.label}
-          </button>
-        ))}
-      </div>
-
-      {/* -- Content ---------------------------------------- */}
+      {/* ─── Main content ─── */}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-[1400px] mx-auto px-6 py-5">
 
-          {/* -- HOLDINGS TAB ---------------------------------------- */}
-          {tab === 'holdings' && (
-            <>
-              {/* Health check results */}
-              {checks.length > 0 && (
-                <div className="space-y-2 mb-5">
-                  <div className="flex items-center justify-between px-1">
-                    <div className="flex items-center gap-1.5">
-                      <Stethoscope size={12} style={{ color: 'var(--text3)' }} />
-                      <span className="text-[10px] font-mono uppercase tracking-widest" style={{ color: 'var(--text3)' }}>Position health</span>
-                    </div>
-                    {checkedAt && <span className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>{new Date(checkedAt).toLocaleTimeString()}</span>}
-                  </div>
-                  {checks.map(c => (
-                    <div key={c.ticker} className="rounded-xl overflow-hidden"
-                      style={{ background: VERDICT_BG[c.verdict], border: `1px solid ${VERDICT_COLOR[c.verdict]}22` }}>
-                      <div className="flex items-center gap-2.5 px-3 py-2.5">
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg min-w-[40px] text-center font-mono"
-                          style={{ background: `${VERDICT_COLOR[c.verdict]}18`, color: VERDICT_COLOR[c.verdict] }}>
-                          {c.verdict}
+          {/* ─── Analyzing status ─── */}
+          {analyzing && (
+            <div className="flex items-center gap-3 px-5 py-4 rounded-xl mb-4"
+              style={{ background: 'rgba(167,139,250,0.05)', border: '1px solid rgba(167,139,250,0.18)' }}>
+              <div className="flex gap-1">
+                {[0, 1, 2].map(i => <span key={i} className="w-1.5 h-1.5 rounded-full thinking-dot" style={{ background: ACCENT, animationDelay: `${i * 0.15}s` }} />)}
+              </div>
+              <span className="text-sm font-mono" style={{ color: 'var(--text2)' }}>{statusMsg}</span>
+            </div>
+          )}
+
+          {/* ─── Action Required strip ─── */}
+          {actionRequired.length > 0 && (
+            <div className="mb-5 rounded-xl border overflow-hidden"
+              style={{
+                background: 'var(--surface)',
+                borderColor: actionRequired.some(i => i.severity === 'critical')
+                  ? 'rgba(248,113,113,0.3)'
+                  : 'rgba(251,191,36,0.25)',
+              }}>
+              <button onClick={() => setActionRequiredCollapsed(c => !c)}
+                className="w-full flex items-center gap-2 px-4 py-2.5 hover:opacity-90 transition-opacity"
+                style={{ background: 'rgba(248,113,113,0.06)', borderBottom: actionRequiredCollapsed ? 'none' : '1px solid var(--border)' }}>
+                <AlertTriangle size={13} style={{ color: actionRequired.some(i => i.severity === 'critical') ? DN : FLAT }} />
+                <span className="text-[11px] font-mono uppercase tracking-widest font-bold"
+                  style={{ color: actionRequired.some(i => i.severity === 'critical') ? DN : FLAT }}>
+                  Action Required ({actionRequired.length})
+                </span>
+                <span className="ml-auto text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
+                  {actionRequiredCollapsed ? 'Show' : 'Collapse'}
+                </span>
+                {actionRequiredCollapsed
+                  ? <ChevronRight size={12} style={{ color: 'var(--text3)' }} />
+                  : <ChevronDown size={12} style={{ color: 'var(--text3)' }} />}
+              </button>
+              {!actionRequiredCollapsed && (
+                <div>
+                  {actionRequired.map(item => {
+                    const accentColor = item.severity === 'critical' ? DN : FLAT
+                    const bgColor = item.category === 'TERMINAL' ? 'rgba(220,38,38,0.08)' : undefined
+                    return (
+                      <div key={item.id}
+                        className="flex items-center gap-3 px-4 py-2.5 border-b last:border-b-0"
+                        style={{ borderColor: 'var(--border)', background: bgColor }}>
+                        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded font-bold min-w-[68px] text-center"
+                          style={{
+                            background: item.category === 'TERMINAL' ? `${TERMINAL_RED}30` : `${accentColor}18`,
+                            color: item.category === 'TERMINAL' ? TERMINAL_RED : accentColor,
+                          }}>
+                          {item.category.replace('_', ' ')}
                         </span>
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="font-bold font-mono text-sm">{c.ticker}</span>
-                            {c.optionType && (
-                              <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
-                                style={{ background: c.optionType === 'call' ? 'rgba(52,211,153,0.12)' : 'rgba(248,113,113,0.12)', color: c.optionType === 'call' ? UP : DN }}>
-                                {c.optionType.toUpperCase()} ${c.strike} {c.expiry?.slice(5)}
-                              </span>
-                            )}
-                            <span className="text-[10px] font-mono" style={{ color: c.underlyingChange1D >= 0 ? UP : DN }}>
-                              ${c.underlyingPrice} ({c.underlyingChange1D >= 0 ? '+' : ''}{c.underlyingChange1D}%)
-                            </span>
-                            {c.position_type === 'option' && c.optionPnlPct !== null && (
-                              <span className="text-[10px] font-mono font-bold" style={{ color: c.optionPnlPct >= 0 ? UP : DN }}>
-                                {c.optionPnlPct >= 0 ? '+' : ''}{c.optionPnlPct}% premium
-                              </span>
-                            )}
-                            {c.position_type === 'stock' && c.pnlPct !== null && (
-                              <span className="text-[10px] font-mono font-bold" style={{ color: c.pnlPct >= 0 ? UP : DN }}>
-                                {c.pnlPct >= 0 ? '+' : ''}{c.pnlPct}% P/L
-                              </span>
-                            )}
+                          <div className="text-xs font-semibold truncate" style={{ color: 'var(--text)' }}>
+                            {item.primary}
                           </div>
-                          <p className="text-[11px] mt-0.5 leading-relaxed" style={{ color: 'var(--text2)' }}>{c.reason}</p>
-                          {/* Options Greeks row */}
-                          {c.position_type === 'option' && (c.delta !== null || c.theta !== null || c.impliedVolatility !== null) && (
-                            <div className="flex gap-2 mt-1 flex-wrap">
-                              {c.currentPremium !== null && (
-                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'rgba(167,139,250,0.1)', color: ACCENT }}>
-                                  ${c.currentPremium}
-                                </span>
-                              )}
-                              {c.delta !== null && (
-                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'rgba(96,165,250,0.08)', color: '#60a5fa' }}>
-                                  Δ {c.delta}
-                                </span>
-                              )}
-                              {c.theta !== null && (
-                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'rgba(248,113,113,0.08)', color: DN }}>
-                                  θ {c.theta}/d
-                                </span>
-                              )}
-                              {c.impliedVolatility !== null && (
-                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.08)', color: FLAT }}>
-                                  IV {(c.impliedVolatility*100).toFixed(0)}%
-                                </span>
-                              )}
-                              {c.daysToExpiry !== null && (
-                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded"
-                                  style={{ background: c.timeDecayUrgent ? 'rgba(248,113,113,0.12)' : 'var(--surface2)', color: c.timeDecayUrgent ? DN : 'var(--text3)' }}>
-                                  {c.daysToExpiry}d left
-                                </span>
-                              )}
-                              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded capitalize"
-                                style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>
-                                {c.moneyness?.replace('_', ' ')}
-                              </span>
+                          {item.secondary && (
+                            <div className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--text2)' }}>
+                              → {item.secondary}
                             </div>
                           )}
                         </div>
-                        <button onClick={() => runHealthCheck(c.ticker)} disabled={checkTicker === c.ticker}
-                          className="shrink-0 p-1.5 rounded-lg hover:opacity-80 disabled:opacity-30 transition-opacity"
-                          style={{ color: 'var(--text3)' }}
-                          aria-label={`Re-check ${c.ticker}`}>
-                          {checkTicker === c.ticker
-                            ? <div className="w-3 h-3 rounded-full border border-t-transparent animate-spin" style={{ borderColor: 'var(--text3)', borderTopColor: 'transparent' }} />
-                            : <RefreshCw size={12} />}
+                        <button onClick={item.onClick}
+                          className="shrink-0 text-[10px] font-semibold px-2.5 py-1 rounded-lg hover:opacity-80 transition-opacity"
+                          style={{ background: `${accentColor}15`, color: accentColor, border: `1px solid ${accentColor}30` }}>
+                          {item.ctaLabel}
                         </button>
-                      </div>
-                      <div className="px-3 pb-2">
-                        <p className="text-[10px] font-semibold" style={{ color: VERDICT_COLOR[c.verdict] }}>
-                          → {c.action}
-                        </p>
-                      </div>
-                      {c.flags.length > 0 && (
-                        <div className="px-3 pb-2.5 flex flex-wrap gap-1">
-                          {c.flags.map(f => (
-                            <span key={f} className="text-[9px] px-1.5 py-0.5 rounded-full font-mono"
-                              style={{ background: 'var(--surface2)', color: 'var(--text3)', border: '1px solid var(--border)' }}>
-                              {f}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Empty state */}
-              {!loadingHoldings && positions.length === 0 && (
-                <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
-                  <div className="p-4 rounded-full" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-                    <Briefcase size={32} style={{ color: 'var(--text3)' }} />
-                  </div>
-                  <div className="text-lg font-bold" style={{ color: 'var(--text)' }}>No positions yet</div>
-                  <p className="text-sm max-w-sm" style={{ color: 'var(--text2)' }}>
-                    Add your holdings to get AI portfolio analysis — concentration risk, earnings events, and rebalancing suggestions.
-                  </p>
-                  <button onClick={() => setShowAdd(true)}
-                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold mt-2 transition-all hover:opacity-90"
-                    style={{ background: ACCENT, color: '#0a0d12' }}
-                    aria-label="Add your first position">
-                    <Plus size={14} /> Add your first position
-                  </button>
-                </div>
-              )}
-
-              {/* Analyzing spinner */}
-              {analyzing && (
-                <div className="flex items-center gap-3 px-5 py-4 rounded-xl mb-4"
-                  style={{ background: 'rgba(167,139,250,0.05)', border: '1px solid rgba(167,139,250,0.18)' }}>
-                  <div className="flex gap-1">{[0,1,2].map(i => <span key={i} className="w-1.5 h-1.5 rounded-full thinking-dot" style={{ background: ACCENT, animationDelay: `${i*0.15}s` }} />)}</div>
-                  <span className="text-sm font-mono" style={{ color: 'var(--text2)' }}>{statusMsg}</span>
-                </div>
-              )}
-
-              {/* Main layout: positions table + right rail */}
-              {positions.length > 0 && (
-                <div className="grid grid-cols-1 xl:grid-cols-[1fr_320px] gap-5">
-
-                  {/* -- Positions table ------------------------------------ */}
-                  <div className="rounded-xl border overflow-hidden"
-                    style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                    {/* Column headers */}
-                    <div className="grid items-center gap-3 px-4 py-2.5 border-b text-[10px] font-mono uppercase tracking-wider"
-                      style={{
-                        borderColor: 'var(--border)',
-                        gridTemplateColumns: 'minmax(130px,1.4fr) 80px 1fr 1fr 1fr 1fr 0.9fr 70px',
-                        color: 'var(--text3)',
-                      }}>
-                      <SortHeader k="ticker" label="Ticker" align="left" />
-                      <div className="text-right">Qty</div>
-                      <div className="text-right">Current</div>
-                      <SortHeader k="day" label="Day" />
-                      <div className="text-right">Value</div>
-                      <SortHeader k="pnl" label="P/L" />
-                      <SortHeader k="signal" label="Signal" />
-                      <div />
-                    </div>
-
-                    {/* Rows */}
-                    <div>
-                      {sortedPositions.map((pos, idx) => {
-                        const data = positionData.find(p => p.ticker === pos.ticker)
-                        const isOption = pos.position_type === 'option'
-                        const daysToExpiry = pos.expiry ? Math.ceil((new Date(pos.expiry).getTime() - Date.now()) / 86400000) : null
-                        const expiryUrgent = daysToExpiry !== null && daysToExpiry <= 7
-                        const expiryExpired = daysToExpiry !== null && daysToExpiry < 0
-                        const signalC = data ? SIG_COLOR[data.signal] : 'var(--text3)'
-                        const isExpanded = expandedRow === pos.id
-                        const alloc = totalValue > 0 && data ? (data.marketValue / totalValue) * 100 : 0
-
-                        return (
-                          <div key={pos.id} style={{ borderTop: idx === 0 ? 'none' : '1px solid var(--border)' }}>
-                            {/* Main row */}
-                            <button
-                              onClick={() => setExpandedRow(isExpanded ? null : pos.id)}
-                              className="grid items-center gap-3 px-4 py-3 w-full text-left hover:bg-white/[0.02] transition-colors"
-                              style={{
-                                gridTemplateColumns: 'minmax(130px,1.4fr) 80px 1fr 1fr 1fr 1fr 0.9fr 70px',
-                                borderLeft: isOption
-                                  ? `3px solid ${pos.option_type === 'call' ? 'rgba(52,211,153,0.5)' : 'rgba(248,113,113,0.5)'}`
-                                  : '3px solid transparent',
-                              }}
-                              aria-expanded={isExpanded}
-                              aria-label={`${pos.ticker} — tap to ${isExpanded ? 'collapse' : 'expand'}`}>
-                              {/* Ticker column */}
-                              <div className="flex items-center gap-2 min-w-0">
-                                <ChevronRight size={12}
-                                  style={{
-                                    color: 'var(--text3)',
-                                    transform: isExpanded ? 'rotate(90deg)' : 'none',
-                                    transition: 'transform 0.15s',
-                                  }} />
-                                <div className="min-w-0">
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="font-mono font-bold text-sm">{pos.ticker}</span>
-                                    {isOption && (
-                                      <span className="text-[9px] font-bold px-1 py-0.5 rounded font-mono"
-                                        style={{
-                                          background: pos.option_type === 'call' ? 'rgba(52,211,153,0.12)' : 'rgba(248,113,113,0.12)',
-                                          color: pos.option_type === 'call' ? UP : DN,
-                                        }}>
-                                        {pos.option_type?.toUpperCase()} {pos.strike}
-                                      </span>
-                                    )}
-                                  </div>
-                                  {isOption ? (
-                                    <div className="text-[10px] font-mono mt-0.5" style={{ color: expiryExpired ? DN : expiryUrgent ? DN : 'var(--text3)' }}>
-                                      {expiryExpired ? 'Expired' : `${daysToExpiry}d · ${pos.expiry}`}
-                                    </div>
-                                  ) : (
-                                    pos.avg_cost && (
-                                      <div className="text-[10px] font-mono mt-0.5" style={{ color: 'var(--text3)' }}>
-                                        @ ${pos.avg_cost.toFixed(2)}
-                                      </div>
-                                    )
-                                  )}
-                                </div>
-                              </div>
-
-                              {/* Qty */}
-                              <div className="text-right font-mono text-xs tabular-nums" style={{ color: 'var(--text2)' }}>
-                                {isOption
-                                  ? `${pos.contracts || 1}x`
-                                  : pos.shares % 1 === 0 ? pos.shares.toString() : pos.shares.toFixed(4)}
-                              </div>
-
-                              {/* Current price */}
-                              <div className="text-right font-mono text-xs tabular-nums" style={{ color: 'var(--text)' }}>
-                                {data ? `$${fmt(data.currentPrice)}` : <span style={{ color: 'var(--text3)' }}>—</span>}
-                              </div>
-
-                              {/* Day change */}
-                              <div className="text-right font-mono text-xs tabular-nums" style={{ color: data ? pnlColor(data.priceChange1D) : 'var(--text3)' }}>
-                                {data ? pct(data.priceChange1D) : '—'}
-                              </div>
-
-                              {/* Market value */}
-                              <div className="text-right font-mono text-xs tabular-nums" style={{ color: 'var(--text)' }}>
-                                {data ? `$${fmt(data.marketValue)}` : <span style={{ color: 'var(--text3)' }}>—</span>}
-                              </div>
-
-                              {/* P/L % */}
-                              <div className="text-right font-mono text-xs tabular-nums"
-                                style={{ color: data && data.gainLossPct !== null ? pnlColor(data.gainLossPct) : 'var(--text3)' }}>
-                                {data?.gainLossPct !== null && data?.gainLossPct !== undefined ? pct(data.gainLossPct) : '—'}
-                              </div>
-
-                              {/* Signal */}
-                              <div className="text-right">
-                                {data?.signal ? (
-                                  <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded"
-                                    style={{ background: `${signalC}18`, color: signalC }}>
-                                    {data.signal.slice(0, 4)}
-                                  </span>
-                                ) : (
-                                  <span className="text-[10px]" style={{ color: 'var(--text3)' }}>—</span>
-                                )}
-                              </div>
-
-                              {/* Action column */}
-                              <div className="flex justify-end gap-1">
-                                {data?.daysToEarnings != null && data.daysToEarnings <= 14 && (
-                                  <span className="text-[9px] font-mono px-1 py-0.5 rounded"
-                                    style={{ background: 'rgba(251,191,36,0.1)', color: FLAT }}
-                                    title={`Earnings in ${data.daysToEarnings} days`}>
-                                    E{data.daysToEarnings}
-                                  </span>
-                                )}
-                              </div>
-                            </button>
-
-                            {/* Expanded row */}
-                            {isExpanded && (
-                              <div className="px-4 pb-4 pt-1 border-t" style={{ borderColor: 'var(--border)', background: 'var(--surface2)' }}>
-                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 py-3">
-                                  {/* Allocation */}
-                                  <div>
-                                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>Allocation</div>
-                                    <div className="text-sm font-bold font-mono" style={{ color: 'var(--text)' }}>
-                                      {alloc.toFixed(1)}%
-                                    </div>
-                                    <div className="h-1 rounded-full mt-1.5 overflow-hidden" style={{ background: 'var(--border)' }}>
-                                      <div className="h-full rounded-full"
-                                        style={{ width: `${Math.min(alloc, 100)}%`, background: alloc > 25 ? FLAT : ACCENT }} />
-                                    </div>
-                                  </div>
-                                  {/* Sector */}
-                                  {data?.sector && (
-                                    <div>
-                                      <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>Sector</div>
-                                      <div className="text-sm font-semibold" style={{ color: 'var(--text)' }}>{data.sector}</div>
-                                    </div>
-                                  )}
-                                  {/* Analyst target */}
-                                  {data?.analystTarget && (
-                                    <div>
-                                      <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>Analyst target</div>
-                                      <div className="text-sm font-bold font-mono" style={{ color: 'var(--text)' }}>
-                                        ${fmt(data.analystTarget)}
-                                      </div>
-                                      <div className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>{data.analystConsensus}</div>
-                                    </div>
-                                  )}
-                                  {/* RSI */}
-                                  {data?.rsi !== null && data?.rsi !== undefined && (
-                                    <div>
-                                      <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>RSI</div>
-                                      <div className="text-sm font-bold font-mono"
-                                        style={{ color: data.rsi > 70 ? DN : data.rsi < 30 ? UP : 'var(--text)' }}>
-                                        {data.rsi.toFixed(0)}
-                                      </div>
-                                      <div className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
-                                        {data.rsi > 70 ? 'overbought' : data.rsi < 30 ? 'oversold' : 'neutral'}
-                                      </div>
-                                    </div>
-                                  )}
-                                  {/* Option specifics */}
-                                  {isOption && pos.entry_premium && (
-                                    <div>
-                                      <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>Entry premium</div>
-                                      <div className="text-sm font-bold font-mono" style={{ color: 'var(--text)' }}>
-                                        ${pos.entry_premium.toFixed(2)}
-                                      </div>
-                                      <div className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
-                                        ${((pos.entry_premium || 0) * (pos.contracts || 1) * 100).toFixed(0)} cost
-                                      </div>
-                                    </div>
-                                  )}
-                                  {/* Earnings */}
-                                  {data?.daysToEarnings != null && data.daysToEarnings <= 30 && (
-                                    <div>
-                                      <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>Next earnings</div>
-                                      <div className="text-sm font-bold font-mono" style={{ color: FLAT }}>
-                                        {data.daysToEarnings}d
-                                      </div>
-                                      {data.earningsDate && (
-                                        <div className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>{data.earningsDate}</div>
-                                      )}
-                                    </div>
-                                  )}
-                                </div>
-
-                                {/* Action row */}
-                                <div className="flex items-center gap-2 pt-2 border-t" style={{ borderColor: 'var(--border)' }}>
-                                  <button onClick={(e) => { e.stopPropagation(); router.push(`/?ticker=${pos.ticker}`) }}
-                                    className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
-                                    style={{ background: 'rgba(167,139,250,0.1)', color: ACCENT, border: '1px solid rgba(167,139,250,0.22)' }}>
-                                    <Activity size={12} /> Analyze
-                                  </button>
-                                  <button onClick={(e) => { e.stopPropagation(); runHealthCheck(pos.ticker) }}
-                                    disabled={checkTicker === pos.ticker}
-                                    className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40"
-                                    style={{ background: 'rgba(248,113,113,0.08)', color: DN, border: '1px solid rgba(248,113,113,0.22)' }}>
-                                    <Stethoscope size={12} /> {checkTicker === pos.ticker ? 'Checking...' : 'Check'}
-                                  </button>
-                                  <div className="ml-auto">
-                                    <button onClick={(e) => { e.stopPropagation(); removePosition(pos.ticker) }}
-                                      className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
-                                      style={{ background: 'var(--surface)', color: 'var(--text3)', border: '1px solid var(--border)' }}
-                                      aria-label={`Remove ${pos.ticker} from portfolio`}>
-                                      <Trash2 size={12} /> Remove
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-
-                  {/* -- Right rail ---------------------------------------- */}
-                  <aside className="space-y-4">
-
-                    {/* Signals summary */}
-                    {metrics && (
-                      <div className="rounded-xl border p-4" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                        <div className="flex items-center gap-1.5 mb-3">
-                          <Activity size={12} style={{ color: 'var(--text3)' }} />
-                          <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: 'var(--text3)' }}>Signals</span>
-                        </div>
-                        <div className="grid grid-cols-3 gap-2">
-                          {[
-                            { label: 'Bull', count: metrics.signals.BULLISH, color: UP },
-                            { label: 'Neutral', count: metrics.signals.NEUTRAL, color: FLAT },
-                            { label: 'Bear', count: metrics.signals.BEARISH, color: DN },
-                          ].map(s => (
-                            <div key={s.label}
-                              className="rounded-lg py-2 text-center"
-                              style={{ background: `${s.color}10`, border: `1px solid ${s.color}22` }}>
-                              <div className="text-lg font-bold font-mono" style={{ color: s.color }}>{s.count}</div>
-                              <div className="text-[9px] font-mono uppercase" style={{ color: s.color }}>{s.label}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Sector concentration */}
-                    {metrics && metrics.sectorConcentration.length > 0 && (
-                      <div className="rounded-xl border p-4" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                        <div className="flex items-center gap-1.5 mb-3">
-                          <PieChart size={12} style={{ color: 'var(--text3)' }} />
-                          <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: 'var(--text3)' }}>Sector concentration</span>
-                        </div>
-                        <div className="space-y-2.5">
-                          {metrics.sectorConcentration.slice(0, 5).map(s => (
-                            <div key={s.sector}>
-                              <div className="flex justify-between text-xs mb-1">
-                                <span style={{ color: 'var(--text2)' }}>{s.sector}</span>
-                                <span className="font-mono tabular-nums" style={{ color: 'var(--text)' }}>{s.pct.toFixed(1)}%</span>
-                              </div>
-                              <div className="h-1 rounded-full overflow-hidden" style={{ background: 'var(--surface2)' }}>
-                                <div className="h-full rounded-full"
-                                  style={{ width: `${s.pct}%`, background: s.pct > 40 ? DN : s.pct > 25 ? FLAT : ACCENT }} />
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Upcoming earnings */}
-                    {metrics && metrics.upcomingEarnings.length > 0 && (
-                      <div className="rounded-xl border p-4" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                        <div className="flex items-center gap-1.5 mb-3">
-                          <Calendar size={12} style={{ color: 'var(--text3)' }} />
-                          <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: 'var(--text3)' }}>Upcoming earnings</span>
-                        </div>
-                        <div className="space-y-1.5">
-                          {metrics.upcomingEarnings.slice(0, 6).map(p => (
-                            <button key={p.ticker}
-                              onClick={() => router.push(`/?ticker=${p.ticker}`)}
-                              className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-left transition-all hover:opacity-80"
-                              style={{ background: 'var(--surface2)' }}>
-                              <span className="font-mono font-bold text-xs">{p.ticker}</span>
-                              <span className="text-[10px] font-mono tabular-nums"
-                                style={{ color: (p.daysToEarnings ?? 99) <= 7 ? DN : FLAT }}>
-                                {p.earningsDate} ({p.daysToEarnings}d)
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* AI portfolio take */}
-                    {analysis && (
-                      <div className="rounded-xl border p-4"
-                        style={{ background: 'var(--surface)', borderColor: `${SIG_COLOR[analysis.overallSignal]}33` }}>
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-1.5">
-                            <Zap size={12} style={{ color: SIG_COLOR[analysis.overallSignal] }} />
-                            <span className="text-[10px] font-mono uppercase tracking-wider font-bold" style={{ color: SIG_COLOR[analysis.overallSignal] }}>
-                              {analysis.overallSignal}
-                            </span>
-                          </div>
-                          <div className="text-xl font-bold font-mono"
-                            style={{ color: analysis.portfolioScore >= 60 ? UP : analysis.portfolioScore >= 40 ? FLAT : DN }}>
-                            {analysis.portfolioScore}
-                          </div>
-                        </div>
-                        <h3 className="text-sm font-bold leading-snug mb-2" style={{ color: 'var(--text)' }}>{analysis.headline}</h3>
-                        <p className="text-xs leading-relaxed mb-3" style={{ color: 'var(--text2)' }}>{analysis.summary}</p>
-
-                        {analysis.topRisks.length > 0 && (
-                          <div className="mb-3 pb-3 border-b" style={{ borderColor: 'var(--border)' }}>
-                            <div className="flex items-center gap-1 mb-1.5">
-                              <AlertTriangle size={10} style={{ color: DN }} />
-                              <span className="text-[9px] font-mono uppercase tracking-wider font-semibold" style={{ color: DN }}>Top risk</span>
-                            </div>
-                            <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{analysis.topRisks[0].risk}</p>
-                            <div className="flex gap-1 mt-1.5 flex-wrap">
-                              {analysis.topRisks[0].tickers.map(t => (
-                                <span key={t} className="text-[9px] font-mono px-1 py-0.5 rounded"
-                                  style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>
-                                  {t}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {analysis.opportunities.length > 0 && (
-                          <div className="mb-3 pb-3 border-b" style={{ borderColor: 'var(--border)' }}>
-                            <div className="flex items-center gap-1 mb-1.5">
-                              <Target size={10} style={{ color: UP }} />
-                              <span className="text-[9px] font-mono uppercase tracking-wider font-semibold" style={{ color: UP }}>Opportunity</span>
-                            </div>
-                            <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{analysis.opportunities[0].opportunity}</p>
-                            <div className="flex gap-1 mt-1.5 flex-wrap">
-                              {analysis.opportunities[0].tickers.map(t => (
-                                <span key={t} className="text-[9px] font-mono px-1 py-0.5 rounded"
-                                  style={{ background: 'rgba(52,211,153,0.1)', color: UP }}>
-                                  {t}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {analysis.actionPlan && (
-                          <div>
-                            <div className="flex items-center gap-1 mb-1.5">
-                              <Flame size={10} style={{ color: ACCENT }} />
-                              <span className="text-[9px] font-mono uppercase tracking-wider font-semibold" style={{ color: ACCENT }}>Action plan</span>
-                            </div>
-                            <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{analysis.actionPlan}</p>
-                          </div>
-                        )}
-
-                        <p className="text-[9px] mt-3" style={{ color: 'var(--text3)' }}>
-                          For informational purposes only. Not financial advice.
-                        </p>
-                      </div>
-                    )}
-                  </aside>
-                </div>
-              )}
-            </>
-          )}
-
-          {/* -- DIVIDENDS TAB ---------------------------------------- */}
-          {tab === 'dividends' && (
-            <div className="space-y-4">
-              {/* Summary strip */}
-              <div className="grid grid-cols-3 gap-4">
-                {[
-                  { label: 'Total received', val: `$${totalDividends.toFixed(2)}`, color: UP },
-                  { label: 'Reinvested', val: `$${reinvestedDividends.toFixed(2)}`, color: ACCENT },
-                  { label: 'Cash kept', val: `$${(totalDividends - reinvestedDividends).toFixed(2)}`, color: FLAT },
-                ].map(s => (
-                  <div key={s.label} className="rounded-xl border p-4"
-                    style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1.5" style={{ color: 'var(--text3)' }}>{s.label}</div>
-                    <div className="text-2xl font-bold font-mono tabular-nums" style={{ color: s.color }}>{s.val}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Upcoming dividends */}
-              {divSchedule.length > 0 && (
-                <div className="rounded-xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                  <div className="flex items-center gap-1.5 px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
-                    <Calendar size={12} style={{ color: 'var(--text3)' }} />
-                    <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: 'var(--text3)' }}>Upcoming dividends</span>
-                  </div>
-                  <div>
-                    {divSchedule.slice(0, 10).map((d, i) => (
-                      <div key={i} className="flex items-center gap-4 px-4 py-2.5"
-                        style={{ borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
-                        <span className="font-mono font-bold text-sm w-16">{d.ticker}</span>
-                        <span className="text-xs" style={{ color: 'var(--text2)' }}>Ex: {d.ex_date}</span>
-                        {d.pay_date && <span className="text-xs" style={{ color: 'var(--text3)' }}>Pay: {d.pay_date}</span>}
-                        {d.amount && <span className="text-xs font-mono tabular-nums" style={{ color: UP }}>${d.amount.toFixed(4)}/sh</span>}
-                        {d.frequency && <span className="text-[10px] px-1.5 py-0.5 rounded font-mono"
-                          style={{ background: 'rgba(167,139,250,0.1)', color: ACCENT }}>{d.frequency}</span>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Empty state */}
-              {loadingDividends && <div className="text-center py-10 text-sm" style={{ color: 'var(--text3)' }}>Loading dividends...</div>}
-              {!loadingDividends && dividends.length === 0 && (
-                <div className="flex flex-col items-center py-16 gap-3 text-center">
-                  <div className="p-4 rounded-full" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-                    <DollarSign size={28} style={{ color: 'var(--text3)' }} />
-                  </div>
-                  <div className="text-base font-bold" style={{ color: 'var(--text2)' }}>No dividends logged yet</div>
-                  <p className="text-sm max-w-sm" style={{ color: 'var(--text3)' }}>
-                    Track dividends you receive and whether you reinvested them. Wali-OS fetches upcoming dividend dates for your portfolio automatically.
-                  </p>
-                  <button onClick={() => setShowLogDiv(true)}
-                    className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold mt-2 transition-all hover:opacity-90"
-                    style={{ background: UP, color: '#0a0d12' }}
-                    aria-label="Log first dividend">
-                    <Plus size={13} /> Log first dividend
-                  </button>
-                </div>
-              )}
-
-              {/* Dividend history */}
-              {dividends.length > 0 && (
-                <div className="rounded-xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                  <div className="flex items-center gap-1.5 px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
-                    <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: 'var(--text3)' }}>Dividend history</span>
-                  </div>
-                  <div>
-                    {dividends.map((d, i) => (
-                      <div key={d.id} className="flex items-center gap-3 px-4 py-3"
-                        style={{ borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
-                        <div className="flex-1 flex items-center gap-3 flex-wrap">
-                          <span className="font-mono font-bold text-sm">{d.ticker}</span>
-                          <span className="text-xs" style={{ color: 'var(--text3)' }}>{d.ex_date}</span>
-                          <span className="text-xs font-mono tabular-nums" style={{ color: UP }}>${d.total_received.toFixed(2)}</span>
-                          <span className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
-                            ${d.amount_per_share.toFixed(4)}/sh × {d.shares_held}
-                          </span>
-                          {d.reinvested && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-bold"
-                              style={{ background: 'rgba(167,139,250,0.12)', color: ACCENT }}>
-                              <Repeat2 size={9} className="inline mr-0.5" style={{ verticalAlign: 'middle' }} />
-                              DRIP {d.reinvest_shares ? `+${d.reinvest_shares}` : ''}
-                            </span>
-                          )}
-                        </div>
-                        <button onClick={() => deleteDiv(d.id)}
-                          className="p-1.5 rounded-lg hover:opacity-80"
-                          style={{ color: DN }}
-                          aria-label={`Delete ${d.ticker} dividend record`}>
-                          <Trash2 size={12} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* -- REINVEST TAB ---------------------------------------- */}
-          {tab === 'reinvest' && (
-            <div className="space-y-4">
-              {/* Summary strip */}
-              <div className="grid grid-cols-3 gap-4">
-                {[
-                  { label: 'Open trades', val: `${openReinvestTrades.length}`, color: ACCENT },
-                  { label: 'Realized P/L', val: `${realizedReinvestPnL >= 0 ? '+' : ''}$${realizedReinvestPnL.toFixed(2)}`, color: pnlColor(realizedReinvestPnL) },
-                  { label: 'Dividend capital', val: `$${reinvestedDividends.toFixed(2)}`, color: FLAT },
-                ].map(s => (
-                  <div key={s.label} className="rounded-xl border p-4"
-                    style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1.5" style={{ color: 'var(--text3)' }}>{s.label}</div>
-                    <div className="text-2xl font-bold font-mono tabular-nums" style={{ color: s.color }}>{s.val}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Quick-add from holdings */}
-              {positions.length > 0 && (
-                <div className="rounded-xl border p-4"
-                  style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                  <div className="text-[10px] font-mono uppercase tracking-wider mb-2" style={{ color: 'var(--text3)' }}>Your holdings — tap to prefill</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {positions.map(p => {
-                      const alreadyTracked = reinvestTrades.some(t => t.ticker === p.ticker && !t.exit_price)
-                      return (
-                        <button key={p.ticker}
-                          onClick={() => { setRTicker(p.ticker); setShowAddReinvest(true) }}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold transition-all hover:opacity-80"
-                          style={{
-                            background: alreadyTracked ? 'rgba(52,211,153,0.1)' : 'var(--surface2)',
-                            color: alreadyTracked ? UP : 'var(--text2)',
-                            border: `1px solid ${alreadyTracked ? 'rgba(52,211,153,0.22)' : 'var(--border)'}`,
-                          }}>
-                          {alreadyTracked && <Check size={9} />}
-                          {p.ticker}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {loadingReinvest && <div className="text-center py-10 text-sm" style={{ color: 'var(--text3)' }}>Loading...</div>}
-
-              {!loadingReinvest && reinvestTrades.length === 0 && (
-                <div className="flex flex-col items-center py-16 gap-3 text-center">
-                  <div className="p-4 rounded-full" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-                    <RotateCw size={28} style={{ color: 'var(--text3)' }} />
-                  </div>
-                  <div className="text-base font-bold" style={{ color: 'var(--text2)' }}>No reinvestment trades yet</div>
-                  <p className="text-sm max-w-sm" style={{ color: 'var(--text3)' }}>
-                    Log trades you make using dividend income. Track how your reinvestment capital performs separately from your main portfolio.
-                  </p>
-                </div>
-              )}
-
-              {reinvestTrades.length > 0 && (
-                <div className="rounded-xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                  <div>
-                    {reinvestTrades.map((t, i) => {
-                      const isOpen = !t.exit_price
-                      return (
-                        <div key={t.id} className="flex items-center gap-3 px-4 py-3"
-                          style={{ borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-mono font-bold text-sm">{t.ticker}</span>
-                              <span className="text-xs font-mono" style={{ color: 'var(--text3)' }}>
-                                {t.shares} @ ${t.entry_price.toFixed(2)}
-                              </span>
-                              {isOpen ? (
-                                <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded"
-                                  style={{ background: 'rgba(52,211,153,0.1)', color: UP }}>OPEN</span>
-                              ) : (
-                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded"
-                                  style={{ background: 'var(--surface2)', color: 'var(--text3)' }}>CLOSED</span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-3 mt-0.5">
-                              {t.currentPrice && <span className="text-xs font-mono tabular-nums" style={{ color: 'var(--text2)' }}>${t.currentPrice.toFixed(2)}</span>}
-                              {t.pnl != null && <span className="text-[11px] font-mono tabular-nums" style={{ color: pnlColor(t.pnl) }}>{t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}</span>}
-                              {t.pnlPct != null && <span className="text-[11px] font-mono tabular-nums" style={{ color: pnlColor(t.pnlPct) }}>{t.pnlPct >= 0 ? '+' : ''}{t.pnlPct.toFixed(2)}%</span>}
-                              {t.notes && <span className="text-[10px] truncate max-w-[180px]" style={{ color: 'var(--text3)' }}>{t.notes}</span>}
-                            </div>
-                          </div>
-                          <div className="flex gap-1.5">
-                            <button onClick={() => router.push(`/?ticker=${t.ticker}`)}
-                              className="flex items-center gap-1 text-[10px] font-mono px-2 py-1 rounded-lg transition-all hover:opacity-80"
-                              style={{ background: 'rgba(167,139,250,0.1)', color: ACCENT, border: '1px solid rgba(167,139,250,0.22)' }}>
-                              <Activity size={10} /> Analyze
-                            </button>
-                            <button onClick={() => deleteReinvestTrade(t.id)}
-                              className="p-1.5 rounded-lg hover:opacity-80"
-                              style={{ color: DN }}
-                              aria-label={`Delete ${t.ticker} trade`}>
-                              <Trash2 size={12} />
-                            </button>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* -- JOURNAL TAB ---------------------------------------- */}
-          {tab === 'journal' && (
-            <div className="space-y-4">
-              {/* Summary strip */}
-              <div className="grid grid-cols-3 gap-4">
-                {[
-                  { label: 'Win rate', val: journalStats.winRate != null ? `${journalStats.winRate.toFixed(0)}%` : '—', color: journalStats.winRate != null && journalStats.winRate >= 50 ? UP : DN },
-                  { label: 'Avg P/L', val: journalStats.avgPnl != null ? `${journalStats.avgPnl >= 0 ? '+' : ''}${journalStats.avgPnl.toFixed(1)}%` : '—', color: journalStats.avgPnl != null ? pnlColor(journalStats.avgPnl) : 'var(--text3)' },
-                  { label: 'Total trades', val: `${journalStats.totalTrades}`, color: 'var(--text)' },
-                ].map(s => (
-                  <div key={s.label} className="rounded-xl border p-4"
-                    style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                    <div className="text-[10px] font-mono uppercase tracking-wider mb-1.5" style={{ color: 'var(--text3)' }}>{s.label}</div>
-                    <div className="text-2xl font-bold font-mono tabular-nums" style={{ color: s.color }}>{s.val}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Journal coverage chips */}
-              {!loadingJournal && positions.length > 0 && (
-                <div className="rounded-xl border p-4" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                  <div className="text-[10px] font-mono uppercase tracking-wider mb-2" style={{ color: 'var(--text3)' }}>Journal coverage</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {positions.map(p => {
-                      const hasEntry = journalEntries.some(e => e.ticker === p.ticker)
-                      const openEntry = journalEntries.find(e => e.ticker === p.ticker && e.outcome === 'pending')
-                      return (
-                        <button key={p.ticker}
-                          onClick={() => router.push(`/?ticker=${p.ticker}`)}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold transition-all hover:opacity-80"
-                          style={{
-                            background: openEntry ? 'rgba(251,191,36,0.1)' : hasEntry ? 'rgba(52,211,153,0.1)' : 'var(--surface2)',
-                            color: openEntry ? FLAT : hasEntry ? UP : 'var(--text2)',
-                            border: `1px solid ${openEntry ? 'rgba(251,191,36,0.22)' : hasEntry ? 'rgba(52,211,153,0.22)' : 'var(--border)'}`,
-                          }}
-                          title={openEntry ? 'Open trade' : hasEntry ? 'Has journal entries' : 'No journal entry — analyze to add'}>
-                          {openEntry ? <Clock size={9} /> : hasEntry ? <Check size={9} /> : null}
-                          {p.ticker}
-                        </button>
-                      )
-                    })}
-                  </div>
-                  <div className="text-[9px] mt-2" style={{ color: 'var(--text3)' }}>journaled · open trade · not yet tracked</div>
-                </div>
-              )}
-
-              {loadingJournal && <div className="text-center py-10 text-sm" style={{ color: 'var(--text3)' }}>Loading journal...</div>}
-
-              {!loadingJournal && journalEntries.length === 0 && (
-                <div className="flex flex-col items-center py-16 gap-3 text-center">
-                  <div className="p-4 rounded-full" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-                    <BookOpen size={28} style={{ color: 'var(--text3)' }} />
-                  </div>
-                  <div className="text-base font-bold" style={{ color: 'var(--text2)' }}>No journal entries yet</div>
-                  <p className="text-sm max-w-sm" style={{ color: 'var(--text3)' }}>
-                    After running a council analysis, tap the verdict dropdown and select &quot;Log to Journal&quot; to track your trades here.
-                  </p>
-                </div>
-              )}
-
-              {journalEntries.length > 0 && (
-                <div className="rounded-xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                  {journalEntries.map((entry, i) => {
-                    const isOpen = entry.outcome === 'pending'
-                    const isExpanded = expandedEntry === entry.id
-                    const signalC = SIG_COLOR[entry.signal] || '#94a3b8'
-                    return (
-                      <div key={entry.id} style={{ borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
-                        <button
-                          onClick={() => setExpandedEntry(isExpanded ? null : entry.id)}
-                          className="flex items-center gap-3 px-4 py-3 w-full text-left hover:bg-white/[0.02] transition-colors">
-                          <ChevronRight size={12}
-                            style={{
-                              color: 'var(--text3)',
-                              transform: isExpanded ? 'rotate(90deg)' : 'none',
-                              transition: 'transform 0.15s',
-                            }} />
-                          <div className="flex items-center gap-1.5">
-                            {outcomeIcon(entry.outcome)}
-                            <span className="font-bold font-mono text-sm">{entry.ticker}</span>
-                            {entry.position_type === 'option' && entry.option_type && (
-                              <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
-                                style={{ background: entry.option_type === 'call' ? 'rgba(52,211,153,0.12)' : 'rgba(248,113,113,0.12)', color: entry.option_type === 'call' ? UP : DN }}>
-                                {entry.option_type.toUpperCase()} ${entry.strike} {entry.expiry?.slice(0,10)}
-                              </span>
-                            )}
-                          </div>
-                          <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded"
-                            style={{ background: `${signalC}15`, color: signalC }}>{entry.signal}</span>
-                          {entry.pnl_percent != null && (
-                            <span className="text-xs font-mono tabular-nums" style={{ color: pnlColor(entry.pnl_percent) }}>
-                              {entry.pnl_percent >= 0 ? '+' : ''}{entry.pnl_percent.toFixed(1)}%
-                            </span>
-                          )}
-                          <div className="ml-auto flex items-center gap-2">
-                            {entry.postmortem?.council_grade && (
-                              <span className="text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center text-[10px]"
-                                style={{ background: `${gradeColor(entry.postmortem.council_grade)}20`, color: gradeColor(entry.postmortem.council_grade) }}>
-                                {entry.postmortem.council_grade}
-                              </span>
-                            )}
-                            <span className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>{entry.timeframe}</span>
-                            <span
-                              onClick={e => { e.stopPropagation(); handleDeleteJournal(entry.id) }}
-                              className="p-1 rounded-lg hover:opacity-80 cursor-pointer"
-                              style={{ color: DN }}
-                              role="button"
-                              aria-label={`Delete ${entry.ticker} journal entry`}>
-                              <Trash2 size={13} />
-                            </span>
-                          </div>
-                        </button>
-
-                        {isExpanded && (
-                          <div className="px-4 pb-4 space-y-3 border-t" style={{ borderColor: 'var(--border)', background: 'var(--surface2)' }}>
-                            <div className="grid grid-cols-3 gap-2 pt-3">
-                              {(entry.position_type === 'option' ? [
-                                { label: 'Premium', val: entry.entry_premium ? `$${entry.entry_premium.toFixed(2)}/sh` : '—' },
-                                { label: 'Contracts', val: entry.contracts ? `${entry.contracts}x` : '1x' },
-                                { label: 'Total cost', val: entry.entry_premium && entry.contracts ? `$${(entry.entry_premium * entry.contracts * 100).toFixed(0)}` : '—' },
-                              ] : [
-                                { label: 'Entry', val: entry.entry_price ? `$${entry.entry_price.toFixed(2)}` : '—' },
-                                { label: 'Stop', val: entry.stop_loss ? `$${entry.stop_loss.toFixed(2)}` : '—' },
-                                { label: 'Target', val: entry.take_profit ? `$${entry.take_profit.toFixed(2)}` : '—' },
-                              ]).map(f => (
-                                <div key={f.label} className="rounded-lg p-2.5"
-                                  style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-                                  <div className="text-[10px] font-mono uppercase tracking-wider mb-0.5" style={{ color: 'var(--text3)' }}>{f.label}</div>
-                                  <div className="text-sm font-mono font-bold tabular-nums" style={{ color: 'var(--text)' }}>{f.val}</div>
-                                </div>
-                              ))}
-                            </div>
-
-                            {entry.notes && <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{entry.notes}</p>}
-
-                            {entry.postmortem && (
-                              <div className="rounded-lg p-3 space-y-2"
-                                style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-                                <div className="flex items-center gap-2">
-                                  <Star size={11} style={{ color: gradeColor(entry.postmortem.council_grade) }} />
-                                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: gradeColor(entry.postmortem.council_grade) }}>
-                                    Grade {entry.postmortem.council_grade} · post-mortem
-                                  </span>
-                                </div>
-                                {[
-                                  { label: 'What worked', val: entry.postmortem.what_worked },
-                                  { label: 'What missed', val: entry.postmortem.what_missed },
-                                  { label: 'Key lesson', val: entry.postmortem.key_lesson },
-                                ].map(f => (
-                                  <div key={f.label}>
-                                    <div className="text-[9px] font-mono uppercase tracking-wider mb-0.5" style={{ color: 'var(--text3)' }}>{f.label}</div>
-                                    <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{f.val}</p>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-
-                            {isOpen && (
-                              <div className="rounded-lg p-3 space-y-3"
-                                style={{ background: 'rgba(52,211,153,0.04)', border: '1px solid rgba(52,211,153,0.18)' }}>
-                                <p className="text-xs font-semibold" style={{ color: UP }}>Resolve trade</p>
-                                <div className="grid grid-cols-2 gap-3">
-                                  <div>
-                                    <label className="text-[10px] font-mono uppercase tracking-wider block mb-1" style={{ color: 'var(--text3)' }}>
-                                      {entry.position_type === 'option' ? 'Exit premium/share ($)' : 'Exit price ($)'}
-                                    </label>
-                                    {entry.position_type === 'option' ? (
-                                      <input value={resolveData.exit_premium} onChange={e => setResolveData(d => ({ ...d, exit_premium: e.target.value }))}
-                                        placeholder="e.g. 4.50" type="number"
-                                        className="w-full rounded-lg px-3 py-2 text-sm outline-none border font-mono"
-                                        style={{ background: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                                    ) : (
-                                      <input value={resolveData.exit_price} onChange={e => setResolveData(d => ({ ...d, exit_price: e.target.value }))}
-                                        placeholder="0.00" type="number"
-                                        className="w-full rounded-lg px-3 py-2 text-sm outline-none border font-mono"
-                                        style={{ background: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                                    )}
-                                    {entry.position_type === 'option' && resolveData.exit_premium && entry.entry_premium && (
-                                      <div className="text-[9px] mt-1 font-mono"
-                                        style={{ color: parseFloat(resolveData.exit_premium) >= entry.entry_premium ? UP : DN }}>
-                                        {((parseFloat(resolveData.exit_premium) - entry.entry_premium) / entry.entry_premium * 100).toFixed(1)}% on premium
-                                      </div>
-                                    )}
-                                  </div>
-                                  <div>
-                                    <label className="text-[10px] font-mono uppercase tracking-wider block mb-1" style={{ color: 'var(--text3)' }}>Outcome</label>
-                                    <select value={resolveData.outcome} onChange={e => setResolveData(d => ({ ...d, outcome: e.target.value }))}
-                                      className="w-full rounded-lg px-3 py-2 text-sm outline-none border"
-                                      style={{ background: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }}>
-                                      <option value="win">Win</option>
-                                      <option value="loss">Loss</option>
-                                      <option value="breakeven">Breakeven</option>
-                                    </select>
-                                  </div>
-                                </div>
-                                <input value={resolveData.notes} onChange={e => setResolveData(d => ({ ...d, notes: e.target.value }))}
-                                  placeholder="What happened? (optional)"
-                                  className="w-full rounded-lg px-3 py-2 text-sm outline-none border"
-                                  style={{ background: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                                <button onClick={() => handleResolve(entry.id)}
-                                  disabled={!!resolving || (entry.position_type === 'option' ? !resolveData.exit_premium : !resolveData.exit_price)}
-                                  className="w-full py-2 rounded-lg text-sm font-semibold transition-all hover:opacity-90 disabled:opacity-40"
-                                  style={{ background: ACCENT, color: '#0a0d12' }}>
-                                  {resolving === entry.id ? 'Generating post-mortem...' : 'Resolve trade + generate post-mortem'}
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        )}
                       </div>
                     )
                   })}
@@ -1643,20 +1261,849 @@ function PortfolioInner() {
             </div>
           )}
 
+          {/* ─── Recent Activity strip ─── */}
+          {recentActivity.length > 0 && (
+            <div className="mb-5 rounded-xl border overflow-hidden"
+              style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+              <button onClick={() => setRecentActivityCollapsed(c => !c)}
+                className="w-full flex items-center gap-2 px-4 py-2.5 hover:opacity-90 transition-opacity"
+                style={{ borderBottom: recentActivityCollapsed ? 'none' : '1px solid var(--border)' }}>
+                <Activity size={13} style={{ color: '#60a5fa' }} />
+                <span className="text-[11px] font-mono uppercase tracking-widest font-bold" style={{ color: '#60a5fa' }}>
+                  Recent Activity ({recentActivity.length})
+                </span>
+                <span className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
+                  · last {recentActivityDays}d
+                </span>
+                <span className="ml-auto text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
+                  {recentActivityCollapsed ? 'Show' : 'Collapse'}
+                </span>
+                {recentActivityCollapsed
+                  ? <ChevronRight size={12} style={{ color: 'var(--text3)' }} />
+                  : <ChevronDown size={12} style={{ color: 'var(--text3)' }} />}
+              </button>
+              {!recentActivityCollapsed && (
+                <div>
+                  {recentActivity.slice(0, 12).map(item => {
+                    const catColor = item.category === 'COUNCIL_RESOLVED' ? UP
+                      : item.category === 'COUNCIL_PENDING' ? FLAT
+                      : item.category === 'REINVEST_OPENED' ? '#60a5fa'
+                      : item.category === 'REINVEST_CLOSED' ? ACCENT
+                      : UP
+                    const catLabel = item.category === 'COUNCIL_RESOLVED' ? 'COUNCIL'
+                      : item.category === 'COUNCIL_PENDING' ? 'PENDING'
+                      : item.category === 'REINVEST_OPENED' ? 'REINVEST'
+                      : item.category === 'REINVEST_CLOSED' ? 'CLOSED'
+                      : 'DIV'
+                    const ageMs = Date.now() - item.date.getTime()
+                    const ageLabel = ageMs < 86400000
+                      ? 'today'
+                      : `${Math.floor(ageMs / 86400000)}d`
+
+                    return (
+                      <div key={item.id}
+                        className="flex items-center gap-3 px-4 py-2 border-b last:border-b-0"
+                        style={{ borderColor: 'var(--border)' }}>
+                        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded font-bold min-w-[68px] text-center"
+                          style={{ background: `${catColor}15`, color: catColor }}>
+                          {catLabel}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[11px] font-semibold truncate" style={{ color: 'var(--text)' }}>
+                            {item.primary}
+                          </div>
+                          {item.secondary && (
+                            <div className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--text3)' }}>
+                              {item.secondary}
+                            </div>
+                          )}
+                        </div>
+                        <span className="shrink-0 text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
+                          {ageLabel}
+                        </span>
+                        {item.onClick && (
+                          <button onClick={item.onClick}
+                            className="shrink-0 text-[10px] font-semibold px-2 py-1 rounded-lg hover:opacity-80 transition-opacity"
+                            style={{ background: 'var(--surface2)', color: 'var(--text2)' }}>
+                            {item.ctaLabel ?? 'View'}
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })}
+                  {recentActivity.length > 12 && (
+                    <div className="px-4 py-2 text-center text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
+                      + {recentActivity.length - 12} more (adjust window in settings)
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ─── Empty state ─── */}
+          {!loadingHoldings && positions.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
+              <div className="p-4 rounded-full" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                <Briefcase size={32} style={{ color: 'var(--text3)' }} />
+              </div>
+              <div className="text-lg font-bold" style={{ color: 'var(--text)' }}>No positions yet</div>
+              <p className="text-sm max-w-sm" style={{ color: 'var(--text2)' }}>
+                Add your holdings to get AI portfolio analysis — concentration risk, earnings events, and rebalancing suggestions.
+              </p>
+              <button onClick={() => setShowAdd(true)}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold mt-2 transition-all hover:opacity-90"
+                style={{ background: ACCENT, color: '#0a0d12' }}>
+                <Plus size={14} /> Add your first position
+              </button>
+            </div>
+          )}
+
+          {/* ─── Single-position notice (improvement #2) ─── */}
+          {positions.length === 1 && analysis && (
+            <div className="mb-4 rounded-xl px-4 py-3"
+              style={{ background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.2)' }}>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-[9px] font-mono uppercase tracking-widest font-bold" style={{ color: '#60a5fa' }}>
+                  Portfolio analysis paused
+                </span>
+              </div>
+              <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>
+                With one position, holistic portfolio analysis (sector concentration, correlation, rebalancing) doesn&apos;t produce useful output. The Position Health Check below is the relevant signal. Add 2+ holdings to enable real portfolio analysis.
+              </p>
+            </div>
+          )}
+
+          {/* ─── Filter + sort bar ─── */}
+          {positions.length > 0 && (
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-[10px] font-mono uppercase tracking-widest" style={{ color: 'var(--text3)' }}>Filter:</span>
+              {(['all', 'stocks', 'options'] as const).map(f => (
+                <button key={f} onClick={() => setPositionFilter(f)}
+                  className="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded-lg transition-all hover:opacity-80"
+                  style={{
+                    background: positionFilter === f ? `${ACCENT}18` : 'var(--surface2)',
+                    color: positionFilter === f ? ACCENT : 'var(--text3)',
+                    border: `1px solid ${positionFilter === f ? `${ACCENT}30` : 'transparent'}`,
+                  }}>
+                  {f}
+                </button>
+              ))}
+              <span className="ml-4 text-[10px] font-mono uppercase tracking-widest" style={{ color: 'var(--text3)' }}>Sort:</span>
+              {([
+                { k: 'value' as SortKey, label: 'Value' },
+                { k: 'day' as SortKey, label: 'Day' },
+                { k: 'pnl' as SortKey, label: 'P/L' },
+                { k: 'ticker' as SortKey, label: 'Ticker' },
+                { k: 'signal' as SortKey, label: 'Signal' },
+              ]).map(s => (
+                <button key={s.k} onClick={() => toggleSort(s.k)}
+                  className="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded-lg transition-all hover:opacity-80"
+                  style={{
+                    background: sortKey === s.k ? `${ACCENT}18` : 'var(--surface2)',
+                    color: sortKey === s.k ? ACCENT : 'var(--text3)',
+                    border: `1px solid ${sortKey === s.k ? `${ACCENT}30` : 'transparent'}`,
+                  }}>
+                  {s.label} {sortKey === s.k && (sortDir === 'desc' ? '↓' : '↑')}
+                </button>
+              ))}
+            </div>
+          )}
+          {/* ─── Position rows ─── */}
+          {positions.length > 0 && (
+            <div className="space-y-2">
+              {sortedPositions.map(pos => {
+                const data = positionData.find(p => p.ticker === pos.ticker)
+                const check = checks.find(c => c.ticker === pos.ticker)
+                const isOption = pos.position_type === 'option'
+                const isExpanded = expandedRows.has(pos.ticker)
+                const allocPct = totalValue > 0 && data ? (data.marketValue / totalValue * 100) : 0
+
+                // Per-position dividends/reinvest/journal (filtered)
+                const posDivs = dividends.filter(d => d.ticker === pos.ticker)
+                const posReinvest = reinvestTrades.filter(t => t.ticker === pos.ticker)
+                const posJournal = journalEntries.filter(j => j.ticker === pos.ticker)
+                const posSchedule = divSchedule.filter(s => s.ticker === pos.ticker)
+
+                // Verdict styling
+                const verdictColor = check ? VERDICT_COLOR[check.verdict] : 'var(--text3)'
+                const verdictBg = check ? VERDICT_BG[check.verdict] : 'var(--surface)'
+
+                return (
+                  <div key={pos.ticker} id={`pos-row-${pos.ticker}`}
+                    className="rounded-xl border overflow-hidden transition-all"
+                    style={{
+                      background: isExpanded ? 'var(--surface)' : verdictBg,
+                      borderColor: isExpanded
+                        ? `${ACCENT}40`
+                        : (check ? `${verdictColor}${check.verdict === 'TERMINAL' ? '55' : '22'}` : 'var(--border)'),
+                    }}>
+
+                    {/* ─── Collapsed/header row (always visible) ─── */}
+                    <button onClick={() => toggleRow(pos.ticker)}
+                      className="w-full flex items-center gap-3 px-4 py-3 hover:opacity-95 transition-opacity text-left">
+                      {/* Verdict badge */}
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg min-w-[68px] text-center font-mono"
+                        style={{
+                          background: check
+                            ? `${verdictColor}${check.verdict === 'TERMINAL' ? '30' : '18'}`
+                            : 'var(--surface2)',
+                          color: check ? verdictColor : 'var(--text3)',
+                        }}>
+                        {check?.verdict ?? '— — —'}
+                      </span>
+
+                      {/* Ticker + position details */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold font-mono text-sm">{pos.ticker}</span>
+                          {isOption && (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
+                              style={{
+                                background: pos.option_type === 'call' ? 'rgba(52,211,153,0.12)' : 'rgba(248,113,113,0.12)',
+                                color: pos.option_type === 'call' ? UP : DN,
+                              }}>
+                              {pos.option_type?.toUpperCase()} ${pos.strike} {pos.expiry?.slice(5)}
+                            </span>
+                          )}
+                          <span className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
+                            {isOption
+                              ? `${pos.contracts ?? 1}x`
+                              : `${pos.shares} sh`}
+                          </span>
+                          {data && (
+                            <>
+                              <span className="text-[11px] font-mono tabular-nums" style={{ color: 'var(--text2)' }}>
+                                ${data.currentPrice.toFixed(2)}
+                              </span>
+                              <span className="text-[10px] font-mono tabular-nums" style={{ color: pnlColor(data.priceChange1D) }}>
+                                {data.priceChange1D >= 0 ? '+' : ''}{data.priceChange1D.toFixed(2)}%
+                              </span>
+                            </>
+                          )}
+                        </div>
+                        {/* Subtitle row — sector / allocation / option deadline */}
+                        <div className="flex items-center gap-2 mt-1 flex-wrap text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
+                          {data?.sector && data.sector !== 'Unknown' && (
+                            <span>{data.sector}</span>
+                          )}
+                          {totalValue > 0 && data && (
+                            <span>· {allocPct.toFixed(1)}% alloc</span>
+                          )}
+                          {check?.deadlineLabel && (
+                            <span style={{ color: check.timeDecayUrgent ? DN : 'var(--text3)' }}>
+                              · {check.deadlineLabel}
+                            </span>
+                          )}
+                          {posDivs.length > 0 && (
+                            <span>· {posDivs.length} div{posDivs.length === 1 ? '' : 's'}</span>
+                          )}
+                          {posReinvest.filter(t => !t.exit_price).length > 0 && (
+                            <span style={{ color: ACCENT }}>· {posReinvest.filter(t => !t.exit_price).length} reinvest open</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* P/L + value */}
+                      {data && (
+                        <div className="text-right shrink-0 hidden sm:block">
+                          <div className="text-sm font-mono font-bold tabular-nums" style={{ color: 'var(--text)' }}>
+                            ${fmt(data.marketValue)}
+                          </div>
+                          {data.gainLossPct !== null && (
+                            <div className="text-[10px] font-mono tabular-nums" style={{ color: pnlColor(data.gainLossPct) }}>
+                              {data.gainLossPct >= 0 ? '+' : ''}{data.gainLossPct.toFixed(1)}% P/L
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Expand icon */}
+                      <span className="shrink-0" style={{ color: 'var(--text3)' }}>
+                        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      </span>
+                    </button>
+
+                    {/* ─── Expanded body — 6 sub-sections ─── */}
+                    {isExpanded && (
+                      <div className="border-t" style={{ borderColor: 'var(--border)' }}>
+
+                        {/* ── Section 1: Health Check ── */}
+                        <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+                          <div className="flex items-center gap-1.5 mb-2">
+                            <Stethoscope size={11} style={{ color: 'var(--text3)' }} />
+                            <span className="text-[10px] font-mono uppercase tracking-widest font-bold" style={{ color: 'var(--text3)' }}>
+                              Health Check
+                            </span>
+                            {!check && (
+                              <button onClick={(e) => { e.stopPropagation(); runHealthCheck(pos.ticker) }}
+                                disabled={checkTicker === pos.ticker}
+                                className="ml-auto flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-lg hover:opacity-80 disabled:opacity-40 transition-opacity"
+                                style={{ background: 'rgba(248,113,113,0.1)', color: DN, border: '1px solid rgba(248,113,113,0.22)' }}>
+                                {checkTicker === pos.ticker ? 'Checking...' : 'Run check'}
+                              </button>
+                            )}
+                            {check && check.verdict !== 'TERMINAL' && (
+                              <button onClick={(e) => { e.stopPropagation(); runHealthCheck(pos.ticker) }}
+                                disabled={checkTicker === pos.ticker}
+                                className="ml-auto p-1 rounded hover:opacity-80 transition-opacity"
+                                style={{ color: 'var(--text3)' }}
+                                aria-label="Re-check">
+                                {checkTicker === pos.ticker
+                                  ? <div className="w-3 h-3 rounded-full border border-t-transparent animate-spin" style={{ borderColor: 'var(--text3)', borderTopColor: 'transparent' }} />
+                                  : <RefreshCw size={11} />}
+                              </button>
+                            )}
+                          </div>
+
+                          {check ? (
+                            <div className="space-y-2">
+                              {/* Reason */}
+                              {check.reason && (
+                                <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text2)' }}>
+                                  {check.reason}
+                                </p>
+                              )}
+                              {/* Action */}
+                              <p className="text-[11px] font-semibold leading-relaxed" style={{ color: verdictColor }}>
+                                → {check.action}
+                              </p>
+
+                              {/* Save path (if present) */}
+                              {check.savePathSummary && (
+                                <div className="rounded-lg px-2.5 py-2"
+                                  style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+                                  <div className="flex items-center gap-1.5 mb-1">
+                                    <span className="text-[8px] font-mono uppercase tracking-wider font-bold" style={{ color: 'var(--text3)' }}>
+                                      Path to recovery
+                                    </span>
+                                    {check.savePathProbabilityVerbal && (
+                                      <span className="text-[8px] font-mono px-1 py-0.5 rounded font-bold"
+                                        style={{
+                                          background: check.savePathProbabilityVerbal === 'likely' ? 'rgba(52,211,153,0.15)'
+                                            : check.savePathProbabilityVerbal === 'plausible' ? 'rgba(251,191,36,0.15)'
+                                            : 'rgba(248,113,113,0.15)',
+                                          color: check.savePathProbabilityVerbal === 'likely' ? UP
+                                            : check.savePathProbabilityVerbal === 'plausible' ? FLAT
+                                            : DN,
+                                        }}>
+                                        {check.savePathProbabilityVerbal} {check.savePathProbabilityNumeric ? `(${check.savePathProbabilityNumeric})` : ''}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-[10px] leading-snug" style={{ color: 'var(--text2)' }}>
+                                    {check.savePathSummary}
+                                  </p>
+                                </div>
+                              )}
+
+                              {/* Realistic proceeds */}
+                              {check.realisticProceedsNote && (
+                                <div className="rounded-lg px-2.5 py-2"
+                                  style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+                                  <div className="text-[8px] font-mono uppercase tracking-wider font-bold mb-1" style={{ color: 'var(--text3)' }}>
+                                    Realistic close proceeds
+                                  </div>
+                                  <p className="text-[10px] leading-snug" style={{ color: 'var(--text2)' }}>
+                                    {check.realisticProceedsNote}
+                                  </p>
+                                </div>
+                              )}
+
+                              {/* Exposure strip */}
+                              {check.directionalExposure !== null && check.directionalExposure !== undefined && (
+                                <div className="flex items-center gap-3 px-2.5 py-1.5 rounded-lg"
+                                  style={{ background: 'var(--surface2)' }}>
+                                  <span className="text-[9px] font-mono uppercase tracking-wider" style={{ color: 'var(--text3)' }}>Exposure</span>
+                                  <span className="text-[10px] font-mono font-bold"
+                                    style={{ color: check.directionalExposure > 0 ? UP : check.directionalExposure < 0 ? DN : 'var(--text3)' }}>
+                                    {check.directionalExposure > 0 ? '+' : ''}${Math.abs(check.directionalExposure).toFixed(0)} {check.directionalExposure > 0 ? 'long' : check.directionalExposure < 0 ? 'short' : 'flat'}
+                                  </span>
+                                  {check.capitalAtRisk !== null && check.capitalAtRisk !== undefined && (
+                                    <>
+                                      <span className="text-[9px] font-mono" style={{ color: 'var(--text3)' }}>·</span>
+                                      <span className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
+                                        ${check.capitalAtRisk.toFixed(0)} at risk
+                                      </span>
+                                    </>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Flags (collapsed) */}
+                              {check.flags.length > 0 && (
+                                <details {...(check.verdict === 'TERMINAL' ? { open: true } : {})}>
+                                  <summary className="text-[9px] font-mono uppercase tracking-wider cursor-pointer hover:opacity-80"
+                                    style={{ color: 'var(--text3)' }}>
+                                    {check.flags.length} flag{check.flags.length === 1 ? '' : 's'} {check.verdict === 'TERMINAL' ? '' : '(click to expand)'}
+                                  </summary>
+                                  <div className="flex flex-wrap gap-1 mt-1.5">
+                                    {check.flags.map(f => (
+                                      <span key={f} className="text-[9px] px-1.5 py-0.5 rounded-full font-mono"
+                                        style={{ background: 'var(--surface2)', color: 'var(--text3)', border: '1px solid var(--border)' }}>
+                                        {f}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </details>
+                              )}
+                            </div>
+                          ) : (
+                            <p className="text-[11px]" style={{ color: 'var(--text3)' }}>
+                              No health check yet. Run one to see the verdict, save path, and realistic close proceeds.
+                            </p>
+                          )}
+                        </div>
+
+                        {/* ── Section 2: Council History ── */}
+                        <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+                          <div className="flex items-center gap-1.5 mb-2">
+                            <Star size={11} style={{ color: 'var(--text3)' }} />
+                            <span className="text-[10px] font-mono uppercase tracking-widest font-bold" style={{ color: 'var(--text3)' }}>
+                              Council History
+                            </span>
+                            <button onClick={(e) => { e.stopPropagation(); router.push(`/?ticker=${pos.ticker}`) }}
+                              className="ml-auto flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-lg hover:opacity-80 transition-opacity"
+                              style={{ background: 'rgba(167,139,250,0.1)', color: ACCENT, border: '1px solid rgba(167,139,250,0.22)' }}>
+                              <Activity size={10} /> Run Council
+                            </button>
+                          </div>
+                          {check?.councilHistory ? (
+                            <div className="rounded-lg px-2.5 py-2"
+                              style={{
+                                background: check.councilHistory.positionContradictsCouncil
+                                  ? 'rgba(251,191,36,0.08)'
+                                  : 'rgba(96,165,250,0.06)',
+                                border: `1px solid ${check.councilHistory.positionContradictsCouncil ? 'rgba(251,191,36,0.25)' : 'rgba(96,165,250,0.18)'}`,
+                              }}>
+                              <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded font-bold"
+                                  style={{
+                                    background: check.councilHistory.recentSignal === 'BULLISH' ? 'rgba(52,211,153,0.15)'
+                                      : check.councilHistory.recentSignal === 'BEARISH' ? 'rgba(248,113,113,0.15)'
+                                      : 'rgba(251,191,36,0.15)',
+                                    color: check.councilHistory.recentSignal === 'BULLISH' ? UP
+                                      : check.councilHistory.recentSignal === 'BEARISH' ? DN
+                                      : FLAT,
+                                  }}>
+                                  {check.councilHistory.recentSignal} {check.councilHistory.recentConfidence !== null ? `${check.councilHistory.recentConfidence}%` : ''}
+                                </span>
+                                <span className="text-[9px] font-mono" style={{ color: 'var(--text3)' }}>
+                                  {check.councilHistory.daysSinceVerdict}d ago
+                                </span>
+                                {check.councilHistory.recentPersona && (
+                                  <span className="text-[9px] font-mono" style={{ color: 'var(--text3)' }}>
+                                    · {check.councilHistory.recentPersona}
+                                  </span>
+                                )}
+                                {check.councilHistory.outcomeStatus !== 'unknown' && (
+                                  <span className="text-[9px] font-mono px-1 py-0.5 rounded ml-auto"
+                                    style={{
+                                      background: check.councilHistory.outcomeStatus === 'correct' ? 'rgba(52,211,153,0.15)'
+                                        : check.councilHistory.outcomeStatus === 'incorrect' ? 'rgba(248,113,113,0.15)'
+                                        : 'var(--surface2)',
+                                      color: check.councilHistory.outcomeStatus === 'correct' ? UP
+                                        : check.councilHistory.outcomeStatus === 'incorrect' ? DN
+                                        : 'var(--text3)',
+                                    }}>
+                                    {check.councilHistory.outcomeStatus} {check.councilHistory.outcomeHorizon ?? ''}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[10px] leading-snug" style={{ color: 'var(--text2)' }}>
+                                {check.councilHistory.alignmentNote}
+                              </p>
+                              {check.councilHistory.personaDisagreement && (
+                                <p className="text-[10px] leading-snug mt-1 italic" style={{ color: 'var(--text3)' }}>
+                                  {check.councilHistory.personaDisagreement}
+                                </p>
+                              )}
+                            </div>
+                          ) : (
+                            <p className="text-[11px]" style={{ color: 'var(--text3)' }}>
+                              No recent Council verdict. Run one to log a directional call you can later check against outcomes.
+                            </p>
+                          )}
+                        </div>
+
+                        {/* ── Section 3: Dividends ── */}
+                        <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+                          <div className="flex items-center gap-1.5 mb-2">
+                            <DollarSign size={11} style={{ color: 'var(--text3)' }} />
+                            <span className="text-[10px] font-mono uppercase tracking-widest font-bold" style={{ color: 'var(--text3)' }}>
+                              Dividends {posDivs.length > 0 && `(${posDivs.length})`}
+                            </span>
+                            <span className="text-[10px] font-mono ml-2" style={{ color: UP }}>
+                              {posDivs.length > 0 && `$${posDivs.reduce((s, d) => s + d.total_received, 0).toFixed(2)} received`}
+                            </span>
+                            <button onClick={(e) => {
+                              e.stopPropagation()
+                              setDivTicker(pos.ticker)
+                              if (!isOption) setDivShares(String(pos.shares))
+                              setShowLogDiv(true)
+                            }}
+                              className="ml-auto flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-lg hover:opacity-80 transition-opacity"
+                              style={{ background: 'rgba(52,211,153,0.1)', color: UP, border: '1px solid rgba(52,211,153,0.22)' }}>
+                              <Plus size={10} /> Log dividend
+                            </button>
+                          </div>
+
+                          {posDivs.length === 0 ? (
+                            <p className="text-[11px]" style={{ color: 'var(--text3)' }}>
+                              No dividends logged for {pos.ticker}.
+                              {posSchedule.length > 0 && ` Next ex-date: ${posSchedule[0].ex_date}${posSchedule[0].amount ? ` ($${posSchedule[0].amount.toFixed(2)}/sh)` : ''}.`}
+                            </p>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {posDivs.slice(0, 6).map(d => (
+                                <div key={d.id} className="rounded-lg px-2.5 py-1.5"
+                                  style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>{d.ex_date}</span>
+                                    <span className="text-[10px] font-mono tabular-nums font-semibold" style={{ color: UP }}>
+                                      ${d.total_received.toFixed(2)}
+                                    </span>
+                                    <span className="text-[9px] font-mono" style={{ color: 'var(--text3)' }}>
+                                      ${d.amount_per_share.toFixed(4)}/sh × {d.shares_held}
+                                    </span>
+                                    {d.reinvested && (
+                                      <span className="text-[9px] px-1 py-0.5 rounded font-mono font-bold"
+                                        style={{ background: 'rgba(167,139,250,0.12)', color: ACCENT }}>
+                                        DRIP
+                                      </span>
+                                    )}
+                                    <button onClick={(e) => {
+                                      e.stopPropagation()
+                                      // Open Add-Reinvest drawer with funded_by_dividend_id prefilled
+                                      setRTicker('')
+                                      setRShares('')
+                                      setREntry('')
+                                      setRNotes(`Funded by ${d.ticker} dividend from ${d.ex_date}`)
+                                      setRFundedByDividendId(d.id)
+                                      setShowAddReinvest(true)
+                                    }}
+                                      className="ml-auto text-[9px] font-semibold px-1.5 py-0.5 rounded hover:opacity-80 transition-opacity"
+                                      style={{ background: 'rgba(167,139,250,0.1)', color: ACCENT }}>
+                                      Reinvest →
+                                    </button>
+                                    <button onClick={(e) => { e.stopPropagation(); deleteDiv(d.id) }}
+                                      className="p-1 rounded hover:opacity-80"
+                                      style={{ color: DN }}
+                                      aria-label="Delete dividend">
+                                      <Trash2 size={10} />
+                                    </button>
+                                  </div>
+                                  {/* Linked reinvest trades from Part 1 */}
+                                  {d.linkedReinvestTrades && d.linkedReinvestTrades.length > 0 && (
+                                    <div className="mt-1.5 pl-3 border-l-2" style={{ borderColor: ACCENT }}>
+                                      {d.linkedReinvestTrades.map(t => (
+                                        <div key={t.id} className="text-[9px] font-mono" style={{ color: 'var(--text3)' }}>
+                                          → funded {t.ticker} reinvest: {t.shares} sh @ ${t.entry_price.toFixed(2)}
+                                          {t.exit_price ? ` (closed @ $${t.exit_price.toFixed(2)})` : ' (open)'}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                              {posDivs.length > 6 && (
+                                <p className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
+                                  + {posDivs.length - 6} older dividends
+                                </p>
+                              )}
+                            </div>
+                          )}
+                          {/* Schedule preview */}
+                          {posSchedule.length > 0 && (
+                            <div className="mt-2 pt-2 border-t" style={{ borderColor: 'var(--border)' }}>
+                              <div className="text-[9px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>
+                                Upcoming
+                              </div>
+                              {posSchedule.slice(0, 3).map((s, i) => (
+                                <div key={i} className="text-[10px] font-mono flex items-center gap-2" style={{ color: 'var(--text2)' }}>
+                                  <Calendar size={9} style={{ color: 'var(--text3)' }} />
+                                  <span>{s.ex_date}</span>
+                                  {s.amount && <span style={{ color: UP }}>${s.amount.toFixed(2)}/sh</span>}
+                                  {s.frequency && <span style={{ color: 'var(--text3)' }}>· {s.frequency}</span>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* ── Section 4: Reinvest trades ── */}
+                        <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+                          <div className="flex items-center gap-1.5 mb-2">
+                            <Repeat2 size={11} style={{ color: 'var(--text3)' }} />
+                            <span className="text-[10px] font-mono uppercase tracking-widest font-bold" style={{ color: 'var(--text3)' }}>
+                              Reinvest trades {posReinvest.length > 0 && `(${posReinvest.length})`}
+                            </span>
+                          </div>
+                          {posReinvest.length === 0 ? (
+                            <p className="text-[11px]" style={{ color: 'var(--text3)' }}>
+                              No reinvest trades for {pos.ticker}. To log one, click &quot;Reinvest →&quot; on a dividend above.
+                            </p>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {posReinvest.map(t => {
+                                const isOpen = !t.exit_price
+                                // Find the dividend that funded this trade (if any)
+                                const fundingDiv = t.funded_by_dividend_id
+                                  ? dividends.find(d => d.id === t.funded_by_dividend_id)
+                                  : null
+                                return (
+                                  <div key={t.id} className="rounded-lg px-2.5 py-1.5"
+                                    style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
+                                        {new Date(t.opened_at).toLocaleDateString()}
+                                      </span>
+                                      <span className="text-[10px] font-mono">
+                                        {t.shares} sh @ ${t.entry_price.toFixed(2)}
+                                      </span>
+                                      {isOpen ? (
+                                        <span className="text-[9px] px-1 py-0.5 rounded font-bold" style={{ background: 'rgba(167,139,250,0.15)', color: ACCENT }}>
+                                          OPEN
+                                        </span>
+                                      ) : (
+                                        <span className="text-[9px] px-1 py-0.5 rounded font-bold" style={{ background: 'var(--surface)', color: 'var(--text3)' }}>
+                                          CLOSED
+                                        </span>
+                                      )}
+                                      {t.pnl !== null && t.pnl !== undefined && (
+                                        <span className="text-[10px] font-mono font-semibold" style={{ color: pnlColor(t.pnl) }}>
+                                          {t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(0)}
+                                          {t.pnlPct !== null && t.pnlPct !== undefined && ` (${t.pnlPct >= 0 ? '+' : ''}${t.pnlPct.toFixed(1)}%)`}
+                                        </span>
+                                      )}
+                                      <button onClick={(e) => { e.stopPropagation(); deleteReinvestTrade(t.id) }}
+                                        className="ml-auto p-1 rounded hover:opacity-80"
+                                        style={{ color: DN }}
+                                        aria-label="Delete reinvest trade">
+                                        <Trash2 size={10} />
+                                      </button>
+                                    </div>
+                                    {fundingDiv && (
+                                      <div className="text-[9px] font-mono mt-0.5" style={{ color: 'var(--text3)' }}>
+                                        ← funded by {fundingDiv.ticker} dividend ({fundingDiv.ex_date}, ${fundingDiv.total_received.toFixed(2)})
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* ── Section 5: Journal ── */}
+                        {posJournal.length > 0 && (
+                          <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+                            <div className="flex items-center gap-1.5 mb-2">
+                              <FileText size={11} style={{ color: 'var(--text3)' }} />
+                              <span className="text-[10px] font-mono uppercase tracking-widest font-bold" style={{ color: 'var(--text3)' }}>
+                                Journal entries ({posJournal.length})
+                              </span>
+                              <button onClick={(e) => { e.stopPropagation(); router.push('/journal') }}
+                                className="ml-auto flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-lg hover:opacity-80 transition-opacity"
+                                style={{ background: 'var(--surface2)', color: 'var(--text2)' }}>
+                                <ExternalLink size={10} /> Open Journal
+                              </button>
+                            </div>
+                            <div className="space-y-1.5">
+                              {posJournal.slice(0, 3).map(j => (
+                                <div key={j.id} className="rounded-lg px-2.5 py-1.5"
+                                  style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-[9px] font-mono px-1 py-0.5 rounded font-bold"
+                                      style={{
+                                        background: j.signal === 'BULLISH' ? 'rgba(52,211,153,0.15)' : j.signal === 'BEARISH' ? 'rgba(248,113,113,0.15)' : 'rgba(251,191,36,0.15)',
+                                        color: j.signal === 'BULLISH' ? UP : j.signal === 'BEARISH' ? DN : FLAT,
+                                      }}>
+                                      {j.signal}
+                                    </span>
+                                    <span className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
+                                      {new Date(j.created_at).toLocaleDateString()}
+                                    </span>
+                                    <span className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
+                                      {j.outcome === 'pending' ? 'pending' : j.outcome}
+                                    </span>
+                                    {j.pnl_percent !== null && (
+                                      <span className="text-[10px] font-mono font-semibold" style={{ color: pnlColor(j.pnl_percent) }}>
+                                        {j.pnl_percent >= 0 ? '+' : ''}{j.pnl_percent.toFixed(1)}%
+                                      </span>
+                                    )}
+                                    {j.postmortem?.council_grade && (
+                                      <span className="text-[9px] font-bold w-5 h-5 rounded-full flex items-center justify-center ml-auto"
+                                        style={{ background: `${gradeColor(j.postmortem.council_grade)}20`, color: gradeColor(j.postmortem.council_grade) }}>
+                                        {j.postmortem.council_grade}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* ── Section 6: Actions footer ── */}
+                        <div className="px-4 py-3 flex items-center gap-2 flex-wrap">
+                          <button onClick={(e) => { e.stopPropagation(); router.push(`/?ticker=${pos.ticker}`) }}
+                            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
+                            style={{ background: 'rgba(167,139,250,0.1)', color: ACCENT, border: '1px solid rgba(167,139,250,0.22)' }}>
+                            <Activity size={12} /> Run Council
+                          </button>
+                          {check && check.verdict !== 'TERMINAL' && (
+                            <button onClick={(e) => { e.stopPropagation(); runHealthCheck(pos.ticker) }}
+                              disabled={checkTicker === pos.ticker}
+                              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 disabled:opacity-40"
+                              style={{ background: 'rgba(248,113,113,0.08)', color: DN, border: '1px solid rgba(248,113,113,0.22)' }}>
+                              <Stethoscope size={12} /> {checkTicker === pos.ticker ? 'Checking...' : 'Re-check'}
+                            </button>
+                          )}
+                          <div className="ml-auto">
+                            <button onClick={(e) => { e.stopPropagation(); removePosition(pos.ticker) }}
+                              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
+                              style={{ background: 'var(--surface)', color: 'var(--text3)', border: '1px solid var(--border)' }}>
+                              <Trash2 size={12} /> Remove
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+          {/* ─── AI Portfolio Summary (preserved from original page) ─── */}
+          {analysis && positions.length >= 2 && (
+            <div className="mt-6 rounded-xl border p-5"
+              style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+              <div className="flex items-center gap-3 mb-4">
+                <span className="text-[10px] font-mono uppercase tracking-widest font-bold" style={{ color: ACCENT }}>
+                  AI Portfolio Summary
+                </span>
+                <span className="text-[10px] font-mono" style={{ color: 'var(--text3)' }}>
+                  Score: <span style={{ color: analysis.portfolioScore >= 70 ? UP : analysis.portfolioScore >= 40 ? FLAT : DN }}>
+                    {analysis.portfolioScore}
+                  </span>
+                </span>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded font-bold"
+                  style={{
+                    background: analysis.overallSignal === 'BULLISH' ? 'rgba(52,211,153,0.15)'
+                      : analysis.overallSignal === 'BEARISH' ? 'rgba(248,113,113,0.15)'
+                      : 'rgba(251,191,36,0.15)',
+                    color: analysis.overallSignal === 'BULLISH' ? UP
+                      : analysis.overallSignal === 'BEARISH' ? DN
+                      : FLAT,
+                  }}>
+                  {analysis.overallSignal} · {analysis.overallConviction}
+                </span>
+              </div>
+
+              <h3 className="text-sm font-bold leading-snug mb-2" style={{ color: 'var(--text)' }}>
+                {analysis.headline}
+              </h3>
+              <p className="text-xs leading-relaxed mb-4" style={{ color: 'var(--text2)' }}>
+                {analysis.summary}
+              </p>
+
+              {analysis.topRisks.length > 0 && (
+                <div className="mb-3 pb-3 border-b" style={{ borderColor: 'var(--border)' }}>
+                  <div className="flex items-center gap-1 mb-1.5">
+                    <AlertTriangle size={11} style={{ color: DN }} />
+                    <span className="text-[10px] font-mono uppercase tracking-wider font-bold" style={{ color: DN }}>Top risks</span>
+                  </div>
+                  {analysis.topRisks.slice(0, 3).map((r, i) => (
+                    <div key={i} className="mb-2 last:mb-0">
+                      <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{r.risk}</p>
+                      {r.tickers.length > 0 && (
+                        <div className="flex gap-1 mt-1 flex-wrap">
+                          {r.tickers.map(t => (
+                            <button key={t} onClick={() => expandAndScrollTo(t)}
+                              className="text-[9px] font-mono px-1 py-0.5 rounded hover:opacity-80 transition-opacity"
+                              style={{ background: 'var(--surface2)', color: 'var(--text2)' }}>
+                              {t}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {analysis.opportunities.length > 0 && (
+                <div className="mb-3 pb-3 border-b" style={{ borderColor: 'var(--border)' }}>
+                  <div className="flex items-center gap-1 mb-1.5">
+                    <Target size={11} style={{ color: UP }} />
+                    <span className="text-[10px] font-mono uppercase tracking-wider font-bold" style={{ color: UP }}>Opportunities</span>
+                  </div>
+                  {analysis.opportunities.slice(0, 3).map((o, i) => (
+                    <div key={i} className="mb-2 last:mb-0">
+                      <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{o.opportunity}</p>
+                      {o.tickers.length > 0 && (
+                        <div className="flex gap-1 mt-1 flex-wrap">
+                          {o.tickers.map(t => (
+                            <button key={t} onClick={() => expandAndScrollTo(t)}
+                              className="text-[9px] font-mono px-1 py-0.5 rounded hover:opacity-80 transition-opacity"
+                              style={{ background: 'var(--surface2)', color: 'var(--text2)' }}>
+                              {t}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                <div>
+                  <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>
+                    Sector analysis
+                  </div>
+                  <p style={{ color: 'var(--text2)' }}>{analysis.sectorAnalysis}</p>
+                </div>
+                <div>
+                  <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>
+                    Earnings watch
+                  </div>
+                  <p style={{ color: 'var(--text2)' }}>{analysis.earningsWatch}</p>
+                </div>
+                <div>
+                  <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>
+                    Rebalancing
+                  </div>
+                  <p style={{ color: 'var(--text2)' }}>{analysis.rebalancingSuggestions}</p>
+                </div>
+                <div>
+                  <div className="text-[10px] font-mono uppercase tracking-wider mb-1" style={{ color: 'var(--text3)' }}>
+                    Action plan
+                  </div>
+                  <p style={{ color: 'var(--text2)' }}>{analysis.actionPlan}</p>
+                </div>
+              </div>
+
+              <p className="text-[10px] mt-4 italic" style={{ color: 'var(--text3)' }}>
+                AI-generated analysis. Not financial advice.
+              </p>
+            </div>
+          )}
+
         </div>
       </div>
 
-      {/* ----------------------------------------
-          DRAWERS — modal-style overlays that slide from the right
-          ==================================================== */}
+      {/* ════════════════════════════════════════════════════════════ */}
+      {/* DRAWERS — preserved from original page                        */}
+      {/* ════════════════════════════════════════════════════════════ */}
 
-      {/* Add position drawer */}
+      {/* Add position drawer (preserved) */}
       {showAdd && (
         <Drawer title="Add position" onClose={() => setShowAdd(false)}>
           <div className="space-y-4">
-            {/* Type toggle */}
             <div className="flex rounded-lg overflow-hidden border" style={{ borderColor: 'var(--border)' }}>
-              {(['stock','option'] as const).map(t => (
+              {(['stock', 'option'] as const).map(t => (
                 <button key={t} onClick={() => setAddType(t)}
                   className="flex-1 px-3 py-2 text-xs font-semibold transition-all"
                   style={{
@@ -1667,33 +2114,30 @@ function PortfolioInner() {
                 </button>
               ))}
             </div>
-
-            {/* Ticker */}
             <FormField label={addType === 'option' ? 'Underlying ticker' : 'Ticker'}>
               <input value={addTicker} onChange={e => setAddTicker(e.target.value.toUpperCase())}
                 placeholder={addType === 'option' ? 'NVDA' : 'AAPL'} maxLength={6}
                 className="w-full rounded-lg px-3 py-2.5 text-sm font-mono font-bold outline-none border"
                 style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
             </FormField>
-
             {addType === 'stock' ? (
               <div className="grid grid-cols-2 gap-3">
                 <FormField label="Shares">
-                  <input value={addShares} onChange={e => setAddShares(e.target.value)} placeholder="100" type="number" min="0"
+                  <input value={addShares} onChange={e => setAddShares(e.target.value)} placeholder="100" type="number"
                     className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
                     style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                 </FormField>
-                <FormField label="Avg cost/share ($)">
-                  <input value={addCost} onChange={e => setAddCost(e.target.value)} placeholder="0.00" type="number" min="0"
+                <FormField label="Avg cost (optional)">
+                  <input value={addCost} onChange={e => setAddCost(e.target.value)} placeholder="180.50" type="number"
                     className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
                     style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                 </FormField>
               </div>
             ) : (
-              <div className="space-y-3">
+              <>
                 <FormField label="Type">
                   <div className="grid grid-cols-2 gap-2">
-                    {(['call','put'] as const).map(ot => (
+                    {(['call', 'put'] as const).map(ot => (
                       <button key={ot} onClick={() => setAddOptionType(ot)}
                         className="py-2 rounded-lg text-xs font-bold transition-all"
                         style={{
@@ -1701,17 +2145,16 @@ function PortfolioInner() {
                             ? (ot === 'call' ? 'rgba(52,211,153,0.15)' : 'rgba(248,113,113,0.15)')
                             : 'var(--surface2)',
                           color: addOptionType === ot ? (ot === 'call' ? UP : DN) : 'var(--text3)',
-                          border: `1px solid ${addOptionType === ot ? (ot === 'call' ? 'rgba(52,211,153,0.3)' : 'rgba(248,113,113,0.3)') : 'var(--border)'}`,
+                          border: `1px solid ${addOptionType === ot ? (ot === 'call' ? UP : DN) + '30' : 'var(--border)'}`,
                         }}>
                         {ot.toUpperCase()}
                       </button>
                     ))}
                   </div>
                 </FormField>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <FormField label="Strike ($)">
-                    <input value={addStrike} onChange={e => setAddStrike(e.target.value)} placeholder="195" type="number" min="0"
+                <div className="grid grid-cols-3 gap-3">
+                  <FormField label="Strike">
+                    <input value={addStrike} onChange={e => setAddStrike(e.target.value)} placeholder="180" type="number"
                       className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
                       style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                   </FormField>
@@ -1720,34 +2163,21 @@ function PortfolioInner() {
                       className="w-full rounded-lg px-3 py-2.5 text-sm outline-none border"
                       style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                   </FormField>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
                   <FormField label="Contracts">
-                    <input value={addContracts} onChange={e => setAddContracts(e.target.value)} placeholder="1" type="number" min="1"
-                      className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
-                      style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                  </FormField>
-                  <FormField label="Entry premium/share ($)">
-                    <input value={addCost} onChange={e => setAddCost(e.target.value)} placeholder="2.50" type="number" min="0" step="0.01"
+                    <input value={addContracts} onChange={e => setAddContracts(e.target.value)} placeholder="1" type="number"
                       className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
                       style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
                   </FormField>
                 </div>
-                {addCost && addContracts && (
-                  <div className="flex items-center justify-between rounded-lg px-3 py-2"
-                    style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.18)' }}>
-                    <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: 'var(--text3)' }}>Total cost</span>
-                    <span className="text-sm font-bold font-mono tabular-nums" style={{ color: ACCENT }}>
-                      ${(parseFloat(addCost) * parseInt(addContracts) * 100).toFixed(2)}
-                    </span>
-                  </div>
-                )}
-              </div>
+                <FormField label="Premium paid/contract (optional)">
+                  <input value={addCost} onChange={e => setAddCost(e.target.value)} placeholder="2.50" type="number"
+                    className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
+                    style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                </FormField>
+              </>
             )}
-
             <div className="flex gap-2 pt-2">
-              <button onClick={addPosition}
-                disabled={addLoading || !addTicker || (addType === 'stock' ? !addShares : !addStrike || !addExpiry)}
+              <button onClick={addPosition} disabled={addLoading || !addTicker || (addType === 'stock' ? !addShares : !addStrike || !addExpiry)}
                 className="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all hover:opacity-90 disabled:opacity-40"
                 style={{ background: ACCENT, color: '#0a0d12' }}>
                 {addLoading ? 'Adding...' : `Add ${addType === 'option' ? `${addOptionType.toUpperCase()} option` : 'position'}`}
@@ -1762,7 +2192,7 @@ function PortfolioInner() {
         </Drawer>
       )}
 
-      {/* Log dividend drawer */}
+      {/* Log dividend drawer (preserved) */}
       {showLogDiv && (
         <Drawer title="Log dividend" onClose={() => setShowLogDiv(false)}>
           <div className="space-y-3">
@@ -1787,26 +2217,14 @@ function PortfolioInner() {
                   className="w-full rounded-lg px-3 py-2.5 text-sm outline-none border"
                   style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
               </FormField>
-              <FormField label="Pay date (opt.)">
+              <FormField label="Pay date (optional)">
                 <input value={divPayDate} onChange={e => setDivPayDate(e.target.value)} type="date"
                   className="w-full rounded-lg px-3 py-2.5 text-sm outline-none border"
                   style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
               </FormField>
             </div>
-
-            {divAmount && divShares && (
-              <div className="flex items-center justify-between rounded-lg px-3 py-2"
-                style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.18)' }}>
-                <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: 'var(--text3)' }}>Total received</span>
-                <span className="text-sm font-bold font-mono tabular-nums" style={{ color: UP }}>
-                  ${(parseFloat(divAmount || '0') * parseFloat(divShares || '0')).toFixed(2)}
-                </span>
-              </div>
-            )}
-
-            {/* Reinvestment toggle */}
-            <button onClick={() => setDivReinvested(!divReinvested)}
-              className="w-full flex items-center gap-2 text-sm font-semibold px-3 py-2.5 rounded-lg transition-all"
+            <button onClick={() => setDivReinvested(v => !v)}
+              className="flex items-center gap-2 w-full px-3 py-2.5 rounded-lg text-sm font-semibold transition-all"
               style={{
                 background: divReinvested ? 'rgba(167,139,250,0.1)' : 'var(--surface2)',
                 color: divReinvested ? ACCENT : 'var(--text2)',
@@ -1816,7 +2234,6 @@ function PortfolioInner() {
               {divReinvested ? 'Reinvesting' : 'Reinvest this dividend?'}
               {divReinvested && <Check size={12} className="ml-auto" />}
             </button>
-
             {divReinvested && (
               <div className="grid grid-cols-2 gap-3">
                 <FormField label="Shares purchased">
@@ -1831,7 +2248,6 @@ function PortfolioInner() {
                 </FormField>
               </div>
             )}
-
             <div className="flex gap-2 pt-2">
               <button onClick={saveDiv} disabled={savingDiv || !divTicker || !divAmount || !divShares || !divExDate}
                 className="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all hover:opacity-90 disabled:opacity-40"
@@ -1848,10 +2264,28 @@ function PortfolioInner() {
         </Drawer>
       )}
 
-      {/* Add reinvest trade drawer */}
+      {/* Add reinvest trade drawer (preserved + funded_by linkage) */}
       {showAddReinvest && (
-        <Drawer title="Log reinvestment trade" onClose={() => setShowAddReinvest(false)}>
+        <Drawer title="Log reinvestment trade" onClose={() => {
+          setShowAddReinvest(false)
+          setRFundedByDividendId(null)
+        }}>
           <div className="space-y-3">
+            {rFundedByDividendId && (() => {
+              const fundingDiv = dividends.find(d => d.id === rFundedByDividendId)
+              if (!fundingDiv) return null
+              return (
+                <div className="rounded-lg px-3 py-2"
+                  style={{ background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.22)' }}>
+                  <div className="text-[9px] font-mono uppercase tracking-wider mb-0.5" style={{ color: ACCENT }}>
+                    Funded by
+                  </div>
+                  <div className="text-xs font-mono" style={{ color: 'var(--text2)' }}>
+                    {fundingDiv.ticker} dividend · {fundingDiv.ex_date} · ${fundingDiv.total_received.toFixed(2)}
+                  </div>
+                </div>
+              )
+            })()}
             <div className="grid grid-cols-3 gap-3">
               <FormField label="Ticker">
                 <input value={rTicker} onChange={e => setRTicker(e.target.value.toUpperCase())} placeholder="NVDA"
@@ -1874,14 +2308,13 @@ function PortfolioInner() {
                 className="w-full rounded-lg px-3 py-2.5 text-sm outline-none border"
                 style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
             </FormField>
-
             <div className="flex gap-2 pt-2">
               <button onClick={addReinvestTrade} disabled={savingReinvest || !rTicker || !rShares || !rEntry}
                 className="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all hover:opacity-90 disabled:opacity-40"
                 style={{ background: FLAT, color: '#0a0d12' }}>
                 {savingReinvest ? 'Saving...' : 'Add trade'}
               </button>
-              <button onClick={() => setShowAddReinvest(false)}
+              <button onClick={() => { setShowAddReinvest(false); setRFundedByDividendId(null) }}
                 className="px-4 py-2.5 rounded-lg text-sm transition-all hover:opacity-80"
                 style={{ background: 'var(--surface2)', color: 'var(--text2)', border: '1px solid var(--border)' }}>
                 Cancel
@@ -1891,141 +2324,42 @@ function PortfolioInner() {
         </Drawer>
       )}
 
-      {/* Add journal entry drawer */}
-      {showAddJournal && (
-        <Drawer title="Log trade" onClose={() => setShowAddJournal(false)}>
-          <div className="space-y-3">
-            <div className="flex rounded-lg overflow-hidden border" style={{ borderColor: 'var(--border)' }}>
-              {(['stock','option'] as const).map(t => (
-                <button key={t} onClick={() => setJType(t)}
-                  className="flex-1 py-2 text-xs font-semibold transition-all"
-                  style={{
-                    background: jType === t ? 'rgba(167,139,250,0.15)' : 'transparent',
-                    color: jType === t ? ACCENT : 'var(--text3)',
-                  }}>
-                  {t === 'stock' ? 'Stock' : 'Option'}
-                </button>
-              ))}
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <FormField label="Ticker">
-                <input value={jTicker} onChange={e => setJTicker(e.target.value.toUpperCase())} placeholder="AAPL"
-                  className="w-full rounded-lg px-3 py-2.5 text-sm font-mono font-bold outline-none border"
-                  style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-              </FormField>
-              <FormField label="Signal">
-                <select value={jSignal} onChange={e => setJSignal(e.target.value as 'BULLISH' | 'BEARISH' | 'NEUTRAL')}
-                  className="w-full rounded-lg px-3 py-2.5 text-sm outline-none border"
-                  style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }}>
-                  <option value="BULLISH">Bullish</option>
-                  <option value="BEARISH">Bearish</option>
-                  <option value="NEUTRAL">Neutral</option>
-                </select>
-              </FormField>
-            </div>
-
-            {jType === 'option' && (
-              <>
-                <FormField label="Option type">
-                  <div className="grid grid-cols-2 gap-2">
-                    {(['call','put'] as const).map(ot => (
-                      <button key={ot} onClick={() => setJOptionType(ot)}
-                        className="py-2 rounded-lg text-xs font-bold transition-all"
-                        style={{
-                          background: jOptionType === ot
-                            ? (ot === 'call' ? 'rgba(52,211,153,0.15)' : 'rgba(248,113,113,0.15)')
-                            : 'var(--surface2)',
-                          color: jOptionType === ot ? (ot === 'call' ? UP : DN) : 'var(--text3)',
-                          border: `1px solid ${jOptionType === ot ? (ot === 'call' ? 'rgba(52,211,153,0.3)' : 'rgba(248,113,113,0.3)') : 'var(--border)'}`,
-                        }}>
-                        {ot.toUpperCase()}
-                      </button>
-                    ))}
-                  </div>
-                </FormField>
-                <div className="grid grid-cols-3 gap-3">
-                  <FormField label="Strike">
-                    <input value={jStrike} onChange={e => setJStrike(e.target.value)} placeholder="$" type="number"
-                      className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
-                      style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                  </FormField>
-                  <FormField label="Expiry">
-                    <input value={jExpiry} onChange={e => setJExpiry(e.target.value)} type="date"
-                      className="w-full rounded-lg px-3 py-2.5 text-sm outline-none border"
-                      style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                  </FormField>
-                  <FormField label="Contracts">
-                    <input value={jContracts} onChange={e => setJContracts(e.target.value)} placeholder="1" type="number"
-                      className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
-                      style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                  </FormField>
+      {/* Settings drawer (NEW v3) */}
+      {showSettings && (
+        <Drawer title="Settings" onClose={() => setShowSettings(false)}>
+          <div className="space-y-5">
+            <div>
+              <FormField label="Recent Activity window">
+                <div className="flex items-center gap-2 mt-1">
+                  <input
+                    type="number"
+                    min={1}
+                    max={90}
+                    value={recentActivityDays}
+                    onChange={e => setRecentActivityDays(Math.max(1, Math.min(90, parseInt(e.target.value) || 14)))}
+                    className="w-20 rounded-lg px-3 py-2 text-sm font-mono outline-none border"
+                    style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                  <span className="text-xs" style={{ color: 'var(--text3)' }}>days back</span>
                 </div>
-                <FormField label="Entry premium/share ($)">
-                  <input value={jPremium} onChange={e => setJPremium(e.target.value)} placeholder="2.50" type="number"
-                    className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
-                    style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                </FormField>
-                {jPremium && jContracts && (
-                  <div className="flex items-center justify-between rounded-lg px-3 py-2"
-                    style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.18)' }}>
-                    <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: 'var(--text3)' }}>Total cost</span>
-                    <span className="text-sm font-bold font-mono tabular-nums" style={{ color: ACCENT }}>
-                      ${(parseFloat(jPremium) * parseInt(jContracts) * 100).toFixed(2)}
-                    </span>
-                  </div>
-                )}
-              </>
-            )}
-
-            {jType === 'stock' && (
-              <div className="grid grid-cols-3 gap-3">
-                <FormField label="Entry">
-                  <input value={jEntryPrice} onChange={e => setJEntryPrice(e.target.value)} placeholder="$" type="number"
-                    className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
-                    style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                </FormField>
-                <FormField label="Stop">
-                  <input value={jStop} onChange={e => setJStop(e.target.value)} placeholder="$" type="number"
-                    className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
-                    style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                </FormField>
-                <FormField label="Target">
-                  <input value={jTarget} onChange={e => setJTarget(e.target.value)} placeholder="$" type="number"
-                    className="w-full rounded-lg px-3 py-2.5 text-sm font-mono outline-none border"
-                    style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                </FormField>
-              </div>
-            )}
-
-            <div className="grid grid-cols-2 gap-3">
-              <FormField label="Timeframe">
-                <select value={jTimeframe} onChange={e => setJTimeframe(e.target.value)}
-                  className="w-full rounded-lg px-3 py-2.5 text-sm outline-none border"
-                  style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }}>
-                  <option value="1D">1D</option><option value="1W">1W</option>
-                  <option value="1M">1M</option><option value="3M">3M</option>
-                </select>
               </FormField>
-              <FormField label="Notes (opt.)">
-                <input value={jNotes} onChange={e => setJNotes(e.target.value)} placeholder="Thesis..."
-                  className="w-full rounded-lg px-3 py-2.5 text-sm outline-none border"
-                  style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-              </FormField>
+              <p className="text-[10px] mt-2" style={{ color: 'var(--text3)' }}>
+                How far back to look for Recent Activity items (Council outcomes, reinvest trades, dividends).
+                Default 14 days.
+              </p>
             </div>
 
-            <div className="flex gap-2 pt-2">
-              <button onClick={addJournalEntry}
-                disabled={!jTicker}
-                className="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all hover:opacity-90 disabled:opacity-40"
-                style={{ background: ACCENT, color: '#0a0d12' }}>
-                Log trade
-              </button>
-              <button onClick={() => setShowAddJournal(false)}
-                className="px-4 py-2.5 rounded-lg text-sm transition-all hover:opacity-80"
-                style={{ background: 'var(--surface2)', color: 'var(--text2)', border: '1px solid var(--border)' }}>
-                Cancel
-              </button>
+            <div className="pt-3 border-t" style={{ borderColor: 'var(--border)' }}>
+              <FormField label="Reset UI state">
+                <button onClick={() => {
+                  if (!confirm('Reset all UI preferences (expanded rows, filter, sort, collapsed strips)?')) return
+                  Object.values(LS_KEYS).forEach(k => window.localStorage.removeItem(k))
+                  window.location.reload()
+                }}
+                  className="w-full py-2 rounded-lg text-sm transition-all hover:opacity-80 mt-1"
+                  style={{ background: 'var(--surface2)', color: 'var(--text2)', border: '1px solid var(--border)' }}>
+                  Reset to defaults
+                </button>
+              </FormField>
             </div>
           </div>
         </Drawer>
@@ -2034,59 +2368,9 @@ function PortfolioInner() {
   )
 }
 
-// -- Helper components ----------------------------------------
-
-function FormField({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <label className="text-[10px] font-mono uppercase tracking-wider block mb-1.5" style={{ color: 'var(--text3)' }}>
-        {label}
-      </label>
-      {children}
-    </div>
-  )
-}
-
-function Drawer({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  // Close on Escape
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [onClose])
-
-  return (
-    <>
-      {/* Backdrop */}
-      <div
-        onClick={onClose}
-        className="fixed inset-0 z-30"
-        style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(2px)' }}
-        aria-hidden="true" />
-      {/* Drawer panel */}
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="drawer-title"
-        className="fixed right-0 top-0 bottom-0 z-40 w-full sm:w-[480px] overflow-y-auto animate-slide-in-right"
-        style={{ background: 'var(--surface)', borderLeft: '1px solid var(--border)' }}>
-        <div className="flex items-center justify-between px-5 py-4 border-b sticky top-0"
-          style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-          <h3 id="drawer-title" className="text-sm font-bold" style={{ color: 'var(--text)' }}>{title}</h3>
-          <button onClick={onClose}
-            className="p-1.5 rounded-lg transition-all hover:opacity-80"
-            style={{ color: 'var(--text3)' }}
-            aria-label="Close">
-            <X size={16} />
-          </button>
-        </div>
-        <div className="p-5">
-          {children}
-        </div>
-      </div>
-    </>
-  )
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Default export wrapper (preserved Suspense boundary)
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function PortfolioPage() {
   return (
