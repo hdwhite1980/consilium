@@ -30,6 +30,7 @@ import type { SignalBundle } from './aggregator'
 import { isFundTicker, getFundInfo, buildFundContext } from './data/fund-detection'
 import { runSocialScout, formatSocialSentimentForPrompt, type SocialSentiment } from './social-scout'
 import { runAggregatorScout, formatAggregatorForPrompt, type AggregatorScoutResult } from './news-aggregator-scout'
+import { evaluateTrade, type TraderVerdict } from './trader'
 import { callGrok } from './grok'
 import { verifyFactualClaims, type VerificationResult } from './verification'
 
@@ -154,6 +155,7 @@ export interface PipelineResult {
   }
   transcript: TranscriptMessage[]
   social: SocialSentiment
+  trader: TraderVerdict
 }
 
 export interface TranscriptMessage {
@@ -2122,7 +2124,15 @@ export async function runPipeline(
   onProgress('judge_start', {})
   const { judge, calibration } = await runJudgeWithCalibration(bundle, gemini, claude, gpt, rebuttal, counter, 1, social, aggregator)
   transcript.push({ role: 'judge', stage: 'arbitrator', content: judge.summary, signal: judge.signal, confidence: judge.confidence, timestamp: ts() })
+
+  // ── Trader Filter ─────────────────────────────────────────
+  // Evaluates the Council's verdict against trader discipline rules:
+  // R:R, confidence floors per setup type, conflict detection.
+  // Output is TAKE / PASS / WAIT — separate from the Judge verdict.
+  onProgress('trader_start', {})
+  const trader = await evaluateTrade(judge, bundle, bundle.timeframe)
+  onProgress('trader_done', trader)
   onProgress('judge_done', judge)
 
-  return { gemini, claude, gpt, rebuttal, counter, judge, calibration, verifications, transcript, social, aggregator }
+  return { gemini, claude, gpt, rebuttal, counter, judge, calibration, verifications, transcript, social, aggregator, trader }
 }

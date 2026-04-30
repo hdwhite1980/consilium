@@ -371,6 +371,14 @@ export async function POST(req: NextRequest) {
                 timeframe: tf,
                 outcome_1w: 'pending',
                 outcome_1m: 'pending',
+                trader_decision: result.trader?.decision ?? null,
+                trader_grade: result.trader?.grade ?? null,
+                trader_position_size: result.trader?.positionSizePct ?? null,
+                trader_risk_reward: result.trader?.riskReward ?? null,
+                trader_pass_reasons: result.trader?.passReasons ?? null,
+                trader_wait_conditions: result.trader?.waitConditions ?? null,
+                trader_rationale: result.trader?.rationale ?? null,
+                trader_evaluated_at: result.trader?.evaluatedAt ?? null,
               })
             } catch { /* non-critical */ }
           }
