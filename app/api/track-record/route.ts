@@ -73,6 +73,25 @@ export async function POST(req: NextRequest) {
   const { ticker, signal, confidence, entry_price, stop_loss, take_profit, time_horizon, persona, timeframe } = await req.json()
   if (!ticker || !signal) return NextResponse.json({ error: 'ticker and signal required' }, { status: 400 })
 
+  // Safe price extractor — matches the first $-prefixed positive number.
+  // Rejects negative values, ranges, and percentages.
+  const parsePrice = (s: unknown): number | null => {
+    if (s === null || s === undefined) return null
+    if (typeof s === 'number') return Number.isFinite(s) && s > 0 ? s : null
+    if (typeof s !== 'string') return null
+    const dollarMatch = s.match(/\$(\d{1,6}(?:\.\d{1,2})?)/)
+    if (dollarMatch) {
+      const n = parseFloat(dollarMatch[1])
+      return Number.isFinite(n) && n > 0 ? n : null
+    }
+    const bareMatch = s.match(/^\s*(\d{1,6}(?:\.\d{1,2})?)\s*$/)
+    if (bareMatch) {
+      const n = parseFloat(bareMatch[1])
+      return Number.isFinite(n) && n > 0 ? n : null
+    }
+    return null
+  }
+
   // Don't log duplicate on same ticker same day
   const today = new Date().toISOString().split('T')[0]
   const { data: existing } = await admin()
@@ -93,9 +112,9 @@ export async function POST(req: NextRequest) {
       ticker: ticker.toUpperCase(),
       signal,
       confidence: confidence ?? null,
-      entry_price: entry_price ? parseFloat(String(entry_price).replace(/[^0-9.-]/g,'')) : null,
-      stop_loss: stop_loss ? parseFloat(String(stop_loss).replace(/[^0-9.-]/g,'')) : null,
-      take_profit: take_profit ? parseFloat(String(take_profit).replace(/[^0-9.-]/g,'')) : null,
+      entry_price: parsePrice(entry_price),
+      stop_loss: parsePrice(stop_loss),
+      take_profit: parsePrice(take_profit),
       time_horizon: time_horizon ?? null,
       persona: persona ?? 'balanced',
       timeframe: timeframe ?? '1W',

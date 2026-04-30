@@ -336,7 +336,17 @@ export async function POST(req: NextRequest) {
         // Auto-log to track record directly via service role (no HTTP round-trip)
         if (currentUserId && result.judge?.signal && result.judge.signal !== 'NEUTRAL') {
           const today = new Date().toISOString().split('T')[0]
-          const parseP = (s: string | undefined) => s ? parseFloat(String(s).replace(/[^0-9.-]/g,'')) || null : null
+          const parseP = (s: string | undefined): number | null => {
+            if (!s) return null
+            // Match the FIRST $-prefixed positive number, e.g. $15.25 from
+            // "Enter on a pullback to the $15.25 - $15.60 range".
+            // Rejects bare numbers, ranges, percentages, and (critically)
+            // anything with a leading minus like "-$15.70" or "$-15.70".
+            const match = String(s).match(/\$(\d{1,6}(?:\.\d{1,2})?)/)
+            if (!match) return null
+            const num = parseFloat(match[1])
+            return Number.isFinite(num) && num > 0 ? num : null
+          }
           // Dedup — don't log same ticker+signal on same day
           const { data: existing } = await supabase
             .from('verdict_log')

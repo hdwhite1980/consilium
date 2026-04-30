@@ -117,7 +117,13 @@ export async function POST(req: NextRequest) {
           if (user?.id) {
             const db = createServerClient()
             const today = new Date().toISOString().split('T')[0]
-            const parseP = (s: string | undefined) => s ? parseFloat(String(s).replace(/[^0-9.-]/g,'')) || null : null
+            const parseP = (s: string | undefined): number | null => {
+              if (!s) return null
+              const match = String(s).match(/\$(\d{1,6}(?:\.\d{1,2})?)/)
+              if (!match) return null
+              const num = parseFloat(match[1])
+              return Number.isFinite(num) && num > 0 ? num : null
+            }
             for (const [sym, judge, bundle] of [
               [symA, judgeA, bundleA] as const,
               [symB, judgeB, bundleB] as const,
