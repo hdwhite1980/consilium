@@ -8,6 +8,7 @@ import { DeskNote } from '@/app/components/desk/DeskNote'
 import { FloorEmbers } from '@/app/components/desk/FloorEmbers'
 import { useContextualLessons } from '@/app/components/desk/useContextualLessons'
 import { INVEST_LESSONS, findLessonByTrigger, type InvestLesson } from '@/app/lib/invest-lessons'
+import { DefinedTerm } from '@/app/components/DefinedTerm'
 
 // ══════════════════════════════════════════════════════════════
 // TYPES
@@ -616,6 +617,7 @@ function OrderTicket({ prefill, cashRemaining, onClose, onSave }: {
               <div className="fl-field">
                 <label>
                   Stop-loss *
+                  <DefinedTerm term="stop" label="Stop-loss" />
                   {prefillStop && <span style={{ opacity: 0.5, fontSize: '10px', marginLeft: 6 }}>council: {fmt$(prefillStop)}</span>}
                 </label>
                 <input
@@ -627,6 +629,7 @@ function OrderTicket({ prefill, cashRemaining, onClose, onSave }: {
               <div className="fl-field">
                 <label>
                   Target *
+                  <DefinedTerm term="target" />
                   {prefillTarget && <span style={{ opacity: 0.5, fontSize: '10px', marginLeft: 6 }}>council: {fmt$(prefillTarget)}</span>}
                 </label>
                 <input
@@ -672,6 +675,7 @@ function OrderTicket({ prefill, cashRemaining, onClose, onSave }: {
           <div className="fl-field">
             <label>
               Why this trade? *
+              <DefinedTerm term="rationale" label="Why this trade" />
               <span style={{ opacity: 0.5, fontSize: '10px', marginLeft: 6 }}>min 10 characters</span>
             </label>
             <textarea
@@ -2337,6 +2341,117 @@ function FloorStyles() {
         margin: 0;
         padding-top: 8px;
         border-top: 1px solid rgba(148, 163, 184, 0.06);
+      }
+
+      /* ── DefinedTerm inline definitions ───────────────────── */
+      .fl-define {
+        position: relative;
+        display: inline-block;
+      }
+      .fl-define-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 14px;
+        height: 14px;
+        margin-left: 4px;
+        padding: 0;
+        border-radius: 50%;
+        border: 1px solid rgba(148, 163, 184, 0.4);
+        background: transparent;
+        color: rgba(148, 163, 184, 0.7);
+        font-size: 9px;
+        font-weight: 600;
+        line-height: 1;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        font-family: inherit;
+      }
+      .fl-define-btn:hover {
+        border-color: rgba(212, 168, 87, 0.6);
+        color: #d4a857;
+        background: rgba(212, 168, 87, 0.08);
+      }
+      .fl-define-popout {
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
+        z-index: 100;
+        display: block;
+        width: max-content;
+        max-width: 280px;
+        padding: 10px 12px;
+        border-radius: 4px;
+        background: rgba(15, 23, 42, 0.98);
+        border: 1px solid rgba(212, 168, 87, 0.3);
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5);
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        font-size: 11px;
+        line-height: 1.5;
+        color: rgba(226, 232, 240, 0.9);
+        text-transform: none;
+        letter-spacing: normal;
+      }
+      .fl-define-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        margin-bottom: 6px;
+      }
+      .fl-define-term {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 9px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: #d4a857;
+      }
+      .fl-define-close {
+        padding: 0;
+        width: 16px;
+        height: 16px;
+        line-height: 1;
+        background: transparent;
+        border: none;
+        color: rgba(148, 163, 184, 0.5);
+        font-size: 14px;
+        cursor: pointer;
+      }
+      .fl-define-close:hover {
+        color: rgba(226, 232, 240, 0.9);
+      }
+      .fl-define-short {
+        display: block;
+        margin-bottom: 8px;
+        color: rgba(226, 232, 240, 0.95);
+      }
+      .fl-define-long {
+        display: block;
+        margin-bottom: 8px;
+        color: rgba(226, 232, 240, 0.7);
+        font-size: 10px;
+      }
+      .fl-define-see {
+        display: block;
+        padding-top: 8px;
+        border-top: 1px solid rgba(148, 163, 184, 0.1);
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 9px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: rgba(148, 163, 184, 0.5);
+      }
+
+      /* Mobile: pin popout to viewport edge so it doesn't get clipped */
+      @media (max-width: 640px) {
+        .fl-define-popout {
+          position: fixed;
+          top: auto;
+          bottom: 16px;
+          left: 16px;
+          right: 16px;
+          max-width: none;
+          width: auto;
+        }
       }
 
       /* ── Center column ──────────────────────────── */
