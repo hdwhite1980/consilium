@@ -1,0 +1,59 @@
+name: Backtest Outcomes Resolver (1d only)
+
+# Resolves 1-day outcomes specifically. Runs in the afternoon ET so that
+# verdicts logged the previous trading day have had a full session to
+# play out before we evaluate them.
+#
+# Why a separate cron from 1w/1m:
+#   - 1d verdicts need market hours to evaluate; the 4:30am ET cron is
+#     too early because it would only catch yesterday's after-hours close
+#   - This 5pm ET cron runs after market close and after-hours, giving
+#     us the full close + AH price action
+#   - If the morning cron also runs horizon=all, that's fine — it's idempotent.
+#     This afternoon cron exists so 1d outcomes resolve same-day.
+#
+# Schedule: Daily at 5:00pm ET (= 21:00 UTC DST / 22:00 UTC standard)
+#   We schedule for 21:00 UTC year-round. In standard-time months it
+#   runs at 4pm ET — still after market close (4pm ET).
+
+on:
+  schedule:
+    - cron: '0 21 * * *'    # daily, 21:00 UTC = 5pm ET DST / 4pm ET standard
+  workflow_dispatch:         # allows manual trigger
+
+jobs:
+  resolve-1d-outcomes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Trigger 1d outcomes resolver
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET not configured in GitHub secrets"
+            exit 1
+          fi
+
+          echo "Triggering 1d outcomes resolver at $(date -u)"
+
+          response=$(curl -sS -w "\n__HTTP_STATUS:%{http_code}__" \
+            --max-time 300 \
+            -X POST "https://wali-os.com/api/backtest/outcomes?horizon=1d" \
+            -H "x-cron-secret: $CRON_SECRET" \
+            -H "Content-Type: application/json")
+
+          body=$(echo "$response" | sed 's/__HTTP_STATUS:[0-9]*__$//')
+          status=$(echo "$response" | grep -o '__HTTP_STATUS:[0-9]*__' | grep -o '[0-9]*')
+
+          echo "HTTP Status: $status"
+          echo "Response body:"
+          echo "$body"
+
+          if [ "$status" != "200" ] && [ "$status" != "202" ]; then
+            echo "::error::1d outcomes resolver failed with status $status"
+            exit 1
+          fi
+
+          echo "✓ 1d outcomes resolver completed"
+          echo "::notice::Check Supabase verdict_log for updated outcome_1d_strict values"

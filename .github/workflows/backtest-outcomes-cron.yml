@@ -1,28 +1,33 @@
-name: Backtest Outcomes Resolver
+name: Backtest Outcomes Resolver (1w + 1m)
 
-# Runs daily at 22:00 UTC (= 6pm ET during DST, 5pm ET during standard time)
-# Resolves pending outcome_1w and outcome_1m entries in verdict_log by
-# looking up actual price data from Finnhub daily candles.
+# Resolves 1-week and 1-month outcomes by fetching daily OHLC bars from
+# Alpaca (replaced Finnhub /candle which moved behind the paid tier).
 #
-# Safe to run daily because the endpoint:
-#   - Only updates rows where outcome is currently NULL or 'pending'
-#   - Only resolves rows old enough (>7 days for 1w, >30 days for 1m)
-#   - Is idempotent — running twice the same day does nothing extra
+# Schedule: Daily at 4:30am ET
+#   - During DST (Mar-Nov): 4:30 ET = 8:30 UTC
+#   - During standard time (Nov-Mar): 4:30 ET = 9:30 UTC
+#   We schedule for 8:30 UTC year-round. In standard-time months, the
+#   job runs at 3:30 ET instead of 4:30 ET — still well before market open.
 #
-# Runs every day (not just weekdays) because we want weekend/holiday
-# verdicts to resolve on the next trading day.
+# Why this time:
+#   - Markets closed; price data settled
+#   - Before any pre-market analysis cron jobs
+#   - User wakes up to fresh resolved outcomes
+#
+# 1-day outcomes are handled by a SEPARATE workflow that runs in the
+# afternoon, since same-day verdicts need market hours to play out.
 
 on:
   schedule:
-    - cron: '0 22 * * *'   # daily, every day
-  workflow_dispatch:  # allows manual trigger from GitHub Actions UI
+    - cron: '30 8 * * *'   # daily, 8:30 UTC = 4:30 ET DST / 3:30 ET standard
+  workflow_dispatch:        # allows manual trigger from GitHub UI
 
 jobs:
   resolve-backtest-outcomes:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Trigger backtest outcomes resolver
+      - name: Trigger backtest outcomes resolver (1w + 1m)
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
@@ -30,27 +35,28 @@ jobs:
             echo "::error::CRON_SECRET not configured in GitHub secrets"
             exit 1
           fi
-          
-          echo "Triggering backtest outcomes resolver at $(date -u)"
-          
+
+          echo "Triggering backtest outcomes resolver (1w + 1m) at $(date -u)"
+
+          # Use horizon=all to resolve every horizon (1d included if any
+          # 1d verdicts haven't been picked up by the afternoon cron yet).
           response=$(curl -sS -w "\n__HTTP_STATUS:%{http_code}__" \
             --max-time 300 \
-            -X POST "https://wali-os.com/api/backtest/outcomes" \
+            -X POST "https://wali-os.com/api/backtest/outcomes?horizon=all" \
             -H "x-cron-secret: $CRON_SECRET" \
             -H "Content-Type: application/json")
-          
+
           body=$(echo "$response" | sed 's/__HTTP_STATUS:[0-9]*__$//')
           status=$(echo "$response" | grep -o '__HTTP_STATUS:[0-9]*__' | grep -o '[0-9]*')
-          
+
           echo "HTTP Status: $status"
           echo "Response body:"
           echo "$body"
-          
-          # Accept both 200 (sync completion) and 202 (fire-and-forget)
+
           if [ "$status" != "200" ] && [ "$status" != "202" ]; then
             echo "::error::Backtest outcomes resolver failed with status $status"
             exit 1
           fi
-          
+
           echo "✓ Backtest outcomes resolver completed"
-          echo "::notice::Check Supabase verdict_log for updated outcome_1w_strict / outcome_1m_strict values"
+          echo "::notice::Check Supabase verdict_log for updated outcome_*_strict values"

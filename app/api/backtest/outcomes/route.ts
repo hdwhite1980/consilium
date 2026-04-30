@@ -1,17 +1,28 @@
 // ═════════════════════════════════════════════════════════════
-// /api/backtest/outcomes — Cron endpoint
+// /api/backtest/outcomes — Cron endpoint (REWRITTEN 2026-04-30)
 //
 // Updates pending outcomes in verdict_log:
-//   1. Finds verdicts where outcome_1w is 'pending' and >=7 days old
-//   2. Fetches 7-day bar history from Finnhub
+//   1. Finds verdicts where outcome_1d/1w/1m is 'pending' AND old enough
+//   2. Fetches OHLC bars from ALPACA (was Finnhub — moved due to free-tier
+//      restrictions on Finnhub's /candle endpoint)
 //   3. Computes BOTH strict and directional outcomes
-//   4. Same for 30-day window
+//   4. NEW: Threshold fallback for verdicts without target/stop —
+//      previously marked 'expired'; now resolved against per-timeframe
+//      threshold (3% / 5% / 8% by horizon)
 //
 // Auth: requires X-Cron-Secret header matching process.env.CRON_SECRET.
-// Designed to be called by Railway cron daily at 4am ET.
+// Designed to be called by GitHub Actions cron daily.
 //
 // Safe to call multiple times — only updates verdicts where outcome is
 // still 'pending'. Idempotent.
+//
+// What changed vs the old version:
+//   - Replaced Finnhub /stock/candle (paid tier only) with Alpaca
+//     /v2/stocks/{ticker}/bars (free, already in use elsewhere in the app)
+//   - Added 1-day outcome resolution alongside 1w/1m
+//   - Added threshold fallback for verdicts without target/stop
+//   - Added optional `?horizon=1d|1w|1m|all` query param so cron jobs
+//     can resolve specific horizons at different times of day
 // ═════════════════════════════════════════════════════════════
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -20,23 +31,85 @@ import { createClient } from '@supabase/supabase-js'
 export const runtime = 'nodejs'
 export const maxDuration = 300  // 5 min max
 
-// Finnhub candle endpoint: returns daily OHLC for a ticker + time range
-async function fetchCandles(ticker: string, fromUnix: number, toUnix: number): Promise<null | {
-  c: number[]; h: number[]; l: number[]; o: number[]; t: number[];
-}> {
-  const key = process.env.FINNHUB_API_KEY
-  if (!key) return null
-  try {
-    const url = `https://finnhub.io/api/v1/stock/candle?symbol=${ticker}&resolution=D&from=${fromUnix}&to=${toUnix}&token=${key}`
-    const res = await fetch(url)
-    if (!res.ok) return null
-    const data = await res.json()
-    if (data.s !== 'ok' || !data.c?.length) return null
-    return data
-  } catch {
+// ─────────────────────────────────────────────────────────────
+// Alpaca bars fetcher (replaces Finnhub /stock/candle)
+// ─────────────────────────────────────────────────────────────
+//
+// Returns Finnhub-shape data so the rest of the resolver doesn't change:
+//   { c: [], h: [], l: [], o: [], t: [] }
+//
+// Try SIP first (real-time consolidated), fall back to IEX for OTC etc.
+// ─────────────────────────────────────────────────────────────
+
+const ALPACA_BASE = 'https://data.alpaca.markets'
+
+interface AlpacaBar {
+  t: string  // ISO timestamp
+  o: number
+  h: number
+  l: number
+  c: number
+  v: number
+}
+
+interface CandleResponse {
+  c: number[]
+  h: number[]
+  l: number[]
+  o: number[]
+  t: number[]
+}
+
+async function fetchCandles(
+  ticker: string,
+  fromUnix: number,
+  toUnix: number,
+): Promise<CandleResponse | null> {
+  const apiKey = process.env.ALPACA_API_KEY
+  const apiSecret = process.env.ALPACA_SECRET_KEY
+  if (!apiKey || !apiSecret) {
+    console.warn('[backtest-resolver] ALPACA_API_KEY/SECRET missing')
     return null
   }
+
+  const headers = {
+    'APCA-API-KEY-ID': apiKey,
+    'APCA-API-SECRET-KEY': apiSecret,
+    'Accept': 'application/json',
+  }
+
+  const startStr = new Date(fromUnix * 1000).toISOString().split('T')[0]
+  const endStr = new Date(toUnix * 1000).toISOString().split('T')[0]
+
+  // Try SIP first, fall back to IEX
+  for (const feed of ['sip', 'iex']) {
+    try {
+      const url = `${ALPACA_BASE}/v2/stocks/${ticker}/bars` +
+        `?timeframe=1Day&start=${startStr}&end=${endStr}` +
+        `&limit=10000&adjustment=all&feed=${feed}`
+      const res = await fetch(url, { headers, cache: 'no-store' })
+      if (!res.ok) continue
+      const data = await res.json()
+      const bars = (data.bars ?? []) as AlpacaBar[]
+      if (bars.length === 0) continue
+      // Convert to Finnhub-shape arrays
+      return {
+        c: bars.map(b => b.c),
+        h: bars.map(b => b.h),
+        l: bars.map(b => b.l),
+        o: bars.map(b => b.o),
+        t: bars.map(b => Math.floor(new Date(b.t).getTime() / 1000)),
+      }
+    } catch {
+      // try next feed
+    }
+  }
+  return null
 }
+
+// ─────────────────────────────────────────────────────────────
+// Outcome computation
+// ─────────────────────────────────────────────────────────────
 
 type StrictOutcome = 'win' | 'loss' | 'expired' | 'pending'
 type DirectionalOutcome = 'win' | 'loss' | 'pending'
@@ -47,82 +120,271 @@ interface ComputedOutcomes {
   closePrice: number | null
 }
 
+// Per-timeframe thresholds for the threshold-fallback path.
+// When a verdict has no stop or no target, we use these to determine
+// whether the move was meaningful enough to count as a "win".
+//
+// Aligned with how a trader would think about each horizon:
+//   1d: a 3% move in a single day is non-trivial
+//   1w: a 3% move in a week is normal-sized
+//   1m: a 5% move in a month is meaningful (not noise)
+//   3m: an 8% move in a quarter is a real trend
+const THRESHOLDS: Record<string, number> = {
+  '1d': 0.03,
+  '1w': 0.03,
+  '1m': 0.05,
+  '3m': 0.08,
+}
+
 /**
- * Compute both outcomes for a verdict given bar data over the horizon window.
- * 
- * Strict: did intraday high during window hit target? Did intraday low hit stop?
- *   - Both hit: whichever was hit FIRST wins (for BULLISH: if high hits target
- *     before low hits stop, it's a win; approximate by checking which daily
- *     high/low was reached first chronologically)
- *   - Only target hit: win
- *   - Only stop hit: loss
- *   - Neither: expired
- * 
- * Directional: close at end of window vs entry price.
- *   - BULLISH: close > entry is win, close < entry is loss
- *   - BEARISH: close < entry is win, close > entry is loss
+ * Compute strict + directional outcomes for a verdict.
+ *
+ * STRICT logic:
+ *   - If stop AND target are both set: walk bars, check first-hit (target=win, stop=loss)
+ *   - If stop OR target missing: use threshold fallback against the horizon's % move
+ *   - NEUTRAL signals: directional only, strict stays 'expired' (no direction to evaluate)
+ *
+ * DIRECTIONAL logic:
+ *   - BULLISH correct if last close > entry (any positive move)
+ *   - BEARISH correct if last close < entry (any negative move)
+ *   - NEUTRAL correct if last close within ±2% of entry (no significant move)
  */
 function computeOutcome(
   signal: string,
   entry: number,
   stop: number | null,
   target: number | null,
-  candles: { c: number[]; h: number[]; l: number[]; o: number[]; t: number[] }
+  candles: CandleResponse,
+  horizon: '1d' | '1w' | '1m',
 ): ComputedOutcomes {
-  const lastClose = candles.c[candles.c.length - 1]
+  const lastClose = candles.c[candles.c.length - 1] ?? null
 
-  // ── Directional: simple close comparison ──
+  // ── DIRECTIONAL ──
   let directional: DirectionalOutcome = 'pending'
-  if (signal === 'BULLISH') {
-    directional = lastClose > entry ? 'win' : 'loss'
-  } else if (signal === 'BEARISH') {
-    directional = lastClose < entry ? 'win' : 'loss'
+  if (lastClose !== null && entry > 0) {
+    if (signal === 'BULLISH') {
+      directional = lastClose > entry ? 'win' : 'loss'
+    } else if (signal === 'BEARISH') {
+      directional = lastClose < entry ? 'win' : 'loss'
+    } else if (signal === 'NEUTRAL') {
+      const pctMove = Math.abs((lastClose - entry) / entry)
+      directional = pctMove < 0.02 ? 'win' : 'loss'
+    }
   }
 
-  // ── Strict: walk bars chronologically, find first hit ──
+  // ── STRICT ──
   let strict: StrictOutcome = 'expired'
 
+  // Path A: Hit-target-or-stop (when both are set)
   if (stop !== null && target !== null && signal !== 'NEUTRAL') {
     for (let i = 0; i < candles.h.length; i++) {
       const high = candles.h[i]
       const low = candles.l[i]
-
       if (signal === 'BULLISH') {
-        // Check target first (we want win to take precedence in ambiguous same-bar cases)
         const targetHit = high >= target
-        const stopHit   = low <= stop
+        const stopHit = low <= stop
         if (targetHit && stopHit) {
-          // Ambiguous — same bar hit both. Use open-proximity heuristic:
-          // if bar opened closer to stop, assume stop hit first.
+          // Same-bar ambiguity: use open-proximity heuristic
           const open = candles.o[i]
-          const distToStop = Math.abs(open - stop)
-          const distToTarget = Math.abs(open - target)
-          strict = distToStop < distToTarget ? 'loss' : 'win'
+          strict = Math.abs(open - stop) < Math.abs(open - target) ? 'loss' : 'win'
           break
         }
         if (targetHit) { strict = 'win'; break }
-        if (stopHit)   { strict = 'loss'; break }
+        if (stopHit) { strict = 'loss'; break }
       } else if (signal === 'BEARISH') {
-        const targetHit = low <= target     // for BEARISH, target is BELOW entry
-        const stopHit   = high >= stop      // stop is ABOVE entry
+        const targetHit = low <= target  // BEARISH target is below entry
+        const stopHit = high >= stop     // BEARISH stop is above entry
         if (targetHit && stopHit) {
           const open = candles.o[i]
-          const distToStop = Math.abs(open - stop)
-          const distToTarget = Math.abs(open - target)
-          strict = distToStop < distToTarget ? 'loss' : 'win'
+          strict = Math.abs(open - stop) < Math.abs(open - target) ? 'loss' : 'win'
           break
         }
         if (targetHit) { strict = 'win'; break }
-        if (stopHit)   { strict = 'loss'; break }
+        if (stopHit) { strict = 'loss'; break }
       }
     }
   }
+  // Path B: Threshold fallback — verdict didn't have target/stop set
+  // Use per-horizon % threshold to determine if directional move was significant
+  else if (lastClose !== null && entry > 0 && signal !== 'NEUTRAL') {
+    const threshold = THRESHOLDS[horizon] ?? 0.03
+    if (signal === 'BULLISH') {
+      const pctMove = (lastClose - entry) / entry
+      strict = pctMove >= threshold ? 'win'
+        : pctMove <= -threshold ? 'loss'
+        : 'expired'  // didn't move enough either way
+    } else if (signal === 'BEARISH') {
+      const pctMove = (entry - lastClose) / entry
+      strict = pctMove >= threshold ? 'win'
+        : pctMove <= -threshold ? 'loss'
+        : 'expired'
+    }
+  }
 
-  return { strict, directional, closePrice: lastClose ?? null }
+  return { strict, directional, closePrice: lastClose }
 }
 
+// ─────────────────────────────────────────────────────────────
+// Per-horizon resolver
+// ─────────────────────────────────────────────────────────────
+
+interface HorizonConfig {
+  key: '1d' | '1w' | '1m'
+  daysOld: number              // verdict must be at least this old
+  windowDays: number           // how many days of candles to fetch
+  strictColumn: string
+  directionalColumn: string
+  priceColumn: string
+  computedAtColumn: string
+  legacyColumn?: string        // for back-compat (1w/1m have legacy outcome_1w / outcome_1m)
+}
+
+const HORIZONS: HorizonConfig[] = [
+  {
+    key: '1d',
+    daysOld: 1,
+    windowDays: 2,                 // grab 2 days of bars to handle weekend gaps
+    strictColumn: 'outcome_1d_strict',
+    directionalColumn: 'outcome_1d_directional',
+    priceColumn: 'outcome_1d_price',
+    computedAtColumn: 'outcome_1d_computed_at',
+    // No legacy column — 1d outcomes are new
+  },
+  {
+    key: '1w',
+    daysOld: 7,
+    windowDays: 7,
+    strictColumn: 'outcome_1w_strict',
+    directionalColumn: 'outcome_1w_directional',
+    priceColumn: 'outcome_1w_price',
+    computedAtColumn: 'outcome_1w_computed_at',
+    legacyColumn: 'outcome_1w',
+  },
+  {
+    key: '1m',
+    daysOld: 30,
+    windowDays: 30,
+    strictColumn: 'outcome_1m_strict',
+    directionalColumn: 'outcome_1m_directional',
+    priceColumn: 'outcome_1m_price',
+    computedAtColumn: 'outcome_1m_computed_at',
+    legacyColumn: 'outcome_1m',
+  },
+]
+
+interface VerdictRow {
+  id: number
+  ticker: string
+  signal: string
+  entry_price: number | null
+  stop_loss: number | null
+  take_profit: number | null
+  verdict_date: string
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function processHorizon(
+  admin: any,
+  horizon: HorizonConfig,
+  now: Date,
+): Promise<{ processed: number; errors: number; expired: number; resolved: number }> {
+
+  const cutoff = new Date(now.getTime() - horizon.daysOld * 86400000)
+    .toISOString().split('T')[0]
+
+  const { data: pending, error } = await admin
+    .from('verdict_log')
+    .select('id, ticker, signal, entry_price, stop_loss, take_profit, verdict_date')
+    .eq(horizon.strictColumn, 'pending')
+    .lte('verdict_date', cutoff)
+    .limit(500)
+
+  if (error) {
+    console.error(`[backtest-resolver] ${horizon.key} fetch failed:`, error.message)
+    return { processed: 0, errors: 1, expired: 0, resolved: 0 }
+  }
+
+  const rows = (pending ?? []) as VerdictRow[]
+  if (rows.length === 0) {
+    return { processed: 0, errors: 0, expired: 0, resolved: 0 }
+  }
+
+  console.log(`[backtest-resolver] ${horizon.key}: ${rows.length} pending verdicts to process`)
+
+  let processed = 0
+  let errors = 0
+  let expired = 0
+  let resolved = 0
+
+  for (const v of rows) {
+    // Skip verdicts that have no entry price — can't compute anything
+    if (!v.entry_price || !v.signal) {
+      const update: Record<string, unknown> = {
+        [horizon.strictColumn]: 'expired',
+        [horizon.directionalColumn]: 'pending',
+        [horizon.computedAtColumn]: now.toISOString(),
+      }
+      if (horizon.legacyColumn) update[horizon.legacyColumn] = 'expired'
+      await admin.from('verdict_log').update(update).eq('id', v.id)
+      expired++
+      continue
+    }
+
+    const verdictDate = new Date(v.verdict_date)
+    const fromUnix = Math.floor(verdictDate.getTime() / 1000)
+    // Add a small buffer to the window for weekend/holiday gaps
+    const toUnix = Math.floor(
+      (verdictDate.getTime() + (horizon.windowDays + 2) * 86400000) / 1000
+    )
+
+    const candles = await fetchCandles(v.ticker, fromUnix, toUnix)
+    if (!candles || candles.c.length === 0) {
+      errors++
+      continue
+    }
+
+    const outcomes = computeOutcome(
+      v.signal,
+      v.entry_price,
+      v.stop_loss,
+      v.take_profit,
+      candles,
+      horizon.key,
+    )
+
+    const update: Record<string, unknown> = {
+      [horizon.strictColumn]: outcomes.strict,
+      [horizon.directionalColumn]: outcomes.directional,
+      [horizon.priceColumn]: outcomes.closePrice,
+      [horizon.computedAtColumn]: now.toISOString(),
+    }
+    // Keep legacy 1w/1m columns in sync
+    if (horizon.legacyColumn) update[horizon.legacyColumn] = outcomes.strict
+
+    const { error: updateErr } = await admin.from('verdict_log').update(update).eq('id', v.id)
+    if (updateErr) {
+      console.error(`[backtest-resolver] update failed for verdict ${v.id}:`, updateErr.message)
+      errors++
+      continue
+    }
+
+    processed++
+    if (outcomes.strict === 'win' || outcomes.strict === 'loss') resolved++
+    else if (outcomes.strict === 'expired') expired++
+
+    // Small delay between Alpaca calls to be polite
+    await new Promise(r => setTimeout(r, 50))
+  }
+
+  return { processed, errors, expired, resolved }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Route handlers
+// ─────────────────────────────────────────────────────────────
+
 export async function POST(req: NextRequest) {
-  // ── Auth check ──
+  // Auth
   const secret = req.headers.get('x-cron-secret')
   if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
@@ -133,109 +395,48 @@ export async function POST(req: NextRequest) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
   )
 
+  const url = new URL(req.url)
+  const horizonParam = url.searchParams.get('horizon') ?? 'all'
+  const targetHorizons = horizonParam === 'all'
+    ? HORIZONS
+    : HORIZONS.filter(h => h.key === horizonParam)
+
+  if (targetHorizons.length === 0) {
+    return NextResponse.json({
+      error: `Invalid horizon: ${horizonParam}. Use 1d, 1w, 1m, or all.`,
+    }, { status: 400 })
+  }
+
   const now = new Date()
-  const nowSec = Math.floor(now.getTime() / 1000)
+  const startedAt = now.toISOString()
 
-  // ── Process 1-week outcomes ──
-  const oneWeekAgo = new Date(now.getTime() - 7 * 86400000).toISOString().split('T')[0]
-  const { data: pending1w, error: err1w } = await admin
-    .from('verdict_log')
-    .select('id, ticker, signal, entry_price, stop_loss, take_profit, verdict_date')
-    .eq('outcome_1w_strict', 'pending')
-    .lte('verdict_date', oneWeekAgo)
-    .limit(500)
-
-  if (err1w) {
-    console.error('[backtest-cron] 1w fetch failed:', err1w.message)
+  const results: Record<string, ReturnType<typeof processHorizon> extends Promise<infer R> ? R : never> = {}
+  for (const h of targetHorizons) {
+    results[h.key] = await processHorizon(admin, h, now)
   }
 
-  let processed1w = 0
-  let errors1w = 0
-  for (const v of pending1w ?? []) {
-    if (!v.entry_price || !v.signal) {
-      // Mark as expired if we can't compute
-      await admin.from('verdict_log').update({
-        outcome_1w_strict: 'expired',
-        outcome_1w_directional: 'pending',
-        outcome_1w_computed_at: now.toISOString(),
-      }).eq('id', v.id)
-      continue
-    }
-    const verdictDate = new Date(v.verdict_date)
-    const fromUnix = Math.floor(verdictDate.getTime() / 1000)
-    const toUnix = Math.floor((verdictDate.getTime() + 7 * 86400000) / 1000)
-    const candles = await fetchCandles(v.ticker, fromUnix, toUnix)
-    if (!candles) {
-      errors1w++
-      continue
-    }
-    const outcomes = computeOutcome(v.signal, v.entry_price, v.stop_loss, v.take_profit, candles)
-    await admin.from('verdict_log').update({
-      outcome_1w_strict: outcomes.strict,
-      outcome_1w_directional: outcomes.directional,
-      outcome_1w_price: outcomes.closePrice,
-      outcome_1w_computed_at: now.toISOString(),
-      // Keep the old `outcome_1w` column in sync so any existing code that
-      // reads it still works (maps to strict outcome).
-      outcome_1w: outcomes.strict,
-    }).eq('id', v.id)
-    processed1w++
-  }
+  const totalProcessed = Object.values(results).reduce((s, r) => s + r.processed, 0)
+  const totalErrors = Object.values(results).reduce((s, r) => s + r.errors, 0)
+  const totalResolved = Object.values(results).reduce((s, r) => s + r.resolved, 0)
 
-  // ── Process 1-month outcomes ──
-  const oneMonthAgo = new Date(now.getTime() - 30 * 86400000).toISOString().split('T')[0]
-  const { data: pending1m, error: err1m } = await admin
-    .from('verdict_log')
-    .select('id, ticker, signal, entry_price, stop_loss, take_profit, verdict_date')
-    .eq('outcome_1m_strict', 'pending')
-    .lte('verdict_date', oneMonthAgo)
-    .limit(500)
-
-  if (err1m) {
-    console.error('[backtest-cron] 1m fetch failed:', err1m.message)
-  }
-
-  let processed1m = 0
-  let errors1m = 0
-  for (const v of pending1m ?? []) {
-    if (!v.entry_price || !v.signal) {
-      await admin.from('verdict_log').update({
-        outcome_1m_strict: 'expired',
-        outcome_1m_directional: 'pending',
-        outcome_1m_computed_at: now.toISOString(),
-      }).eq('id', v.id)
-      continue
-    }
-    const verdictDate = new Date(v.verdict_date)
-    const fromUnix = Math.floor(verdictDate.getTime() / 1000)
-    const toUnix = Math.floor((verdictDate.getTime() + 30 * 86400000) / 1000)
-    const candles = await fetchCandles(v.ticker, fromUnix, toUnix)
-    if (!candles) {
-      errors1m++
-      continue
-    }
-    const outcomes = computeOutcome(v.signal, v.entry_price, v.stop_loss, v.take_profit, candles)
-    await admin.from('verdict_log').update({
-      outcome_1m_strict: outcomes.strict,
-      outcome_1m_directional: outcomes.directional,
-      outcome_1m_price: outcomes.closePrice,
-      outcome_1m_computed_at: now.toISOString(),
-      outcome_1m: outcomes.strict,
-    }).eq('id', v.id)
-    processed1m++
-  }
+  console.log(`[backtest-resolver] DONE: ${totalProcessed} processed, ${totalResolved} resolved (win/loss), ${totalErrors} errors`)
 
   return NextResponse.json({
     ok: true,
-    processed_1w: processed1w,
-    errors_1w: errors1w,
-    processed_1m: processed1m,
-    errors_1m: errors1m,
-    timestamp: now.toISOString(),
+    horizons: targetHorizons.map(h => h.key),
+    results,
+    totals: {
+      processed: totalProcessed,
+      resolved: totalResolved,
+      errors: totalErrors,
+    },
+    startedAt,
+    finishedAt: new Date().toISOString(),
   })
 }
 
-// GET for manual testing — returns counts of pending verdicts without updating
+// GET — manual diagnostic. Returns counts of pending verdicts WITHOUT updating.
+// Useful for sanity-checking before running a real resolution pass.
 export async function GET(req: NextRequest) {
   const secret = req.headers.get('x-cron-secret')
   if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
@@ -248,25 +449,22 @@ export async function GET(req: NextRequest) {
   )
 
   const now = new Date()
-  const oneWeekAgo = new Date(now.getTime() - 7 * 86400000).toISOString().split('T')[0]
-  const oneMonthAgo = new Date(now.getTime() - 30 * 86400000).toISOString().split('T')[0]
+  const counts: Record<string, { pending: number; daysOld: number }> = {}
 
-  const { count: pending1w } = await admin
-    .from('verdict_log')
-    .select('*', { count: 'exact', head: true })
-    .eq('outcome_1w_strict', 'pending')
-    .lte('verdict_date', oneWeekAgo)
-
-  const { count: pending1m } = await admin
-    .from('verdict_log')
-    .select('*', { count: 'exact', head: true })
-    .eq('outcome_1m_strict', 'pending')
-    .lte('verdict_date', oneMonthAgo)
+  for (const h of HORIZONS) {
+    const cutoff = new Date(now.getTime() - h.daysOld * 86400000)
+      .toISOString().split('T')[0]
+    const { count } = await admin
+      .from('verdict_log')
+      .select('*', { count: 'exact', head: true })
+      .eq(h.strictColumn, 'pending')
+      .lte('verdict_date', cutoff)
+    counts[h.key] = { pending: count ?? 0, daysOld: h.daysOld }
+  }
 
   return NextResponse.json({
     ok: true,
-    pending_1w: pending1w ?? 0,
-    pending_1m: pending1m ?? 0,
+    counts,
     timestamp: now.toISOString(),
   })
 }
