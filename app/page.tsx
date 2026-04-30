@@ -1,4 +1,5 @@
 'use client'
+import type { TraderVerdict } from '@/app/lib/trader'
 
 import type { SocialSentiment } from '@/app/lib/social-scout'
 import { useState, useRef, useCallback, useEffect, Suspense } from 'react'
@@ -322,6 +323,7 @@ function HomeInner() {
   const [verify, setVerify]     = useState<{ totalVerified: number; totalStripped: number; allSourceUrls: string[] } | null>(null)
   const [soc, setSoc]           = useState<SocialSentiment | null>(null)
   const [socOpen, setSocOpen]   = useState(false)
+  const [trader, setTrader]     = useState<TraderVerdict | null>(null)
   const [err, setErr]           = useState<string | null>(null)
   const [cached, setCached]     = useState<{ at: string; ageMinutes: number } | null>(null)
 
@@ -470,7 +472,7 @@ function HomeInner() {
   const run = useCallback(async () => {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
-    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setSoc(null); setErr(null); setCached(null); setVerify(null)
+    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setSoc(null); setErr(null); setCached(null); setVerify(null); setTrader(null)
 
     try {
       const res = await fetch('/api/analyze', {
@@ -499,6 +501,8 @@ function HomeInner() {
             case 'gemini_done':  setGem(data); scroll(); break
             case 'grok_start':   setStage('grok'); scroll(); break
             case 'grok_done':    setSoc(data); scroll(); break
+            case 'trader_start': /* trader runs after judge */ break
+            case 'trader_done':  setTrader(data); scroll(); break
             case 'claude_start': setStage('claude'); scroll(); break
             case 'claude_done':  setCla(data); scroll(); break
             case 'gpt_start':    setStage('gpt'); scroll(); break
@@ -525,7 +529,7 @@ function HomeInner() {
   const forceRun = useCallback(async () => {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
-    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setSoc(null); setErr(null); setCached(null); setVerify(null)
+    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setSoc(null); setErr(null); setCached(null); setVerify(null); setTrader(null)
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
@@ -551,6 +555,8 @@ function HomeInner() {
             case 'gemini_done':  setGem(data); scroll(); break
             case 'grok_start':   setStage('grok'); scroll(); break
             case 'grok_done':    setSoc(data); scroll(); break
+            case 'trader_start': /* trader runs after judge */ break
+            case 'trader_done':  setTrader(data); scroll(); break
             case 'claude_start': setStage('claude'); scroll(); break
             case 'claude_done':  setCla(data); scroll(); break
             case 'gpt_start':    setStage('gpt'); scroll(); break
@@ -1717,6 +1723,104 @@ function HomeInner() {
                     epsActual={md.fundamentals.epsActual ?? null}
                   />
                 })()}
+
+                {/* ── TRADER ASSESSMENT — between Council Verdict and Trade Plan ── */}
+                {trader && (
+                  <div className="rounded-2xl p-4 mt-1" style={{
+                    background: trader.decision === 'TAKE' ? 'rgba(52,211,153,0.08)'
+                              : trader.decision === 'WAIT' ? 'rgba(251,191,36,0.08)'
+                              : 'rgba(248,113,113,0.08)',
+                    border: `2px solid ${
+                      trader.decision === 'TAKE' ? 'rgba(52,211,153,0.3)'
+                      : trader.decision === 'WAIT' ? 'rgba(251,191,36,0.3)'
+                      : 'rgba(248,113,113,0.3)'}`
+                  }}>
+                    <div className="flex items-center gap-2 flex-wrap mb-3">
+                      <span className="text-[10px] font-mono uppercase tracking-widest" style={{
+                        color: trader.decision === 'TAKE' ? '#34d399'
+                             : trader.decision === 'WAIT' ? '#fbbf24'
+                             : '#f87171'
+                      }}>
+                        Trader Assessment
+                      </span>
+                      <span className="font-mono font-bold text-lg px-2.5 py-0.5 rounded-full" style={{
+                        background: trader.decision === 'TAKE' ? 'rgba(52,211,153,0.15)'
+                                  : trader.decision === 'WAIT' ? 'rgba(251,191,36,0.15)'
+                                  : 'rgba(248,113,113,0.15)',
+                        color: trader.decision === 'TAKE' ? '#34d399'
+                             : trader.decision === 'WAIT' ? '#fbbf24'
+                             : '#f87171',
+                        border: `1px solid ${
+                          trader.decision === 'TAKE' ? '#34d39940'
+                          : trader.decision === 'WAIT' ? '#fbbf2440'
+                          : '#f8717140'}`
+                      }}>
+                        {trader.decision}
+                      </span>
+                      {trader.grade && (
+                        <span className="text-xs font-mono px-2 py-0.5 rounded-full" style={{
+                          background: 'rgba(255,255,255,0.05)',
+                          color: 'var(--text)',
+                          border: '1px solid rgba(255,255,255,0.1)'
+                        }}>
+                          Grade {trader.grade}
+                        </span>
+                      )}
+                      {trader.decision === 'TAKE' && trader.positionSizePct > 0 && (
+                        <span className="text-xs font-mono" style={{ color: 'var(--text2)' }}>
+                          {Math.round(trader.positionSizePct * 100)}% position size
+                        </span>
+                      )}
+                      {trader.riskReward !== null && trader.riskReward > 0 && (
+                        <span className="ml-auto text-xs font-mono" style={{ color: 'var(--text3)' }}>
+                          R:R {trader.riskReward.toFixed(2)}:1
+                        </span>
+                      )}
+                    </div>
+                    {trader.rationale && (
+                      <p className="text-sm leading-relaxed mb-3" style={{ color: 'var(--text)' }}>
+                        {trader.rationale}
+                      </p>
+                    )}
+                    {trader.passReasons && trader.passReasons.length > 0 && (
+                      <div className="space-y-1.5">
+                        <div className="text-[10px] font-mono uppercase tracking-widest" style={{ color: 'var(--text3)' }}>
+                          Why
+                        </div>
+                        {trader.passReasons.map((reason: string, i: number) => (
+                          <div key={i} className="text-xs flex gap-2 leading-relaxed" style={{ color: 'var(--text2)' }}>
+                            <span style={{ color: '#f87171', flexShrink: 0 }}>•</span>
+                            <span>{reason}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {trader.waitConditions && trader.waitConditions.length > 0 && (
+                      <div className="space-y-1.5 mt-3">
+                        <div className="text-[10px] font-mono uppercase tracking-widest" style={{ color: '#fbbf24' }}>
+                          What Would Change This
+                        </div>
+                        {trader.waitConditions.map((condition: string, i: number) => (
+                          <div key={i} className="text-xs flex gap-2 leading-relaxed" style={{ color: 'var(--text2)' }}>
+                            <span style={{ color: '#fbbf24', flexShrink: 0 }}>→</span>
+                            <span>{condition}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {trader.diagnostics?.setupType && trader.diagnostics.setupType !== 'unknown' && (
+                      <div className="mt-3 pt-3 border-t text-[10px] font-mono" style={{
+                        borderColor: 'rgba(255,255,255,0.05)',
+                        color: 'var(--text3)'
+                      }}>
+                        Setup: {trader.diagnostics.setupType.replace('_', ' ')}
+                        {trader.diagnostics.conflicts && trader.diagnostics.conflicts.length > 0 && (
+                          <> · {trader.diagnostics.conflicts.length} conflict{trader.diagnostics.conflicts.length === 1 ? '' : 's'} flagged</>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* ── TRADE PLAN — prominent, right under verdict ── */}
                 {jud.entryPrice && (
