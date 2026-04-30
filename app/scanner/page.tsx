@@ -136,6 +136,8 @@ interface CustomFilter {
   sectors: string[]
   caps: string[]
   priceTiers: string[]
+  priceMin?: number
+  priceMax?: number
   tagsIncludeAny: string[]
   tagsExcludeAny: string[]
 }
@@ -692,6 +694,49 @@ function FilterPanel({
       </div>
 
       <div>
+        <div className="text-[10px] font-mono uppercase tracking-widest text-white/40 mb-1.5">Live price range</div>
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            placeholder="Min"
+            min={0}
+            step="0.01"
+            value={filter.priceMin ?? ''}
+            onChange={e => {
+              const v = e.target.value
+              onChange({ ...filter, priceMin: v === '' ? undefined : parseFloat(v) })
+            }}
+            className="w-24 px-2 py-1 text-[11px] font-mono rounded"
+            style={{ background: 'rgba(148,163,184,0.08)', color: '#a78bfa', border: '1px solid rgba(148,163,184,0.2)' }}
+          />
+          <span className="text-[10px] font-mono text-white/40">to</span>
+          <input
+            type="number"
+            placeholder="Max"
+            min={0}
+            step="0.01"
+            value={filter.priceMax ?? ''}
+            onChange={e => {
+              const v = e.target.value
+              onChange({ ...filter, priceMax: v === '' ? undefined : parseFloat(v) })
+            }}
+            className="w-24 px-2 py-1 text-[11px] font-mono rounded"
+            style={{ background: 'rgba(148,163,184,0.08)', color: '#a78bfa', border: '1px solid rgba(148,163,184,0.2)' }}
+          />
+          {(typeof filter.priceMin === 'number' || typeof filter.priceMax === 'number') && (
+            <button
+              onClick={() => onChange({ ...filter, priceMin: undefined, priceMax: undefined })}
+              className="text-[10px] font-mono text-white/40 hover:text-white/70 transition-all">
+              clear
+            </button>
+          )}
+        </div>
+        <p className="text-[10px] mt-1 text-white/40">
+          Filters by actual current price (works on any universe, including live screener movers)
+        </p>
+      </div>
+
+      <div>
         <div className="text-[10px] font-mono uppercase tracking-widest text-white/40 mb-1.5">
           Tags <span className="text-white/30">(must include any)</span>
         </div>
@@ -728,7 +773,7 @@ function FilterPanel({
       {(filter.sectors.length > 0 || filter.caps.length > 0 || filter.priceTiers.length > 0
         || filter.tagsIncludeAny.length > 0 || filter.tagsExcludeAny.length > 0) && (
         <button
-          onClick={() => onChange({ sectors: [], caps: [], priceTiers: [], tagsIncludeAny: [], tagsExcludeAny: [] })}
+          onClick={() => onChange({ sectors: [], caps: [], priceTiers: [], priceMin: undefined, priceMax: undefined, tagsIncludeAny: [], tagsExcludeAny: [] })}
           className="text-[10px] font-mono text-white/40 hover:text-white/70 transition-all">
           Clear all filters
         </button>
@@ -757,6 +802,7 @@ export default function ScannerPage() {
   const [showFilters, setShowFilters] = useState(false)
   const [filter, setFilter] = useState<CustomFilter>({
     sectors: [], caps: [], priceTiers: [], tagsIncludeAny: [], tagsExcludeAny: [],
+    priceMin: undefined, priceMax: undefined,
   })
 
   // Scan type — directional (default) vs fast_movers
@@ -863,6 +909,8 @@ export default function ScannerPage() {
       sectors: preset.filter.sectors ?? [],
       caps: preset.filter.caps ?? [],
       priceTiers: preset.filter.priceTiers ?? [],
+      priceMin: preset.filter.priceMin,
+      priceMax: preset.filter.priceMax,
       tagsIncludeAny: preset.filter.tagsIncludeAny ?? [],
       tagsExcludeAny: preset.filter.tagsExcludeAny ?? [],
     })
@@ -889,6 +937,8 @@ export default function ScannerPage() {
             sectors: filter.sectors.length > 0 ? filter.sectors : undefined,
             caps: filter.caps.length > 0 ? filter.caps : undefined,
             priceTiers: filter.priceTiers.length > 0 ? filter.priceTiers : undefined,
+            priceMin: typeof filter.priceMin === 'number' ? filter.priceMin : undefined,
+            priceMax: typeof filter.priceMax === 'number' ? filter.priceMax : undefined,
             tagsIncludeAny: filter.tagsIncludeAny.length > 0 ? filter.tagsIncludeAny : undefined,
             tagsExcludeAny: filter.tagsExcludeAny.length > 0 ? filter.tagsExcludeAny : undefined,
           },
@@ -983,6 +1033,8 @@ export default function ScannerPage() {
           sectors: filter.sectors.length > 0 ? filter.sectors : undefined,
           caps: filter.caps.length > 0 ? filter.caps : undefined,
           priceTiers: filter.priceTiers.length > 0 ? filter.priceTiers : undefined,
+          priceMin: typeof filter.priceMin === 'number' ? filter.priceMin : undefined,
+          priceMax: typeof filter.priceMax === 'number' ? filter.priceMax : undefined,
           tagsIncludeAny: filter.tagsIncludeAny.length > 0 ? filter.tagsIncludeAny : undefined,
           tagsExcludeAny: filter.tagsExcludeAny.length > 0 ? filter.tagsExcludeAny : undefined,
         },
@@ -1043,9 +1095,12 @@ export default function ScannerPage() {
     return sorted
   }, [result, sortBy])
 
+  const priceRangeActive = typeof filter.priceMin === 'number' || typeof filter.priceMax === 'number'
   const filterActive = filter.sectors.length > 0 || filter.caps.length > 0
-    || filter.priceTiers.length > 0 || filter.tagsIncludeAny.length > 0 || filter.tagsExcludeAny.length > 0
+    || filter.priceTiers.length > 0 || priceRangeActive
+    || filter.tagsIncludeAny.length > 0 || filter.tagsExcludeAny.length > 0
   const filterChipCount = filter.sectors.length + filter.caps.length + filter.priceTiers.length
+    + (priceRangeActive ? 1 : 0)
     + filter.tagsIncludeAny.length + filter.tagsExcludeAny.length
 
   if (!authLoaded) {

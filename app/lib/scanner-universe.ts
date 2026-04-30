@@ -301,11 +301,27 @@ export const SCANNER_UNIVERSE: UniverseEntry[] = [
 // Pre-defined universes (shortcuts for common scans)
 // ═════════════════════════════════════════════════════════════
 
+// UniverseSource — where the scanner pulls tickers from.
+//   'curated'           — the static SCANNER_UNIVERSE list (~500 hand-picked)
+//   'screener-actives'  — Alpaca's most-actives (~100 by volume, real-time)
+//   'screener-gainers'  — Alpaca's top gainers (~50, real-time)
+//   'screener-losers'   — Alpaca's top losers (~50, real-time)
+//   'screener-all'      — Union of most-actives + gainers + losers (~150-250)
+//   'union'             — Curated union with screener-all (~600-650, dedup)
+export type UniverseSource =
+  | 'curated'
+  | 'screener-actives'
+  | 'screener-gainers'
+  | 'screener-losers'
+  | 'screener-all'
+  | 'union'
+
 export interface PredefinedUniverse {
   id: string
   label: string
   description: string
   filter: (e: UniverseEntry) => boolean
+  source?: UniverseSource    // defaults to 'curated' for backward compat
 }
 
 export const PREDEFINED_UNIVERSES: PredefinedUniverse[] = [
@@ -384,6 +400,41 @@ export const PREDEFINED_UNIVERSES: PredefinedUniverse[] = [
   { id: 'meme', label: 'Meme / Volatile',
     description: 'High-volatility retail favorites',
     filter: (e) => e.tags.includes('meme') || e.tags.includes('volatile') },
+
+  // ── Live screener-sourced presets ──────────────────────────────
+  // These don't filter the curated universe — they pull from Alpaca's
+  // real-time screener API. The 'filter' is a no-op so applyFilter()
+  // returns nothing; the API route checks the source field and fetches
+  // from Alpaca instead of SCANNER_UNIVERSE.
+  { id: 'most_active', label: 'Most Active (live)',
+    description: 'Top 100 stocks by volume today (Alpaca screener)',
+    filter: () => false,
+    source: 'screener-actives' },
+
+  { id: 'top_gainers', label: 'Top Gainers (live)',
+    description: 'Top 50 daily gainers across the market (Alpaca screener)',
+    filter: () => false,
+    source: 'screener-gainers' },
+
+  { id: 'top_losers', label: 'Top Losers (live)',
+    description: 'Top 50 daily losers across the market (Alpaca screener)',
+    filter: () => false,
+    source: 'screener-losers' },
+
+  { id: 'all_movers', label: 'All Movers (live)',
+    description: 'Most active + gainers + losers (~150-250 unique tickers)',
+    filter: () => false,
+    source: 'screener-all' },
+
+  { id: 'penny_movers', label: 'Penny Movers (live)',
+    description: 'All movers, filtered to under \ by live price',
+    filter: () => false,
+    source: 'screener-all' },
+
+  { id: 'union_full', label: 'Curated + Movers',
+    description: 'Curated universe joined with live movers (~600-650 tickers)',
+    filter: () => true,           // curated side: include everything
+    source: 'union' },
 ]
 
 // ═════════════════════════════════════════════════════════════
@@ -393,7 +444,9 @@ export const PREDEFINED_UNIVERSES: PredefinedUniverse[] = [
 export interface ScannerFilter {
   sectors?: Sector[]            // restrict to these sectors
   caps?: CapTier[]              // restrict to these cap tiers
-  priceTiers?: PriceTier[]      // restrict to these price tiers
+  priceTiers?: PriceTier[]      // restrict to these price tiers (curated tag-based)
+  priceMin?: number             // live price floor (post-bars, applies to ANY source)
+  priceMax?: number             // live price ceiling (post-bars, applies to ANY source)
   tagsIncludeAny?: string[]     // has at least ONE of these tags
   tagsIncludeAll?: string[]     // has ALL of these tags
   tagsExcludeAny?: string[]     // has NONE of these tags
@@ -469,4 +522,13 @@ export function getPredefinedUniverse(id: string): UniverseEntry[] {
   const preset = PREDEFINED_UNIVERSES.find(p => p.id === id)
   if (!preset) return []
   return SCANNER_UNIVERSE.filter(preset.filter)
+}
+
+// Returns the source for a preset id. Defaults to 'curated' for any
+// preset that doesn't explicitly declare one (i.e. all the original
+// PREDEFINED_UNIVERSES entries).
+export function getUniverseSource(presetId: string | undefined): UniverseSource {
+  if (!presetId) return 'curated'
+  const preset = PREDEFINED_UNIVERSES.find(p => p.id === presetId)
+  return preset?.source ?? 'curated'
 }
