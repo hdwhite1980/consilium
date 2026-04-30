@@ -24,10 +24,12 @@ export async function GET() {
   const portfolio = await getOrCreatePortfolio(user.id)
   if (!portfolio) return NextResponse.json({ positions: [] })
 
+  // Only return open positions; closed/partial show in /api/portfolio/closed
   const { data: positions } = await admin()
     .from('portfolio_positions')
     .select('*')
     .eq('portfolio_id', portfolio.id)
+    .eq('status', 'open')
     .order('added_at', { ascending: true })
 
   return NextResponse.json({ positions: positions ?? [], portfolio })

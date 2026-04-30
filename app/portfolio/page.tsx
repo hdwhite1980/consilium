@@ -57,7 +57,10 @@ import {
   AlertTriangle, Calendar, DollarSign, Check, X, Clock,
   Star, Repeat2, ChevronDown, ChevronRight, Activity, Briefcase,
   BookOpen, Stethoscope, Target, FileText, ExternalLink, Settings,
+  Archive,
 } from 'lucide-react'
+import { CloseModal, type ClosablePosition, type CloseResult } from '@/app/components/portfolio/CloseModal'
+import { ClosedTab } from '@/app/components/portfolio/ClosedTab'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -362,6 +365,12 @@ function PortfolioInner() {
   const [checking, setChecking] = useState(false)
   const [checkedAt, setCheckedAt] = useState<string | null>(null)
   const [checkTicker, setCheckTicker] = useState<string | null>(null)
+
+  // Close-position state (Commit 1+2)
+  const [closeTarget, setCloseTarget] = useState<ClosablePosition | null>(null)
+  const [closedReloadKey, setClosedReloadKey] = useState(0)
+  const [showClosed, setShowClosed] = useState(false)
+  const [realizedPnlTotal, setRealizedPnlTotal] = useState(0)
 
   // Sort state (persisted)
   const [sortKey, setSortKey] = useState<SortKey>('value')
@@ -734,6 +743,14 @@ function PortfolioInner() {
 
   // ── Initial load ────────────────────────────────────────────────
   useEffect(() => { loadPositions() }, [loadPositions])
+
+  // Load realized P&L total (closed positions). Re-runs when a close happens.
+  useEffect(() => {
+    fetch('/api/portfolio/closed')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setRealizedPnlTotal(d.realized_pnl_total ?? 0) })
+      .catch(() => {})
+  }, [closedReloadKey])
 
   // Load dividends, reinvest, journal eagerly — they're now used by the
   // strips and per-position expansions, not gated by tab switch.
@@ -1130,7 +1147,7 @@ function PortfolioInner() {
       {/* ─── Hero strip — portfolio totals (preserved) ─── */}
       {positions.length > 0 && (
         <div className="border-b px-6 py-5" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-6">
             <div>
               <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: 'var(--text3)' }}>
                 Portfolio value
@@ -1167,6 +1184,21 @@ function PortfolioInner() {
               <div className="text-xs font-mono mt-1" style={{ color: pnlColor(totalGainLoss) }}>
                 {pct(totalGainLossPct)} all-time
               </div>
+            </div>
+            <div>
+              <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: 'var(--text3)' }}>
+                Realized P/L
+              </div>
+              <div className="text-2xl md:text-3xl font-bold font-mono tabular-nums" style={{ color: pnlColor(realizedPnlTotal) }}>
+                {realizedPnlTotal >= 0 ? '+' : ''}${fmt(Math.abs(realizedPnlTotal))}
+              </div>
+              <button
+                onClick={() => setShowClosed(s => !s)}
+                className="text-[10px] font-mono mt-1 transition-opacity hover:opacity-80"
+                style={{ color: 'var(--text3)' }}
+              >
+                {showClosed ? 'hide closed positions' : 'view closed positions'}
+              </button>
             </div>
             <div>
               <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: 'var(--text3)' }}>
@@ -1960,6 +1992,27 @@ function PortfolioInner() {
                               <Stethoscope size={12} /> {checkTicker === pos.ticker ? 'Checking...' : 'Re-check'}
                             </button>
                           )}
+                          <button onClick={(e) => {
+                              e.stopPropagation()
+                              setCloseTarget({
+                                id: pos.id,
+                                ticker: pos.ticker,
+                                position_type: pos.position_type,
+                                option_type: pos.option_type,
+                                strike: pos.strike,
+                                expiry: pos.expiry,
+                                contracts: pos.contracts,
+                                entry_premium: pos.entry_premium,
+                                underlying: pos.underlying,
+                                shares: pos.shares,
+                                avg_cost: pos.avg_cost,
+                                currentPrice: data?.currentPrice,
+                              })
+                            }}
+                            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
+                            style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)' }}>
+                            <Archive size={12} /> Close
+                          </button>
                           <div className="ml-auto">
                             <button onClick={(e) => { e.stopPropagation(); removePosition(pos.ticker) }}
                               className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
@@ -1975,6 +2028,24 @@ function PortfolioInner() {
               })}
             </div>
           )}
+          {/* ─── Closed positions section (Commit 1+2) ─── */}
+          {showClosed && (
+            <div className="mt-6">
+              <div className="flex items-center gap-2 mb-3">
+                <Archive size={14} style={{ color: 'var(--text2)' }} />
+                <span className="text-sm font-bold" style={{ color: 'var(--text)' }}>Closed Positions</span>
+                <button
+                  onClick={() => setShowClosed(false)}
+                  className="ml-auto text-[10px] font-mono"
+                  style={{ color: 'var(--text3)' }}
+                >
+                  hide
+                </button>
+              </div>
+              <ClosedTab reloadKey={closedReloadKey} />
+            </div>
+          )}
+
           {/* ─── AI Portfolio Summary (preserved from original page) ─── */}
           {analysis && positions.length >= 2 && (
             <div className="mt-6 rounded-xl border p-5"
@@ -2363,6 +2434,25 @@ function PortfolioInner() {
             </div>
           </div>
         </Drawer>
+      )}
+
+      {/* ─── Close-position modal (Commit 1+2) ─── */}
+      {closeTarget && (
+        <CloseModal
+          position={closeTarget}
+          onClose={() => setCloseTarget(null)}
+          onSuccess={(result: CloseResult) => {
+            setCloseTarget(null)
+            // Reload positions (will be removed if full close, reduced if partial)
+            void loadPositions()
+            // Trigger ClosedTab + realized P&L refresh
+            setClosedReloadKey(k => k + 1)
+            // If full close, expand the closed view so user can see it
+            if (result.close_event.close_type === 'full') {
+              setShowClosed(true)
+            }
+          }}
+        />
       )}
     </div>
   )
