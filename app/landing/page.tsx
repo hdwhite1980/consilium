@@ -1,5 +1,6 @@
 'use client'
 
+import type { ReactNode } from 'react'
 import Link from 'next/link'
 import {
   ArrowRight, BarChart3, Briefcase, Building2, Calculator,
@@ -300,7 +301,19 @@ function Pillars() {
             number="02"
             title="Numbers, not testimonials"
             body="Every BULLISH and BEARISH verdict is logged with a timestamp and price. An automated job computes the actual outcome at one week and one month  -  strict and directional. Hit rates by lens, timeframe, and confidence band are public."
-            proof="Verifiable: /api/backtest/stats is open. Most retail tools sell vibes; we publish numbers."
+            proof={
+              <>
+                Verifiable: the{' '}
+                <Link
+                  href="/track-record"
+                  style={{ color: '#34d399', textDecoration: 'underline' }}
+                  className="hover:opacity-80 transition"
+                >
+                  track record page
+                </Link>
+                {' '}is open. Most retail tools sell vibes; we publish numbers.
+              </>
+            }
             accent="#34d399"
           />
           <PillarCard
@@ -317,7 +330,7 @@ function Pillars() {
 }
 
 function PillarCard({ number, title, body, proof, accent }: {
-  number: string; title: string; body: string; proof: string; accent: string
+  number: string; title: string; body: string; proof: ReactNode; accent: string
 }) {
   return (
     <div
@@ -642,14 +655,26 @@ function PricingCard({ tier, price, period, blurb, features, highlighted }: {
 // FAQ
 // -------------------------------------------------------------
 function FAQ() {
-  const items = [
+  const items: Array<{ q: string; a: ReactNode }> = [
     {
       q: 'What does the Council actually do?',
       a: 'A News Scout pulls fresh data. A Lead Analyst makes the directional call from your chosen lens (technical, fundamental, or balanced). A Devil\'s Advocate cross-pressures from the opposite lens. Both sides ask one research question each, fetch fresh data, and rebut. A neutral Judge reads the full transcript, weighs argument quality, and delivers the verdict  -  including stop, target, three probability-weighted scenarios, and the one specific condition that would invalidate the thesis. You see the whole transcript, not just the conclusion.',
     },
     {
       q: 'How do I know your analysis is any good?',
-      a: 'Every BULLISH and BEARISH verdict is logged with a timestamp. An automated cron job computes the actual outcome at one week and one month  -  both strict (did the price hit the target?) and directional (did it move the right way?). The /api/backtest/stats endpoint exposes hit rates by analytical lens, timeframe, and confidence band. We are not aware of another retail tool that publishes its track record this transparently.',
+      a: (
+        <>
+          Every BULLISH and BEARISH verdict is logged with a timestamp. An automated cron job computes the actual outcome at one week and one month  -  both strict (did the price hit the target?) and directional (did it move the right way?). The{' '}
+          <Link
+            href="/track-record"
+            style={{ color: '#a78bfa', textDecoration: 'underline' }}
+            className="hover:opacity-80 transition"
+          >
+            track record page
+          </Link>
+          {' '}exposes hit rates by analytical lens, timeframe, and confidence band. We are not aware of another retail tool that publishes its track record this transparently.
+        </>
+      ),
     },
     {
       q: 'What assets are covered?',
