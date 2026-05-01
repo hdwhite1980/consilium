@@ -1265,6 +1265,11 @@ function FloorInner() {
     tier: data?.tier.name ?? 'Buyer',
     openTrades: data?.openTrades ?? [],
     closedTrades: data?.closedTrades ?? [],
+    postmortems: data?.processTrend?.recentTrades.map(t => ({
+      trade_id: t.tradeId,
+      process_score: t.score,
+      generated_at: t.closedAt,
+    })),
     floorSeen: !!data?.journey?.floor_seen_at,
   })
 

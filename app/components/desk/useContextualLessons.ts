@@ -2,6 +2,60 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react'
 import type { LessonTrigger } from '@/app/lib/invest-lessons'
+import {
+  detectBehavioralTrigger,
+  type BehavioralTrade,
+  type BehavioralPostmortem,
+} from '@/app/lib/invest-behavioral-triggers'
+
+// ─────────────────────────────────────────────────────────────
+// Cooldown helpers — localStorage-backed
+// ─────────────────────────────────────────────────────────────
+//
+// Each behavioral trigger has a 6h global cooldown. Inside that window we
+// also track the eventKey (trade ID) so the same event never re-fires.
+//
+// Storage shape: { lastFiredAt: number, lastEventKey: string }
+
+const COOLDOWN_MS = 6 * 60 * 60 * 1000  // 6 hours
+const STORAGE_PREFIX = 'wali:lesson-cooldown:'
+
+interface CooldownState {
+  lastFiredAt: number
+  lastEventKey: string
+}
+
+function readCooldown(trigger: string): CooldownState | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = localStorage.getItem(STORAGE_PREFIX + trigger)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (typeof parsed?.lastFiredAt !== 'number') return null
+    return parsed as CooldownState
+  } catch { return null }
+}
+
+function writeCooldown(trigger: string, eventKey: string) {
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.setItem(
+      STORAGE_PREFIX + trigger,
+      JSON.stringify({ lastFiredAt: Date.now(), lastEventKey: eventKey })
+    )
+  } catch { /* quota exceeded etc — silent fail */ }
+}
+
+/** True if this (trigger, eventKey) pair is allowed to fire right now. */
+function isCooldownClear(trigger: string, eventKey: string): boolean {
+  const state = readCooldown(trigger)
+  if (!state) return true
+  // Same event already fired — never refire even after cooldown
+  if (state.lastEventKey === eventKey) return false
+  // Different event but still in 6h window
+  if (Date.now() - state.lastFiredAt < COOLDOWN_MS) return false
+  return true
+}
 
 interface FloorSnapshot {
   tier: string
@@ -19,12 +73,23 @@ interface Trade {
   exit_price: number | null
   shares: number
   exit_date: string | null
+  opened_at?: string | null
+  stop_price?: number | null
+  target_price?: number | null
+  position_type?: 'stock' | 'option' | null
+}
+
+interface Postmortem {
+  trade_id: string
+  process_score: number
+  generated_at?: string | null
 }
 
 interface Args {
   tier: string
   openTrades: Trade[]
   closedTrades: Trade[]
+  postmortems?: Postmortem[]
   floorSeen: boolean
 }
 
@@ -43,7 +108,7 @@ function computeConsecutiveLosses(closed: Trade[]): number {
   return count
 }
 
-export function useContextualLessons({ tier, openTrades, closedTrades, floorSeen }: Args) {
+export function useContextualLessons({ tier, openTrades, closedTrades, postmortems, floorSeen }: Args) {
   const firedRef = useRef<Set<LessonTrigger>>(new Set())
   const prevRef = useRef<FloorSnapshot | null>(null)
   const [pendingTrigger, setPendingTrigger] = useState<LessonTrigger | null>(null)
@@ -124,8 +189,47 @@ export function useContextualLessons({ tier, openTrades, closedTrades, floorSeen
       }
     }
 
+    // ── Behavioral pattern detection ──────────────────────────
+    // Runs every effect tick, but cooldowns prevent spam. The detector
+    // returns at most one trigger; if a "first_*" trigger fired above we
+    // skip behavioral so the user gets one note per render at most.
+    if (!pendingTrigger) {
+      const behavioralTrades: BehavioralTrade[] = [...openTrades, ...closedTrades].map(t => ({
+        id: t.id,
+        entry_price: t.entry_price,
+        exit_price: t.exit_price,
+        shares: t.shares,
+        stop_price: t.stop_price ?? null,
+        target_price: t.target_price ?? null,
+        position_type: t.position_type ?? null,
+        opened_at: t.opened_at ?? null,
+        exit_date: t.exit_date ?? null,
+      }))
+      const behavioralOpens = behavioralTrades.filter(t => t.exit_price == null)
+      const behavioralClosed = behavioralTrades.filter(t => t.exit_price != null)
+      const behavioralPMs: BehavioralPostmortem[] = (postmortems ?? []).map(p => ({
+        trade_id: p.trade_id,
+        process_score: p.process_score,
+        generated_at: p.generated_at ?? null,
+      }))
+
+      const behavioral = detectBehavioralTrigger({
+        openTrades: behavioralOpens,
+        closedTrades: behavioralClosed,
+        postmortems: behavioralPMs,
+        lastCloseId: closedTrades[0]?.id ?? null,
+        lastOpenId: openTrades[0]?.id ?? null,
+      })
+
+      if (behavioral.trigger && behavioral.eventKey
+          && isCooldownClear(behavioral.trigger, behavioral.eventKey)) {
+        writeCooldown(behavioral.trigger, behavioral.eventKey)
+        setPendingTrigger(behavioral.trigger)
+      }
+    }
+
     prevRef.current = snapshot
-  }, [tier, openTrades, closedTrades, floorSeen])
+  }, [tier, openTrades, closedTrades, postmortems, floorSeen, pendingTrigger])
 
   const dismissTrigger = useCallback(() => {
     setPendingTrigger(null)
