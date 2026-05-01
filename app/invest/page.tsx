@@ -1645,13 +1645,9 @@ function FloorInner() {
 
       <div className="fl-stage">
 
-        {/* LEFT — tier ladder */}
+        {/* LEFT - tier ladder + capital */}
         <div className={mobileView === 'portfolio' ? 'fl-show' : 'fl-hide'}>
           <TierLadder tiers={tiers} tier={tier} stats={stats} value={value} processTrend={data.processTrend} />
-        </div>
-
-        {/* Capital block - deposit / withdraw */}
-        <div className={mobileView === 'portfolio' ? 'fl-show' : 'fl-hide'}>
           <div className="fl-metric-block fl-capital-block" style={{ marginTop: 12 }}>
             <div className="fl-capital-row">
               <span className="k">capital</span>
