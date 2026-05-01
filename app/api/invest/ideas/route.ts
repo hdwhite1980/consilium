@@ -347,6 +347,15 @@ export async function POST(req: NextRequest) {
   // This protects very-small Buyer accounts from getting "no setups
   // ever" on slow days, without losing the tier identity on busy days.
 
+  // Mode strategy:
+  //   Buyer/Builder: scan 'both' then keep bullish + mixed picks. Beginners
+  //     are learning to spot setups; "mixed" picks (momentum present but
+  //     direction unclear) still teach the discipline of stop+target+
+  //     thesis. Pure bearish is dropped because these tiers can't short.
+  //   Operator+: strict 'bullish'. These users have stricter execution
+  //     and the cleaner signal matters more.
+  const isStrictBullish = tier.name === 'Operator' || tier.name === 'Principal' || tier.name === 'Sovereign'
+
   async function runScanForBand(
     priceMin: number,
     priceMax: number,
@@ -355,16 +364,25 @@ export async function POST(req: NextRequest) {
       priceMin,
       priceMax: priceMax > 0 ? priceMax : undefined,
     }
-    return runScan({
+    const result = await runScan({
       universe: tier.universe,
       filter,
-      mode: 'bullish',
+      mode: isStrictBullish ? 'bullish' : 'both',
       limit: tier.scanLimit,
       newsBoost: tier.newsBoost,
       scanType: tier.scanType,
       horizon: 'week',
       priceCeiling: priceMax > 0 ? priceMax : 999,
     })
+
+    // Post-filter for non-strict tiers: keep bullish + mixed, drop bearish
+    if (!isStrictBullish) {
+      result.picks = result.picks.filter(p =>
+        p.direction === 'bullish' || p.direction === 'mixed'
+      )
+    }
+
+    return result
   }
 
   let scanResult = await runScanForBand(tier.priceMin, tier.priceMax)
@@ -437,22 +455,21 @@ export async function POST(req: NextRequest) {
   const msg = await anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 2000,
-    system: `You are the Wali-OS Council. The scanner has selected the tickers. Your job is to produce a complete trade plan for each one — entry, stop, target, share count, and a 1-2 sentence rationale.
+    system: `You are the Wali-OS Council. The scanner has selected the tickers based on technical criteria. Your job is to produce a complete trade plan for each one — entry, stop, target, share count, and a 1-2 sentence rationale.
 
-CRITICAL: Do NOT propose tickers other than the ones provided. You may reject a pick if you genuinely believe it is unsuitable, but explain why in the response (set "skipReason").
-
-For each pick:
-- Use the live price as the entry anchor
-- Stop must be ${tier.stopPct} below entry (range)
-- Target must be ${tier.targetPct} above entry
-- Suggested shares should size the position to ~$${(deployable / tier.maxPositions).toFixed(0)} per slot
+CRITICAL RULES:
+1. Do NOT propose tickers other than the ones provided.
+2. Do NOT skip picks because they seem too expensive for the trader's account. Affordability is handled separately by the system. Your job is to produce a setup for EVERY ticker.
+3. Use the live price as the entry anchor.
+4. Stop must be in the ${tier.stopPct} range below entry.
+5. Target must be in the ${tier.targetPct} range above entry.
+6. Suggested shares: produce a sensible round number (typically 1-20 shares depending on price) that represents a reasonable starter position. The actual affordability gate is downstream — produce the plan as if the trader can afford it.
 
 All numeric fields plain numbers — no $ signs, no commas.`,
     messages: [{
       role: 'user',
       content: `TRADER PROFILE:
-Tier: ${tier.name} — total $${(totalValue ?? 0).toFixed(2)}, deployable $${deployable.toFixed(2)}
-Per-position budget: ~$${(deployable / tier.maxPositions).toFixed(2)}
+Tier: ${tier.name}
 Strategy: ${tier.strategy}
 Stop range: ${tier.stopPct} | Target range: ${tier.targetPct}
 
