@@ -1167,6 +1167,10 @@ function FloorInner() {
   // Options ideas (Operator+ only — empty array at lower tiers)
   const [optionIdeas, setOptionIdeas] = useState<Idea[]>([])
   const [optionsBudgetWarning, setOptionsBudgetWarning] = useState<string | null>(null)
+  const [scanMeta, setScanMeta] = useState<{
+    widenedFromTier?: string | null
+    widenedToBand?: { priceMin: number; priceMax: number } | null
+  } | null>(null)
 
   // Post-mortem cache — keyed by trade_id
   const [postmortems, setPostmortems] = useState<Record<string, Postmortem>>({})
@@ -1312,6 +1316,7 @@ function FloorInner() {
       setIdeas(body.ideas ?? [])
       setOptionIdeas(body.options ?? [])
       setOptionsBudgetWarning(body.optionsBudgetWarning ?? null)
+      setScanMeta(body.scanMeta ?? null)
       setPulledAt(new Date())
     } catch { /* ignore */ }
     setLoadingIdeas(false)
@@ -1528,13 +1533,29 @@ function FloorInner() {
               </div>
             ) : (
               <>
+                {scanMeta?.widenedFromTier && scanMeta?.widenedToBand && (
+                  <div className="fl-widening-flag">
+                    <span className="fl-widening-eyebrow">band widened</span>
+                    <span className="fl-widening-text">
+                      {scanMeta.widenedFromTier}-tier band returned no setups today.
+                      Showing wider range (${scanMeta.widenedToBand.priceMin}–${scanMeta.widenedToBand.priceMax}).
+                    </span>
+                  </div>
+                )}
                 <div className="fl-signals-grid">
                   {ideas.map((idea, i) => {
                     const price = idea.livePrice ?? idea.price
+                    const cashAvail = data?.value?.cashRemaining ?? 0
+                    const ideaCost = idea.suggestedAmount ?? 0
+                    const isAffordable = ideaCost <= cashAvail * 1.05 || ideaCost === 0
+                    const tileClass = isAffordable ? 'fl-signal-tile' : 'fl-signal-tile fl-signal-locked'
                     return (
-                      <div key={`stock-${idea.ticker}-${i}`} className="fl-signal-tile"
-                        onClick={() => openTicketFromSignal(idea)}
+                      <div key={`stock-${idea.ticker}-${i}`} className={tileClass}
+                        onClick={() => isAffordable && openTicketFromSignal(idea)}
                         style={{ animationDelay: `${i * 0.06}s` }}>
+                        {!isAffordable && (
+                          <div className="fl-signal-locked-badge">above budget</div>
+                        )}
                         <div className="fl-signal-top">
                           <span className="fl-signal-sym">{idea.ticker}</span>
                           <span className="fl-signal-px mono">{fmt$(price)}</span>
@@ -2586,6 +2607,56 @@ function FloorStyles() {
         position: absolute;
         left: 0;
         color: rgba(148, 163, 184, 0.5);
+      }
+
+      /* ── Widening flag (appears when scanner widened band) ── */
+      .fl-widening-flag {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        margin-bottom: 12px;
+        padding: 8px 12px;
+        border-radius: 4px;
+        background: rgba(212, 168, 87, 0.06);
+        border: 1px solid rgba(212, 168, 87, 0.18);
+      }
+      .fl-widening-eyebrow {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 8px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: #d4a857;
+        flex-shrink: 0;
+      }
+      .fl-widening-text {
+        font-size: 11px;
+        line-height: 1.5;
+        color: rgba(226, 232, 240, 0.75);
+      }
+
+      /* ── Locked tile (idea above user's budget) ──────────── */
+      .fl-signal-tile.fl-signal-locked {
+        opacity: 0.5;
+        cursor: default;
+        position: relative;
+      }
+      .fl-signal-tile.fl-signal-locked:hover {
+        border-color: rgba(148, 163, 184, 0.12);
+        background: rgba(15, 23, 42, 0.6);
+      }
+      .fl-signal-locked-badge {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        padding: 2px 6px;
+        border-radius: 2px;
+        background: rgba(148, 163, 184, 0.12);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 8px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: rgba(148, 163, 184, 0.75);
       }
 
       /* ── Center column ──────────────────────────── */
