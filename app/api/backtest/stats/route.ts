@@ -3,7 +3,7 @@
 //
 // Query params:
 //   scope: 'public' (default) | 'user' — user requires auth
-//   horizon: '1w' (default) | '1m'
+//   horizon: '1w' (default) | '1d' | '1m'
 //   persona: 'all' (default) | 'balanced' | 'technical' | 'fundamental'
 //   timeframe: 'all' (default) | '1D' | '1W' | '1M' | '3M'
 //
@@ -30,6 +30,9 @@ interface VerdictRow {
   timeframe: string | null
   verdict_date: string
   entry_price: number | null
+  outcome_1d_strict: string
+  outcome_1d_directional: string
+  outcome_1d_price: number | null
   outcome_1w_strict: string
   outcome_1w_directional: string
   outcome_1w_price: number | null
@@ -38,10 +41,13 @@ interface VerdictRow {
   outcome_1m_price: number | null
 }
 
-function computeHitRate(rows: VerdictRow[], horizon: '1w' | '1m'): {
+function computeHitRate(rows: VerdictRow[], horizon: '1d' | '1w' | '1m'): {
   wins: number; losses: number; expired: number; total: number; hitRate: number
 } {
-  const strictCol = horizon === '1w' ? 'outcome_1w_strict' : 'outcome_1m_strict'
+  const strictCol =
+    horizon === '1d' ? 'outcome_1d_strict' :
+    horizon === '1w' ? 'outcome_1w_strict' :
+    'outcome_1m_strict'
   let wins = 0, losses = 0, expired = 0
   for (const r of rows) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -57,10 +63,13 @@ function computeHitRate(rows: VerdictRow[], horizon: '1w' | '1m'): {
   return { wins, losses, expired, total, hitRate }
 }
 
-function computeDirectionAccuracy(rows: VerdictRow[], horizon: '1w' | '1m'): {
+function computeDirectionAccuracy(rows: VerdictRow[], horizon: '1d' | '1w' | '1m'): {
   correct: number; incorrect: number; pending: number; total: number; accuracy: number
 } {
-  const col = horizon === '1w' ? 'outcome_1w_directional' : 'outcome_1m_directional'
+  const col =
+    horizon === '1d' ? 'outcome_1d_directional' :
+    horizon === '1w' ? 'outcome_1w_directional' :
+    'outcome_1m_directional'
   let correct = 0, incorrect = 0, pending = 0
   for (const r of rows) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -86,7 +95,7 @@ function bucketConfidence(c: number | null): string {
 export async function GET(req: NextRequest) {
   const url = new URL(req.url)
   const scope = url.searchParams.get('scope') ?? 'public'
-  const horizon = (url.searchParams.get('horizon') ?? '1w') as '1w' | '1m'
+  const horizon = (url.searchParams.get('horizon') ?? '1w') as '1d' | '1w' | '1m'
   const personaFilter = url.searchParams.get('persona') ?? 'all'
   const timeframeFilter = url.searchParams.get('timeframe') ?? 'all'
 
@@ -118,7 +127,7 @@ export async function GET(req: NextRequest) {
 
   let query = admin
     .from('verdict_log')
-    .select('ticker, signal, confidence, persona, timeframe, verdict_date, entry_price, outcome_1w_strict, outcome_1w_directional, outcome_1w_price, outcome_1m_strict, outcome_1m_directional, outcome_1m_price')
+    .select('ticker, signal, confidence, persona, timeframe, verdict_date, entry_price, outcome_1d_strict, outcome_1d_directional, outcome_1d_price, outcome_1w_strict, outcome_1w_directional, outcome_1w_price, outcome_1m_strict, outcome_1m_directional, outcome_1m_price')
     .order('verdict_date', { ascending: false })
     .limit(5000)
 
@@ -195,9 +204,18 @@ export async function GET(req: NextRequest) {
   ]
 
   // Recent verdicts (last 100 for display)
-  const horizonStrict = horizon === '1w' ? 'outcome_1w_strict' : 'outcome_1m_strict'
-  const horizonDir    = horizon === '1w' ? 'outcome_1w_directional' : 'outcome_1m_directional'
-  const horizonPrice  = horizon === '1w' ? 'outcome_1w_price' : 'outcome_1m_price'
+  const horizonStrict =
+    horizon === '1d' ? 'outcome_1d_strict' :
+    horizon === '1w' ? 'outcome_1w_strict' :
+    'outcome_1m_strict'
+  const horizonDir =
+    horizon === '1d' ? 'outcome_1d_directional' :
+    horizon === '1w' ? 'outcome_1w_directional' :
+    'outcome_1m_directional'
+  const horizonPrice =
+    horizon === '1d' ? 'outcome_1d_price' :
+    horizon === '1w' ? 'outcome_1w_price' :
+    'outcome_1m_price'
 
   const recent = allRows.slice(0, 100).map(r => ({
     ticker: r.ticker,
