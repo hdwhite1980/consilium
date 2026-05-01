@@ -64,6 +64,14 @@ export type LessonTrigger =
   | 'first_win'
   | 'three_losses_in_row'
   | 'tier_up'
+  // ── Behavioral pattern triggers ──
+  | 'cut_winner_short'
+  | 'held_past_stop'
+  | 'no_stop_set_pattern'
+  | 'sized_up_after_win'
+  | 'overtrading'
+  | 'held_too_long_open'
+  | 'process_grade_dropped'
 
 // ─────────────────────────────────────────────────────────────
 // THE DESK NOTES
@@ -1074,6 +1082,306 @@ export const INVEST_LESSONS: InvestLesson[] = [
       explanation: "2.5% is within your normal loss distribution regardless of account size. The dollars are larger but the percentage is the signal. If you start shrinking size because dollars feel big, you eventually under-size your edge away. The correct Principal-tier move: same rules, same percentage sizing, same execution. Over time the dollar amounts of wins and losses both scale — that's compounding.",
     },
   },
+
+  // ─────────────────────────────────────────────────────────
+  // BEHAVIORAL TRIGGER LESSONS (added via lessons expansion)
+  // These fire when the system detects a specific pattern in the user's
+  // trade history. Each one pairs to a single trigger.
+  // ─────────────────────────────────────────────────────────
+
+  {
+    id: 'builder-cut-winner',
+    stage: 'Builder',
+    order: 8,
+    title: 'You cut a winner short',
+    subtitle: 'The market gave you what you asked for. You took less.',
+    duration: '3 min',
+    icon: '◊',
+    requiresBehavior: 'first_close',
+    triggerOn: ['cut_winner_short'],
+    content: [
+      "Your last trade went green and you closed it before the target — far before.",
+      "Cutting winners short is the inverse mistake of holding losers. Both come from the same place: emotion overriding the plan.",
+      "The plan said: enter here, stop there, target there. The plan does not say: exit when you feel nervous.",
+    ],
+    blocks: [
+      { type: 'prose', text: "You set a target. The market moved toward it. You exited at half the distance because you were afraid the gain would disappear. That is the trade you just took." },
+      { type: 'heading', text: "Why this is expensive" },
+      { type: 'prose', text: "Profitable traders are NOT right more often than losing ones. They are right BIGGER. Every time you cut a winner at half-target, you cap the upside that pays for your losses. Three good entries cut short cannot offset two stopped-out losses." },
+      { type: 'pullquote', text: "If you exit before the target, you trade like someone who does not believe their own plan." },
+      { type: 'callout', tone: 'gold', label: 'The professional move', text: "Set a stop at entry. Set a target at entry. Let one or the other resolve the trade. Do not negotiate with yourself in the middle." },
+      { type: 'tip', text: "If holding to target makes you anxious, your size is wrong — not your plan. Smaller positions let you hold targets without flinching." },
+    ],
+    callout: {
+      label: 'The pattern across many trades',
+      text: "Win rate matters less than win size. The trader who hits 2x risk on every winner can be wrong 60% of the time and still compound.\n\nIf you cannot hold to target, your position is too big.",
+    },
+    tip: "The discipline of HOLDING is harder than the discipline of stopping out. Both are the job.",
+    quiz: {
+      question: "You buy at $10 with a $9 stop and $12 target. The price hits $11 and you feel nervous about giving back the gain. What is the disciplined move?",
+      options: [
+        "Take the profit — a win is a win",
+        "Sell half, hold half to target",
+        "Hold to target. The plan is the plan",
+        "Move the stop up to $10.50 to lock in profit, hold to target",
+      ],
+      correctIndex: 3,
+      explanation: "Both 3 and 4 honor the plan — but moving the stop up is the strongest answer because it removes the downside risk WITHOUT capping upside. 'Sell half' is the compromise the trader who can't trust their plan reaches for. Taking profit at half-target IS what you just did wrong.",
+    },
+  },
+
+  {
+    id: 'builder-held-past-stop',
+    stage: 'Builder',
+    order: 9,
+    title: 'You held a trade past your stop',
+    subtitle: 'Your stop is the discipline. You moved past it.',
+    duration: '4 min',
+    icon: '◊',
+    requiresBehavior: 'first_close',
+    triggerOn: ['held_past_stop'],
+    content: [
+      "You set a stop. The price hit it. You did not exit.",
+      "The trade kept going against you. By the time you closed it, the loss was substantially bigger than what you signed up for.",
+      "This is the single most account-destroying habit in trading.",
+    ],
+    blocks: [
+      { type: 'prose', text: "Your stop is not a suggestion. It is a contract you signed with yourself when the position was opened — when you were calm, when the data was fresh, when emotion was not in the seat." },
+      { type: 'heading', text: "Why traders break their stops" },
+      { type: 'prose', text: "The voice in your head when price approaches your stop is not the same voice that set the stop. It is louder, it is panicked, and it is wrong. It says: 'It will come back.' 'I just need a little more time.' 'The stop is too tight.' Every one of those sentences is the cost of admission to a much bigger loss." },
+      { type: 'callout', tone: 'red', label: 'What you might tell yourself next time', text: "1. \"It will come back.\"\n2. \"My stop was too tight.\"\n3. \"The market is just shaking out weak hands.\"\n4. \"I just need to wait one more day.\"\n\nAll four of these have ended more accounts than any market crash." },
+      { type: 'pullquote', text: "The trader who honors stops survives. The trader who negotiates with stops eventually does not." },
+      { type: 'prose', text: "If your stop hits, you exit. If you decide afterward that the stop was too tight, you adjust the strategy for the NEXT trade — not this one. The current trade is closed; the next trade is where wisdom applies." },
+      { type: 'tip', text: "Set a hard stop ORDER at your broker the moment you enter — before emotion can intervene. The platform executes faster than your panic." },
+    ],
+    callout: {
+      label: 'The rule, plain',
+      text: "When the stop hits, you exit. Always. Without negotiation.\n\nIf this feels impossible, your size is too big OR your stop is too tight. Both are fixable on the NEXT trade. Not this one.",
+    },
+    tip: "A stop you don't honor is worse than no stop. It teaches you that stops are negotiable.",
+    quiz: {
+      question: "You set a $9 stop on a $10 entry. Price drops to $9 and bounces slightly. Before you can react, it drops to $8. What is the correct move?",
+      options: [
+        "Hold — it might come back to your stop, then you can exit",
+        "Exit immediately at $8 even though it's worse than your stop",
+        "Move the stop down to $7 to give it room",
+        "Add more shares at $8 to lower your average cost",
+      ],
+      correctIndex: 1,
+      explanation: "Once the stop is broken, you exit at market. Yes, $8 is worse than $9 — that is the cost of having let it run past the level you committed to. Holding past stop hoping for a bounce, moving the stop, or averaging down are the three behaviors that turn a small loss into a catastrophic one. Take the worse exit. Adjust your strategy for the next trade.",
+    },
+  },
+
+  {
+    id: 'buyer-no-stop-pattern',
+    stage: 'Buyer',
+    order: 5,
+    title: 'You keep skipping the stop',
+    subtitle: "Three trades without one is not an accident. It's a pattern.",
+    duration: '3 min',
+    icon: '◊',
+    requiresBehavior: 'first_close',
+    triggerOn: ['no_stop_set_pattern'],
+    content: [
+      "You have closed three or more trades without setting a stop-loss.",
+      "A trade without a stop is not a trade. It is a hope.",
+      "The whole purpose of the desk is to teach you to size a loss BEFORE you take it.",
+    ],
+    blocks: [
+      { type: 'prose', text: "There are exactly two reasons traders skip the stop:" },
+      { type: 'callout', tone: 'red', label: 'The two reasons (both wrong)', text: "1. \"I'll just watch it and exit when it goes wrong.\"\n2. \"I don't want to get stopped out at the low and then watch it bounce.\"\n\nThe first is fantasy — you will not exit calmly when emotion floods in. The second is a real concern that has a real solution: better stops, not no stops." },
+      { type: 'heading', text: "Why a stop comes BEFORE the trade" },
+      { type: 'prose', text: "Setting a stop forces you to answer one question: how much am I willing to lose if I am wrong? That question is the entire job of risk management. If you cannot answer it before you click buy, you should not click buy." },
+      { type: 'pullquote', text: "No stop is not aggressive trading. It is no plan." },
+      { type: 'tip', text: "If your stop feels arbitrary, anchor it to a structure: below the previous swing low, below the day's open, below the moving average. Not a round number. Not 'a dollar below entry.'" },
+    ],
+    callout: {
+      label: 'The hard rule',
+      text: "Every trade has a stop. Every stop is set before the entry. The stop is what defines whether this is a real position or a guess.",
+    },
+    tip: "The stop is not pessimism. It is the line you would not cross even if you were optimistic.",
+    quiz: {
+      question: "Why is setting a stop BEFORE entering a trade more important than setting one after?",
+      options: [
+        "It's not — you can always set the stop later if it starts going wrong",
+        "It forces you to define your risk while you are calm and rational",
+        "Brokers charge extra for stops set after entry",
+        "Stops set before entry execute faster",
+      ],
+      correctIndex: 1,
+      explanation: "The pre-entry stop is the only stop set by your CALM brain. Once the trade is on and price is moving, every nerve in your body negotiates against the stop. The brain that wants to set a stop after a trade is going against it is the same brain that wants to move it lower. That is the trap.",
+    },
+  },
+
+  {
+    id: 'operator-sized-up',
+    stage: 'Operator',
+    order: 11,
+    title: 'You sized up after a win',
+    subtitle: 'Euphoria is the most expensive emotion in trading.',
+    duration: '4 min',
+    icon: '◊',
+    requiresLesson: 'operator-sizing',
+    triggerOn: ['sized_up_after_win'],
+    content: [
+      "Your last trade was a winner. The trade you just opened is twice the size.",
+      "This is one of the most reliable patterns of account destruction.",
+      "Euphoria sizing is the doubling-down of the disciplined: it FEELS like confidence and is actually impulse.",
+    ],
+    blocks: [
+      { type: 'prose', text: "After a win, the brain is bathed in dopamine. Every signal looks stronger. Confidence feels like data. The next trade feels SAFER even though nothing about the market has changed." },
+      { type: 'heading', text: "What just happened in your head" },
+      { type: 'prose', text: "Your prior trade hit. The setup worked. You think: 'I have figured this out — let me press the advantage.' What you actually have is one data point, and the market does not know or care that you won the last one." },
+      { type: 'pullquote', text: "Sizing should be set by your strategy, not your last P&L." },
+      { type: 'callout', tone: 'red', label: 'The euphoria-sizing playbook (do not run it)', text: "1. Win\n2. Size up 2x on the next trade\n3. Lose (probabilities catch up)\n4. Lose 2x what you won\n5. Try to recover by sizing up further\n6. Account is now smaller than it was three trades ago" },
+      { type: 'prose', text: "The professional approach: position size is set by the strategy and the account, not by the last outcome. A 1% risk per trade is 1% on win number five and 1% on loss number five. The discipline survives the streaks." },
+      { type: 'tip', text: "If you genuinely want to scale up, do it incrementally and pre-committed: 'I'll add 0.25% risk per tier of capital growth.' Doubling on instinct is not scaling — it is gambling with house money." },
+    ],
+    callout: {
+      label: 'The check',
+      text: "Before doubling up, ask: would I size this same way if my last trade had been a LOSS?\n\nIf the answer is no, the size is wrong.",
+    },
+    tip: "The market punishes confidence. It pays for consistency.",
+    quiz: {
+      question: "You won your last trade. Your normal position is 100 shares. You feel like the next setup is 'really good.' What is the disciplined position size?",
+      options: [
+        "200 shares — you're hot, ride it",
+        "150 shares — a moderate size up to take advantage of the streak",
+        "100 shares — your normal position",
+        "50 shares — be cautious in case the streak breaks",
+      ],
+      correctIndex: 2,
+      explanation: "The previous trade's outcome has no bearing on the next trade's odds. Your normal size is your normal size because that is the size your strategy is designed around. Sizing UP after wins or DOWN after losses are both versions of the same mistake: letting recent P&L drive sizing instead of strategy. The streak is real to your nervous system. It is not real to the market.",
+    },
+  },
+
+  {
+    id: 'operator-overtrading',
+    stage: 'Operator',
+    order: 12,
+    title: 'You are overtrading',
+    subtitle: 'Four trades in 24 hours is not a strategy. It is restlessness.',
+    duration: '3 min',
+    icon: '◊',
+    requiresLesson: 'operator-1',
+    triggerOn: ['overtrading'],
+    content: [
+      "You have opened four or more trades in the last 24 hours.",
+      "Most setups are not real. Most days do not have an A+ trade.",
+      "The trader who sits on their hands when the market is mid is the trader who has chips left when an A+ setup arrives.",
+    ],
+    blocks: [
+      { type: 'prose', text: "Volume is not skill. The number of trades you take per day is not correlated with profitability — in most studies, it is INVERSELY correlated. The traders who make the most money over time take the FEWEST trades." },
+      { type: 'heading', text: "What overtrading is actually telling you" },
+      { type: 'prose', text: "When you open four trades in a day, the question is not 'are these all good trades' — it is 'why am I trading right now.' Boredom. The need to feel productive. The need to recover a recent loss. None of these reasons make a setup more likely to work." },
+      { type: 'pullquote', text: "Patience is the cheapest position size you will ever take." },
+      { type: 'callout', tone: 'gold', label: 'The single best discipline', text: "Decide BEFORE the day starts: \"I will take at most two A-quality setups today, or none at all.\"\n\nThen hold yourself to it. The trades you don't take are as important as the ones you do." },
+      { type: 'prose', text: "Most days, the right number of trades is zero. The market does not owe you action. Your account does not need you to do something." },
+      { type: 'tip', text: "If you are placing trades to feel less anxious, the trades are managing your emotions, not your edge. That is a flag." },
+    ],
+    callout: {
+      label: 'The pattern',
+      text: "Most trader fortunes are not lost on the bad trades. They are lost on the trades that should not have been taken.\n\nA boring market is a feature, not a problem.",
+    },
+    tip: "If you can't tell why you took a trade three hours later, it was probably restlessness.",
+    quiz: {
+      question: "You have already taken three trades today. The market is choppy and the setups feel marginal. You see another candidate. What is the correct move?",
+      options: [
+        "Take it — you're in flow, three trades is nothing",
+        "Take it but cut size in half",
+        "Skip it. Three trades is more than enough; marginal setups are not edge",
+        "Wait an hour and see if it forms up better",
+      ],
+      correctIndex: 2,
+      explanation: "Marginal setups taken because you're already trading are how flat days become losing days. The professional move is to stop trading when setups are marginal — even if you're 'in the zone.' Cutting size on bad trades just slows the bleed. Waiting an hour is fine for a setup forming, but the deeper problem is that you've already taken three trades and your read on quality is now suspect.",
+    },
+  },
+
+  {
+    id: 'builder-held-too-long',
+    stage: 'Builder',
+    order: 10,
+    title: 'A position is getting old',
+    subtitle: "Trades that need time to 'come back' are usually broken trades.",
+    duration: '3 min',
+    icon: '◊',
+    requiresLesson: 'builder-1',
+    triggerOn: ['held_too_long_open'],
+    content: [
+      "You have an open position that is more than two weeks old.",
+      "There are exactly two kinds of long-held positions: the working ones and the broken ones.",
+      "Telling them apart is the discipline this lesson is about.",
+    ],
+    blocks: [
+      { type: 'prose', text: "When a trade has been open for two weeks, ask one question: 'If I had no position right now, would I open this exact trade today, at the current price?' If the answer is no, the position is not held by conviction — it is held by hope, or inertia, or the unwillingness to take a loss." },
+      { type: 'heading', text: "The working long-hold" },
+      { type: 'prose', text: "If a trade is working — moving toward target, structure intact, thesis still valid — it can absolutely be held for weeks. Some of the best trades take 30+ days to play out. The key word is WORKING. There is movement. The chart is doing what you predicted." },
+      { type: 'heading', text: "The broken long-hold" },
+      { type: 'prose', text: "If a trade is FLAT or DRIFTING and you are holding because you don't want to take the small loss, that is a broken hold. The opportunity cost is real — that capital could be in a fresh trade with fresh conviction. Capital tied up in dead positions is the silent compound killer." },
+      { type: 'pullquote', text: "Time in a flat trade is more expensive than a small loss." },
+      { type: 'callout', tone: 'gold', label: 'The freshness check', text: "Once a week, look at every open trade and answer: would I open this trade today at the current price?\n\nIf no — close it. The capital is more useful elsewhere." },
+      { type: 'tip', text: "There is no shame in closing a flat trade for a tiny gain or loss. The professional move is freeing up capital, not hoping the market wakes up." },
+    ],
+    callout: {
+      label: 'The principle',
+      text: "Capital is the inventory. A flat trade is inventory you cannot sell.\n\nThe market does not care that you bought it last Tuesday. The clock matters; the entry price does not.",
+    },
+    tip: "The trade you wouldn't open today is the trade you should close.",
+    quiz: {
+      question: "You have a position open for 18 days. It's down 2% with no clear trend either direction. The thesis is intact but nothing is happening. What is the disciplined move?",
+      options: [
+        "Hold — you still believe the thesis",
+        "Close it — flat capital is dead capital",
+        "Add to the position to lower your basis",
+        "Wait one more week and reassess",
+      ],
+      correctIndex: 1,
+      explanation: "A position that has gone nowhere for 18 days is telling you the market disagrees with your thesis — or doesn't care enough to act on it. Holding because you 'still believe' is a bias toward the past. Adding to a flat trade is doubling on a non-signal. Waiting another week is just delaying the same decision. Free the capital. Take it to a fresh setup.",
+    },
+  },
+
+  {
+    id: 'operator-grade-drop',
+    stage: 'Operator',
+    order: 13,
+    title: 'Your process grade just dropped',
+    subtitle: 'A bad grade is information. Three are a pattern.',
+    duration: '3 min',
+    icon: '◊',
+    requiresLesson: 'operator-tilt',
+    triggerOn: ['process_grade_dropped'],
+    content: [
+      "Your most recent process grade is at least a full letter below your trailing average.",
+      "Process grades exist because outcome is noisy and process is not. A drop in process grade is signal that something has changed in HOW you are trading.",
+      "This is the moment to slow down and look at your last few trades carefully.",
+    ],
+    blocks: [
+      { type: 'prose', text: "Process can deteriorate without you noticing. The chart looks fine. The setups feel familiar. But execution is slipping — entries are off, stops are wider than they should be, sizing is creeping up, journal entries are getting shorter." },
+      { type: 'heading', text: "Three things to check immediately" },
+      { type: 'prose', text: "1. Are you still writing real rationales? Or has your 'why' field become two words? \n2. Are stops still anchored to structure? Or have they crept up because you 'have a feeling'? \n3. Are you taking setups outside your defined criteria? Bored-trades disguised as edge?" },
+      { type: 'pullquote', text: "When grades drop, the question is not 'what is the market doing.' It is 'what am I doing differently.'" },
+      { type: 'callout', tone: 'gold', label: 'The reset', text: "Take ONE day off the desk. No new trades. Re-read your last five postmortems. Identify the specific thing that changed.\n\nWhen you come back, half-size the next two trades while you re-establish the discipline." },
+      { type: 'prose', text: "Process drift compounds. Every trade taken with sloppy execution teaches your nervous system that sloppy is normal. The earlier you catch it, the cheaper the correction." },
+      { type: 'tip', text: "The traders who survive are the ones who notice the drift in their OWN process before the market punishes it." },
+    ],
+    callout: {
+      label: 'The honest check',
+      text: "Look at the last three trades. Did you write a real rationale? Did the stop come from structure? Was the size your normal size?\n\nIf any answer is fuzzy, that is the answer.",
+    },
+    tip: "Process is the only variable you fully control. Defending it is the entire job.",
+    quiz: {
+      question: "Your last three process grades have averaged 60 (C). Your prior 10 averaged 80 (B+). What is the most likely cause?",
+      options: [
+        "The market has changed and your edge is gone",
+        "Your process has drifted — you are executing more sloppily than before",
+        "Your grading is too harsh on the recent trades",
+        "Random variance — wait for more data",
+      ],
+      correctIndex: 1,
+      explanation: "A 20-point drop in process grade across three trades is not random — that's a one-letter drop with strong consistency. The market changing wouldn't show up in PROCESS grades (which measure execution, not outcome). Grading bias would have shown up earlier. The honest answer is almost always: you are doing something different. Find what, fix what.",
+    },
+  },
+
 ]
 
 // ─── Helpers ────────────────────────────────────────────────
