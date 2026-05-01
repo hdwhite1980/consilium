@@ -237,17 +237,19 @@ interface HorizonConfig {
   priceColumn: string
   computedAtColumn: string
   legacyColumn?: string        // for back-compat (1w/1m have legacy outcome_1w / outcome_1m)
+  timeframeFilter?: string     // if set, only resolve verdicts where timeframe matches
 }
 
 const HORIZONS: HorizonConfig[] = [
   {
     key: '1d',
-    daysOld: 1,
+    daysOld: 2,                    // wait 2 days so weekend/Friday-PM verdicts have a real trading session
     windowDays: 2,                 // grab 2 days of bars to handle weekend gaps
     strictColumn: 'outcome_1d_strict',
     directionalColumn: 'outcome_1d_directional',
     priceColumn: 'outcome_1d_price',
     computedAtColumn: 'outcome_1d_computed_at',
+    timeframeFilter: '1D',         // ONLY resolve verdicts whose declared timeframe is 1D
     // No legacy column — 1d outcomes are new
   },
   {
@@ -292,12 +294,19 @@ async function processHorizon(
   const cutoff = new Date(now.getTime() - horizon.daysOld * 86400000)
     .toISOString().split('T')[0]
 
-  const { data: pending, error } = await admin
+  let baseQuery = admin
     .from('verdict_log')
     .select('id, ticker, signal, entry_price, stop_loss, take_profit, verdict_date')
     .eq(horizon.strictColumn, 'pending')
     .lte('verdict_date', cutoff)
-    .limit(500)
+
+  // For horizons that should ONLY resolve a specific timeframe (e.g. 1d
+  // only resolves timeframe='1D' verdicts), apply the additional filter.
+  if (horizon.timeframeFilter) {
+    baseQuery = baseQuery.eq('timeframe', horizon.timeframeFilter)
+  }
+
+  const { data: pending, error } = await baseQuery.limit(500)
 
   if (error) {
     console.error(`[backtest-resolver] ${horizon.key} fetch failed:`, error.message)
@@ -454,11 +463,15 @@ export async function GET(req: NextRequest) {
   for (const h of HORIZONS) {
     const cutoff = new Date(now.getTime() - h.daysOld * 86400000)
       .toISOString().split('T')[0]
-    const { count } = await admin
+    let q = admin
       .from('verdict_log')
       .select('*', { count: 'exact', head: true })
       .eq(h.strictColumn, 'pending')
       .lte('verdict_date', cutoff)
+    if (h.timeframeFilter) {
+      q = q.eq('timeframe', h.timeframeFilter)
+    }
+    const { count } = await q
     counts[h.key] = { pending: count ?? 0, daysOld: h.daysOld }
   }
 

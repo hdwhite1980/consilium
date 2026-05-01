@@ -50,7 +50,7 @@ function formatOutcome(outcome: string): { label: string; color: string } {
 
 export default function BacktestPage() {
   const [scope, setScope] = useState<'public' | 'user'>('public')
-  const [horizon, setHorizon] = useState<'1w' | '1m'>('1w')
+  const [horizon, setHorizon] = useState<'1d' | '1w' | '1m'>('1w')
   const [personaFilter, setPersonaFilter] = useState<string>('all')
   const [timeframeFilter, setTimeframeFilter] = useState<string>('all')
   const [data, setData] = useState<StatsResponse | null>(null)
@@ -101,6 +101,12 @@ export default function BacktestPage() {
           </div>
 
           <div className="flex bg-gray-900 rounded overflow-hidden">
+            <button
+              onClick={() => setHorizon('1d')}
+              className={`px-4 py-2 ${horizon === '1d' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+            >
+              1 Day
+            </button>
             <button
               onClick={() => setHorizon('1w')}
               className={`px-4 py-2 ${horizon === '1w' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
