@@ -1,4 +1,3 @@
-
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { createClient as createAdmin } from '@supabase/supabase-js'
@@ -30,7 +29,12 @@ export async function middleware(request: NextRequest) {
   // Note: /disclaimer is NOT in this list. The disclaimer page requires
   // an authenticated user so the acceptance can be recorded correctly.
   // Middleware handles the /disclaimer case explicitly below.
-  const alwaysPublic = ['/login', '/auth/callback', '/subscribe', '/signup', '/confirm', '/privacy', '/terms']
+  //
+  // /landing is the public marketing page. Authenticated users hitting
+  // /landing fall through (we don't bounce them off — they may have
+  // arrived via a marketing link). Unauthenticated users hitting /
+  // are rewritten to /landing below.
+  const alwaysPublic = ['/login', '/auth/callback', '/subscribe', '/signup', '/confirm', '/privacy', '/terms', '/landing']
   if (alwaysPublic.some(p => pathname.startsWith(p))) return supabaseResponse
 
   // --- RSC prefetch bypass ---
@@ -84,8 +88,18 @@ export async function middleware(request: NextRequest) {
   // API routes handle their own auth
   if (pathname.startsWith('/api/')) return supabaseResponse
 
-  // Not logged in -> login
+  // Not logged in -> marketing page (root) or login (anywhere else)
+  //
+  // Unauthenticated visitors hitting / get the marketing landing page
+  // via a rewrite. They see / in the address bar and the marketing
+  // route renders. Any other path bounces to /login as before.
   if (!user || !session) {
+    if (pathname === '/') {
+      // Rewrite (not redirect) so the URL stays clean as /
+      const url = request.nextUrl.clone()
+      url.pathname = '/landing'
+      return NextResponse.rewrite(url)
+    }
     if (process.env.NODE_ENV !== 'production') {
       console.log('[middleware] redirect to /login from', pathname, '- no user/session')
     }
