@@ -162,6 +162,9 @@ interface Idea {
   risk?: string
   timeframe?: string
   volumeNote?: string
+  // Scanner-sourced criteria reasons (Phase 2: scanner-backed ideas)
+  criteriaReasons?: string[]
+  tags?: string[]
   // Option-idea fields (present only for Operator+ option setups)
   positionType?: 'stock' | 'option'
   underlying?: string
@@ -1537,6 +1540,16 @@ function FloorInner() {
                           <span className="fl-signal-px mono">{fmt$(price)}</span>
                         </div>
                         {idea.catalyst && <div className="fl-signal-catalyst">{idea.catalyst}</div>}
+                        {idea.criteriaReasons && idea.criteriaReasons.length > 0 && (
+                          <div className="fl-criteria-block">
+                            <div className="fl-criteria-eyebrow">why it passed</div>
+                            <ul className="fl-criteria-list">
+                              {idea.criteriaReasons.slice(0, 4).map((r, ri) => (
+                                <li key={ri} className="fl-criteria-item">{r}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
                         <div className="fl-signal-meta">
                           <span className="mono">{idea.suggestedShares} sh</span>
                           <span className="fl-signal-conf mono">
@@ -2539,6 +2552,40 @@ function FloorStyles() {
       }
       .fl-progress-pulse {
         animation: fl-progress-pulse-anim 2s ease-in-out infinite;
+      }
+
+      /* ── Idea criteria reasons (scanner-sourced WHY) ───────── */
+      .fl-criteria-block {
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(148, 163, 184, 0.08);
+      }
+      .fl-criteria-eyebrow {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 8px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: rgba(148, 163, 184, 0.5);
+        margin-bottom: 5px;
+      }
+      .fl-criteria-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+      .fl-criteria-item {
+        font-size: 10px;
+        line-height: 1.5;
+        color: rgba(212, 168, 87, 0.85);
+        padding-left: 10px;
+        position: relative;
+        margin-bottom: 2px;
+      }
+      .fl-criteria-item::before {
+        content: '·';
+        position: absolute;
+        left: 0;
+        color: rgba(148, 163, 184, 0.5);
       }
 
       /* ── Center column ──────────────────────────── */

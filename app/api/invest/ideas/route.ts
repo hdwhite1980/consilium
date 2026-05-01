@@ -1,490 +1,456 @@
+// ═════════════════════════════════════════════════════════════
+// app/api/invest/ideas/route.ts
+//
+// Tier-aware idea generation backed by the scanner engine.
+//
+// FLOW:
+//   1. Determine user's tier from totalValue
+//   2. Look up tier-specific scanner config (price band, scan type, etc)
+//   3. Call runScan() → get scored picks with full criteria data
+//   4. For each pick, format a `criteriaReasons` array — the WHY this
+//      passed at this tier (used by UI to "show the why")
+//   5. Send picks to Claude for SETUP SYNTHESIS only (entry, stop, target,
+//      shares, rationale) — NOT for ticker selection
+//   6. For Operator+: generate options for top 3 bullish ideas
+//
+// KEY DIFFERENCE from previous version:
+//   Previously Claude picked tickers from a curated list + sector context
+//   plus volume movers. Now the scanner picks the tickers using the same
+//   scoring as /scanner, filtered to the tier's price band. Claude is no
+//   longer responsible for which ticker — only for the trade plan.
+// ═════════════════════════════════════════════════════════════
+
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/app/lib/auth/server'
 import Anthropic from '@anthropic-ai/sdk'
-import { getVolumeMoversEnhanced } from '@/app/lib/data/screener'
+import { runScan, type EnrichedScore } from '@/app/lib/scanner-engine'
+import type { ScannerFilter } from '@/app/lib/scanner-universe'
 import { enrichOptionIdea, isTradierConfigured, getTradierMode } from '@/app/lib/tradier'
 
-const STAGE_CONFIG = [
-  { name: 'Spark',   min: 0,      max: 10,     maxPositions: 2, stopPct: '20–30%', targetPct: '40–80%', strategy: 'momentum and volume spike plays on micro-cap stocks' },
-  { name: 'Ember',   min: 10,     max: 50,     maxPositions: 2, stopPct: '18–25%', targetPct: '35–70%', strategy: 'momentum with early technical confirmation' },
-  { name: 'Flame',   min: 50,     max: 200,    maxPositions: 3, stopPct: '15–20%', targetPct: '30–60%', strategy: 'technical setups with catalyst awareness' },
-  { name: 'Blaze',   min: 200,    max: 1000,   maxPositions: 4, stopPct: '10–15%', targetPct: '20–40%', strategy: 'fundamentally-supported technical breakouts' },
-  { name: 'Inferno', min: 1000,   max: 10000,  maxPositions: 5, stopPct: '8–12%',  targetPct: '15–30%', strategy: 'high-conviction full debate analysis' },
-  { name: 'Free',    min: 10000,  max: Infinity, maxPositions: 10, stopPct: '5–10%', targetPct: '10–25%', strategy: 'diversified conviction-weighted portfolio' },
-]
+// ─────────────────────────────────────────────────────────────
+// Tier configuration
+// ─────────────────────────────────────────────────────────────
+//
+// The displayed tier name uses Buyer/Builder/Operator/Principal/Sovereign
+// (matching /api/invest/floor). Scanner config maps to these tiers.
 
-function getStage(totalValue: number) {
-  return STAGE_CONFIG.find(s => totalValue >= s.min && totalValue < s.max) ?? STAGE_CONFIG[0]
+interface TierConfig {
+  name: string
+  min: number
+  max: number
+  maxPositions: number
+  stopPct: string
+  targetPct: string
+  strategy: string
+
+  // Scanner config
+  priceMin: number
+  priceMax: number
+  scanType: 'directional' | 'fast_movers'
+  universe: string
+  newsBoost: boolean
+  scanLimit: number
 }
 
-// ── Tier gate for options eligibility ────────────────────────
-// MUST match the TIERS array in /api/invest/journey. Options unlock at Operator+.
-// Below Operator ($200), we skip option generation entirely.
-const OPTIONS_MIN_VALUE = 200
+const TIER_CONFIG: TierConfig[] = [
+  {
+    name: 'Buyer',
+    min: 0, max: 50,
+    maxPositions: 2,
+    stopPct: '20–30%', targetPct: '40–80%',
+    strategy: 'small-cap momentum at the price level you can afford',
+    priceMin: 1, priceMax: 5,
+    scanType: 'fast_movers',
+    universe: 'screener-actives',
+    newsBoost: false,
+    scanLimit: 5,
+  },
+  {
+    name: 'Builder',
+    min: 50, max: 200,
+    maxPositions: 2,
+    stopPct: '18–25%', targetPct: '35–70%',
+    strategy: 'momentum with early technical confirmation',
+    priceMin: 1, priceMax: 15,
+    scanType: 'fast_movers',
+    universe: 'screener-actives',
+    newsBoost: false,
+    scanLimit: 6,
+  },
+  {
+    name: 'Operator',
+    min: 200, max: 1000,
+    maxPositions: 3,
+    stopPct: '15–20%', targetPct: '30–60%',
+    strategy: 'directional setups with news + sector confirmation',
+    priceMin: 5, priceMax: 50,
+    scanType: 'directional',
+    universe: 'screener-all',
+    newsBoost: true,
+    scanLimit: 7,
+  },
+  {
+    name: 'Principal',
+    min: 1000, max: 10000,
+    maxPositions: 4,
+    stopPct: '10–15%', targetPct: '20–40%',
+    strategy: 'liquid blue-chip directional setups with news edge',
+    priceMin: 20, priceMax: 200,
+    scanType: 'directional',
+    universe: 'screener-all',
+    newsBoost: true,
+    scanLimit: 8,
+  },
+  {
+    name: 'Sovereign',
+    min: 10000, max: Infinity,
+    maxPositions: 10,
+    stopPct: '5–10%', targetPct: '10–25%',
+    strategy: 'diversified conviction-weighted portfolio',
+    priceMin: 20, priceMax: 0,  // 0 = no upper bound
+    scanType: 'directional',
+    universe: 'screener-all',
+    newsBoost: true,
+    scanLimit: 10,
+  },
+]
 
-// ── Options budget heuristic ─────────────────────────────────
-// Per-position budget × N = max premium per contract. Tighter caps for larger
-// accounts (where absolute dollar amounts matter more), looser for smaller
-// accounts (where a tight cap forces Claude into unrealistic deep-OTM strikes).
-//
-// At $1000 account / 5 positions = $200/pos:
-//   OLD: 20% → $40 cap → Claude often proposes $0.50+ premiums → filtered out
-//   NEW: 40% → $80 cap → Claude can propose normal ATM strikes on cheap stocks
-//
-// At $50k account / 10 positions = $5k/pos:
-//   20% → $1k cap — reasonable for real option sizing discipline
+function getTier(totalValue: number): TierConfig {
+  return TIER_CONFIG.find(t => totalValue >= t.min && totalValue < t.max) ?? TIER_CONFIG[0]
+}
+
+const OPTIONS_MIN_VALUE = 200  // Operator+ unlocks options
+
 function getOptionBudget(deployable: number, maxPositions: number): { maxPremiumPerContract: number; capPct: number } {
   const perPosition = deployable / Math.max(1, maxPositions)
-  // Looser cap at small accounts because premium dollars are tiny either way,
-  // and a tight cap just causes Claude to return 0 valid options most of the time.
   const capPct = deployable < 5000 ? 0.40 : 0.20
   const cap = perPosition * capPct
   return { maxPremiumPerContract: cap, capPct }
 }
 
+// ─────────────────────────────────────────────────────────────
+// Build criteriaReasons — the "show the WHY" surface
+// ─────────────────────────────────────────────────────────────
+//
+// Each scanner pick carries rich scoring data. We translate that into
+// short, human-readable bullets the UI can show next to each idea.
+// Beginners can scan the list and see what makes each idea pass.
+
+function buildCriteriaReasons(pick: EnrichedScore, scanType: string): string[] {
+  const reasons: string[] = []
+
+  // ── Direction + composite ──
+  if (pick.direction === 'bullish') {
+    reasons.push(`Bullish setup (composite ${Math.round(pick.compositeScore)})`)
+  } else if (pick.direction === 'bearish') {
+    reasons.push(`Bearish setup (composite ${Math.round(pick.compositeScore)})`)
+  }
+
+  // ── Rel-strength signal ──
+  if (pick.relStrengthScore >= 75) {
+    reasons.push(`Strong relative strength vs SPY (${Math.round(pick.relStrengthScore)})`)
+  } else if (pick.relStrengthScore >= 60) {
+    reasons.push(`Outperforming SPY (rel-strength ${Math.round(pick.relStrengthScore)})`)
+  } else if (pick.relStrengthScore <= 25) {
+    reasons.push(`Significantly weaker than SPY (rel-strength ${Math.round(pick.relStrengthScore)})`)
+  }
+
+  // ── Fast-mover specifics ──
+  if (scanType === 'fast_movers' && pick.momentumScore !== undefined) {
+    const setup = pick.setupType ? ` · ${pick.setupType}` : ''
+    reasons.push(`Momentum score ${Math.round(pick.momentumScore)}${setup}`)
+
+    // Top 1-2 momentum reasons (avoid swamping the UI)
+    const momReasons = (pick.momentumReasons ?? []).slice(0, 2)
+    for (const r of momReasons) {
+      reasons.push(r)
+    }
+  }
+
+  // ── News boost ──
+  if (pick.newsExposureScore !== undefined && pick.newsExposureScore > 0) {
+    const matchType = pick.newsMatchType === 'direct' ? 'direct' :
+                      pick.newsMatchType === 'sector' ? 'sector' : 'news'
+    if (pick.newsAlignedBoost && pick.newsAlignedBoost > 5) {
+      reasons.push(`News exposure aligned with direction (+${Math.round(pick.newsAlignedBoost)} boost, ${matchType})`)
+    } else if (pick.newsExposureScore > 30) {
+      reasons.push(`News attention (${matchType}, exposure ${Math.round(pick.newsExposureScore)})`)
+    }
+  }
+
+  // ── Liquidity tier ──
+  if (pick.liquidityLabel) {
+    reasons.push(`Liquidity: ${pick.liquidityLabel}`)
+  }
+
+  // ── Tags ──
+  if (pick.tags.length > 0 && pick.tags.length <= 3) {
+    reasons.push(`Tags: ${pick.tags.join(', ')}`)
+  }
+
+  return reasons
+}
+
 // ═════════════════════════════════════════════════════════════
-// Options idea generator (Phase 1 — Claude estimates only)
+// Options idea generator (preserved from previous version)
 //
 // Called after stock ideas are generated. Asks Claude to propose 2-3 option
-// plays based on the top stock ideas (mirror pattern). Every numeric field
-// (strike, premium, delta, breakeven, maxLoss) is a MODEL ESTIMATE — real
-// market prices will differ. Phase 2 (deferred) will enrich with Tradier.
-//
-// All option ideas are cost-capped: contract cost ≤ maxPremiumPerContract * 100.
-// Post-generation filter rejects anything over budget.
+// plays based on the top bullish stock ideas. Phase 2 enriches with Tradier.
 // ═════════════════════════════════════════════════════════════
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
+interface StockIdea {
+  ticker: string
+  companyName?: string
+  price: number
+  livePrice?: number | null
+  signal: string
+  confidence: number
+  catalyst?: string
+  rationale?: string
+  entry?: string
+  stop?: string
+  target?: string
+  stopPct?: number
+  targetPct?: number
+  suggestedShares?: number
+  suggestedAmount?: number
+  criteriaReasons?: string[]
+  sector?: string
+  tags?: string[]
+  timeframe?: string
+}
+
 async function generateOptionIdeas(params: {
   anthropic: Anthropic
-  topStockIdeas: any[]  // eslint-disable-line @typescript-eslint/no-explicit-any
+  topStockIdeas: StockIdea[]
   maxPremiumPerContract: number
   perPositionBudget: number
-  stageName: string
+  tierName: string
   marketContext: string
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-}): Promise<any[]> {
-  const { anthropic, topStockIdeas, maxPremiumPerContract, perPositionBudget, stageName, marketContext } = params
+}): Promise<unknown[]> {
+  const { anthropic, topStockIdeas, maxPremiumPerContract, perPositionBudget, tierName, marketContext } = params
 
-  if (topStockIdeas.length === 0) return []
+  // Take top 3 bullish-only ideas
+  const bullishIdeas = topStockIdeas.filter(i => i.signal === 'BULLISH').slice(0, 3)
+  if (bullishIdeas.length === 0) return []
 
-  // Mirror pattern: only propose options for the top 3 highest-confidence bullish stock ideas.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const candidates = topStockIdeas
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .filter((i: any) => i.ticker && typeof i.confidence === 'number')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .sort((a: any, b: any) => (b.confidence ?? 0) - (a.confidence ?? 0))
-    .slice(0, 3)
-
-  if (candidates.length === 0) return []
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const candidatesDesc = candidates.map((i: any) =>
-    `${i.ticker} @ ~$${i.price?.toFixed(2) ?? '?'} — ${i.signal} ${i.confidence}% — ${i.catalyst ?? 'no catalyst'}`
+  const stockContext = bullishIdeas.map(i =>
+    `${i.ticker} @ $${i.livePrice ?? i.price} (${i.signal}, conf ${i.confidence}%) — ${i.catalyst ?? ''}`
   ).join('\n')
 
-  const maxContractCost = maxPremiumPerContract * 100
-  const maxPremiumSh = maxPremiumPerContract.toFixed(2)
+  const msg = await anthropic.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 1500,
+    system: `You are the Wali-OS options desk. Propose 2-3 directional option plays mirroring the top stock ideas. Strict cost cap: each contract premium × 100 ≤ $${(maxPremiumPerContract * 100).toFixed(0)}. Numeric fields plain numbers — no $ signs.`,
+    messages: [{
+      role: 'user',
+      content: `TIER: ${tierName} (per-position budget ~$${perPositionBudget.toFixed(0)})
+MAX PREMIUM PER CONTRACT: $${maxPremiumPerContract.toFixed(2)} (so 1 contract ≤ $${(maxPremiumPerContract * 100).toFixed(0)})
 
-  const prompt = `You are proposing OPTION plays that mirror the top stock ideas already selected by the Wali-OS AI Council. This is Phase 1 — you are ESTIMATING strikes, premiums, deltas, and breakevens. These numbers are not from a real options chain.
+TOP STOCK IDEAS:
+${stockContext}
 
-CANDIDATE UNDERLYINGS (from top-confidence stock ideas):
-${candidatesDesc}
+MARKET CONTEXT: ${marketContext}
 
-TRADER CONTEXT:
-- Stage: ${stageName}
-- Per-position budget: ~$${perPositionBudget.toFixed(2)}
-- HARD CAP: max premium per contract = $${maxPremiumSh}/share (total contract cost ≤ $${maxContractCost.toFixed(2)})
-- Market context: ${marketContext || 'mixed'}
-
-INSTRUCTIONS:
-1. Generate 1-3 option ideas. Each MUST be on one of the candidate underlyings listed above.
-2. Choose option_type based on the stock signal: BULLISH → call, BEARISH → put.
-3. HARD CAP: estimated_premium × 100 MUST be ≤ $${maxContractCost.toFixed(2)}. This is non-negotiable — any option exceeding this will be rejected.
-
-   STRIKE SELECTION STRATEGY TO HIT THE CAP:
-   - If the underlying is cheap (<$5), ATM options may fit the cap. Check: ATM premium on a $2 stock is typically $0.10-$0.25 for 30 DTE.
-   - If the underlying is mid-price ($5-$30), you likely need slightly OTM strikes (5-15% OTM) with 20-45 DTE.
-   - If the underlying is expensive (>$30), you'll need deeper OTM strikes (15-30% OTM) or short DTE (7-21 days) to fit a tight budget.
-   - When in doubt, go FURTHER OTM rather than closer to ATM — deeper OTM = cheaper premium = fits the cap.
-   - If you cannot find a valid strike for a ticker at this premium cap, SKIP that ticker. Better to return 1 valid option than 3 that get filtered out.
-
-4. Estimate delta: calls are positive (0.15-0.80), puts negative (-0.15 to -0.80). ATM = ~0.50. Deep OTM = 0.15-0.30.
-5. Calculate breakeven: calls = strike + premium, puts = strike - premium.
-6. Calculate max_loss: premium × 100 × number_of_contracts (always 1 contract in this flow).
-
-Return JSON ONLY — no markdown:
+Generate 2-3 option ideas mirroring the strongest stock setups. JSON ONLY:
 {
   "options": [
     {
-      "underlying": "SNDL",
-      "ticker": "SNDL",
-      "optionType": "call",
-      "positionType": "option",
-      "strike": 2.0,
-      "expiry": "2026-05-16",
-      "dte": 26,
-      "estimatedPremium": 0.15,
-      "delta": 0.42,
-      "breakeven": 2.15,
-      "cost": 15.00,
-      "maxLoss": 15.00,
-      "signal": "BULLISH",
-      "confidence": 68,
-      "suggestedShares": 1,
-      "catalyst": "Mirrors stock idea — leveraged play on the same thesis",
-      "rationale": "One sentence on why options make sense here vs shares",
-      "price": 1.84,
-      "underlyingPrice": 1.84
+      "ticker": "AAPL",
+      "type": "call",
+      "strike": 180,
+      "expiry": "2025-12-19",
+      "dte": 45,
+      "premium": 2.50,
+      "contracts": 1,
+      "totalCost": 250,
+      "delta": 0.45,
+      "breakeven": 182.50,
+      "maxLoss": 250,
+      "rationale": "1 sentence — why this option mirrors the bullish stock thesis",
+      "underlyingTicker": "AAPL"
     }
   ]
-}
-
-If none of the candidates fit the premium budget, return: { "options": [] }`
+}`
+    }]
+  })
 
   try {
-    const msg = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1500,
-      system: 'You estimate option plays. All numeric fields are plain numbers — no $ signs, no commas.',
-      messages: [{ role: 'user', content: prompt }],
-    })
-
     const text = (msg.content[0] as { type: string; text: string }).text
     const clean = text.replace(/```json|```/g, '').trim()
-    const parsed = JSON.parse(clean)
+    const result = JSON.parse(clean)
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rawOptions: any[] = Array.isArray(parsed.options) ? parsed.options : []
+    const enriched: any[] = []
+    for (const opt of (result.options ?? [])) {
+      // Cap by budget
+      const premium = parseFloat(String(opt.premium ?? 0))
+      if (!premium || premium * 100 > maxPremiumPerContract * 100 * 1.05) continue
 
-    // Post-generation filter: enforce the premium cap and basic sanity
-    const filtered = rawOptions.filter((o) => {
-      if (!o || typeof o !== 'object') return false
-      if (!o.underlying || !o.strike || !o.expiry) return false
-      if (o.optionType !== 'call' && o.optionType !== 'put') return false
-      const premium = Number(o.estimatedPremium)
-      if (!Number.isFinite(premium) || premium <= 0) return false
-      const contractCost = premium * 100
-      if (contractCost > maxContractCost * 1.02) {
-        // 2% tolerance for rounding
-        console.warn(`[options] filtering out ${o.ticker}: cost $${contractCost.toFixed(2)} exceeds cap $${maxContractCost.toFixed(2)}`)
-        return false
+      // Try Tradier enrichment
+      if (isTradierConfigured()) {
+        try {
+          const enrichedData = await enrichOptionIdea({
+            underlying: opt.underlyingTicker || opt.ticker,
+            optionType: opt.type,
+            targetStrike: parseFloat(String(opt.strike)),
+            targetExpiration: opt.expiry,
+          })
+          if (enrichedData) {
+            opt.dataSource = 'tradier'
+            opt.premium = enrichedData.premium ?? opt.premium
+            opt.delta = enrichedData.delta ?? opt.delta
+            opt.iv = enrichedData.iv
+            opt.optionSymbol = enrichedData.optionSymbol
+          } else {
+            opt.dataSource = 'claude-estimate'
+          }
+        } catch {
+          opt.dataSource = 'claude-estimate'
+        }
+      } else {
+        opt.dataSource = 'claude-estimate'
       }
-      // Sanity: require underlying to be one of our candidates
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      if (!candidates.some((c: any) => c.ticker === o.underlying || c.ticker === o.ticker)) {
-        console.warn(`[options] filtering out ${o.ticker}: not in candidate list`)
-        return false
-      }
-      return true
-    })
 
-    // Diagnostic summary — helps identify when Claude's estimates miss the cap
-    console.log(`[options] generated ${rawOptions.length} raw → ${filtered.length} after filter (cap $${maxContractCost.toFixed(2)}, candidates: ${candidates.map(c => c.ticker).join(',')})`)
-
-    // ── Phase 2: enrich with real Tradier option chain data ─────────
-    // For each Claude-proposed option, fetch the real option chain and
-    // find the nearest actual strike+expiry. If Tradier succeeds we swap
-    // in real premium/delta/IV data; if it fails we keep Claude's estimate
-    // and flag it with isEstimated: true so the UI shows the "est" badge.
-    const tradierEnabled = isTradierConfigured()
-    if (tradierEnabled) {
-      console.log(`[options] Tradier enabled (${getTradierMode()}) — enriching ${filtered.length} ideas`)
-    } else {
-      console.log('[options] Tradier not configured — all ideas will be marked as estimates')
+      opt.totalCost = (opt.premium ?? 0) * 100 * (opt.contracts ?? 1)
+      enriched.push(opt)
     }
 
-    // Process all enrichments in parallel, cap at 3 (from slice below)
-    const top3 = filtered.slice(0, 3)
-
-    const enriched = await Promise.all(
-      top3.map(async (o) => {
-        const baseNormalised = {
-          ...o,
-          positionType: 'option' as const,
-          strike: Number(o.strike),
-          estimatedPremium: Number(o.estimatedPremium),
-          delta: typeof o.delta === 'number' ? Number(o.delta) : null,
-          breakeven: Number(o.breakeven ?? (o.optionType === 'call' ? o.strike + o.estimatedPremium : o.strike - o.estimatedPremium)),
-          cost: Number(o.cost ?? Number(o.estimatedPremium) * 100),
-          maxLoss: Number(o.maxLoss ?? Number(o.estimatedPremium) * 100),
-          dte: Number(o.dte ?? 0),
-          confidence: Math.round(Number(o.confidence ?? 60)),
-          suggestedShares: 1,
-          isEstimated: true,   // Default; overridden if Tradier succeeds
-          iv: null as number | null,
-          optionSymbol: null as string | null,
-          dataSource: 'claude-estimate' as 'claude-estimate' | 'tradier',
-        }
-
-        if (!tradierEnabled) return baseNormalised
-
-        // Attempt real-chain enrichment
-        try {
-          const real = await enrichOptionIdea({
-            underlying: o.underlying ?? o.ticker,
-            optionType: o.optionType,
-            targetStrike: Number(o.strike),
-            targetExpiration: String(o.expiry),
-          })
-
-          if (!real) {
-            console.log(`[options] Tradier lookup empty for ${o.ticker ?? o.underlying} — keeping Claude estimate`)
-            return baseNormalised
-          }
-
-          // Check if the real contract cost still fits within budget cap
-          // (Real premium may differ substantially from Claude's estimate)
-          const realContractCost = real.premium * 100
-          if (realContractCost > maxContractCost * 1.5) {
-            // Soft limit: reject only if real price exceeds 150% of cap
-            // (some premium drift is fine for educational purposes)
-            console.warn(`[options] real premium exceeds cap by too much for ${o.ticker}: $${realContractCost.toFixed(2)} vs cap $${maxContractCost.toFixed(2)} — dropping`)
-            return null
-          }
-
-          // Successful enrichment — swap in real data
-          console.log(`[options] Tradier enriched ${o.ticker}: strike ${o.strike} → ${real.strike}, premium ${o.estimatedPremium.toFixed(2)} → ${real.premium.toFixed(2)}`)
-
-          const breakeven = o.optionType === 'call'
-            ? real.strike + real.premium
-            : real.strike - real.premium
-
-          const newDte = Math.max(0, Math.round(
-            (new Date(real.expiration + 'T00:00:00Z').getTime() - Date.now()) / (1000 * 60 * 60 * 24)
-          ))
-
-          return {
-            ...baseNormalised,
-            strike: real.strike,
-            estimatedPremium: real.premium,
-            delta: real.delta,
-            iv: real.iv,
-            breakeven,
-            cost: realContractCost,
-            maxLoss: realContractCost,
-            expiry: real.expiration,
-            dte: newDte,
-            optionSymbol: real.optionSymbol,
-            isEstimated: false,
-            dataSource: 'tradier' as const,
-          }
-        } catch (e) {
-          console.warn(`[options] enrichment error for ${o.ticker}:`, (e as Error).message?.slice(0, 100))
-          return baseNormalised
-        }
-      })
-    )
-
-    // Drop any nulls (options rejected due to real premium exceeding soft cap)
-    const finalOptions = enriched.filter((o): o is NonNullable<typeof o> => o !== null)
-
-    const tradierEnrichedCount = finalOptions.filter(o => o.dataSource === 'tradier').length
-    console.log(`[options] final: ${finalOptions.length} ideas, ${tradierEnrichedCount} enriched from Tradier`)
-
-    return finalOptions
-
-  } catch (err) {
-    console.error('[options] generation failed:', (err as Error).message)
+    return enriched
+  } catch (e) {
+    console.error('Option ideas parse error:', e)
     return []
   }
 }
 
-// Calculate ideal price range based on deployable cash
-// Target: each position should buy 10–50 shares (feels like a real holding)
-// Per-position capital = deployable / max positions
-// ideal price = per-position capital / target shares
-function getPriceRange(deployable: number, maxPositions: number): { minPrice: number; maxPrice: number; targetShares: number } {
-  const perPosition = deployable / Math.max(1, maxPositions)
-
-  if (perPosition <= 5) {
-    // Under $5/position — buy fractional or 1-3 shares of $1-3 stocks
-    return { minPrice: 0.5, maxPrice: 5, targetShares: Math.max(1, Math.floor(perPosition)) }
-  } else if (perPosition <= 20) {
-    // $5-20/position — $1-8 stocks, 3-15 shares
-    return { minPrice: 1, maxPrice: Math.min(8, perPosition * 0.7), targetShares: 5 }
-  } else if (perPosition <= 100) {
-    // $20-100/position — $3-25 stocks, 5-20 shares
-    return { minPrice: 2, maxPrice: Math.min(25, perPosition * 0.6), targetShares: 10 }
-  } else if (perPosition <= 500) {
-    // $100-500/position — $5-60 stocks, 10-30 shares
-    return { minPrice: 5, maxPrice: Math.min(60, perPosition * 0.5), targetShares: 15 }
-  } else if (perPosition <= 2000) {
-    // $500-2000/position — $10-150 stocks
-    return { minPrice: 10, maxPrice: Math.min(150, perPosition * 0.4), targetShares: 20 }
-  } else {
-    // $2000+/position — any price, 20-50 shares
-    return { minPrice: 20, maxPrice: Math.min(500, perPosition * 0.3), targetShares: 30 }
-  }
-}
-
-// Small-cap stocks by sector — known to trade in lower price ranges
-const SECTOR_SMALLCAPS: Record<string, string[]> = {
-  'Technology':       ['SSYS', 'NAOV', 'CIFS', 'GPRO', 'VUZI', 'AEYE', 'IDEX', 'INPX', 'DLPN', 'GXII'],
-  'Healthcare':       ['CLOV', 'OCGN', 'SNGX', 'MESO', 'NRXP', 'IPHA', 'ATOS', 'IMVT', 'VVOS', 'BFRI'],
-  'Energy':           ['TELL', 'NEXT', 'GENIE', 'MNRL', 'AMMO', 'ZOM', 'SWN', 'RIG', 'CEQP', 'BORR'],
-  'Financials':       ['NEGG', 'NRDS', 'CURO', 'ELAN', 'HMST', 'PFBC', 'GDOT', 'CARE', 'ASRV', 'BSVN'],
-  'Consumer Disc.':   ['WKHS', 'GOEV', 'RIDE', 'SOLO', 'NKLA', 'MULN', 'IDEANOMICS', 'XPEV', 'XPOA', 'BLNK'],
-  'Consumer Staples': ['FLGC', 'IIPR', 'CCHWF', 'CURLF', 'ACB', 'SNDL', 'TLRY', 'CGC', 'OGI', 'APHA'],
-  'Industrials':      ['BLPG', 'SHIP', 'SINO', 'GATO', 'VERB', 'FRMO', 'ILUS', 'USDR', 'CTXR', 'ATXI'],
-  'Materials':        ['GATO', 'HUSA', 'NXE', 'URG', 'DNN', 'UEC', 'FSM', 'AG', 'GPL', 'EXK'],
-  'Real Estate':      ['SQFT', 'KREF', 'NREF', 'REFI', 'BRMK', 'BRSP', 'GPMT', 'TRTX', 'BXMT', 'ARI'],
-  'Utilities':        ['GENIE', 'SPKE', 'AMRC', 'PEGI', 'NOVA', 'SHLS', 'FTCI', 'REGI', 'CLFD', 'ARRY'],
-  'Comm. Services':   ['PHUN', 'ATUS', 'MINM', 'SOPA', 'GFAI', 'AEAC', 'CIDM', 'MFAC', 'LIQT', 'CODA'],
-}
-
-// Fetch current sector performance from macro data
-async function fetchSectorPerformance(): Promise<Array<{ name: string; signal: string; change1D: number; etf: string }>> {
-  try {
-    const res = await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/macro`, {
-      cache: 'no-store',
-      headers: { 'x-internal': '1' },
-    })
-    if (!res.ok) return []
-    const data = await res.json()
-    return (data.sectors ?? []).map((s: { name: string; signal: string; change1D: number; etf: string }) => ({
-      name: s.name,
-      signal: s.signal,
-      change1D: s.change1D,
-      etf: s.etf,
-    }))
-  } catch { return [] }
-}
+// ═════════════════════════════════════════════════════════════
+// Main route
+// ═════════════════════════════════════════════════════════════
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
 
-  const { totalValue, openTrades, startingBalance, cashRemaining } = await req.json()
-  const stage = getStage(totalValue ?? 0)
-  const deployable = cashRemaining ?? Math.max(0,
-    (totalValue ?? 0) - (openTrades?.reduce((s: number, t: { entry_price: number; shares: number }) => s + t.entry_price * t.shares, 0) ?? 0)
+  const { totalValue, openTrades, cashRemaining } = await req.json()
+  const tier = getTier(totalValue ?? 0)
+  const deployable = cashRemaining ?? Math.max(
+    0,
+    (totalValue ?? 0) - (openTrades?.reduce(
+      (s: number, t: { entry_price: number; shares: number }) => s + t.entry_price * t.shares, 0
+    ) ?? 0)
   )
 
-  // Dynamic price range based on how much they can actually deploy
-  const priceRange = getPriceRange(deployable, stage.maxPositions)
-  const minPrice = priceRange.minPrice
-  const maxPrice = priceRange.maxPrice
-  const targetShares = priceRange.targetShares
-
-  // Pick candidate tickers from the right price tier
-  const SMALL_CAP_BY_PRICE: Record<string, string[]> = {
-    'under5':   ['SNDL','CLOV','MVIS','WKHS','GOEV','RIDE','NKLA','PHUN','BBIG','ILUS','AMC','CMAX','NRXP','OCGN','TELL'],
-    'under15':  ['GPRO','LAZR','LIDR','BLNK','PLUG','FCEL','HYLN','SOLO','XPEV','NIO','GOTU','GRAB','ACHR','JOBY','ARCHER'],
-    'under30':  ['F','BAC','T','ITUB','VALE','SWN','RIG','NOK','ERIC','GOLD','AG','FSM','MRO','APA','BORR'],
-    'under75':  ['SNAP','LYFT','RIVN','LCID','SOFI','OPEN','UWMC','VUZI','NAOV','SPCE','PTRA','DKNG','PENN','MGAM','AGS'],
-    'under200': ['UBER','HOOD','COIN','RBLX','PLTR','MARA','RIOT','HUT','BITF','CLSK','IREN','WULF','BTBT','CIFR','CORZ'],
-    'any':      ['AMD','NVDA','META','GOOGL','MSFT','AAPL','AMZN','TSLA','JPM','GS'],
+  // ── Step 1: Run scanner with tier-appropriate config ─────────
+  const filter: ScannerFilter = {
+    priceMin: tier.priceMin,
+    priceMax: tier.priceMax > 0 ? tier.priceMax : undefined,
   }
 
-  const priceTier = maxPrice <= 5 ? 'under5' : maxPrice <= 15 ? 'under15' : maxPrice <= 30 ? 'under30' : maxPrice <= 75 ? 'under75' : maxPrice <= 200 ? 'under200' : 'any'
-  const priceTierTickers = SMALL_CAP_BY_PRICE[priceTier] ?? []
-
-  // Fetch live sector performance
-  const sectors = await fetchSectorPerformance()
-
-  // Rank: BULLISH first, then by change1D descending
-  const ranked = [...sectors].sort((a, b) => {
-    const sigScore = (s: string) => s === 'BULLISH' ? 2 : s === 'NEUTRAL' ? 1 : 0
-    if (sigScore(b.signal) !== sigScore(a.signal)) return sigScore(b.signal) - sigScore(a.signal)
-    return b.change1D - a.change1D
+  const scanResult = await runScan({
+    universe: tier.universe,
+    filter,
+    mode: 'bullish',  // ideas are buy-side
+    limit: tier.scanLimit,
+    newsBoost: tier.newsBoost,
+    scanType: tier.scanType,
+    horizon: 'week',
+    priceCeiling: tier.priceMax > 0 ? tier.priceMax : 999,
   })
 
-  // Take top 5 sectors (or all if fewer)
-  const topSectors = ranked.slice(0, 5)
-  const bullishSectors = topSectors.filter(s => s.signal === 'BULLISH')
-  const allTopNames = topSectors.map(s => s.name)
-
-  // Build sector context for the AI
-  const sectorContext = topSectors.map(s =>
-    `${s.name}: ${s.signal} (${s.change1D >= 0 ? '+' : ''}${s.change1D.toFixed(2)}% today)`
-  ).join('\n')
-
-  // Gather candidate tickers from top sectors
-  const candidateTickers: string[] = []
-  for (const sector of topSectors) {
-    const tickers = SECTOR_SMALLCAPS[sector.name] ?? []
-    candidateTickers.push(...tickers.slice(0, 4))
+  if (scanResult.picks.length === 0) {
+    return NextResponse.json({
+      ideas: [],
+      options: [],
+      optionsBudgetWarning: null,
+      journeyNote: `No ${tier.name}-tier setups found in current market conditions. The scanner reviewed ${scanResult.scannedCount} candidates but none met the criteria right now.`,
+      stageAdvice: 'Wait for conditions. Most days do not have an A+ setup — patience is a position.',
+      marketContext: `SPY: ${scanResult.spyChange10d > 0 ? '+' : ''}${scanResult.spyChange10d}% (10d), ${scanResult.spyChange30d > 0 ? '+' : ''}${scanResult.spyChange30d}% (30d)`,
+      topSectors: [],
+      stage: tier.name,
+      stageConfig: tier,
+      scanMeta: {
+        scannedCount: scanResult.scannedCount,
+        withTechnicalsCount: scanResult.withTechnicalsCount,
+        scanType: tier.scanType,
+        universe: tier.universe,
+      },
+    })
   }
 
-  // ── Step 1: Get real volume movers in the price range ────────
-  // These are actual stocks moving TODAY with real volume data
-  const realMovers = await getVolumeMoversEnhanced(minPrice, maxPrice, 10)
+  // ── Step 2: Build criteria reasons for each pick (the "show the WHY") ──
+  const picksWithCriteria = scanResult.picks.map(pick => ({
+    pick,
+    criteriaReasons: buildCriteriaReasons(pick, tier.scanType),
+  }))
 
-  // Format movers for AI context
-  const moversContext = realMovers.length > 0
-    ? `TODAY'S REAL VOLUME MOVERS in the $${minPrice.toFixed(2)}–$${maxPrice.toFixed(2)} range (from Alpaca screener):\n` +
-      realMovers.map(m =>
-        `${m.ticker}: $${m.price.toFixed(2)}, ${m.changePercent >= 0 ? '+' : ''}${m.changePercent.toFixed(1)}% today, volume moving`
-      ).join('\n')
-    : `No screener data available — use your knowledge of current $${minPrice.toFixed(2)}–$${maxPrice.toFixed(2)} stocks`
+  // ── Step 3: Send picks to Claude for SETUP SYNTHESIS ONLY ────
+  // Claude no longer chooses tickers — the scanner did that. Claude only
+  // produces the trade plan: entry, stop, target, shares, rationale.
+
+  const targetShares = Math.max(
+    1,
+    Math.floor((deployable / tier.maxPositions) / Math.max(1, scanResult.picks[0].currentPrice))
+  )
+
+  const picksContext = picksWithCriteria.map(({ pick, criteriaReasons }, i) =>
+    `${i + 1}. ${pick.ticker} @ $${pick.currentPrice.toFixed(2)} · ${pick.direction}\n   Why it passed: ${criteriaReasons.join(' / ')}`
+  ).join('\n\n')
 
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
   const msg = await anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 2000,
-    system: `You are the Wali-OS AI Council's journey guide for investors at all levels. You recommend stage-appropriate stocks using live sector performance data.
+    system: `You are the Wali-OS Council. The scanner has selected the tickers. Your job is to produce a complete trade plan for each one — entry, stop, target, share count, and a 1-2 sentence rationale.
 
-CRITICAL PRICE RULE: Every stock you recommend MUST currently trade between $${minPrice.toFixed(2)} and $${maxPrice.toFixed(2)}. This range is calculated from the user's available capital so each position feels meaningful — around ${targetShares} shares per position. A $${maxPrice.toFixed(0)} stock with ${targetShares} shares = $${(maxPrice * targetShares).toFixed(0)} which is appropriate for their balance. Do NOT recommend stocks outside this range.
+CRITICAL: Do NOT propose tickers other than the ones provided. You may reject a pick if you genuinely believe it is unsuitable, but explain why in the response (set "skipReason").
 
-All numeric fields must be plain numbers — no $ signs, no commas.`,
+For each pick:
+- Use the live price as the entry anchor
+- Stop must be ${tier.stopPct} below entry (range)
+- Target must be ${tier.targetPct} above entry
+- Suggested shares should size the position to ~$${(deployable / tier.maxPositions).toFixed(0)} per slot
+
+All numeric fields plain numbers — no $ signs, no commas.`,
     messages: [{
       role: 'user',
       content: `TRADER PROFILE:
-Stage: ${stage.name} — total portfolio $${(totalValue ?? 0).toFixed(2)}, cash to deploy: $${deployable.toFixed(2)}
-STOCK PRICE RANGE: $${minPrice.toFixed(2)}–$${maxPrice.toFixed(2)} (sized so they can buy ~${targetShares} shares per position)
-Per-position budget: ~$${(deployable / stage.maxPositions).toFixed(2)}
-Strategy: ${stage.strategy}
-Stop range: ${stage.stopPct} | Target range: ${stage.targetPct}
+Tier: ${tier.name} — total $${(totalValue ?? 0).toFixed(2)}, deployable $${deployable.toFixed(2)}
+Per-position budget: ~$${(deployable / tier.maxPositions).toFixed(2)}
+Strategy: ${tier.strategy}
+Stop range: ${tier.stopPct} | Target range: ${tier.targetPct}
 
-${moversContext}
+SPY CONTEXT: ${scanResult.spyChange10d > 0 ? '+' : ''}${scanResult.spyChange10d}% (10d), ${scanResult.spyChange30d > 0 ? '+' : ''}${scanResult.spyChange30d}% (30d)
 
-TODAY'S SECTOR PERFORMANCE:
-${sectorContext || 'Sector data unavailable — use broad market context'}
+SCANNER PICKS:
+${picksContext}
 
-STRONGEST SECTORS TODAY: ${allTopNames.slice(0, 3).join(', ')}
-BULLISH SECTORS: ${bullishSectors.map(s => s.name).join(', ') || 'None — market is mixed/bearish'}
-
-BACKUP CANDIDATE TICKERS (only use if real movers list is empty):
-${candidateTickers.slice(0, 10).join(', ')}, ${priceTierTickers.slice(0, 8).join(', ')}
-
-INSTRUCTION: Use the REAL VOLUME MOVERS above as your primary source — these are confirmed to be trading in range TODAY. For each, explain the technical setup and why the sector conditions support it. Only use backup candidates if the movers list is empty.
-
-Generate EXACTLY 5 stock ideas. Each must:
-1. Trade between $${minPrice.toFixed(2)} and $${maxPrice.toFixed(2)} — prefer stocks from the real movers list
-2. Come from a top-performing sector where possible
-3. Have a specific catalyst or technical reason RIGHT NOW
-4. Suggest ~${targetShares} shares for ~$${(deployable / stage.maxPositions).toFixed(2)} per-position budget
-
-Return JSON ONLY — no markdown, no backticks:
+For each ticker above, produce a setup. Return JSON ONLY:
 {
   "ideas": [
     {
-      "ticker": "SNDL",
-      "companyName": "Sundial Growers",
-      "sector": "Consumer Staples",
-      "sectorSignal": "BULLISH",
-      "price": 1.84,
+      "ticker": "AAPL",
+      "companyName": "Apple Inc.",
       "signal": "BULLISH",
       "confidence": 71,
-      "catalyst": "One specific reason to buy this week",
-      "rationale": "2 sentences — why this fits their $${(deployable / stage.maxPositions).toFixed(2)} per-position budget and sector momentum",
-      "suggestedAmount": 3.68,
-      "suggestedShares": ${targetShares},
-      "entry": "$1.80–1.90",
-      "stop": "$1.45",
-      "stopPct": 21,
-      "target": "$2.80",
-      "targetPct": 52,
-      "risk": "high",
-      "timeframe": "1–3 weeks",
-      "volumeNote": "volume 4.2× average"
+      "catalyst": "1-2 word event tag (earnings, breakout, etc)",
+      "rationale": "1-2 sentences — what makes this a tradeable setup RIGHT NOW given the criteria",
+      "entry": "180.00–182.50",
+      "stop": 175.00,
+      "stopPct": 3,
+      "target": 195.00,
+      "targetPct": 8,
+      "suggestedShares": 5,
+      "suggestedAmount": 905,
+      "risk": "low|medium|high",
+      "timeframe": "1-3 weeks",
+      "skipReason": null
     }
   ],
-  "journeyNote": "One sentence referencing their ${stage.name} stage progress and today's market",
-  "stageAdvice": "One practical tip for the ${stage.name} stage today",
-  "marketContext": "One sentence on overall market conditions from the sector data"
+  "journeyNote": "1 sentence about today's market and ${tier.name}-tier opportunity",
+  "stageAdvice": "1 practical tip for ${tier.name} traders today",
+  "marketContext": "1 sentence on overall conditions"
 }`
     }]
   })
@@ -495,16 +461,23 @@ Return JSON ONLY — no markdown, no backticks:
     const result = JSON.parse(clean)
 
     const finnhubKey = process.env.FINNHUB_API_KEY
-    const validIdeas = []
+    const validIdeas: StockIdea[] = []
 
     for (const idea of (result.ideas ?? [])) {
-      if (!idea.ticker) continue
+      if (!idea.ticker || idea.skipReason) continue
 
-      // Fetch live price
-      let livePrice: number | null = null
+      // Match back to scanner pick for criteria + price
+      const matched = picksWithCriteria.find(p => p.pick.ticker === idea.ticker)
+      if (!matched) continue
+
+      // Live price refresh (defense in depth)
+      let livePrice: number | null = matched.pick.currentPrice
       if (finnhubKey) {
         try {
-          const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${idea.ticker}&token=${finnhubKey}`, { cache: 'no-store' })
+          const res = await fetch(
+            `https://finnhub.io/api/v1/quote?symbol=${idea.ticker}&token=${finnhubKey}`,
+            { cache: 'no-store' }
+          )
           if (res.ok) {
             const q = await res.json()
             if (q.c > 0) livePrice = q.c
@@ -512,10 +485,9 @@ Return JSON ONLY — no markdown, no backticks:
         } catch { /* ignore */ }
       }
 
-      const displayPrice = livePrice ?? idea.price ?? 0
-
-      // Hard reject if outside dynamic price range
-      if (livePrice && (livePrice > maxPrice || livePrice < minPrice)) {
+      // Hard reject if price moved out of tier range since the scan
+      if (livePrice && (livePrice < tier.priceMin ||
+          (tier.priceMax > 0 && livePrice > tier.priceMax))) {
         continue
       }
 
@@ -527,38 +499,40 @@ Return JSON ONLY — no markdown, no backticks:
         ? parseFloat(String(idea.suggestedShares)) || 1
         : (idea.suggestedShares ?? 1)
       idea.livePrice = livePrice
-      idea.price = displayPrice
+      idea.price = livePrice ?? idea.price
 
       // Recalculate based on live price
       if (livePrice && idea.suggestedShares > 0) {
         idea.suggestedAmount = parseFloat((livePrice * idea.suggestedShares).toFixed(2))
       }
 
+      // Attach criteria reasons + scanner data
+      idea.criteriaReasons = matched.criteriaReasons
+      idea.sector = matched.pick.sector
+      idea.tags = matched.pick.tags
+
       validIdeas.push(idea)
     }
 
-    // ── Phase 1: Options generation ─────────────────────────
-    // Only generate options when the account is at Operator+ tier ($200+).
-    // Below that, tiers are still learning stock discipline.
+    // ── Step 4: Options for Operator+ ────────────────────────
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let optionIdeas: any[] = []
     let optionsBudgetWarning: string | null = null
 
     const accountTotalValue = totalValue ?? 0
     if (accountTotalValue >= OPTIONS_MIN_VALUE && validIdeas.length > 0) {
-      const optionBudget = getOptionBudget(deployable, stage.maxPositions)
-      const perPositionBudget = deployable / Math.max(1, stage.maxPositions)
+      const optionBudget = getOptionBudget(deployable, tier.maxPositions)
+      const perPositionBudget = deployable / Math.max(1, tier.maxPositions)
 
       optionIdeas = await generateOptionIdeas({
         anthropic,
         topStockIdeas: validIdeas,
         maxPremiumPerContract: optionBudget.maxPremiumPerContract,
         perPositionBudget,
-        stageName: stage.name,
+        tierName: tier.name,
         marketContext: result.marketContext ?? '',
       })
 
-      // Phase 2: compute how many options got real Tradier data
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const tradierCount = optionIdeas.filter((o: any) => o.dataSource === 'tradier').length
       const allFromTradier = optionIdeas.length > 0 && tradierCount === optionIdeas.length
@@ -566,7 +540,6 @@ Return JSON ONLY — no markdown, no backticks:
       const tradierMode = getTradierMode()
       const delayNote = tradierMode === 'sandbox' ? ' (sandbox data has a 15-minute delay)' : ''
 
-      // Warn when account is small relative to options risk, even though we allow it
       if (accountTotalValue < 5000 && optionIdeas.length > 0) {
         const dataNote = allFromTradier
           ? `Prices are from Tradier${delayNote}.`
@@ -591,10 +564,16 @@ Return JSON ONLY — no markdown, no backticks:
       optionsBudgetWarning,
       journeyNote: result.journeyNote ?? '',
       stageAdvice: result.stageAdvice ?? '',
-      marketContext: result.marketContext ?? '',
-      topSectors: topSectors.map(s => ({ name: s.name, signal: s.signal, change1D: s.change1D })),
-      stage: stage.name,
-      stageConfig: stage,
+      marketContext: result.marketContext ?? `SPY: ${scanResult.spyChange10d > 0 ? '+' : ''}${scanResult.spyChange10d}% (10d)`,
+      topSectors: [],  // legacy field — not used now that scanner picks
+      stage: tier.name,
+      stageConfig: tier,
+      scanMeta: {
+        scannedCount: scanResult.scannedCount,
+        withTechnicalsCount: scanResult.withTechnicalsCount,
+        scanType: tier.scanType,
+        universe: tier.universe,
+      },
     })
   } catch (err) {
     console.error('Invest ideas error:', err)
