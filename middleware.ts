@@ -34,7 +34,7 @@ export async function middleware(request: NextRequest) {
   // /landing fall through (we don't bounce them off — they may have
   // arrived via a marketing link). Unauthenticated users hitting /
   // are rewritten to /landing below.
-  const alwaysPublic = ['/login', '/auth/callback', '/subscribe', '/signup', '/confirm', '/privacy', '/terms', '/landing']
+  const alwaysPublic = ['/login', '/auth/callback', '/subscribe', '/signup', '/confirm', '/privacy', '/terms', '/landing', '/track-record']
   if (alwaysPublic.some(p => pathname.startsWith(p))) return supabaseResponse
 
   // --- RSC prefetch bypass ---
