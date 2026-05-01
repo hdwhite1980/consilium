@@ -164,7 +164,7 @@ function Hero() {
               }}
               className="hover:opacity-80 transition"
             >
-              See a sample analysis ->
+              See a sample analysis {'->'}
             </a>
           </div>
           <p
@@ -423,7 +423,7 @@ function SamplePreview() {
           }}
           className="hover:opacity-80 transition"
         >
-          Run your own analysis  -  start free trial ->
+          Run your own analysis  -  start free trial {'->'}
         </Link>
       </div>
     </section>
