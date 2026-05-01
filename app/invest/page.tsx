@@ -1105,19 +1105,6 @@ function TierLadder({ tiers, tier, stats, value, processTrend }: {
         })}
       </div>
 
-      <div className="fl-metric-block fl-capital-block">
-        <div className="fl-capital-row">
-          <span className="k">capital</span>
-          <button type="button" className="fl-capital-add-btn" onClick={() => setAddCashOpen(true)}>
-            + add
-          </button>
-        </div>
-        <div className="fl-capital-detail mono">
-          <span>starting</span>
-          <span>${(data?.journey?.starting_balance ?? 0).toFixed(2)}</span>
-        </div>
-      </div>
-
       <div className="fl-metric-block">
         <div className="fl-metric-row">
           <span className="k">to {tier.nextTierName ?? 'apex'}</span>
@@ -1661,6 +1648,22 @@ function FloorInner() {
         {/* LEFT — tier ladder */}
         <div className={mobileView === 'portfolio' ? 'fl-show' : 'fl-hide'}>
           <TierLadder tiers={tiers} tier={tier} stats={stats} value={value} processTrend={data.processTrend} />
+        </div>
+
+        {/* Capital block - deposit / withdraw */}
+        <div className={mobileView === 'portfolio' ? 'fl-show' : 'fl-hide'}>
+          <div className="fl-metric-block fl-capital-block" style={{ marginTop: 12 }}>
+            <div className="fl-capital-row">
+              <span className="k">capital</span>
+              <button type="button" className="fl-capital-add-btn" onClick={() => setAddCashOpen(true)}>
+                + add
+              </button>
+            </div>
+            <div className="fl-capital-detail mono">
+              <span>starting</span>
+              <span>${(data?.journey?.starting_balance ?? 0).toFixed(2)}</span>
+            </div>
+          </div>
         </div>
 
         {/* CENTER — orb + signals */}
