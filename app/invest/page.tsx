@@ -1105,6 +1105,19 @@ function TierLadder({ tiers, tier, stats, value, processTrend }: {
         })}
       </div>
 
+      <div className="fl-metric-block fl-capital-block">
+        <div className="fl-capital-row">
+          <span className="k">capital</span>
+          <button type="button" className="fl-capital-add-btn" onClick={() => setAddCashOpen(true)}>
+            + add
+          </button>
+        </div>
+        <div className="fl-capital-detail mono">
+          <span>starting</span>
+          <span>${(data?.journey?.starting_balance ?? 0).toFixed(2)}</span>
+        </div>
+      </div>
+
       <div className="fl-metric-block">
         <div className="fl-metric-row">
           <span className="k">to {tier.nextTierName ?? 'apex'}</span>
@@ -1139,6 +1152,140 @@ function TierLadder({ tiers, tier, stats, value, processTrend }: {
   )
 }
 
+// --------------------------------------------------------------
+// ADD CASH MODAL
+// --------------------------------------------------------------
+function AddCashModal({ currentBalance, submitting, onClose, onSubmit }: {
+  currentBalance: number
+  submitting: boolean
+  onClose: () => void
+  onSubmit: (amount: number) => Promise<{ ok: boolean; clamped: boolean; appliedAmount: number; newBalance: number; error?: string }>
+}) {
+  const [amount, setAmount] = useState('')
+  const [mode, setMode] = useState<'deposit' | 'withdraw'>('deposit')
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
+  const presets = mode === 'deposit' ? [10, 50, 100, 500] : [10, 25, 50]
+  const num = parseFloat(amount)
+  const valid = !isNaN(num) && num > 0
+  const maxWithdraw = currentBalance
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const handleSubmit = async () => {
+    if (!valid) return
+    setError(null)
+    setSuccess(null)
+    const signedAmount = mode === 'deposit' ? num : -num
+    const result = await onSubmit(signedAmount)
+    if (!result.ok) {
+      setError(result.error ?? 'failed')
+      return
+    }
+    const verb = mode === 'deposit' ? 'Added' : 'Withdrew'
+    const dollars = '$' + Math.abs(result.appliedAmount).toFixed(2)
+    const newBal = '$' + result.newBalance.toFixed(2)
+    if (result.clamped) {
+      setSuccess('Withdrew ' + dollars + ' (clamped to available). New starting: ' + newBal + '.')
+    } else {
+      setSuccess(verb + ' ' + dollars + '. New starting: ' + newBal + '.')
+    }
+    setAmount('')
+    setTimeout(onClose, 1400)
+  }
+
+  return (
+    <div className="fl-ticket-overlay" onClick={onClose}>
+      <div className="fl-ticket fl-cash-ticket" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="add-cash-title">
+        <div className="fl-ticket-header">
+          <div>
+            <span className="fl-eyebrow">capital adjustment</span>
+            <div className="fl-ticket-time mono">{nowETShort()}</div>
+          </div>
+          <button className="fl-close-btn" onClick={onClose} aria-label="Close"><X size={16} /></button>
+        </div>
+
+        <div className="fl-ticket-body">
+          <h2 id="add-cash-title" className="fl-ticket-title">
+            {mode === 'deposit' ? 'Add cash to your account' : 'Withdraw from your account'}
+          </h2>
+          <p className="fl-ticket-sub">
+            {mode === 'deposit'
+              ? 'Deposits raise your starting balance and total value. Tier-up still requires passing the desk qualifications.'
+              : 'Withdrawals reduce your starting balance. Cannot go below zero.'}
+          </p>
+
+          <div className="fl-cash-mode-toggle">
+            <button
+              type="button"
+              className={'fl-cash-mode-btn ' + (mode === 'deposit' ? 'active' : '')}
+              onClick={() => { setMode('deposit'); setError(null); setSuccess(null); setAmount('') }}>
+              Deposit
+            </button>
+            <button
+              type="button"
+              className={'fl-cash-mode-btn ' + (mode === 'withdraw' ? 'active' : '')}
+              disabled={maxWithdraw <= 0}
+              onClick={() => { setMode('withdraw'); setError(null); setSuccess(null); setAmount('') }}>
+              Withdraw
+            </button>
+          </div>
+
+          <div className="fl-start-presets" style={{ marginTop: 4 }}>
+            {presets.map(p => (
+              <button
+                key={p}
+                type="button"
+                className={'fl-preset-chip ' + (num === p ? 'active' : '')}
+                onClick={() => setAmount(String(p))}>
+                ${p}
+              </button>
+            ))}
+          </div>
+
+          <div className="fl-start-input-row" style={{ marginTop: 12 }}>
+            <span className="fl-dollar">$</span>
+            <input
+              type="number"
+              value={amount}
+              onChange={e => setAmount(e.target.value)}
+              placeholder="0.00"
+              min="0.01"
+              step="0.01"
+              inputMode="decimal"
+              autoFocus
+            />
+          </div>
+
+          {mode === 'withdraw' && (
+            <div className="fl-cash-meta mono">
+              available to withdraw: ${maxWithdraw.toFixed(2)}
+            </div>
+          )}
+
+          {error && <div className="fl-cash-error">{error}</div>}
+          {success && <div className="fl-cash-success">{success}</div>}
+        </div>
+
+        <div className="fl-ticket-footer">
+          <button className="fl-ghost-btn" onClick={onClose}>Cancel</button>
+          <button
+            className="fl-primary-btn"
+            disabled={!valid || submitting}
+            onClick={handleSubmit}>
+            {submitting ? 'Processing...' : (mode === 'deposit' ? 'Confirm deposit' : 'Confirm withdrawal')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
 // ══════════════════════════════════════════════════════════════
 // MAIN PAGE
 // ══════════════════════════════════════════════════════════════
@@ -1156,6 +1303,8 @@ function FloorInner() {
   const [ticketOpen, setTicketOpen] = useState(false)
   const [ticketPrefill, setTicketPrefill] = useState<Partial<Idea> | undefined>(undefined)
   const [closeTarget, setCloseTarget] = useState<Trade | null>(null)
+  const [addCashOpen, setAddCashOpen] = useState(false)
+  const [addCashSubmitting, setAddCashSubmitting] = useState(false)
   const [firstWinAmount, setFirstWinAmount] = useState<number | null>(null)
   const [showTutorial, setShowTutorial] = useState(false)
   const [mobileView, setMobileView] = useState<'portfolio' | 'signals' | 'positions' | 'notes'>('portfolio')
@@ -1387,6 +1536,29 @@ function FloorInner() {
     await loadData()
   }
 
+  const addCash = async (amount: number): Promise<{ ok: boolean; clamped: boolean; appliedAmount: number; newBalance: number; error?: string }> => {
+    setAddCashSubmitting(true)
+    try {
+      const res = await fetch('/api/invest/cash', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount }),
+      })
+      const body = await res.json()
+      if (!res.ok) return { ok: false, clamped: false, appliedAmount: 0, newBalance: 0, error: body.error ?? 'request failed' }
+      await loadData()
+      return {
+        ok: true,
+        clamped: !!body.clamped,
+        appliedAmount: Number(body.appliedAmount ?? 0),
+        newBalance: Number(body.newBalance ?? 0),
+      }
+    } catch (e) {
+      return { ok: false, clamped: false, appliedAmount: 0, newBalance: 0, error: (e as Error).message }
+    } finally {
+      setAddCashSubmitting(false)
+    }
+  }
+
   const handleLessonComplete = async (lessonId: string, correct: boolean, answer: number) => {
     try {
       await fetch('/api/invest/lessons', {
@@ -1442,6 +1614,7 @@ function FloorInner() {
       {firstWinAmount != null && <TradeConfirmation amount={firstWinAmount} onDismiss={() => setFirstWinAmount(null)} />}
       {ticketOpen && <OrderTicket prefill={ticketPrefill} cashRemaining={value.cashRemaining} onClose={() => { setTicketOpen(false); setTicketPrefill(undefined) }} onSave={submitOrder} />}
       {closeTarget && <MarkToMarket trade={closeTarget} onClose={() => setCloseTarget(null)} onSave={closePosition} />}
+      {addCashOpen && <AddCashModal currentBalance={data?.journey?.starting_balance ?? 0} submitting={addCashSubmitting} onClose={() => setAddCashOpen(false)} onSubmit={addCash} />}
       {openLesson && <DeskNote lesson={openLesson} balance={value.total} onClose={closeLesson} onComplete={handleLessonComplete} alreadyCompleted={completedIds.has(openLesson.id)} />}
 
       {/* Topbar */}
@@ -2967,6 +3140,115 @@ function FloorStyles() {
       }
       .fl-tier-rules-body p {
         margin: 0 0 8px;
+      }
+      /* â”€â”€ Add Cash modal + Capital block (sidebar) â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+      .fl-capital-block {
+        background: rgba(212, 168, 87, 0.04);
+        border: 1px solid rgba(212, 168, 87, 0.18);
+        border-radius: 4px;
+        padding: 10px 12px;
+      }
+      .fl-capital-row {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+      .fl-capital-row .k {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 10px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: rgba(212, 168, 87, 0.8);
+        font-weight: 500;
+      }
+      .fl-capital-add-btn {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 10px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        background: rgba(212, 168, 87, 0.12);
+        border: 1px solid rgba(212, 168, 87, 0.3);
+        color: #d4a857;
+        padding: 4px 10px;
+        border-radius: 3px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        font-weight: 600;
+      }
+      .fl-capital-add-btn:hover {
+        background: rgba(212, 168, 87, 0.2);
+        border-color: rgba(212, 168, 87, 0.5);
+      }
+      .fl-capital-detail {
+        display: flex; justify-content: space-between;
+        font-size: 11px;
+        color: rgba(226, 232, 240, 0.85);
+      }
+      .fl-capital-detail span:first-child {
+        color: rgba(148, 163, 184, 0.6);
+      }
+      .fl-cash-ticket .fl-ticket-body { padding: 18px 20px; }
+      .fl-cash-mode-toggle {
+        display: grid; grid-template-columns: 1fr 1fr;
+        gap: 0;
+        background: rgba(15, 23, 42, 0.5);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 4px;
+        overflow: hidden;
+        margin: 14px 0 10px;
+      }
+      .fl-cash-mode-btn {
+        background: transparent;
+        border: 0;
+        padding: 9px 12px;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 10px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: rgba(148, 163, 184, 0.7);
+        cursor: pointer;
+        font-weight: 500;
+        transition: all 0.15s ease;
+      }
+      .fl-cash-mode-btn:not(:last-child) {
+        border-right: 1px solid rgba(148, 163, 184, 0.12);
+      }
+      .fl-cash-mode-btn:hover:not(:disabled) {
+        background: rgba(212, 168, 87, 0.05);
+        color: rgba(226, 232, 240, 0.9);
+      }
+      .fl-cash-mode-btn.active {
+        background: rgba(212, 168, 87, 0.12);
+        color: #d4a857;
+      }
+      .fl-cash-mode-btn:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+      .fl-cash-meta {
+        font-size: 10px;
+        color: rgba(148, 163, 184, 0.55);
+        margin-top: 8px;
+        text-align: right;
+      }
+      .fl-cash-error {
+        margin-top: 12px;
+        padding: 8px 10px;
+        background: rgba(220, 38, 38, 0.08);
+        border: 1px solid rgba(220, 38, 38, 0.25);
+        border-radius: 4px;
+        color: #fca5a5;
+        font-size: 12px;
+      }
+      .fl-cash-success {
+        margin-top: 12px;
+        padding: 8px 10px;
+        background: rgba(16, 185, 129, 0.08);
+        border: 1px solid rgba(16, 185, 129, 0.25);
+        border-radius: 4px;
+        color: #6ee7b7;
+        font-size: 12px;
+        font-family: 'IBM Plex Mono', monospace;
       }
       .fl-tier-rules-body ul {
         list-style: none;
