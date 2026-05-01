@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/app/lib/auth/server'
 import { createClient as createAdmin } from '@supabase/supabase-js'
+import { evaluateSkillGate, type TierName, type SkillTrade, type SkillPostmortem } from '@/app/lib/invest-skill-gates'
+import { computeProcessTrend, type ProcessTrendInput } from '@/app/lib/invest-process-trend'
 
 const getAdmin = () => createAdmin(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -66,9 +68,10 @@ export async function GET(_req: NextRequest) {
 
   const admin = getAdmin()
 
-  const [{ data: trades }, { data: journey }, sectorsRaw] = await Promise.all([
+  const [{ data: trades }, { data: journey }, { data: postmortemRows }, sectorsRaw] = await Promise.all([
     admin.from('invest_trades').select('*').eq('user_id', user.id).order('opened_at', { ascending: false }),
     admin.from('invest_journey').select('*').eq('user_id', user.id).maybeSingle(),
+    admin.from('invest_trade_postmortems').select('trade_id, process_score, grade, outcome, generated_at').eq('user_id', user.id),
     fetchSectorWinds(),
   ])
 
@@ -111,6 +114,47 @@ export async function GET(_req: NextRequest) {
   const winCount = closedTrades.filter(t => (t.exit_price ?? 0) > t.entry_price).length
   const winRate = closedTrades.length > 0 ? Math.round((winCount / closedTrades.length) * 100) : 0
 
+  // ── Skill-based progression gate ──
+  // Determines whether the user has demonstrated the discipline required to
+  // unlock the next tier. The CURRENT tier (above) is still capital-based —
+  // this evaluation tells the UI what skill bar is blocking the next step.
+  const skillTrades: SkillTrade[] = closedTrades.map(t => ({
+    id: t.id,
+    entry_price: Number(t.entry_price ?? 0),
+    exit_price: t.exit_price != null ? Number(t.exit_price) : null,
+    shares: Number(t.shares ?? 0),
+    stop_price: t.stop_price != null ? Number(t.stop_price) : null,
+    target_price: t.target_price != null ? Number(t.target_price) : null,
+    position_type: (t.position_type === 'option' || t.position_type === 'stock') ? t.position_type : null,
+    exit_date: t.exit_date ?? null,
+    opened_at: t.opened_at ?? null,
+  }))
+  const skillPostmortems: SkillPostmortem[] = (postmortemRows ?? []).map(p => ({
+    trade_id: p.trade_id as string,
+    process_score: Number(p.process_score ?? 0),
+    grade: String(p.grade ?? ''),
+    outcome: (p.outcome === 'win' || p.outcome === 'loss' || p.outcome === 'breakeven') ? p.outcome : 'breakeven',
+    generated_at: p.generated_at ?? undefined,
+  }))
+  const skillGate = evaluateSkillGate({
+    currentTierName: tier.name as TierName,
+    capitalReady: !!nextTier && totalValue >= nextTier.min,
+    closedTrades: skillTrades,
+    postmortems: skillPostmortems,
+  })
+
+  // ── Process grade trend ──
+  // Reuses the same postmortems we already fetched. Returns up to 20 most
+  // recent reviews + trailing-5 vs baseline-5 comparison for the UI.
+  const trendInput: ProcessTrendInput[] = (postmortemRows ?? []).map(p => ({
+    trade_id: p.trade_id as string,
+    process_score: Number(p.process_score ?? 0),
+    grade: String(p.grade ?? ''),
+    outcome: typeof p.outcome === 'string' ? p.outcome : undefined,
+    generated_at: p.generated_at ?? null,
+  }))
+  const processTrend = computeProcessTrend(trendInput)
+
   const sectorWinds = sectorsRaw
     .filter(s => typeof s.change1D === 'number')
     .sort((a, b) => (b.change1D ?? 0) - (a.change1D ?? 0))
@@ -122,7 +166,9 @@ export async function GET(_req: NextRequest) {
       progressPct: Math.round(progressPct),
       toNext: Number(toNext.toFixed(2)),
       nextTierName: nextTier?.name ?? null,
+      skillGate,
     },
+    processTrend,
     tiers: TIERS.map(t => ({
       name: t.name, color: t.color,
       min: t.min, max: t.max === Infinity ? null : t.max,

@@ -9,6 +9,26 @@ import { FloorEmbers } from '@/app/components/desk/FloorEmbers'
 import { useContextualLessons } from '@/app/components/desk/useContextualLessons'
 import { INVEST_LESSONS, findLessonByTrigger, type InvestLesson } from '@/app/lib/invest-lessons'
 import { DefinedTerm } from '@/app/components/DefinedTerm'
+import { DeskProgress } from '@/app/components/DeskProgress'
+
+interface ProcessTrendPoint {
+  closedAt: string
+  score: number
+  grade: string
+  tradeId: string
+}
+
+interface ProcessTrend {
+  recentTrades: ProcessTrendPoint[]
+  totalReviewed: number
+  trailing5Avg: number | null
+  baselineAvg: number | null
+  trailing5Letter: string | null
+  baselineLetter: string | null
+  isImproving: boolean
+  isRegressing: boolean
+  freshSince: string | null
+}
 
 // ══════════════════════════════════════════════════════════════
 // TYPES
@@ -166,6 +186,7 @@ interface FloorData {
   journey: Journey | null
   tier: Tier
   tiers: TierMeta[]
+  processTrend?: ProcessTrend
   value: { total: number; cashRemaining: number; unrealized: number; realized: number; openPnL: number }
   openTrades: Trade[]
   closedTrades: Trade[]
@@ -986,7 +1007,8 @@ function SkillGateBlock({ gate, nextTierColor }: {
 // ══════════════════════════════════════════════════════════════
 // TIER LADDER (left column — skyline silhouettes)
 // ══════════════════════════════════════════════════════════════
-function TierLadder({ tiers, tier, stats, value }: {
+function TierLadder({ tiers, tier, stats, value, processTrend }: {
+  processTrend?: ProcessTrend
   tiers: TierMeta[]
   tier: Tier
   stats: { winRate: number; winStreak: number; bestStreak: number }
@@ -1096,6 +1118,8 @@ function TierLadder({ tiers, tier, stats, value }: {
           nextTierColor={tiers.find(t => t.name === tier.skillGate!.nextTierName)?.color ?? '#d4a857'}
         />
       )}
+
+      {processTrend && <DeskProgress trend={processTrend} />}
 
       <div className="fl-metric-block">
         <div className="fl-metric-row"><span className="k">win rate</span><span className="v mono">{stats.winRate}%</span></div>
@@ -1450,7 +1474,7 @@ function FloorInner() {
 
         {/* LEFT — tier ladder */}
         <div className={mobileView === 'portfolio' ? 'fl-show' : 'fl-hide'}>
-          <TierLadder tiers={tiers} tier={tier} stats={stats} value={value} />
+          <TierLadder tiers={tiers} tier={tier} stats={stats} value={value} processTrend={data.processTrend} />
         </div>
 
         {/* CENTER — orb + signals */}
@@ -2452,6 +2476,64 @@ function FloorStyles() {
           max-width: none;
           width: auto;
         }
+      }
+
+      /* ── Desk progress (process grade trend) ──────────────── */
+      .fl-progress {
+        margin-top: 14px;
+        padding: 12px 14px;
+        border-radius: 4px;
+        background: rgba(15, 23, 42, 0.5);
+        border: 1px solid rgba(148, 163, 184, 0.1);
+      }
+      .fl-progress-head {
+        display: flex; justify-content: space-between; align-items: baseline;
+        margin-bottom: 10px;
+      }
+      .fl-progress-fresh {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 8px; letter-spacing: 0.18em; text-transform: uppercase;
+        color: #d4a857;
+        padding: 2px 6px;
+        border: 1px solid rgba(212, 168, 87, 0.3);
+        border-radius: 2px;
+      }
+      .fl-progress-empty-msg {
+        font-size: 11px;
+        line-height: 1.6;
+        color: rgba(226, 232, 240, 0.65);
+        margin: 0;
+      }
+      .fl-progress-svg {
+        display: block;
+        width: 100%;
+        height: 60px;
+        margin-bottom: 8px;
+      }
+      .fl-progress-caption {
+        margin: 0;
+        padding-top: 8px;
+        border-top: 1px solid rgba(148, 163, 184, 0.06);
+        font-size: 10px;
+        line-height: 1.5;
+        color: rgba(148, 163, 184, 0.7);
+      }
+      .fl-progress-caption strong {
+        font-weight: 600;
+        color: rgba(226, 232, 240, 0.95);
+      }
+      .fl-progress-grade-good {
+        color: #10b981 !important;
+      }
+      .fl-progress-grade-warn {
+        color: #f59e0b !important;
+      }
+      @keyframes fl-progress-pulse-anim {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+      }
+      .fl-progress-pulse {
+        animation: fl-progress-pulse-anim 2s ease-in-out infinite;
       }
 
       /* ── Center column ──────────────────────────── */
