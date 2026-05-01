@@ -342,28 +342,61 @@ export async function POST(req: NextRequest) {
   )
 
   // ── Step 1: Run scanner with tier-appropriate config ─────────
-  const filter: ScannerFilter = {
-    priceMin: tier.priceMin,
-    priceMax: tier.priceMax > 0 ? tier.priceMax : undefined,
+  // Try the strict tier band first. If zero picks come back, widen to
+  // the NEXT tier's band and try again. Up to one widening per call.
+  // This protects very-small Buyer accounts from getting "no setups
+  // ever" on slow days, without losing the tier identity on busy days.
+
+  async function runScanForBand(
+    priceMin: number,
+    priceMax: number,
+  ) {
+    const filter: ScannerFilter = {
+      priceMin,
+      priceMax: priceMax > 0 ? priceMax : undefined,
+    }
+    return runScan({
+      universe: tier.universe,
+      filter,
+      mode: 'bullish',
+      limit: tier.scanLimit,
+      newsBoost: tier.newsBoost,
+      scanType: tier.scanType,
+      horizon: 'week',
+      priceCeiling: priceMax > 0 ? priceMax : 999,
+    })
   }
 
-  const scanResult = await runScan({
-    universe: tier.universe,
-    filter,
-    mode: 'bullish',  // ideas are buy-side
-    limit: tier.scanLimit,
-    newsBoost: tier.newsBoost,
-    scanType: tier.scanType,
-    horizon: 'week',
-    priceCeiling: tier.priceMax > 0 ? tier.priceMax : 999,
-  })
+  let scanResult = await runScanForBand(tier.priceMin, tier.priceMax)
+  let widenedFromTier: string | null = null
+  let widenedToBand: { priceMin: number; priceMax: number } | null = null
+
+  if (scanResult.picks.length === 0) {
+    // Find the next tier up to widen into
+    const tierIdx = TIER_CONFIG.findIndex(t => t.name === tier.name)
+    const nextTier = TIER_CONFIG[tierIdx + 1]
+    if (nextTier) {
+      // Widen the band: keep the floor at the user's tier (so we don't
+      // recommend things they truly can't afford), but extend the ceiling
+      // to the next tier's ceiling.
+      const widenedMin = tier.priceMin
+      const widenedMax = nextTier.priceMax > 0 ? nextTier.priceMax : tier.priceMax
+      const widenedScan = await runScanForBand(widenedMin, widenedMax)
+      if (widenedScan.picks.length > 0) {
+        scanResult = widenedScan
+        widenedFromTier = tier.name
+        widenedToBand = { priceMin: widenedMin, priceMax: widenedMax }
+      }
+    }
+  }
+
 
   if (scanResult.picks.length === 0) {
     return NextResponse.json({
       ideas: [],
       options: [],
       optionsBudgetWarning: null,
-      journeyNote: `No ${tier.name}-tier setups found in current market conditions. The scanner reviewed ${scanResult.scannedCount} candidates but none met the criteria right now.`,
+      journeyNote: `No setups passed criteria today. The scanner reviewed ${scanResult.scannedCount} candidates across ${tier.name}-tier and the wider band, but none met the bar right now. This is normal — most days do not have an A+ setup.`,
       stageAdvice: 'Wait for conditions. Most days do not have an A+ setup — patience is a position.',
       marketContext: `SPY: ${scanResult.spyChange10d > 0 ? '+' : ''}${scanResult.spyChange10d}% (10d), ${scanResult.spyChange30d > 0 ? '+' : ''}${scanResult.spyChange30d}% (30d)`,
       topSectors: [],
@@ -374,6 +407,8 @@ export async function POST(req: NextRequest) {
         withTechnicalsCount: scanResult.withTechnicalsCount,
         scanType: tier.scanType,
         universe: tier.universe,
+        widenedFromTier,
+        widenedToBand,
       },
     })
   }
@@ -485,9 +520,13 @@ For each ticker above, produce a setup. Return JSON ONLY:
         } catch { /* ignore */ }
       }
 
-      // Hard reject if price moved out of tier range since the scan
-      if (livePrice && (livePrice < tier.priceMin ||
-          (tier.priceMax > 0 && livePrice > tier.priceMax))) {
+      // Hard reject if price moved out of ACTIVE scan band since the scan.
+      // (This may be the strict tier band OR the widened band — either way,
+      // we honor whatever band the scanner actually used.)
+      const activeMin = widenedToBand?.priceMin ?? tier.priceMin
+      const activeMax = widenedToBand?.priceMax ?? tier.priceMax
+      if (livePrice && (livePrice < activeMin ||
+          (activeMax > 0 && livePrice > activeMax))) {
         continue
       }
 
@@ -573,6 +612,8 @@ For each ticker above, produce a setup. Return JSON ONLY:
         withTechnicalsCount: scanResult.withTechnicalsCount,
         scanType: tier.scanType,
         universe: tier.universe,
+        widenedFromTier,
+        widenedToBand,
       },
     })
   } catch (err) {
