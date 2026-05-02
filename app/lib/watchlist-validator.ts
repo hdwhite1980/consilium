@@ -34,14 +34,13 @@ export interface PriceCheckResult {
   actualPrice?: number
 }
 
-// Generic interface so this works for any item with a ticker + catalyst + confidence
+// Generic interface so this works for any item with a ticker + catalyst + confidence.
+// Callers pass their own richer types via the generic T parameter on validateWatchlist.
 interface ValidatableItem {
   ticker: string
   catalyst: string
   signal: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
   confidence?: number
-  // arbitrary extra fields are preserved
-  [k: string]: unknown
 }
 
 // -----------------------------------------------------------------
@@ -64,30 +63,58 @@ function parseCatalyst(catalyst: string): ParsedCatalyst {
   const result: ParsedCatalyst = { mentionedAssets: [] }
   const text = catalyst.toLowerCase()
 
-  // 1. Look for explicit percentage claim
-  // Patterns: "+5.78%", "5.78%", "up 3%", "down 1.5%", "surge of 4%"
-  // First, try the most specific signed form: "+X.XX%" or "-X.XX%"
-  const signedPctMatch = catalyst.match(/([+-])(\d+(?:\.\d+)?)\s*%/)
-  if (signedPctMatch) {
-    result.pctClaim = {
-      sign: signedPctMatch[1] === '-' ? -1 : 1,
-      magnitude: parseFloat(signedPctMatch[2]),
-    }
-  } else {
-    // Try "up X%" / "down X%" / "X%"
-    const upMatch  = text.match(/up\s+(\d+(?:\.\d+)?)\s*%/)
-    const downMatch = text.match(/down\s+(\d+(?:\.\d+)?)\s*%/)
-    if (upMatch) {
-      result.pctClaim = { sign: 1, magnitude: parseFloat(upMatch[1]) }
-    } else if (downMatch) {
-      result.pctClaim = { sign: -1, magnitude: parseFloat(downMatch[1]) }
-    } else {
-      // Bare number - rare, only use if combined with bullish/bearish verb
-      const bareMatch = text.match(/(\d+(?:\.\d+)?)\s*%/)
-      if (bareMatch) {
-        // We'll resolve sign from implied direction below
-        result.pctClaim = { sign: 1, magnitude: parseFloat(bareMatch[1]) }
+  // Find ALL percentage claims with their position in the text.
+  // We'll then associate each with a nearby asset keyword so the
+  // validator picks the correct one when a catalyst has multiple.
+  type PctMatch = { sign: 1 | -1; magnitude: number; index: number; raw: string }
+  const allClaims: PctMatch[] = []
+
+  // Pattern A: signed (+X.XX% or -X.XX%)
+  for (const m of catalyst.matchAll(/([+\-])(\d+(?:\.\d+)?)\s*%/g)) {
+    allClaims.push({
+      sign: m[1] === '-' ? -1 : 1,
+      magnitude: parseFloat(m[2]),
+      index: m.index ?? 0,
+      raw: m[0],
+    })
+  }
+  // Pattern B: "up X%" / "down X%"
+  for (const m of text.matchAll(/up\s+(\d+(?:\.\d+)?)\s*%/g)) {
+    allClaims.push({ sign: 1, magnitude: parseFloat(m[1]), index: m.index ?? 0, raw: m[0] })
+  }
+  for (const m of text.matchAll(/down\s+(\d+(?:\.\d+)?)\s*%/g)) {
+    allClaims.push({ sign: -1, magnitude: parseFloat(m[1]), index: m.index ?? 0, raw: m[0] })
+  }
+  // Pattern C: "X% higher/above/up" / "X% lower/below/down"
+  for (const m of text.matchAll(/(\d+(?:\.\d+)?)\s*%\s+(higher|above|up|gain|gains|rally|rallies|rise|risen|jumped|jump|surge|climbed|climb)/g)) {
+    allClaims.push({ sign: 1, magnitude: parseFloat(m[1]), index: m.index ?? 0, raw: m[0] })
+  }
+  for (const m of text.matchAll(/(\d+(?:\.\d+)?)\s*%\s+(lower|below|down|loss|losses|drop|drops|fall|falls|fell|fallen|plunge|slump|slumped|tumble|crashed|crash)/g)) {
+    allClaims.push({ sign: -1, magnitude: parseFloat(m[1]), index: m.index ?? 0, raw: m[0] })
+  }
+  // Pattern D: "gained/rose/surged X%" verb + %
+  for (const m of text.matchAll(/(gained|rose|risen|rallied|surged|jumped|climbed|gapped\s+up)\s+(?:\w+\s+)?(\d+(?:\.\d+)?)\s*%/g)) {
+    allClaims.push({ sign: 1, magnitude: parseFloat(m[2]), index: m.index ?? 0, raw: m[0] })
+  }
+  for (const m of text.matchAll(/(fell|fallen|dropped|plunged|tumbled|slumped|crashed|gapped\s+down)\s+(?:\w+\s+)?(\d+(?:\.\d+)?)\s*%/g)) {
+    allClaims.push({ sign: -1, magnitude: parseFloat(m[2]), index: m.index ?? 0, raw: m[0] })
+  }
+
+  // Deduplicate claims that overlap (same magnitude at nearby positions)
+  // Keep the longest match (most specific pattern)
+  const uniqueClaims: PctMatch[] = []
+  for (const c of allClaims.sort((a, b) => a.index - b.index)) {
+    const overlaps = uniqueClaims.find(u =>
+      Math.abs(u.index - c.index) < 10 && Math.abs(u.magnitude - c.magnitude) < 0.01
+    )
+    if (overlaps) {
+      // Prefer the longer/more specific raw match
+      if (c.raw.length > overlaps.raw.length) {
+        const idx = uniqueClaims.indexOf(overlaps)
+        uniqueClaims[idx] = c
       }
+    } else {
+      uniqueClaims.push(c)
     }
   }
 
@@ -96,44 +123,115 @@ function parseCatalyst(catalyst: string): ParsedCatalyst {
   let bearishHits = 0
   for (const v of BULLISH_VERBS) if (text.includes(v)) bullishHits++
   for (const v of BEARISH_VERBS) if (text.includes(v)) bearishHits++
+  if (/\b(higher|above|gain|gainer|rallying)\b/.test(text)) bullishHits++
+  if (/\b(lower|below|loss|loser|falling)\b/.test(text)) bearishHits++
   if (bullishHits > bearishHits)      result.impliedDirection = 'bullish'
   else if (bearishHits > bullishHits) result.impliedDirection = 'bearish'
 
-  // If we had a bare-number claim and impliedDirection says bearish, flip the sign
-  if (result.pctClaim && !signedPctMatch && !text.match(/up\s+\d/) && !text.match(/down\s+\d/)) {
-    if (result.impliedDirection === 'bearish') result.pctClaim.sign = -1
+  // 3. Asset/ticker mentions with their position in the text
+  type AssetMatch = { key: string; index: number }
+  const assetMatches: AssetMatch[] = []
+
+  // ALL_CAPS tickers from the original catalyst
+  for (const m of catalyst.matchAll(/\$?\b[A-Z]{2,5}\b/g)) {
+    const clean = m[0].replace('$', '').toUpperCase()
+    if (['THE', 'AND', 'FOR', 'BUT', 'NOT', 'WITH', 'AT', 'ON', 'IN', 'OF', 'TO', 'IS', 'IT', 'AS', 'BE', 'OR', 'AN', 'IF', 'BY'].includes(clean)) continue
+    if (clean.length < 2) continue
+    assetMatches.push({ key: clean, index: m.index ?? 0 })
   }
 
-  // 3. Asset/ticker mentions
-  // Look for $TICKER, ALL-CAPS 3-5 letter words, and asset keywords
-  const tickerMatches = catalyst.match(/\$?\b[A-Z]{2,5}\b/g) ?? []
-  for (const t of tickerMatches) {
-    const clean = t.replace('$', '').toUpperCase()
-    // Filter common false positives
-    if (['THE', 'AND', 'FOR', 'BUT', 'NOT', 'WITH', 'AT', 'ON', 'IN', 'OF', 'TO', 'IS', 'IT', 'AS', 'BE', 'OR', 'AN', 'IF', 'BY', 'A', 'I'].includes(clean)) continue
-    if (clean.length === 1) continue
-    if (!result.mentionedAssets.includes(clean)) result.mentionedAssets.push(clean)
+  // Asset keywords (lowercased text). Order matters: more specific first
+  // so "oil futures" matches before "oil" -> USO.
+  const assetKeywords: Array<[string, string]> = [
+    ['oil futures',  'WTI_FUTURES'],
+    ['wti futures',  'WTI_FUTURES'],
+    ['crude futures','WTI_FUTURES'],
+    ['brent futures','BRENT_FUTURES'],
+    ['gold futures', 'GOLD_FUTURES'],
+    ['gas futures',  'NATGAS_FUTURES'],
+    ['s&p futures',  'ES_FUTURES'],
+    ['nasdaq futures','NQ_FUTURES'],
+    ['dow futures',  'YM_FUTURES'],
+    ['oil',          'OIL'],
+    ['crude',        'OIL'],
+    ['wti',          'OIL'],
+    ['brent',        'OIL'],
+    ['gold',         'GOLD'],
+    ['silver',       'SILVER'],
+    ['natural gas',  'NATGAS'],
+    ['natgas',       'NATGAS'],
+    ['bitcoin',      'BITCOIN'],
+    ['btc',          'BITCOIN'],
+    ['ethereum',     'ETHEREUM'],
+    ['eth',          'ETHEREUM'],
+    ['solana',       'SOLANA'],
+    ['energy sector','ENERGY'],
+    ['energy stocks','ENERGY'],
+    ['tech sector',  'TECH'],
+    ['technology sector','TECH'],
+    ['financials',   'FINANCIALS'],
+    ['healthcare',   'HEALTHCARE'],
+    ['s&p 500',      'S&P 500'],
+    ['s&p',          'S&P'],
+    ['nasdaq',       'NASDAQ'],
+    ['russell',      'RUSSELL'],
+    ['dow',          'DOW'],
+    ['vix',          'VIX'],
+  ]
+  // Track which keys we've already added so we don't double-up
+  const addedKeys = new Set<string>()
+  for (const [kw, mappedKey] of assetKeywords) {
+    const idx = text.indexOf(kw)
+    if (idx === -1) continue
+    if (addedKeys.has(mappedKey)) continue
+    addedKeys.add(mappedKey)
+    assetMatches.push({ key: mappedKey, index: idx })
+    if (!result.mentionedAssets.includes(mappedKey)) result.mentionedAssets.push(mappedKey)
   }
 
-  // Asset keywords (lowercased text)
-  const assetKeywords: Record<string, string> = {
-    'oil': 'OIL', 'crude': 'OIL', 'wti': 'OIL', 'brent': 'OIL',
-    'gold': 'GOLD', 'silver': 'SILVER',
-    'natural gas': 'NATGAS', 'natgas': 'NATGAS',
-    'bitcoin': 'BITCOIN', 'btc': 'BITCOIN',
-    'ethereum': 'ETHEREUM', 'eth': 'ETHEREUM',
-    'solana': 'SOLANA',
-    'energy sector': 'ENERGY', 'energy stocks': 'ENERGY',
-    'tech sector': 'TECH', 'technology sector': 'TECH',
-    'financials': 'FINANCIALS',
-    'healthcare': 'HEALTHCARE',
-    's&p': 'S&P', 's&p 500': 'S&P 500',
-    'nasdaq': 'NASDAQ', 'russell': 'RUSSELL', 'dow': 'DOW',
-    'vix': 'VIX',
-  }
-  for (const [k, v] of Object.entries(assetKeywords)) {
-    if (text.includes(k) && !result.mentionedAssets.includes(v)) {
-      result.mentionedAssets.push(v)
+  // 4. Associate the BEST percentage claim with the BEST asset.
+  // Heuristic: pair each pct with the nearest preceding asset mention
+  // (within 60 chars). If no asset is close, fall back to the first claim.
+  if (uniqueClaims.length > 0) {
+    // For each claim, find the closest asset mention that PRECEDES it.
+    // The "primary" claim is the first one whose nearby asset is a
+    // futures-keyword (most specific) or commodity asset.
+    let bestClaim: PctMatch | null = null
+    let bestAssetKey: string | undefined
+
+    for (const claim of uniqueClaims) {
+      // Find asset that precedes this claim within 60 chars (or appears in same clause)
+      const candidates = assetMatches.filter(a => {
+        const dist = claim.index - a.index
+        return dist >= 0 && dist <= 60
+      })
+      if (candidates.length === 0) continue
+      // Prefer the closest preceding asset
+      const closest = candidates.reduce((acc, cur) =>
+        (claim.index - cur.index) < (claim.index - acc.index) ? cur : acc
+      )
+      // Prefer claims whose nearby asset is a futures-keyword (more specific)
+      if (closest.key.endsWith('_FUTURES')) {
+        bestClaim = claim
+        bestAssetKey = closest.key
+        break  // Best possible match
+      }
+      // Otherwise hold this as a candidate but keep looking
+      if (!bestClaim) {
+        bestClaim = claim
+        bestAssetKey = closest.key
+      }
+    }
+
+    // Fallback: if no asset-associated claim, just use the first
+    if (!bestClaim) {
+      bestClaim = uniqueClaims[0]
+    }
+
+    result.pctClaim = {
+      sign: bestClaim.sign,
+      magnitude: bestClaim.magnitude,
+      rawAsset: bestAssetKey,
     }
   }
 
@@ -149,24 +247,77 @@ function validateItem(
 ): PriceCheckResult {
   const parsed = parseCatalyst(item.catalyst)
 
-  // Try to resolve the asset the catalyst is talking about
-  // Prefer the item's own ticker, then mentioned assets
+  // Resolve which asset the percentage claim is about. The logic:
+  //
+  //   - If the catalyst has an explicit pct claim AND mentions a specific
+  //     asset (especially futures like "oil futures", "WTI", "brent"), the
+  //     pct is almost certainly about THAT asset, not the item's ticker.
+  //     Example: item=XLE, catalyst="Oil futures gapped 5.78% higher" -> validate
+  //     the 5.78% against OIL/WTI_FUTURES, NOT against XLE.
+  //
+  //   - If the catalyst has a pct claim but no mentioned asset, validate
+  //     against the item's own ticker.
+  //
+  //   - If no pct claim, fall back to item ticker for direction check.
   let primaryAsset: GroundTruthQuote | undefined
   let primaryAssetKey: string | undefined
 
-  // First try the item's own ticker
-  const ownGt = groundTruthMap.get(item.ticker.toUpperCase())
-  if (ownGt) {
-    primaryAsset = ownGt
-    primaryAssetKey = item.ticker.toUpperCase()
-  } else {
-    // Try mentioned assets in order
-    for (const a of parsed.mentionedAssets) {
+  if (parsed.pctClaim && parsed.mentionedAssets.length > 0) {
+    // Prefer mentioned assets, especially futures-specific ones
+    const futuresAssets = parsed.mentionedAssets.filter(a => a.endsWith('_FUTURES'))
+    const orderedAssets = [...futuresAssets, ...parsed.mentionedAssets.filter(a => !a.endsWith('_FUTURES'))]
+    for (const a of orderedAssets) {
       const gt = groundTruthMap.get(a)
       if (gt) {
         primaryAsset = gt
         primaryAssetKey = a
         break
+      }
+    }
+    // If still nothing, fall back to item ticker
+    if (!primaryAsset) {
+      const ownGt = groundTruthMap.get(item.ticker.toUpperCase())
+      if (ownGt) {
+        primaryAsset = ownGt
+        primaryAssetKey = item.ticker.toUpperCase()
+      }
+    }
+  } else if (!parsed.pctClaim && parsed.mentionedAssets.some(a => a.endsWith('_FUTURES'))) {
+    // No pct claim but a specific futures asset is mentioned - validate
+    // direction against that asset, not the item's ticker.
+    // Example: item=XLE, catalyst="Oil futures gapped higher overnight, bullish energy"
+    // -> validate "bullish" direction against WTI_FUTURES (which is up), not XLE (down).
+    const futuresAssets = parsed.mentionedAssets.filter(a => a.endsWith('_FUTURES'))
+    for (const a of futuresAssets) {
+      const gt = groundTruthMap.get(a)
+      if (gt) {
+        primaryAsset = gt
+        primaryAssetKey = a
+        break
+      }
+    }
+    // Fall back to item ticker
+    if (!primaryAsset) {
+      const ownGt = groundTruthMap.get(item.ticker.toUpperCase())
+      if (ownGt) {
+        primaryAsset = ownGt
+        primaryAssetKey = item.ticker.toUpperCase()
+      }
+    }
+  } else {
+    // No pct claim, or no mentioned assets - prefer item ticker, then mentioned
+    const ownGt = groundTruthMap.get(item.ticker.toUpperCase())
+    if (ownGt) {
+      primaryAsset = ownGt
+      primaryAssetKey = item.ticker.toUpperCase()
+    } else {
+      for (const a of parsed.mentionedAssets) {
+        const gt = groundTruthMap.get(a)
+        if (gt) {
+          primaryAsset = gt
+          primaryAssetKey = a
+          break
+        }
       }
     }
   }
@@ -198,10 +349,10 @@ function validateItem(
       }
     }
 
-    // Magnitude wildly off (>2x in same direction)
+    // Magnitude wildly off (>1.5x in same direction triggers minor warning)
     const claimedMag = Math.abs(claimedPct)
     const actualMag = Math.abs(actualPct)
-    if (actualSign === claimedSign && claimedMag > 2 * actualMag && claimedMag > 1) {
+    if (actualSign === claimedSign && claimedMag > 1.5 * actualMag && claimedMag > 1) {
       return {
         status: 'warn',
         severity: 'minor',
