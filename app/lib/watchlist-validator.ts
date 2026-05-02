@@ -34,13 +34,14 @@ export interface PriceCheckResult {
   actualPrice?: number
 }
 
-// Generic interface so this works for any item with a ticker + catalyst + confidence.
-// Callers pass their own richer types via the generic T parameter on validateWatchlist.
+// Generic interface so this works for any item with a ticker + catalyst + confidence
 interface ValidatableItem {
   ticker: string
   catalyst: string
   signal: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
   confidence?: number
+  // arbitrary extra fields are preserved
+  [k: string]: unknown
 }
 
 // -----------------------------------------------------------------
