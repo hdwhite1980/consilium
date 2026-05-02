@@ -1,0 +1,17 @@
+{
+  "serverUrl": "wss://opsisapp.com",
+  "apiKey": "opsis_bb7e9bca27fb4f43a2663aeec34f42d1",
+  "tenantId": "client-7",
+  "agentVersion": "1.0.0",
+  "monitoring": {
+    "heartbeatInterval": 30000,
+    "telemetryInterval": 60000,
+    "healthCheckInterval": 300000
+  },
+  "reconnect": {
+    "enabled": true,
+    "baseDelay": 1000,
+    "maxDelay": 300000
+  },
+  "hmacSecret": "28451dfc0d7767fe1d17d17c71620374131054eba2a8b94e358b782fb0e12bf9"
+}
