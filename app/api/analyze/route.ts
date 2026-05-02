@@ -30,6 +30,19 @@ export async function POST(req: NextRequest) {
   const tf = timeframe || '1W'
   const encoder = new TextEncoder()
 
+  // --- DIAG: per-request id for tracing through Railway logs ---
+  const reqId = Math.random().toString(36).slice(2, 10)
+  const startedAt = Date.now()
+  const dlog = (msg: string, extra?: unknown) => {
+    const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1)
+    if (extra !== undefined) {
+      console.log(`[analyze:${reqId}] +${elapsed}s ${msg}`, extra)
+    } else {
+      console.log(`[analyze:${reqId}] +${elapsed}s ${msg}`)
+    }
+  }
+  dlog(`START ticker=${symbol} tf=${tf} forceRefresh=${forceRefresh ?? false} persona=${persona ?? 'balanced'}`)
+
   // Get user ID for track record logging — non-blocking, null if not authed
   let currentUserId: string | null = null
   try {
@@ -37,15 +50,21 @@ export async function POST(req: NextRequest) {
     const { data: { user } } = await authClient.auth.getUser()
     currentUserId = user?.id ?? null
   } catch { /* not blocking */ }
+  dlog(`auth resolved userId=${currentUserId ?? '(anonymous)'}`)
 
   const stream = new ReadableStream({
     async start(controller) {
       let controllerClosed = false
+      let controllerClosedAt: { stage: string; elapsedSec: string } | null = null
       const send = (event: string, data: unknown) => {
         if (controllerClosed) return
         try {
           controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
-        } catch { controllerClosed = true }
+        } catch {
+          controllerClosed = true
+          controllerClosedAt = { stage: event, elapsedSec: ((Date.now() - startedAt) / 1000).toFixed(1) }
+          dlog(`!! CONTROLLER CLOSED at event=${event} (client disconnected, pipeline continues server-side)`)
+        }
       }
 
       // Heartbeat — sends a SSE comment every 15s to prevent Railway/proxy from
@@ -125,6 +144,7 @@ export async function POST(req: NextRequest) {
             const ageMinutes = Math.round(
               (Date.now() - new Date(cached.created_at).getTime()) / 60000
             )
+            dlog(`cache HIT (age ${ageMinutes}m, will replay)`)
             // Stream cached results exactly like a live run
             send('status', { stage: 'cache_hit', message: `Serving cached analysis from ${ageMinutes} minute${ageMinutes === 1 ? '' : 's'} ago` })
 
@@ -178,12 +198,14 @@ export async function POST(req: NextRequest) {
               judge: cached.judge_verdict,
               transcript: cached.transcript,
             })
+            dlog(`DONE via cache hit (controllerClosed=${controllerClosed})`)
             return
             } // end !priceStale
           }
         }
 
         // ── Live pipeline ──────────────────────────────────────
+        dlog(`LIVE pipeline starting (cache miss or stale)`)
         send('status', { stage: 'building_bundle', message: 'Gathering market data and computing signals...' })
 
         const bundle = await buildSignalBundle(symbol, tf, (step) =>
@@ -254,10 +276,13 @@ export async function POST(req: NextRequest) {
           },
         })
 
+        dlog(`bundle built (price=$${bundle.currentPrice.toFixed(2)}), entering runPipeline`)
         const result = await runPipeline(bundle, (event, data) => send(event, data))
+        dlog(`runPipeline RETURNED (signal=${result.judge?.signal} confidence=${result.judge?.confidence})`)
 
         // Save to Supabase — store full dashboard data in signal_bundle for cache restore
-        const { data: saved } = await supabase.from('analyses').insert({
+        dlog(`starting analyses insert`)
+        const { data: saved, error: savedErr } = await supabase.from('analyses').insert({
           ticker: symbol,
           timeframe: tf,
           persona: persona ?? 'balanced',
@@ -332,6 +357,11 @@ export async function POST(req: NextRequest) {
             },
           },
         }).select().single()
+        if (savedErr) {
+          dlog(`!! analyses INSERT FAILED: ${savedErr.message}`, { code: savedErr.code, details: savedErr.details })
+        } else {
+          dlog(`analyses inserted OK id=${saved?.id ?? '(no id returned)'}`)
+        }
 
         // Auto-log to track record directly via service role (no HTTP round-trip)
         if (currentUserId && result.judge?.signal && result.judge.signal !== 'NEUTRAL') {
@@ -348,6 +378,7 @@ export async function POST(req: NextRequest) {
             return Number.isFinite(num) && num > 0 ? num : null
           }
           // Dedup — don't log same ticker+signal on same day
+          dlog(`checking verdict_log for dup`)
           const { data: existing } = await supabase
             .from('verdict_log')
             .select('id')
@@ -358,7 +389,8 @@ export async function POST(req: NextRequest) {
             .maybeSingle()
           if (!existing) {
             try {
-              await supabase.from('verdict_log').insert({
+              dlog(`inserting verdict_log row`)
+              const { error: vlErr } = await supabase.from('verdict_log').insert({
                 user_id: currentUserId,
                 ticker: symbol,
                 signal: result.judge.signal,
@@ -380,8 +412,19 @@ export async function POST(req: NextRequest) {
                 trader_rationale: result.trader?.rationale ?? null,
                 trader_evaluated_at: result.trader?.evaluatedAt ?? null,
               })
-            } catch { /* non-critical */ }
+              if (vlErr) {
+                dlog(`!! verdict_log INSERT FAILED: ${vlErr.message}`, { code: vlErr.code })
+              } else {
+                dlog(`verdict_log inserted OK`)
+              }
+            } catch (e) {
+              dlog(`!! verdict_log threw exception: ${(e as Error).message}`)
+            }
+          } else {
+            dlog(`verdict_log skipped (dup found, id=${existing.id})`)
           }
+        } else if (currentUserId) {
+          dlog(`verdict_log skipped (signal=${result.judge?.signal ?? 'undefined'}, must be BULLISH/BEARISH and userId present)`)
         }
 
         send('complete', {
@@ -389,9 +432,11 @@ export async function POST(req: NextRequest) {
           cached: false,
           ...result,
         })
+        dlog(`DONE via live run (controllerClosed=${controllerClosed}${controllerClosedAt ? ` at stage=${controllerClosedAt.stage}` : ''})`)
 
 
       } catch (err) {
+        dlog(`!! UNCAUGHT pipeline error: ${err instanceof Error ? err.message : String(err)}`)
         console.error('Pipeline error:', err)
         send('error', { message: err instanceof Error ? err.message : 'Pipeline failed' })
       } finally {
