@@ -146,6 +146,28 @@ function setupIcon(setupType: string, color: string) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Defensive number formatters - return em-dash on undefined/null
+// API responses occasionally have missing fields (Yahoo timeouts,
+// etc.). These prevent the whole page from crashing on a single
+// missing value.
+// ─────────────────────────────────────────────────────────────
+function fmtPct(n: number | null | undefined, digits = 2): string {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return '—'
+  const sign = n >= 0 ? '+' : ''
+  return `${sign}${n.toFixed(digits)}%`
+}
+
+function fmtNum(n: number | null | undefined, digits = 2): string {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return '—'
+  return n.toFixed(digits)
+}
+
+function pctColor(n: number | null | undefined): string {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return '#94a3b8'
+  return n >= 0 ? '#34d399' : '#f87171'
+}
+
+// ─────────────────────────────────────────────────────────────
 // Reusable: Section component
 // Unifies the visual language of every section (consistent header,
 // border, padding, optional collapse toggle on mobile).
@@ -639,7 +661,7 @@ export default function TomorrowPage() {
                         {data.regime.label === 'risk-on' ? 'Risk-On' : data.regime.label === 'risk-off' ? 'Risk-Off' : 'Mixed'}
                       </div>
                       <div className="flex items-center gap-3 text-sm font-mono" style={{ color: 'var(--text2)' }}>
-                        {data.regime.spyChangePct !== null && (
+                        {typeof data.regime.spyChangePct === 'number' && (
                           <span>
                             <span style={{ color: 'var(--text3)' }}>SPY</span>{' '}
                             <span style={{ color: data.regime.spyChangePct >= 0 ? '#34d399' : '#f87171' }}>
@@ -647,7 +669,7 @@ export default function TomorrowPage() {
                             </span>
                           </span>
                         )}
-                        {data.regime.vixLevel !== null && (
+                        {typeof data.regime.vixLevel === 'number' && (
                           <span>
                             <span style={{ color: 'var(--text3)' }}>VIX</span>{' '}
                             <span style={{ color: 'var(--text)' }}>{data.regime.vixLevel.toFixed(1)}</span>
@@ -703,18 +725,14 @@ export default function TomorrowPage() {
                 {isWeekendMode && data.internationalSnapshot ? (
                   <HeroTile label="International" accent="#a78bfa">
                     <div className="space-y-1.5">
-                      {data.internationalSnapshot.indices.slice(0, 3).map(idx => {
-                        const c = idx.changePct >= 0 ? '#34d399' : '#f87171'
-                        const sign = idx.changePct >= 0 ? '+' : ''
-                        return (
-                          <div key={idx.symbol} className="flex items-center justify-between gap-2 text-sm">
-                            <span style={{ color: 'var(--text2)' }}>{idx.name}</span>
-                            <span className="font-mono font-semibold" style={{ color: c }}>
-                              {sign}{idx.changePct.toFixed(2)}%
-                            </span>
-                          </div>
-                        )
-                      })}
+                      {(data.internationalSnapshot.indices ?? []).slice(0, 3).map(idx => (
+                        <div key={idx.symbol} className="flex items-center justify-between gap-2 text-sm">
+                          <span style={{ color: 'var(--text2)' }}>{idx.name}</span>
+                          <span className="font-mono font-semibold" style={{ color: pctColor(idx.changePct) }}>
+                            {fmtPct(idx.changePct)}
+                          </span>
+                        </div>
+                      ))}
                     </div>
                   </HeroTile>
                 ) : (
@@ -1089,16 +1107,19 @@ export default function TomorrowPage() {
                             {s.emoji} {s.sector}
                           </div>
                           <div className="flex flex-wrap gap-1">
-                            {s.topMovers.slice(0, 5).map(m => (
-                              <button key={m.ticker} onClick={() => handleAnalyze(m.ticker)}
-                                className="text-[11px] font-mono px-1.5 py-0.5 rounded hover:opacity-80"
-                                style={{
-                                  background: m.changePct >= 0 ? 'rgba(52,211,153,0.1)' : 'rgba(248,113,113,0.1)',
-                                  color: m.changePct >= 0 ? '#34d399' : '#f87171',
-                                }}>
-                                {m.ticker} {m.changePct >= 0 ? '+' : ''}{m.changePct.toFixed(1)}%
-                              </button>
-                            ))}
+                            {(s.topMovers ?? []).slice(0, 5).map(m => {
+                              const isPositive = typeof m.changePct === 'number' && m.changePct >= 0
+                              return (
+                                <button key={m.ticker} onClick={() => handleAnalyze(m.ticker)}
+                                  className="text-[11px] font-mono px-1.5 py-0.5 rounded hover:opacity-80"
+                                  style={{
+                                    background: isPositive ? 'rgba(52,211,153,0.1)' : 'rgba(248,113,113,0.1)',
+                                    color: isPositive ? '#34d399' : '#f87171',
+                                  }}>
+                                  {m.ticker} {fmtPct(m.changePct, 1)}
+                                </button>
+                              )
+                            })}
                           </div>
                         </div>
                       ))}
@@ -1199,65 +1220,53 @@ export default function TomorrowPage() {
                     accent="#a78bfa"
                     mobileCollapsible>
                     <div className="px-5 py-4 space-y-4">
-                      {data.internationalSnapshot.indices.length > 0 && (
+                      {(data.internationalSnapshot.indices ?? []).length > 0 && (
                         <div>
                           <div className="text-[11px] font-mono uppercase tracking-widest mb-2" style={{ color: 'var(--text3)' }}>Indices</div>
                           <div className="space-y-1">
-                            {data.internationalSnapshot.indices.map(idx => {
-                              const c = idx.changePct >= 0 ? '#34d399' : '#f87171'
-                              const sign = idx.changePct >= 0 ? '+' : ''
-                              return (
-                                <div key={idx.symbol} className="flex items-center justify-between text-sm">
-                                  <span style={{ color: 'var(--text2)' }}>{idx.name}</span>
-                                  <div className="flex items-center gap-2 font-mono">
-                                    <span style={{ color: 'var(--text)' }}>{idx.price.toFixed(2)}</span>
-                                    <span className="w-16 text-right" style={{ color: c }}>{sign}{idx.changePct.toFixed(2)}%</span>
-                                  </div>
+                            {(data.internationalSnapshot.indices ?? []).map(idx => (
+                              <div key={idx.symbol} className="flex items-center justify-between text-sm">
+                                <span style={{ color: 'var(--text2)' }}>{idx.name}</span>
+                                <div className="flex items-center gap-2 font-mono">
+                                  <span style={{ color: 'var(--text)' }}>{fmtNum(idx.price, 2)}</span>
+                                  <span className="w-16 text-right" style={{ color: pctColor(idx.changePct) }}>{fmtPct(idx.changePct)}</span>
                                 </div>
-                              )
-                            })}
+                              </div>
+                            ))}
                           </div>
                         </div>
                       )}
-                      {data.internationalSnapshot.forex.length > 0 && (
+                      {(data.internationalSnapshot.forex ?? []).length > 0 && (
                         <div>
                           <div className="text-[11px] font-mono uppercase tracking-widest mb-2" style={{ color: 'var(--text3)' }}>Forex</div>
                           <div className="space-y-1">
-                            {data.internationalSnapshot.forex.map(fx => {
-                              const c = fx.changePct >= 0 ? '#34d399' : '#f87171'
-                              const sign = fx.changePct >= 0 ? '+' : ''
-                              return (
-                                <div key={fx.symbol} className="flex items-center justify-between text-sm">
-                                  <span style={{ color: 'var(--text2)' }}>{fx.name}</span>
-                                  <div className="flex items-center gap-2 font-mono">
-                                    <span style={{ color: 'var(--text)' }}>{fx.price.toFixed(4)}</span>
-                                    <span className="w-16 text-right" style={{ color: c }}>{sign}{fx.changePct.toFixed(2)}%</span>
-                                  </div>
+                            {(data.internationalSnapshot.forex ?? []).map(fx => (
+                              <div key={fx.symbol} className="flex items-center justify-between text-sm">
+                                <span style={{ color: 'var(--text2)' }}>{fx.name}</span>
+                                <div className="flex items-center gap-2 font-mono">
+                                  <span style={{ color: 'var(--text)' }}>{fmtNum(fx.price, 4)}</span>
+                                  <span className="w-16 text-right" style={{ color: pctColor(fx.changePct) }}>{fmtPct(fx.changePct)}</span>
                                 </div>
-                              )
-                            })}
+                              </div>
+                            ))}
                           </div>
                         </div>
                       )}
-                      {(data.internationalSnapshot.commodities.length + data.internationalSnapshot.futures.length) > 0 && (
+                      {((data.internationalSnapshot.commodities ?? []).length + (data.internationalSnapshot.futures ?? []).length) > 0 && (
                         <div>
                           <div className="text-[11px] font-mono uppercase tracking-widest mb-2" style={{ color: 'var(--text3)' }}>
                             Futures &amp; Commodities
                           </div>
                           <div className="space-y-1">
-                            {[...data.internationalSnapshot.futures, ...data.internationalSnapshot.commodities].map(item => {
-                              const c = item.changePct >= 0 ? '#34d399' : '#f87171'
-                              const sign = item.changePct >= 0 ? '+' : ''
-                              return (
-                                <div key={item.symbol} className="flex items-center justify-between text-sm">
-                                  <span style={{ color: 'var(--text2)' }}>{item.name}</span>
-                                  <div className="flex items-center gap-2 font-mono">
-                                    <span style={{ color: 'var(--text)' }}>{item.price.toFixed(2)}</span>
-                                    <span className="w-16 text-right" style={{ color: c }}>{sign}{item.changePct.toFixed(2)}%</span>
-                                  </div>
+                            {[...(data.internationalSnapshot.futures ?? []), ...(data.internationalSnapshot.commodities ?? [])].map(item => (
+                              <div key={item.symbol} className="flex items-center justify-between text-sm">
+                                <span style={{ color: 'var(--text2)' }}>{item.name}</span>
+                                <div className="flex items-center gap-2 font-mono">
+                                  <span style={{ color: 'var(--text)' }}>{fmtNum(item.price, 2)}</span>
+                                  <span className="w-16 text-right" style={{ color: pctColor(item.changePct) }}>{fmtPct(item.changePct)}</span>
                                 </div>
-                              )
-                            })}
+                              </div>
+                            ))}
                           </div>
                         </div>
                       )}
