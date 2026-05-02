@@ -36,20 +36,14 @@ export interface NewsItem {
 // ─────────────────────────────────────────────────────────────
 // Source 1: Alpaca news (unchanged)
 // ─────────────────────────────────────────────────────────────
-async function fetchAlpacaNews(limit = 50, symbols?: string, hoursBack?: number): Promise<NewsItem[]> {
+async function fetchAlpacaNews(limit = 50, symbols?: string): Promise<NewsItem[]> {
   if (!process.env.ALPACA_API_KEY) return []
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), 8000)
   try {
-    // For weekend mode we fetch a wider window (Friday close through now).
-    // Alpaca supports a `start` parameter as ISO timestamp.
-    const startTs = hoursBack
-      ? new Date(Date.now() - hoursBack * 3600000).toISOString()
-      : null
-    const baseUrl = `https://data.alpaca.markets/v1beta1/news?limit=${limit}&sort=desc`
     const url = symbols
-      ? `${baseUrl}&symbols=${symbols}${startTs ? `&start=${startTs}` : ''}`
-      : `${baseUrl}${startTs ? `&start=${startTs}` : ''}`
+      ? `https://data.alpaca.markets/v1beta1/news?limit=${limit}&sort=desc&symbols=${symbols}`
+      : `https://data.alpaca.markets/v1beta1/news?limit=${limit}&sort=desc`
     const res = await fetch(url, { headers: ALPACA_HEADERS, signal: ctrl.signal })
     if (!res.ok) return []
     const data = await res.json()
@@ -103,7 +97,7 @@ async function fetchFinnhubNewsForTicker(ticker: string, hours = 24): Promise<Ne
 // ─────────────────────────────────────────────────────────────
 // Source 3: Gemini grounded search (unchanged)
 // ─────────────────────────────────────────────────────────────
-async function fetchGeminiGroundedNews(weekendMode = false): Promise<NewsItem[]> {
+async function fetchGeminiGroundedNews(): Promise<NewsItem[]> {
   const key = process.env.GEMINI_API_KEY
   if (!key) return []
   try {
@@ -117,44 +111,7 @@ async function fetchGeminiGroundedNews(weekendMode = false): Promise<NewsItem[]>
     const today = new Date().toLocaleDateString('en-US', {
       weekday: 'long', month: 'long', day: 'numeric', year: 'numeric'
     })
-
-    // Pick prompt based on mode
-    const prompt = weekendMode
-      ? `Use Google Search to find the 12 biggest WORLD EVENTS and global market stories from the past 65 hours (since Friday close ${today}) that could affect the upcoming Monday US market open.
-
-Focus on:
-- Geopolitical events (war, sanctions, elections, diplomatic incidents)
-- Central bank actions or surprise rate moves (Fed, ECB, BoJ, BoE, PBOC)
-- Major company news (M&A, earnings warnings, executive changes, fraud, SEC actions)
-- Energy and commodity moves (oil, gas, gold)
-- Asian and European market action
-- Macro data scheduled for Monday morning (jobs, CPI, GDP)
-- Natural disasters or supply chain disruptions
-
-Prioritize coverage from credible international outlets: Reuters, Bloomberg, WSJ, FT, Nikkei, South China Morning Post, The Economist, AP. Include US outlets where appropriate (CNBC, Barron's).
-
-For each story, return:
-- The exact ticker symbol(s) mentioned (use "MARKET" if no specific ticker, or country tickers like "ASIA", "EUROPE", "OIL")
-- The headline as it was published
-- A 1-sentence summary of what happened and Monday market implication
-- The source outlet name
-- The URL
-
-Return ONLY this JSON format (no markdown, no preamble):
-{
-  "stories": [
-    {
-      "tickers": ["ASIA"],
-      "headline": "Nikkei drops 2% on weak China data",
-      "summary": "Nikkei fell 2% Monday Tokyo morning on weaker-than-expected Chinese PMI; suggests cautious US open in industrials and chip exporters",
-      "outlet": "Reuters",
-      "url": "https://www.reuters.com/..."
-    }
-  ]
-}
-
-Return exactly 12 stories. Tickers must be uppercase. Cover geopolitics, central banks, corporate, energy, and Asia/Europe action.`
-      : `Use Google Search to find the 10 biggest US stock market stories published TODAY (${today}). Focus on earnings, M&A, Fed/macro, analyst upgrades/downgrades, regulatory news, major product announcements.
+    const prompt = `Use Google Search to find the 10 biggest US stock market stories published TODAY (${today}). Focus on earnings, M&A, Fed/macro, analyst upgrades/downgrades, regulatory news, major product announcements.
 
 Prioritize coverage from credible outlets: Reuters, Bloomberg, WSJ, CNBC, MarketWatch, Financial Times, Barron's, Axios.
 
@@ -179,7 +136,6 @@ Return ONLY this JSON format (no markdown, no preamble):
 }
 
 Return exactly 10 stories. Tickers must be uppercase US stock tickers or "MARKET".`
-
     const result = await model.generateContent(prompt)
     const text = result.response.text()
     const clean = text.replace(/```json|```/g, '').trim()
@@ -199,7 +155,7 @@ Return exactly 10 stories. Tickers must be uppercase US stock tickers or "MARKET
         : [],
       publishedAt: new Date().toISOString(),
       sourceOutlet: typeof s.outlet === 'string' ? s.outlet : undefined,
-    })).filter((item: NewsItem) => item.headline.length > 0).slice(0, weekendMode ? 18 : 15)
+    })).filter((item: NewsItem) => item.headline.length > 0).slice(0, 15)
   } catch (e) {
     console.warn('[multi-source-news] Gemini grounded fetch failed:', (e as Error).message?.slice(0, 100))
     return []
@@ -390,21 +346,15 @@ export interface MultiSourceNewsResult {
 export async function fetchMultiSourceNews(options?: {
   includeCrypto?: boolean
   topTickersForFinnhub?: string[]
-  weekendMode?: boolean
 }): Promise<MultiSourceNewsResult> {
   const started = Date.now()
-  const isWeekend = options?.weekendMode === true
-
-  // On weekends, fetch a wider 65-hour window for Alpaca news
-  // (Friday 4pm ET to Monday 9:30am ET = 65 hours)
-  const alpacaLookback = isWeekend ? 65 : undefined
 
   // Kick off all independent fetches in parallel
-  const alpacaP = fetchAlpacaNews(isWeekend ? 80 : 50, undefined, alpacaLookback)
+  const alpacaP = fetchAlpacaNews(50)
   const cryptoP = options?.includeCrypto
-    ? fetchAlpacaNews(isWeekend ? 30 : 20, 'BTC,ETH,SOL,DOGE,XRP', alpacaLookback)
+    ? fetchAlpacaNews(20, 'BTC,ETH,SOL,DOGE,XRP')
     : Promise.resolve([])
-  const geminiP = fetchGeminiGroundedNews(isWeekend).catch(() => [] as NewsItem[])
+  const geminiP = fetchGeminiGroundedNews().catch(() => [] as NewsItem[])
   const stocktwitsP = fetchStocktwitsTrending().catch(() => [] as NewsItem[])
   const newsapiP = fetchNewsAPIMarket().catch(() => [] as NewsItem[])
   const marketauxP = fetchMarketauxMarket().catch(() => [] as NewsItem[])

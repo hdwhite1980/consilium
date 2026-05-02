@@ -56,29 +56,6 @@ interface SectorTopMover {
   topMovers: Array<{ ticker: string; change: number; signal: 'up' | 'down' }>
 }
 
-interface WorldEvent {
-  category: 'geopolitical' | 'central_bank' | 'macro_data' | 'corporate' | 'energy' | 'other'
-  headline: string
-  summary: string
-  marketImpact: 'high' | 'medium' | 'low'
-  affectedSectors?: string[]
-  affectedTickers?: string[]
-}
-
-interface InternationalSnapshot {
-  fetchedAt: string
-  indices: Array<{ name: string; symbol: string; price: number; changePct: number }>
-  forex: Array<{ name: string; symbol: string; price: number; changePct: number }>
-  commodities: Array<{ name: string; symbol: string; price: number; changePct: number }>
-  futures: Array<{ name: string; symbol: string; price: number; changePct: number }>
-  sentiment: {
-    indices: 'up' | 'down' | 'mixed' | 'unknown'
-    forex: 'up' | 'down' | 'mixed' | 'unknown'
-    commodities: 'up' | 'down' | 'mixed' | 'unknown'
-    futures: 'up' | 'down' | 'mixed' | 'unknown'
-  }
-}
-
 interface TomorrowData {
   nextTradingDay: string
   generatedAt: string
@@ -113,12 +90,6 @@ interface TomorrowData {
     afterDedupe: number
   }
   elapsedMs?: number
-  // Weekend-only fields
-  worldEvents?: WorldEvent[]
-  internationalSummary?: string
-  internationalSnapshot?: InternationalSnapshot
-  briefMode?: 'weekday' | 'weekend' | 'fri-after-close'
-  internationalCounts?: { fetched: number }
 }
 
 const SIG_COLOR = { BULLISH: '#34d399', BEARISH: '#f87171', NEUTRAL: '#fbbf24' }
@@ -376,16 +347,8 @@ export default function TomorrowPage() {
         <div className="w-px h-4" style={{ background: 'var(--border)' }} />
         <div className="flex items-center gap-2">
           <Calendar size={14} style={{ color: '#a78bfa' }} />
-          <span className="text-sm font-bold">
-            {data?.briefMode === 'weekend' || data?.briefMode === 'fri-after-close'
-              ? 'Weekend Brief'
-              : 'Tomorrow\u2019s Movers'}
-          </span>
-          <span className="text-[10px] font-mono text-white/25 hidden sm:inline">
-            {data?.briefMode === 'weekend' || data?.briefMode === 'fri-after-close'
-              ? 'Monday open playbook'
-              : 'Next trading day playbook'}
-          </span>
+          <span className="text-sm font-bold">Tomorrow&apos;s Movers</span>
+          <span className="text-[10px] font-mono text-white/25 hidden sm:inline">Next trading day playbook</span>
         </div>
         <div className="ml-auto flex items-center gap-2">
           {data?.cached && !loading && (
@@ -439,19 +402,13 @@ export default function TomorrowPage() {
                 <div>
                   <div className="flex items-center gap-2 mb-1 flex-wrap">
                     <span className="text-[10px] font-mono uppercase tracking-widest" style={{ color: '#a78bfa' }}>
-                      {data.briefMode === 'weekend' || data.briefMode === 'fri-after-close' ? 'Monday open' : 'Next trading day'}
+                      Next trading day
                     </span>
                     <span className="text-xs font-bold text-white">{data.nextTradingDay}</span>
                     <span className="text-[10px] font-mono px-2 py-0.5 rounded-full"
                       style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)' }}>
                       {data.keyTheme}
                     </span>
-                    {(data.briefMode === 'weekend' || data.briefMode === 'fri-after-close') && (
-                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full"
-                        style={{ background: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)' }}>
-                        Weekend Brief
-                      </span>
-                    )}
                   </div>
                   <p className="text-sm text-white/70 leading-relaxed">{data.marketOutlook}</p>
                 </div>
@@ -460,155 +417,6 @@ export default function TomorrowPage() {
           </div>
 
           <div className="max-w-4xl mx-auto px-3 sm:px-5 py-5 space-y-8">
-
-            {/* WEEKEND-ONLY: International markets snapshot */}
-            {(data.briefMode === 'weekend' || data.briefMode === 'fri-after-close') && data.internationalSnapshot && (
-              <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
-                  <div className="flex items-center gap-2">
-                    <Globe size={14} style={{ color: '#a78bfa' }} />
-                    <span className="text-sm font-bold">International Markets</span>
-                    {data.internationalSummary && (
-                      <span className="text-[10px] font-mono text-white/30 hidden sm:inline">while US markets are closed</span>
-                    )}
-                  </div>
-                </div>
-                <div className="px-5 py-4 space-y-4">
-                  {data.internationalSummary && (
-                    <p className="text-sm text-white/70 leading-relaxed">{data.internationalSummary}</p>
-                  )}
-
-                  {/* Indices */}
-                  {data.internationalSnapshot.indices.length > 0 && (
-                    <div>
-                      <div className="text-[10px] font-mono uppercase tracking-widest mb-2 text-white/40">Indices</div>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                        {data.internationalSnapshot.indices.map(idx => {
-                          const c = idx.changePct >= 0 ? '#34d399' : '#f87171'
-                          const sign = idx.changePct >= 0 ? '+' : ''
-                          return (
-                            <div key={idx.symbol} className="rounded-lg px-3 py-2"
-                              style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}>
-                              <div className="text-[10px] font-mono text-white/40">{idx.name}</div>
-                              <div className="flex items-baseline gap-2">
-                                <span className="text-sm font-mono font-bold text-white">{idx.price.toFixed(2)}</span>
-                                <span className="text-[11px] font-mono" style={{ color: c }}>{sign}{idx.changePct.toFixed(2)}%</span>
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Forex */}
-                  {data.internationalSnapshot.forex.length > 0 && (
-                    <div>
-                      <div className="text-[10px] font-mono uppercase tracking-widest mb-2 text-white/40">Forex</div>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                        {data.internationalSnapshot.forex.map(fx => {
-                          const c = fx.changePct >= 0 ? '#34d399' : '#f87171'
-                          const sign = fx.changePct >= 0 ? '+' : ''
-                          return (
-                            <div key={fx.symbol} className="rounded-lg px-3 py-2"
-                              style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}>
-                              <div className="text-[10px] font-mono text-white/40">{fx.name}</div>
-                              <div className="flex items-baseline gap-2">
-                                <span className="text-sm font-mono font-bold text-white">{fx.price.toFixed(4)}</span>
-                                <span className="text-[11px] font-mono" style={{ color: c }}>{sign}{fx.changePct.toFixed(2)}%</span>
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Commodities + Futures combined row */}
-                  {(data.internationalSnapshot.commodities.length > 0 || data.internationalSnapshot.futures.length > 0) && (
-                    <div>
-                      <div className="text-[10px] font-mono uppercase tracking-widest mb-2 text-white/40">
-                        {data.internationalSnapshot.futures.length > 0 ? 'US Futures + Commodities' : 'Commodities'}
-                      </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                        {[...data.internationalSnapshot.futures, ...data.internationalSnapshot.commodities].map(item => {
-                          const c = item.changePct >= 0 ? '#34d399' : '#f87171'
-                          const sign = item.changePct >= 0 ? '+' : ''
-                          return (
-                            <div key={item.symbol} className="rounded-lg px-3 py-2"
-                              style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}>
-                              <div className="text-[10px] font-mono text-white/40">{item.name}</div>
-                              <div className="flex items-baseline gap-2">
-                                <span className="text-sm font-mono font-bold text-white">{item.price.toFixed(2)}</span>
-                                <span className="text-[11px] font-mono" style={{ color: c }}>{sign}{item.changePct.toFixed(2)}%</span>
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="text-[10px] font-mono text-white/25">
-                    Data via Yahoo Finance. Some symbols may be unavailable depending on market hours.
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* WEEKEND-ONLY: World events */}
-            {(data.briefMode === 'weekend' || data.briefMode === 'fri-after-close') && data.worldEvents && data.worldEvents.length > 0 && (
-              <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-                <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
-                  <div className="flex items-center gap-2">
-                    <Newspaper size={14} style={{ color: '#fbbf24' }} />
-                    <span className="text-sm font-bold">World Events</span>
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full"
-                      style={{ background: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)' }}>
-                      {data.worldEvents.length}
-                    </span>
-                  </div>
-                  <span className="text-[10px] font-mono text-white/30 hidden sm:inline">since Friday close</span>
-                </div>
-                <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
-                  {data.worldEvents.map((ev, i) => {
-                    const impactColor = IMPACT_COLOR[ev.marketImpact] ?? '#94a3b8'
-                    const categoryLabel: Record<string, string> = {
-                      geopolitical: 'Geopolitical',
-                      central_bank: 'Central Bank',
-                      macro_data: 'Macro Data',
-                      corporate: 'Corporate',
-                      energy: 'Energy',
-                      other: 'Other',
-                    }
-                    return (
-                      <div key={i} className="px-5 py-4">
-                        <div className="flex items-start gap-3">
-                          <div className="w-1 h-12 rounded-full shrink-0 mt-1" style={{ background: impactColor }} />
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 flex-wrap mb-1">
-                              <span className="text-[10px] font-mono uppercase tracking-widest" style={{ color: impactColor }}>
-                                {categoryLabel[ev.category] ?? ev.category}
-                              </span>
-                              <span className="text-[10px] font-mono uppercase tracking-widest text-white/30">
-                                {ev.marketImpact} impact
-                              </span>
-                              {ev.affectedTickers && ev.affectedTickers.length > 0 && (
-                                <span className="text-[10px] font-mono text-white/40">
-                                  {ev.affectedTickers.slice(0, 4).join(' · ')}
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-sm font-semibold text-white mb-1">{ev.headline}</div>
-                            <div className="text-xs text-white/60 leading-relaxed">{ev.summary}</div>
-                          </div>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
 
             {/* Pre-Market Brief - sentiment, open direction, expected move */}
             <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
