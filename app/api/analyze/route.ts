@@ -432,7 +432,9 @@ export async function POST(req: NextRequest) {
           cached: false,
           ...result,
         })
-        dlog(`DONE via live run (controllerClosed=${controllerClosed}${controllerClosedAt ? ` at stage=${controllerClosedAt.stage}` : ''})`)
+        const _cca = controllerClosedAt as { stage: string; elapsedSec: string } | null
+        const _ccaTag = _cca ? ` at stage=${_cca.stage}` : ''
+        dlog(`DONE via live run (controllerClosed=${controllerClosed}${_ccaTag})`)
 
 
       } catch (err) {
