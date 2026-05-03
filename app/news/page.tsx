@@ -347,18 +347,29 @@ export default function NewsPage() {
           Back
         </button>
         <div className="w-px h-4" style={{ background: 'var(--border)' }} />
-        <div className="flex items-center gap-2">
-          <Zap size={14} style={{ color: '#fbbf24' }} />
-          <span className="text-sm font-bold">Today&apos;s Movers</span>
+        {/* Today | Tomorrow tab pair */}
+        <div className="flex items-center gap-1" role="tablist" aria-label="Brief">
+          <button
+            type="button"
+            role="tab"
+            aria-selected="true"
+            className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg transition-all"
+            style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.3)' }}>
+            <Zap size={12} aria-hidden="true" />
+            <span>Today</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected="false"
+            onClick={() => router.push('/tomorrow')}
+            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
+            style={{ background: 'transparent', color: 'var(--text3)', border: '1px solid var(--border)' }}>
+            <Calendar size={12} aria-hidden="true" />
+            <span>Tomorrow</span>
+          </button>
         </div>
-        <button onClick={() => router.push('/tomorrow')}
-          className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-lg transition-all hover:opacity-80"
-          style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)' }}>
-          <Calendar size={12} aria-hidden="true" /> Tomorrow
-        </button>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-mono text-white/25">AI-powered market intelligence</span>
-        </div>
+        <span className="text-[10px] font-mono text-white/25 hidden sm:inline">AI-powered market intelligence</span>
         <div className="ml-auto flex items-center gap-3">
           {timeAgo !== null && !loading && (
             data?.cached
