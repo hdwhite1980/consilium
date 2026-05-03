@@ -621,7 +621,6 @@ function HomeInner() {
       icon: <Search size={12} />,
       color: '#a78bfa',
       items: [
-        { label: 'Screener', icon: <Search size={12} />,    path: '/screener', color: '#a78bfa' },
         { label: 'Scanner',  icon: <Target size={12} />,    path: '/scanner',  color: '#a78bfa' },
         { label: 'Options',  icon: <LineChart size={12} />, path: '/options',  color: '#fbbf24' },
         { label: 'Macro',    icon: <Globe size={12} />,     path: '/macro',    color: '#60a5fa' },
