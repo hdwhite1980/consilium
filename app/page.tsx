@@ -246,9 +246,9 @@ function Chip({ label, color }: { label: string; color: string }) {
   )
 }
 
-function Card({ title, icon, color, children, surf, brd, txt3 }: { title: string; icon: React.ReactNode; color: string; children: React.ReactNode; surf?: string; brd?: string; txt3?: string }) {
+function Card({ title, icon, color, children }: { title: string; icon: React.ReactNode; color: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl border p-3 space-y-2.5" style={{ background: surf ?? '#181e2a', borderColor: brd ?? 'rgba(255,255,255,0.07)' }}>
+    <div className="rounded-xl border p-3 space-y-2.5" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
       <div className="flex items-center gap-1.5">
         <span style={{ color }}>{icon}</span>
         <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color }}>{title}</span>
@@ -593,17 +593,6 @@ function HomeInner() {
   const stepIdx = STEPS.findIndex(s => s.key === stage)
   const isDark = theme === 'dark'
 
-  // Theme-aware inline style helpers
-  const bg    = isDark ? '#0a0d12' : '#f0f2f7'
-  const surf  = isDark ? '#111620' : '#ffffff'
-  const surf2 = isDark ? '#181e2a' : '#f5f7fb'
-  const brd   = isDark ? 'rgba(255,255,255,0.08)' : '#d1d5db'
-  const brd2  = isDark ? 'rgba(255,255,255,0.16)' : '#9ca3af'
-  const txt   = isDark ? '#f1f5f9' : '#0a0e17'
-  const txt2  = isDark ? 'rgba(255,255,255,0.82)' : '#1f2937'
-  const txt3  = isDark ? 'rgba(255,255,255,0.6)'  : '#4b5563'
-  const inputBg = isDark ? '#181e2a' : '#ffffff'
-
   // Always-visible top-level nav items (high-frequency actions + utilities)
   const NAV_TOP: Array<{ label: string; icon: React.ReactNode; path: string; color: string }> = [
     { label: 'Today',        icon: <Zap size={12} />,           path: '/news',         color: '#fbbf24' },
@@ -611,7 +600,7 @@ function HomeInner() {
     { label: 'Invest',       icon: <Flame size={12} />,         path: '/invest',       color: '#f97316' },
     { label: 'Compare',      icon: <Scale size={12} />,         path: '/compare',      color: '#f87171' },
     { label: 'Track Record', icon: <Trophy size={12} />,        path: '/track-record', color: '#fbbf24' },
-    { label: 'Guide',        icon: <BookOpen size={12} />,      path: '/guide',        color: txt3 },
+    { label: 'Guide',        icon: <BookOpen size={12} />,      path: '/guide',        color: 'var(--text3)' },
   ]
 
   // Dropdown groups for desktop nav
@@ -647,7 +636,7 @@ function HomeInner() {
 
   return (
     <>
-    <div className="flex flex-col min-h-screen md:h-screen md:overflow-hidden" style={{ background: bg, color: txt }}>
+    <div className="flex flex-col min-h-screen md:h-screen md:overflow-hidden" style={{ background: 'var(--bg)', color: 'var(--text)' }}>
 
       {/* ── Skip-to-content link for keyboard users ── */}
       <a href="#main-content"
@@ -669,20 +658,20 @@ function HomeInner() {
             style={{ outlineColor: '#fbbf24' }}>
             <span className="text-[10px] font-bold px-1.5 py-0.5 rounded font-mono shrink-0"
               style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>PRE-MARKET</span>
-            <span className="text-xs flex-1 truncate" style={{ color: txt2 }}>{preMarketBrief.headline}</span>
-            <span className="text-[10px] shrink-0" style={{ color: txt3 }} aria-hidden="true">{showBrief ? '▲' : '▼'}</span>
+            <span className="text-xs flex-1 truncate" style={{ color: 'var(--text2)' }}>{preMarketBrief.headline}</span>
+            <span className="text-[10px] shrink-0" style={{ color: 'var(--text3)' }} aria-hidden="true">{showBrief ? '▲' : '▼'}</span>
           </button>
           {showBrief && (
             <div id="premarket-details" className="px-3 pb-2 space-y-1.5 text-xs">
-              {preMarketBrief.one_line && <p style={{ color: txt2 }} className="leading-relaxed">{preMarketBrief.one_line}</p>}
+              {preMarketBrief.one_line && <p style={{ color: 'var(--text2)' }} className="leading-relaxed">{preMarketBrief.one_line}</p>}
               {preMarketBrief.risk_of_day && (
                 <div className="flex items-start gap-1.5">
                   <AlertTriangle size={11} style={{ color: '#f87171' }} aria-hidden="true" />
-                  <span style={{ color: txt2 }}><strong className="font-semibold">Risk:</strong> {preMarketBrief.risk_of_day}</span>
+                  <span style={{ color: 'var(--text2)' }}><strong className="font-semibold">Risk:</strong> {preMarketBrief.risk_of_day}</span>
                 </div>
               )}
               {preMarketBrief.watchlist && preMarketBrief.watchlist.length > 0 && (
-                <div><span style={{ color: txt3 }}>Watch: </span><span style={{ color: txt2 }}>{preMarketBrief.watchlist.join(' · ')}</span></div>
+                <div><span style={{ color: 'var(--text3)' }}>Watch: </span><span style={{ color: 'var(--text2)' }}>{preMarketBrief.watchlist.join(' · ')}</span></div>
               )}
             </div>
           )}
@@ -698,7 +687,7 @@ function HomeInner() {
            The user cluster (theme · status · email · LOGOUT · mobile menu)
            is locked to the right edge and can never be pushed off-screen.
          ─────────────────────────────────────────────────────────── */}
-      <nav className="border-b shrink-0" style={{ background: surf, borderColor: brd }} aria-label="Primary navigation">
+      <nav className="border-b shrink-0" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }} aria-label="Primary navigation">
 
         {/* ── Row 1a: brand (left) + user cluster (right) — always on its own row ── */}
         <div className="flex items-center gap-2 px-3 py-2">
@@ -711,7 +700,7 @@ function HomeInner() {
             style={{ outlineColor: '#a78bfa' }}
             aria-label="Wali-OS home">
             <WaliLogo size="xs" noLink />
-            <span className="text-sm font-bold tracking-tight" style={{ color: txt }}>WALI-OS</span>
+            <span className="text-sm font-bold tracking-tight" style={{ color: 'var(--text)' }}>WALI-OS</span>
           </button>
 
           {/* ── User cluster — locked to right ── */}
@@ -727,7 +716,7 @@ function HomeInner() {
               aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
               title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
               className="p-2 sm:p-1.5 rounded-lg transition-all hover:opacity-80 focus:outline focus:outline-2 focus:outline-offset-1"
-              style={{ background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)', color: txt2, border: `1px solid ${brd}`, outlineColor: '#a78bfa' }}>
+              style={{ background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)', color: 'var(--text2)', border: '1px solid var(--border)', outlineColor: '#a78bfa' }}>
               {isDark ? <Sun size={14} aria-hidden="true" /> : <Moon size={14} aria-hidden="true" />}
             </button>
 
@@ -741,11 +730,11 @@ function HomeInner() {
                 running ? 'Analysis in progress' : 'Idle'
               }
               className="w-1.5 h-1.5 rounded-full animate-pulse-dot shrink-0"
-              style={{ background: stage === 'done' ? '#34d399' : stage === 'error' ? '#f87171' : running ? '#fbbf24' : brd2 }} />
+              style={{ background: stage === 'done' ? '#34d399' : stage === 'error' ? '#f87171' : running ? '#fbbf24' : 'var(--border2)' }} />
 
             {/* User area — trial badge + email + LOGOUT */}
             {userEmail && (
-              <div className="flex items-center gap-1.5 pl-1.5 border-l" style={{ borderColor: brd }}>
+              <div className="flex items-center gap-1.5 pl-1.5 border-l" style={{ borderColor: 'var(--border)' }}>
                 {subStatus?.status !== 'exempt' && subStatus?.status === 'trialing' && subStatus.daysLeft !== null && (
                   <button
                     type="button"
@@ -767,7 +756,7 @@ function HomeInner() {
                   aria-label={`Account settings for ${userEmail}`}
                   title="Account settings"
                   className="text-[10px] font-mono hidden sm:block max-w-[100px] truncate hover:opacity-70 transition-opacity rounded focus:outline focus:outline-2 focus:outline-offset-1"
-                  style={{ color: txt2, outlineColor: '#a78bfa' }}>
+                  style={{ color: 'var(--text2)', outlineColor: '#a78bfa' }}>
                   {userEmail}
                 </button>
                 <button
@@ -791,7 +780,7 @@ function HomeInner() {
               aria-expanded={navOpen}
               aria-controls="mobile-nav-drawer"
               className="flex xl:hidden p-2 sm:p-1.5 rounded-lg transition-all focus:outline focus:outline-2 focus:outline-offset-1"
-              style={{ background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)', color: txt2, border: `1px solid ${brd}`, outlineColor: '#a78bfa' }}>
+              style={{ background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)', color: 'var(--text2)', border: '1px solid var(--border)', outlineColor: '#a78bfa' }}>
               {navOpen ? <X size={15} aria-hidden="true" /> : <Menu size={15} aria-hidden="true" />}
             </button>
           </div>
@@ -818,7 +807,7 @@ function HomeInner() {
                 data-tutorial="ticker-input"
                 aria-label="Ticker symbol (e.g. AAPL, BTC, or EUR/USD)"
                 className="w-24 sm:w-32 rounded-lg px-2.5 py-2 sm:py-1.5 text-sm font-mono font-bold tracking-widest border transition-colors focus:outline focus:outline-2 focus:outline-offset-1"
-                style={{ background: inputBg, borderColor: brd2, color: txt, outlineColor: '#a78bfa' }} />
+                style={{ background: 'var(--surface2)', borderColor: 'var(--border2)', color: 'var(--text)', outlineColor: '#a78bfa' }} />
             </div>
 
             {/* Timeframe */}
@@ -839,16 +828,16 @@ function HomeInner() {
                   title={title}
                   className="px-2.5 py-2 sm:py-1.5 rounded-md text-xs font-mono border transition-all focus:outline focus:outline-2 focus:outline-offset-1"
                   style={{
-                    background: tf === t ? 'rgba(167,139,250,0.15)' : inputBg,
-                    borderColor: tf === t ? '#a78bfa' : brd,
-                    color: tf === t ? '#a78bfa' : txt2,
+                    background: tf === t ? 'rgba(167,139,250,0.15)' : 'var(--surface2)',
+                    borderColor: tf === t ? '#a78bfa' : 'var(--border)',
+                    color: tf === t ? '#a78bfa' : 'var(--text2)',
                     outlineColor: '#a78bfa',
                   }}>{label}</button>
               ))}
             </div>
 
             {/* Persona — label always visible now, no more hidden lg:inline */}
-            <div className="flex items-center gap-0.5 rounded-lg p-0.5" role="radiogroup" aria-label="Analyst persona" data-tutorial="persona-selector" style={{ background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)', border: `1px solid ${brd}` }}>
+            <div className="flex items-center gap-0.5 rounded-lg p-0.5" role="radiogroup" aria-label="Analyst persona" data-tutorial="persona-selector" style={{ background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)', border: '1px solid var(--border)' }}>
               {(Object.entries(PERSONAS) as [Persona, typeof PERSONAS[Persona]][]).map(([key, p]) => (
                 <button
                   key={key}
@@ -861,7 +850,7 @@ function HomeInner() {
                   className="flex items-center gap-1 px-2 py-1.5 sm:py-1 rounded-md text-[11px] font-mono transition-all focus:outline focus:outline-2 focus:outline-offset-1"
                   style={{
                     background: persona === key ? `${p.color}18` : 'transparent',
-                    color: persona === key ? p.color : txt2,
+                    color: persona === key ? p.color : 'var(--text2)',
                     border: persona === key ? `1px solid ${p.color}35` : '1px solid transparent',
                     outlineColor: p.color,
                   }}>
@@ -969,7 +958,7 @@ function HomeInner() {
                     role="menu"
                     aria-label={`${group.label} submenu`}
                     className="absolute top-full left-0 mt-1 py-1 rounded-lg shadow-lg z-50 min-w-[170px]"
-                    style={{ background: surf, border: `1px solid ` + brd }}>
+                    style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
                     {group.items.map(item => (
                       <button
                         key={item.path}
@@ -1014,7 +1003,7 @@ function HomeInner() {
         <div
           id="mobile-nav-drawer"
           className="xl:hidden border-b px-3 py-2 flex flex-wrap gap-2"
-          style={{ background: surf, borderColor: brd }}
+          style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
           role="menu"
           aria-label="Main navigation">
           {NAV_ITEMS.map(n => (
@@ -1038,7 +1027,7 @@ function HomeInner() {
 
       {/* ── Stage progress bar ──────────────────────── */}
       {running && (
-        <div className="px-3 py-2 border-b shrink-0" style={{ background: surf, borderColor: brd }}>
+        <div className="px-3 py-2 border-b shrink-0" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
           <div className="flex items-center gap-1 max-w-2xl mx-auto">
             {STEPS.map((s, i) => {
               const done = stepIdx > i
@@ -1051,14 +1040,14 @@ function HomeInner() {
                         style={{ width: done ? '100%' : active ? '60%' : '0%', background: done ? '#34d399' : active ? '#a78bfa' : 'transparent' }} />
                     </div>
                     <span className="text-[8px] font-mono truncate w-full text-center"
-                      style={{ color: done ? '#34d399' : active ? '#a78bfa' : txt3 }}>{s.label}</span>
+                      style={{ color: done ? '#34d399' : active ? '#a78bfa' : 'var(--text3)' }}>{s.label}</span>
                   </div>
-                  {i < STEPS.length - 1 && <div className="w-2 h-px shrink-0" style={{ background: done ? '#34d399' : brd }} />}
+                  {i < STEPS.length - 1 && <div className="w-2 h-px shrink-0" style={{ background: done ? '#34d399' : 'var(--border)' }} />}
                 </div>
               )
             })}
           </div>
-          {statusMsg && <p className="text-[10px] font-mono text-center mt-1" style={{ color: txt3 }}>{statusMsg}</p>}
+          {statusMsg && <p className="text-[10px] font-mono text-center mt-1" style={{ color: 'var(--text3)' }}>{statusMsg}</p>}
         </div>
       )}
 
@@ -1069,7 +1058,7 @@ function HomeInner() {
             background: cached.ageMinutes > 60 ? 'rgba(248,113,113,0.07)' : isDark ? 'rgba(251,191,36,0.06)' : 'rgba(251,191,36,0.08)',
             borderColor: cached.ageMinutes > 60 ? 'rgba(248,113,113,0.25)' : 'rgba(251,191,36,0.2)',
           }}>
-          <span className="text-xs" style={{ color: txt2 }}>
+          <span className="text-xs" style={{ color: 'var(--text2)' }}>
             {cached.ageMinutes > 60
               ? <><strong style={{ color: '#f87171' }} className="inline-flex items-center gap-1"><AlertTriangle size={11} />Stale — {cached.ageMinutes}m old.</strong> Price may have moved.</>
               : <span className="inline-flex items-center gap-1"><Clock size={11} />Cached analysis · {cached.ageMinutes}m ago</span>
@@ -1089,13 +1078,13 @@ function HomeInner() {
         {/* Left sidebar — only show when there's data */}
         {md && (
           <aside data-tutorial="sidebar" className="w-full md:w-56 lg:w-60 md:shrink-0 flex flex-col gap-2 p-3 md:overflow-y-auto border-b md:border-b-0 md:border-r"
-            style={{ background: isDark ? '#0d1117' : '#f5f7fb', borderColor: brd }}>
+            style={{ background: isDark ? '#0d1117' : '#f5f7fb', borderColor: 'var(--border)' }}>
           <div className="grid grid-cols-2 md:grid-cols-1 gap-2">
 
           {/* Price + sparkline */}
-          <div className="col-span-2 md:col-span-1 rounded-xl border p-3" style={{ background: surf, borderColor: brd }}>
+          <div className="col-span-2 md:col-span-1 rounded-xl border p-3" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
             <div className="flex items-baseline gap-2 mb-1.5">
-              <span className="text-base font-bold font-mono" style={{ color: txt }}>
+              <span className="text-base font-bold font-mono" style={{ color: 'var(--text)' }}>
                 {/* Forex rates need more decimal places */}
                 {md!.currentPrice < 10 && md!.currentPrice > 0
                   ? (md!.currentPrice < 0.01 ? md!.currentPrice.toFixed(6) : md!.currentPrice.toFixed(4))
@@ -1104,14 +1093,14 @@ function HomeInner() {
               <span className="text-xs font-mono" style={{ color: md!.technicals?.priceChange1D >= 0 ? '#34d399' : '#f87171' }}>
                 {((v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`)(md!.technicals?.priceChange1D)}
               </span>
-              <span className="text-[9px] font-mono ml-auto" style={{ color: txt3 }}>live</span>
+              <span className="text-[9px] font-mono ml-auto" style={{ color: 'var(--text3)' }}>live</span>
             </div>
             <Spark bars={md!.bars} />
           </div>
 
           {/* Conviction */}
           {md?.conviction && (
-            <div className="rounded-xl border p-3 space-y-2" style={{ background: surf, borderColor: brd }}>
+            <div className="rounded-xl border p-3 space-y-2" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
                   <Zap size={11} style={{ color: SIG_COLOR[(md!.conviction?.direction ?? 'NEUTRAL') as Signal] }} />
@@ -1119,7 +1108,7 @@ function HomeInner() {
                     {md!.conviction?.direction ?? ''}
                   </span>
                 </div>
-                <span className="text-[10px] font-mono capitalize" style={{ color: txt3 }}>{md!.conviction?.conviction?.replace('_',' ')}</span>
+                <span className="text-[10px] font-mono capitalize" style={{ color: 'var(--text3)' }}>{md!.conviction?.conviction?.replace('_',' ')}</span>
               </div>
               <div className="h-1.5 rounded-full overflow-hidden" style={{ background: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)' }}>
                 <div className="h-full rounded-full transition-all duration-1000"
@@ -1134,19 +1123,19 @@ function HomeInner() {
 
           {/* Technicals */}
           {md?.technicals && (
-            <Card title="Technicals" icon={<BarChart2 size={11}/>} color="#a78bfa" surf={surf} brd={brd} txt3={txt3}>
+            <Card title="Technicals" icon={<BarChart2 size={11}/>} color="#a78bfa">
               {([
-                ['RSI', <span style={{ color: md!.technicals?.rsi > 70 ? '#f87171' : md!.technicals?.rsi < 30 ? '#34d399' : txt }}>{md!.technicals?.rsi?.toFixed(1)}</span>],
+                ['RSI', <span style={{ color: md!.technicals?.rsi > 70 ? '#f87171' : md!.technicals?.rsi < 30 ? '#34d399' : 'var(--text)' }}>{md!.technicals?.rsi?.toFixed(1)}</span>],
                 ['MACD', <span style={{ color: md!.technicals?.macdHistogram >= 0 ? '#34d399' : '#f87171' }}>{md!.technicals?.macdHistogram >= 0 ? '▲ pos' : '▼ neg'}</span>],
                 ['MA cross', (() => {
                     const t = md!.technicals
                     // Only show cross if we have real SMA200 data (not fallback)
                     if (!t?.sma200 || !t?.sma50 || t.sma200 <= 0) {
-                      return <span style={{ color: txt3 }}>N/A</span>
+                      return <span style={{ color: 'var(--text3)' }}>N/A</span>
                     }
                     if (!t.goldenCross && !t.deathCross) {
                       // Not enough bars for a valid cross signal
-                      return <span style={{ color: txt3 }}>N/A</span>
+                      return <span style={{ color: 'var(--text3)' }}>N/A</span>
                     }
                     return <span style={{ color: t.goldenCross ? '#34d399' : '#f87171' }}>{t.goldenCross ? 'Golden' : 'Death'}</span>
                   })()],
@@ -1154,27 +1143,27 @@ function HomeInner() {
                     const t = md!.technicals
                     const sma200 = t?.sma200
                     // Only show if we have a real SMA200 (goldenCross or deathCross means we have 200 bars)
-                    if (!sma200 || sma200 <= 0 || (!t?.goldenCross && !t?.deathCross)) return <span style={{ color: txt3 }}>N/A</span>
+                    if (!sma200 || sma200 <= 0 || (!t?.goldenCross && !t?.deathCross)) return <span style={{ color: 'var(--text3)' }}>N/A</span>
                     const pct = (md!.currentPrice / sma200 - 1) * 100
                     return <span style={{ color: pct >= 0 ? '#34d399' : '#f87171' }}>{(pct >= 0 ? '+' : '') + pct.toFixed(1) + '%'}</span>
                   })()],
-                ['Williams %R', <span style={{ color: md!.technicals?.williamsR > -20 ? '#f87171' : md!.technicals?.williamsR < -80 ? '#34d399' : txt }}>{md!.technicals?.williamsR?.toFixed(1)}</span>],
-                ['CCI', <span style={{ color: md!.technicals?.cci > 100 ? '#f87171' : md!.technicals?.cci < -100 ? '#34d399' : txt }}>{md!.technicals?.cci?.toFixed(0)}</span>],
-                ['ATR(14)', <span style={{ color: txt }}>
+                ['Williams %R', <span style={{ color: md!.technicals?.williamsR > -20 ? '#f87171' : md!.technicals?.williamsR < -80 ? '#34d399' : 'var(--text)' }}>{md!.technicals?.williamsR?.toFixed(1)}</span>],
+                ['CCI', <span style={{ color: md!.technicals?.cci > 100 ? '#f87171' : md!.technicals?.cci < -100 ? '#34d399' : 'var(--text)' }}>{md!.technicals?.cci?.toFixed(0)}</span>],
+                ['ATR(14)', <span style={{ color: 'var(--text)' }}>
                   {md!.currentPrice < 10
                     ? `${md!.technicals?.atr14?.toFixed(4)} (${md!.technicals?.atrPct?.toFixed(2)}%)`
                     : `$${md!.technicals?.atr14?.toFixed(2)} (${md!.technicals?.atrPct?.toFixed(1)}%)`}
                 </span>],
                 ['Ichimoku', <span style={{ color: md!.technicals?.ichimokuSignal === 'above_cloud' ? '#34d399' : md!.technicals?.ichimokuSignal === 'below_cloud' ? '#f87171' : '#fbbf24' }}>{(md!.technicals?.ichimokuSignal ?? 'N/A').replace(/_/g,' ')}</span>],
                 ['ROC 10d', <span style={{ color: (md!.technicals?.roc10 ?? 0) >= 0 ? '#34d399' : '#f87171' }}>{md!.technicals?.roc10?.toFixed(1)}%</span>],
-                ['Rel Str', <span style={{ color: (md!.technicals?.relStrengthVsSector ?? 0) > 0 ? '#34d399' : (md!.technicals?.relStrengthVsSector ?? 0) < 0 ? '#f87171' : txt }}>{md!.technicals?.relStrengthVsSector != null ? ((md!.technicals?.relStrengthVsSector >= 0 ? '+' : '') + md!.technicals?.relStrengthVsSector?.toFixed(1) + '%') : 'N/A'}</span>],
-                ['Volume', <span style={{ color: txt }}>{md!.technicals?.volumeRatio?.toFixed(1)}x avg</span>],
-                ['Bollinger', <span style={{ color: txt }}>{md!.technicals?.bbSignal}</span>],
-                ['Support', <span style={{ color: txt }}>{md!.currentPrice < 10 ? md!.technicals?.support?.toFixed(4) : '$' + md!.technicals?.support?.toFixed(2)}</span>],
-                ['Resist', <span style={{ color: txt }}>{md!.currentPrice < 10 ? md!.technicals?.resistance?.toFixed(4) : '$' + md!.technicals?.resistance?.toFixed(2)}</span>],
+                ['Rel Str', <span style={{ color: (md!.technicals?.relStrengthVsSector ?? 0) > 0 ? '#34d399' : (md!.technicals?.relStrengthVsSector ?? 0) < 0 ? '#f87171' : 'var(--text)' }}>{md!.technicals?.relStrengthVsSector != null ? ((md!.technicals?.relStrengthVsSector >= 0 ? '+' : '') + md!.technicals?.relStrengthVsSector?.toFixed(1) + '%') : 'N/A'}</span>],
+                ['Volume', <span style={{ color: 'var(--text)' }}>{md!.technicals?.volumeRatio?.toFixed(1)}x avg</span>],
+                ['Bollinger', <span style={{ color: 'var(--text)' }}>{md!.technicals?.bbSignal}</span>],
+                ['Support', <span style={{ color: 'var(--text)' }}>{md!.currentPrice < 10 ? md!.technicals?.support?.toFixed(4) : '$' + md!.technicals?.support?.toFixed(2)}</span>],
+                ['Resist', <span style={{ color: 'var(--text)' }}>{md!.currentPrice < 10 ? md!.technicals?.resistance?.toFixed(4) : '$' + md!.technicals?.resistance?.toFixed(2)}</span>],
               ] as [string, React.ReactNode][]).map(([k, v]) => (
                 <div key={k} className="flex justify-between text-xs">
-                  <span style={{ color: txt3 }}>{k}</span>
+                  <span style={{ color: 'var(--text3)' }}>{k}</span>
                   <span className="font-mono text-[11px]">{v}</span>
                 </div>
               ))}
@@ -1183,17 +1172,17 @@ function HomeInner() {
 
           {/* Fundamentals */}
           {md?.fundamentals && (
-            <Card title="Fundamentals" icon={<DollarSign size={11}/>} color="#60a5fa" surf={surf} brd={brd} txt3={txt3}>
+            <Card title="Fundamentals" icon={<DollarSign size={11}/>} color="#60a5fa">
               {md!.fundamentals?.peRatio !== null && (
-                <div className="flex justify-between text-xs"><span style={{ color: txt3 }}>P/E</span><span className="font-mono" style={{ color: txt }}>{md!.fundamentals?.peRatio.toFixed(1)}x</span></div>
+                <div className="flex justify-between text-xs"><span style={{ color: 'var(--text3)' }}>P/E</span><span className="font-mono" style={{ color: 'var(--text)' }}>{md!.fundamentals?.peRatio.toFixed(1)}x</span></div>
               )}
               <div className="flex justify-between text-xs">
-                <span style={{ color: txt3 }}>Analysts</span>
+                <span style={{ color: 'var(--text3)' }}>Analysts</span>
                 <span className="font-mono text-[10px]" style={{ color: '#60a5fa' }}>{md!.fundamentals?.analystConsensus.replace('_',' ')}</span>
               </div>
               {md!.fundamentals?.daysToEarnings !== null && (
                 <div className="flex justify-between text-xs">
-                  <span style={{ color: txt3 }}>Earnings</span>
+                  <span style={{ color: 'var(--text3)' }}>Earnings</span>
                   <span className="font-mono text-[10px]" style={{ color: md!.fundamentals?.earningsRisk === 'high' ? '#f87171' : md!.fundamentals?.earningsRisk === 'moderate' ? '#fbbf24' : '#34d399' }}>
                     {md!.fundamentals?.daysToEarnings}d — {md!.fundamentals?.earningsRisk}
                   </span>
@@ -1204,52 +1193,52 @@ function HomeInner() {
 
           {/* Smart money */}
           {md?.smartMoney && (
-            <Card title="Smart Money" icon={<Shield size={11}/>} color="#34d399" surf={surf} brd={brd} txt3={txt3}>
+            <Card title="Smart Money" icon={<Shield size={11}/>} color="#34d399">
               <div className="flex justify-between text-xs">
-                <span style={{ color: txt3 }}>Insiders</span>
+                <span style={{ color: 'var(--text3)' }}>Insiders</span>
                 <Chip label={md!.smartMoney?.insiderSignal.replace('_',' ')}
                   color={md!.smartMoney?.insiderSignal.includes('buy') ? '#34d399' : md!.smartMoney?.insiderSignal.includes('sell') ? '#f87171' : '#fbbf24'} />
               </div>
               {md!.smartMoney?.notableHolders.length > 0 && (
-                <div className="text-[9px] leading-relaxed" style={{ color: txt3 }}>{md!.smartMoney?.notableHolders.join(' · ')}</div>
+                <div className="text-[9px] leading-relaxed" style={{ color: 'var(--text3)' }}>{md!.smartMoney?.notableHolders.join(' · ')}</div>
               )}
             </Card>
           )}
 
           {/* Options */}
           {md?.options && (
-            <Card title="Options Flow" icon={<Activity size={11}/>} color="#f87171" surf={surf} brd={brd} txt3={txt3}>
+            <Card title="Options Flow" icon={<Activity size={11}/>} color="#f87171">
               {md!.options?.putCallRatio !== null && md!.options?.putCallRatio !== undefined ? (
                 <div className="flex justify-between text-xs">
-                  <span style={{ color: txt3 }}>P/C ratio</span>
-                  <span className="font-mono text-[10px]" style={{ color: md!.options?.putCallSignal === 'bullish' ? '#34d399' : md!.options?.putCallSignal === 'bearish' ? '#f87171' : txt }}>
+                  <span style={{ color: 'var(--text3)' }}>P/C ratio</span>
+                  <span className="font-mono text-[10px]" style={{ color: md!.options?.putCallSignal === 'bullish' ? '#34d399' : md!.options?.putCallSignal === 'bearish' ? '#f87171' : 'var(--text)' }}>
                     {md!.options?.putCallRatio.toFixed(2)} — {md!.options?.putCallSignal}
                   </span>
                 </div>
               ) : (
-                <div className="text-[10px]" style={{ color: txt3 }}>P/C ratio unavailable</div>
+                <div className="text-[10px]" style={{ color: 'var(--text3)' }}>P/C ratio unavailable</div>
               )}
               {md!.options?.maxPainStrike != null && md!.options?.maxPainStrike > 0 && (
                 <div className="flex justify-between text-xs">
-                  <span style={{ color: txt3 }}>Max pain</span>
-                  <span className="font-mono text-[10px]" style={{ color: txt }}>${md!.options?.maxPainStrike}</span>
+                  <span style={{ color: 'var(--text3)' }}>Max pain</span>
+                  <span className="font-mono text-[10px]" style={{ color: 'var(--text)' }}>${md!.options?.maxPainStrike}</span>
                 </div>
               )}
               {md!.options?.shortInterestPct != null && (
                 <div className="flex justify-between text-xs">
-                  <span style={{ color: txt3 }}>Short int.</span>
-                  <span className="font-mono text-[10px]" style={{ color: txt }}>{md!.options?.shortInterestPct.toFixed(1)}% float</span>
+                  <span style={{ color: 'var(--text3)' }}>Short int.</span>
+                  <span className="font-mono text-[10px]" style={{ color: 'var(--text)' }}>{md!.options?.shortInterestPct.toFixed(1)}% float</span>
                 </div>
               )}
               {md!.options?.ivSignal && md!.options?.ivSignal !== 'normal' && (
                 <div className="flex justify-between text-xs">
-                  <span style={{ color: txt3 }}>IV skew</span>
+                  <span style={{ color: 'var(--text3)' }}>IV skew</span>
                   <span className="font-mono text-[10px]" style={{ color: md!.options?.ivSignal === 'bearish_skew' ? '#f87171' : '#34d399' }}>{md!.options?.ivSignal?.replace('_', ' ')}</span>
                 </div>
               )}
               {(md!.options?.unusualCount ?? 0) > 0 && (
                 <div className="flex justify-between text-xs">
-                  <span style={{ color: txt3 }}>Sweeps</span>
+                  <span style={{ color: 'var(--text3)' }}>Sweeps</span>
                   <span className="font-mono text-[10px]" style={{ color: '#fbbf24' }}>{md!.options?.unusualCount} unusual</span>
                 </div>
               )}
@@ -1258,12 +1247,12 @@ function HomeInner() {
 
           {/* Patterns */}
           {md?.technicals && (md.technicals.candlePattern || md.technicals.chartPattern || md.technicals.gapPattern || md.technicals.trendLines?.trend !== 'sideways') && (
-            <Card title="Patterns" icon={<Activity size={11}/>} color="#e879f9" surf={surf} brd={brd} txt3={txt3}>
+            <Card title="Patterns" icon={<Activity size={11}/>} color="#e879f9">
               {/* Trend structure */}
               {md.technicals.trendLines && (
                 <div className="flex justify-between text-xs mb-1">
-                  <span style={{ color: txt3 }}>Trend</span>
-                  <span className="font-mono text-[10px] capitalize" style={{ color: md.technicals.trendLines.trend === 'uptrend' ? '#34d399' : md.technicals.trendLines.trend === 'downtrend' ? '#f87171' : txt }}>
+                  <span style={{ color: 'var(--text3)' }}>Trend</span>
+                  <span className="font-mono text-[10px] capitalize" style={{ color: md.technicals.trendLines.trend === 'uptrend' ? '#34d399' : md.technicals.trendLines.trend === 'downtrend' ? '#f87171' : 'var(--text)' }}>
                     {md.technicals.trendLines.trend}
                     {md.technicals.trendLines.higherHighs && md.technicals.trendLines.higherLows ? ' ↑↑' : md.technicals.trendLines.lowerHighs && md.technicals.trendLines.lowerLows ? ' ↓↓' : ''}
                   </span>
@@ -1271,34 +1260,34 @@ function HomeInner() {
               )}
               {md.technicals.trendLines?.dynamicSupport && (
                 <div className="flex justify-between text-xs">
-                  <span style={{ color: txt3 }}>Dyn. support</span>
+                  <span style={{ color: 'var(--text3)' }}>Dyn. support</span>
                   <span className="font-mono text-[10px]" style={{ color: '#34d399' }}>${md.technicals.trendLines.dynamicSupport.toFixed(2)}</span>
                 </div>
               )}
               {md.technicals.trendLines?.dynamicResistance && (
                 <div className="flex justify-between text-xs mb-1">
-                  <span style={{ color: txt3 }}>Dyn. resist.</span>
+                  <span style={{ color: 'var(--text3)' }}>Dyn. resist.</span>
                   <span className="font-mono text-[10px]" style={{ color: '#f87171' }}>${md.technicals.trendLines.dynamicResistance.toFixed(2)}</span>
                 </div>
               )}
               {/* Candle pattern */}
               {md.technicals.candlePattern && (
                 <div className="mt-1 px-2 py-1.5 rounded-lg" style={{ background: md.technicals.candlePattern.type === 'bullish' ? 'rgba(52,211,153,0.08)' : md.technicals.candlePattern.type === 'bearish' ? 'rgba(248,113,113,0.08)' : 'var(--surface2)', border: `1px solid ${md.technicals.candlePattern.type === 'bullish' ? 'rgba(52,211,153,0.2)' : md.technicals.candlePattern.type === 'bearish' ? 'rgba(248,113,113,0.2)' : 'var(--border)'}` }}>
-                  <div className="text-[10px] font-semibold mb-0.5" style={{ color: md.technicals.candlePattern.type === 'bullish' ? '#34d399' : md.technicals.candlePattern.type === 'bearish' ? '#f87171' : txt }}>
+                  <div className="text-[10px] font-semibold mb-0.5" style={{ color: md.technicals.candlePattern.type === 'bullish' ? '#34d399' : md.technicals.candlePattern.type === 'bearish' ? '#f87171' : 'var(--text)' }}>
                     {md.technicals.candlePattern.name}
                     <span className="ml-1 font-normal opacity-60">({md.technicals.candlePattern.strength})</span>
                   </div>
-                  <div className="text-[10px] leading-relaxed" style={{ color: txt3 }}>{md.technicals.candlePattern.description}</div>
+                  <div className="text-[10px] leading-relaxed" style={{ color: 'var(--text3)' }}>{md.technicals.candlePattern.description}</div>
                 </div>
               )}
               {/* Chart pattern */}
               {md.technicals.chartPattern && (
                 <div className="mt-1 px-2 py-1.5 rounded-lg" style={{ background: md.technicals.chartPattern.type === 'bullish' ? 'rgba(52,211,153,0.08)' : md.technicals.chartPattern.type === 'bearish' ? 'rgba(248,113,113,0.08)' : 'var(--surface2)', border: `1px solid ${md.technicals.chartPattern.type === 'bullish' ? 'rgba(52,211,153,0.2)' : md.technicals.chartPattern.type === 'bearish' ? 'rgba(248,113,113,0.2)' : 'var(--border)'}` }}>
-                  <div className="text-[10px] font-semibold mb-0.5 flex items-center justify-between" style={{ color: md.technicals.chartPattern.type === 'bullish' ? '#34d399' : md.technicals.chartPattern.type === 'bearish' ? '#f87171' : txt }}>
+                  <div className="text-[10px] font-semibold mb-0.5 flex items-center justify-between" style={{ color: md.technicals.chartPattern.type === 'bullish' ? '#34d399' : md.technicals.chartPattern.type === 'bearish' ? '#f87171' : 'var(--text)' }}>
                     <span>{md.technicals.chartPattern.name}</span>
                     <span className="font-normal opacity-60 text-[9px]">{md.technicals.chartPattern.confidence}</span>
                   </div>
-                  <div className="text-[10px] leading-relaxed" style={{ color: txt3 }}>{md.technicals.chartPattern.description}</div>
+                  <div className="text-[10px] leading-relaxed" style={{ color: 'var(--text3)' }}>{md.technicals.chartPattern.description}</div>
                   {md.technicals.chartPattern.target && (
                     <div className="text-[10px] mt-1 font-mono" style={{ color: md.technicals.chartPattern.type === 'bullish' ? '#34d399' : '#f87171' }}>
                       Target: ${md.technicals.chartPattern.target.toFixed(2)}
@@ -1314,7 +1303,7 @@ function HomeInner() {
                     ⬆ {md.technicals.gapPattern.type === 'gap_up' ? 'Gap Up' : 'Gap Down'} {md.technicals.gapPattern.size.toFixed(1)}%
                     {md.technicals.gapPattern.filled && <span className="ml-1 opacity-60">(filled)</span>}
                   </div>
-                  <div className="text-[10px] leading-relaxed" style={{ color: txt3 }}>{md.technicals.gapPattern.description}</div>
+                  <div className="text-[10px] leading-relaxed" style={{ color: 'var(--text3)' }}>{md.technicals.gapPattern.description}</div>
                 </div>
               )}
             </Card>
@@ -1323,7 +1312,7 @@ function HomeInner() {
 
           {/* Golden Zone Fibonacci */}
           {md?.technicals?.goldenZone && (
-            <Card title="Golden Zone" icon={<span style={{ fontSize: 10 }}>⬡</span>} color="#fbbf24" surf={surf} brd={brd} txt3={txt3}>
+            <Card title="Golden Zone" icon={<span style={{ fontSize: 10 }}>⬡</span>} color="#fbbf24">
               {(() => {
                 const gz = md!.technicals!.goldenZone!
                 return (
@@ -1336,7 +1325,7 @@ function HomeInner() {
                       </div>
                     )}
                     {!gz.inGoldenZone && (
-                      <div className="text-[10px] text-center mb-1.5" style={{ color: txt3 }}>
+                      <div className="text-[10px] text-center mb-1.5" style={{ color: 'var(--text3)' }}>
                         {gz.distToZone.toFixed(1)}% from zone · {gz.trending === 'up' ? '↗' : '↘'} {gz.trending}trend
                       </div>
                     )}
@@ -1345,7 +1334,7 @@ function HomeInner() {
                       <div className="text-[9px] font-mono uppercase text-center mb-1" style={{ color: 'rgba(251,191,36,0.6)' }}>Golden Pocket (optimal entry)</div>
                       <div className="flex justify-between text-[10px] font-mono">
                         <span style={{ color: '#34d399' }}>${gz.goldenPocketLow.toFixed(2)}</span>
-                        <span style={{ color: txt3 }}>—</span>
+                        <span style={{ color: 'var(--text3)' }}>—</span>
                         <span style={{ color: '#f87171' }}>${gz.goldenPocketHigh.toFixed(2)}</span>
                       </div>
                     </div>
@@ -1356,7 +1345,7 @@ function HomeInner() {
                       return (
                         <div key={l.level} className="flex justify-between text-xs"
                           style={{ opacity: isPocket ? 1 : isInPocket ? 0.9 : 0.65 }}>
-                          <span style={{ color: isPocket ? '#fbbf24' : txt3 }}>
+                          <span style={{ color: isPocket ? '#fbbf24' : 'var(--text3)' }}>
                             {(l.level * 100).toFixed(1)}%{isPocket ? ' ◆' : ''}
                           </span>
                           <span className="font-mono text-[11px]" style={{ color: l.type === 'support' ? '#34d399' : '#f87171' }}>
@@ -1365,7 +1354,7 @@ function HomeInner() {
                         </div>
                       )
                     })}
-                    <div className="text-[9px] mt-1.5 text-center" style={{ color: txt3 }}>
+                    <div className="text-[9px] mt-1.5 text-center" style={{ color: 'var(--text3)' }}>
                       Swing: ${gz.swingLow.toFixed(2)} – ${gz.swingHigh.toFixed(2)}
                     </div>
                   </>
@@ -1376,18 +1365,18 @@ function HomeInner() {
 
           {/* Market */}
           {md?.marketContext && (
-            <Card title="Market" icon={<Globe size={11}/>} color="#fbbf24" surf={surf} brd={brd} txt3={txt3}>
+            <Card title="Market" icon={<Globe size={11}/>} color="#fbbf24">
               <div className="text-[10px] font-mono mb-1" style={{ color: '#fbbf24' }}>
                 {md!.marketContext?.regime.replace(/_/g,' ').toUpperCase()}
               </div>
               <div className="flex justify-between text-xs">
-                <span style={{ color: txt3 }}>SPY</span>
+                <span style={{ color: 'var(--text3)' }}>SPY</span>
                 <span className="font-mono" style={{ color: md!.marketContext?.spy.change1D >= 0 ? '#34d399' : '#f87171' }}>
                   {((v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`)(md!.marketContext?.spy.change1D)}
                 </span>
               </div>
               <div className="flex justify-between text-xs">
-                <span style={{ color: txt3 }}>VIX</span>
+                <span style={{ color: 'var(--text3)' }}>VIX</span>
                 <span className="font-mono" style={{ color: md!.marketContext?.vix.level > 25 ? '#f87171' : '#34d399' }}>
                   {md!.marketContext?.vix.level.toFixed(1)}
                 </span>
@@ -1884,7 +1873,7 @@ function HomeInner() {
                             val: jud.entryPrice,
                             color: isBearish ? '#f87171' : '#34d399',
                             icon: isBearish ? <TrendingDown size={13} /> : <TrendingUp size={13} />,
-                            bg: isBearish ? 'rgba(248,113,113,0.1)' : 'rgba(52,211,153,0.1)',
+                            tileBg: isBearish ? 'rgba(248,113,113,0.1)' : 'rgba(52,211,153,0.1)',
                             border: isBearish ? 'rgba(248,113,113,0.25)' : 'rgba(52,211,153,0.25)',
                             hint: isBearish ? 'short / wait for drop' : 'buy zone',
                             fixed: false,
@@ -1894,7 +1883,7 @@ function HomeInner() {
                             val: stopVal,
                             color: '#f87171',
                             icon: <X size={13} />,
-                            bg: 'rgba(248,113,113,0.1)',
+                            tileBg: 'rgba(248,113,113,0.1)',
                             border: 'rgba(248,113,113,0.25)',
                             hint: isBearish ? 'exit if price rises here' : 'exit if price falls here',
                             fixed: stopFixed,
@@ -1904,7 +1893,7 @@ function HomeInner() {
                             val: tpVal,
                             color: '#34d399',
                             icon: <Target size={13} />,
-                            bg: 'rgba(52,211,153,0.1)',
+                            tileBg: 'rgba(52,211,153,0.1)',
                             border: 'rgba(52,211,153,0.25)',
                             hint: isBearish ? 'target below entry' : 'target above entry',
                             fixed: tpFixed,
@@ -1914,15 +1903,15 @@ function HomeInner() {
                             val: jud.timeHorizon,
                             color: '#a78bfa',
                             icon: <Clock size={13} />,
-                            bg: 'rgba(167,139,250,0.1)',
+                            tileBg: 'rgba(167,139,250,0.1)',
                             border: 'rgba(167,139,250,0.25)',
                             hint: '',
                             fixed: false,
                           },
-                        ] as Array<{label:string;val:string;color:string;icon:React.ReactNode;bg:string;border:string;hint:string;fixed:boolean}>)
-                      })().map(({ label, val, color, icon, bg, border, hint, fixed }) => (
+                        ] as Array<{label:string;val:string;color:string;icon:React.ReactNode;tileBg:string;border:string;hint:string;fixed:boolean}>)
+                      })().map(({ label, val, color, icon, tileBg, border, hint, fixed }) => (
                         <div key={label} className="rounded-xl p-3 flex flex-col gap-1"
-                          style={{ background: bg, border: `1px solid ${border}` }}>
+                          style={{ background: tileBg, border: `1px solid ${border}` }}>
                           <div className="flex items-center gap-1.5">
                             <span style={{ color }} className="shrink-0 inline-flex">{icon}</span>
                             <span className="text-[10px] font-mono uppercase tracking-widest" style={{ color: `${color}99` }}>{label}</span>
@@ -2261,30 +2250,30 @@ function HomeInner() {
         style={{ background: 'rgba(0,0,0,0.7)' }}
         onClick={() => setWhyMoving(p => ({ ...p, open: false }))}>
         <div className="w-full max-w-md rounded-2xl overflow-hidden shadow-2xl"
-          style={{ background: surf, border: '1px solid rgba(251,191,36,0.3)' }}
+          style={{ background: 'var(--surface)', border: '1px solid rgba(251,191,36,0.3)' }}
           onClick={e => e.stopPropagation()}>
-          <div className="flex items-center gap-2 px-4 py-3 border-b" style={{ borderColor: brd }}>
+          <div className="flex items-center gap-2 px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
             <Zap size={14} style={{ color: '#fbbf24' }} aria-hidden="true" />
-            <span id="why-moving-title" className="text-sm font-bold" style={{ color: txt }}>Why is {ticker} moving?</span>
+            <span id="why-moving-title" className="text-sm font-bold" style={{ color: 'var(--text)' }}>Why is {ticker} moving?</span>
             <button
               type="button"
               onClick={() => setWhyMoving(p => ({ ...p, open: false }))}
               aria-label="Close dialog"
               className="ml-auto text-lg leading-none rounded hover:opacity-70 focus:outline focus:outline-2 focus:outline-offset-1"
-              style={{ color: txt3, outlineColor: '#fbbf24' }}>
+              style={{ color: 'var(--text3)', outlineColor: '#fbbf24' }}>
               <span aria-hidden="true">×</span>
             </button>
           </div>
           <div className="px-4 py-4 space-y-4">
             {whyMoving.loading && !whyMoving.catalyst && (
-              <div className="text-sm animate-pulse" style={{ color: txt3 }} role="status" aria-live="polite">
+              <div className="text-sm animate-pulse" style={{ color: 'var(--text3)' }} role="status" aria-live="polite">
                 Scanning headlines and analyzing catalyst…
               </div>
             )}
             {whyMoving.catalyst && (
               <div>
-                <div className="text-[10px] font-mono uppercase tracking-wider mb-1.5" style={{ color: txt3 }}>Catalyst</div>
-                <p className="text-sm leading-relaxed" style={{ color: txt }}>{whyMoving.catalyst}</p>
+                <div className="text-[10px] font-mono uppercase tracking-wider mb-1.5" style={{ color: 'var(--text3)' }}>Catalyst</div>
+                <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{whyMoving.catalyst}</p>
               </div>
             )}
             {whyMoving.verdict && (() => {
@@ -2296,16 +2285,16 @@ function HomeInner() {
                     <span className="text-2xl font-black" style={{ color: vColor }}>{v.verdict}</span>
                     <div>
                       <div className="text-xs font-semibold" style={{ color: vColor }}>{v.confidence}% confidence</div>
-                      <div className="text-xs" style={{ color: txt2 }}>{v.reason}</div>
+                      <div className="text-xs" style={{ color: 'var(--text2)' }}>{v.reason}</div>
                     </div>
                   </div>
                   <div>
-                    <div className="text-[10px] font-mono uppercase mb-1" style={{ color: txt3 }}>What to do</div>
-                    <p className="text-xs leading-relaxed" style={{ color: txt2 }}>{v.action}</p>
+                    <div className="text-[10px] font-mono uppercase mb-1" style={{ color: 'var(--text3)' }}>What to do</div>
+                    <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{v.action}</p>
                   </div>
                   <div className="rounded-lg px-3 py-2" style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.15)' }}>
                     <span className="text-[10px] font-mono" style={{ color: '#fca5a5' }}><AlertTriangle size={10} aria-hidden="true" className="inline mr-0.5" />Risk: </span>
-                    <span className="text-xs" style={{ color: txt2 }}>{v.risk}</span>
+                    <span className="text-xs" style={{ color: 'var(--text2)' }}>{v.risk}</span>
                   </div>
                 </div>
               )
@@ -2379,7 +2368,7 @@ function EarningsCountdown({
     : totalHours < 24 ? '#f87171'
     : totalHours < 72 ? '#fbbf24'
     : '#9ca3af'
-  const bg = isPast ? 'rgba(52,211,153,0.08)'
+  const dotBg = isPast ? 'rgba(52,211,153,0.08)'
     : totalHours < 24 ? 'rgba(248,113,113,0.10)'
     : totalHours < 72 ? 'rgba(251,191,36,0.10)'
     : 'rgba(156,163,175,0.08)'
@@ -2390,7 +2379,7 @@ function EarningsCountdown({
   return (
     <div
       className="rounded-xl px-3 py-2 mt-1 flex items-center justify-between"
-      style={{ background: bg, border: `1px solid ${border}` }}
+      style={{ background: dotBg, border: `1px solid ${border}` }}
     >
       <div className="text-[10px] font-mono uppercase tracking-widest" style={{ color }}>
         {isPast ? 'POST-EARNINGS' : 'EARNINGS COUNTDOWN'}
