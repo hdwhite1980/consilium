@@ -24,6 +24,7 @@
 import { NextRequest } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { GoogleGenerativeAI } from '@google/generative-ai'
+import { generateWithFallback } from '@/app/lib/gemini-helper'
 import { createServerClient } from '@/app/lib/supabase'
 import { createClient as createAdmin } from '@supabase/supabase-js'
 import { fetchMultiSourceNews, formatNewsForPrompt } from '@/app/lib/multi-source-news'
@@ -186,7 +187,7 @@ function getMondayLabel(now: Date = new Date()): string {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Sector top movers (cached 5 min) — shared pattern from Session 2
+// Sector top movers (cached 5 min) --- shared pattern from Session 2
 // ─────────────────────────────────────────────────────────────
 const SECTOR_TICKERS: Record<string, { name: string; emoji: string; tickers: string[] }> = {
   XLK:  { name: 'Technology',       emoji: '💻', tickers: ['NVDA','MSFT','AAPL','META','GOOGL','AVGO','ORCL','AMD','ADBE','CRM'] },
@@ -337,13 +338,13 @@ async function buildPlaybookWithClaude(params: {
 
   const system = `You are a professional market strategist preparing traders for the NEXT US trading day (${nextDayLabel}). Today is ${todayLabel}.
 
-You have REAL data — do not invent earnings dates, EPS estimates, economic events, or PRICE MOVES. Only use what is provided in the data blocks below. If specific data isn't there, don't make it up.
+You have REAL data --- do not invent earnings dates, EPS estimates, economic events, or PRICE MOVES. Only use what is provided in the data blocks below. If specific data isn't there, don't make it up.
 
 CRITICAL PRICE INTEGRITY RULES:
 - The GROUND TRUTH MARKET DATA block contains the AUTHORITATIVE current prices and most recent moves for major sector ETFs, indices, commodities, and crypto.
 - You MUST NOT contradict prices in the ground truth block.
 - You MUST NOT cite percentage moves that conflict with the ground truth block.
-- If your news suggests one direction (e.g. "oil surge") but the ground truth shows the opposite, PREFER THE GROUND TRUTH and adjust the catalyst accordingly. The model is NOT being run live — news may be stale.
+- If your news suggests one direction (e.g. "oil surge") but the ground truth shows the opposite, PREFER THE GROUND TRUTH and adjust the catalyst accordingly. The model is NOT being run live --- news may be stale.
 - Only cite percentage moves explicitly present in either the ground truth block or the news block. Do NOT invent specific percentages.
 
 You also have market regime context. Use it when assessing conviction. Bullish setups in risk-off markets often fail. Bearish setups in risk-on markets often fade.
@@ -370,7 +371,7 @@ TODAY'S NEWS HEADLINES (may carry forward into tomorrow):
 ${newsBlock}
 
 Build tomorrow's trader playbook. Consider:
-1. Stocks with earnings reports (use the real dates/times above — don't make them up)
+1. Stocks with earnings reports (use the real dates/times above --- don't make them up)
 2. After-hours movers that will gap at the open
 3. Scheduled economic events (use the real ones above)
 4. Today's news that creates continuation trades tomorrow
@@ -381,7 +382,7 @@ Respond JSON ONLY (no markdown, no preamble):
 {
   "nextTradingDay": "${nextDayLabel}",
   "generatedAt": "${new Date().toISOString()}",
-  "marketOutlook": "2-3 sentences on the setup heading into tomorrow — dominant theme, macro backdrop, risk-on vs risk-off bias",
+  "marketOutlook": "2-3 sentences on the setup heading into tomorrow --- dominant theme, macro backdrop, risk-on vs risk-off bias",
   "keyTheme": "single most important theme for tomorrow",
   "preMarketWatchlist": [
     {
@@ -390,7 +391,7 @@ Respond JSON ONLY (no markdown, no preamble):
       "type": "stock",
       "signal": "BULLISH|BEARISH|NEUTRAL",
       "confidence": 72,
-      "catalyst": "specific reason e.g. 'Reports earnings BMO — EPS est 1.20, revenue est 50B, high bar given valuation'",
+      "catalyst": "specific reason e.g. 'Reports earnings BMO --- EPS est 1.20, revenue est 50B, high bar given valuation'",
       "setupType": "earnings|technical_breakout|news_continuation|sector_play|macro_event|catalyst|after_hours_move",
       "magnitude": "high|medium|low",
       "keyLevel": "specific price level to watch",
@@ -398,7 +399,7 @@ Respond JSON ONLY (no markdown, no preamble):
       "planBear": "what to look for if bearish scenario plays out",
       "timeOfDay": "pre-market|market-open|intraday|after-hours",
       "riskLevel": "high|medium|low",
-      "plainEnglish": "2-3 sentences explaining for a beginner — what to watch for tomorrow"
+      "plainEnglish": "2-3 sentences explaining for a beginner --- what to watch for tomorrow"
     }
   ],
   "earningsCalendar": [
@@ -435,8 +436,8 @@ Respond JSON ONLY (no markdown, no preamble):
 
 Rules:
 - preMarketWatchlist: 5-8 items, confidence >= 60 each
-- earningsCalendar: ONLY tickers from the forward data above — do NOT invent
-- economicEvents: ONLY events from the forward data above — do NOT invent
+- earningsCalendar: ONLY tickers from the forward data above --- do NOT invent
+- economicEvents: ONLY events from the forward data above --- do NOT invent
 - sectorSetups: 3-5 sectors max, based on sector data provided
 - Be specific. Vague setups aren't useful.`
 
@@ -679,14 +680,13 @@ Return ONLY this JSON, no preamble:
 }`
 
   try {
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-pro',
-      generationConfig: { temperature: 0.1, maxOutputTokens: 2500 },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      tools: [{ googleSearch: {} } as any],
+    const { text } = await generateWithFallback({
+      prompt,
+      caller: 'tomorrow:verify-watchlist',
+      temperature: 0.1,
+      maxOutputTokens: 2500,
+      useGoogleSearchGrounding: true,
     })
-    const result = await model.generateContent(prompt)
-    const text = result.response.text()
     const clean = text.replace(/```json|```/g, '').trim()
     const start = clean.indexOf('{')
     const end = clean.lastIndexOf('}')

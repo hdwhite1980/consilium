@@ -1,16 +1,16 @@
 // ─────────────────────────────────────────────────────────────
-// AI Pipeline v2 — All 5 phases integrated
+// AI Pipeline v2 --- All 5 phases integrated
 // Each AI receives the full signal bundle, not just price text
 // ─────────────────────────────────────────────────────────────
 //
 // Changelog:
-//   Apr 19 (a58f): Gap #1 — Sequential debate (Lead → Devil → Rebuttal → Counter)
-//   Apr 19 (a58f): Gap #2 — Gemini 2.5 Pro Judge + GEMINI_JUDGE toggle + fallback
-//   Apr 19 (b*):   Gap #3 — Calibrated adversarial Devil's Advocate
-//   Apr 19 (b*):   Gap #4 — Symmetric Judge presentation
-//   Apr 19 (c*):   Gap #5 — Multi-source Round 2 research (Alpaca+Finnhub+Grok)
-//   Apr 19 (c*):   Gap #6 — Judge correction logging to judge_corrections table
-//   Apr 19 (d*):   Gap #7 — Structural personas:
+//   Apr 19 (a58f): Gap #1 --- Sequential debate (Lead → Devil → Rebuttal → Counter)
+//   Apr 19 (a58f): Gap #2 --- Gemini 2.5 Pro Judge + GEMINI_JUDGE toggle + fallback
+//   Apr 19 (b*):   Gap #3 --- Calibrated adversarial Devil's Advocate
+//   Apr 19 (b*):   Gap #4 --- Symmetric Judge presentation
+//   Apr 19 (c*):   Gap #5 --- Multi-source Round 2 research (Alpaca+Finnhub+Grok)
+//   Apr 19 (c*):   Gap #6 --- Judge correction logging to judge_corrections table
+//   Apr 19 (d*):   Gap #7 --- Structural personas:
 //                  - Lead sees opposite-dimension data as "background noise" unless
 //                    catalyst overrides trigger (earnings <=3d, 5% gap, death/golden cross)
 //                  - Devil cross-pressures: technical Lead gets fundamental Devil,
@@ -25,6 +25,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import { GoogleGenerativeAI } from '@google/generative-ai'
+import { generateWithFallback } from './gemini-helper'
 import { buildMacroIntelligenceContext } from './macro-intelligence'
 import type { SignalBundle } from './aggregator'
 import { isFundTicker, getFundInfo, buildFundContext } from './data/fund-detection'
@@ -170,7 +171,7 @@ export interface TranscriptMessage {
 function ts() { return new Date().toISOString() }
 
 // ─────────────────────────────────────────────────────────────
-// GAP #7 — Persona + catalyst override logic
+// GAP #7 --- Persona + catalyst override logic
 // ─────────────────────────────────────────────────────────────
 
 /**
@@ -204,7 +205,7 @@ function isPersonaExplicit(persona: PersonaKey): boolean {
 
 interface CatalystOverrides {
   triggered: boolean
-  reasons: string[]  // why the override fired — feeds the Lead's prompt as warning
+  reasons: string[]  // why the override fired --- feeds the Lead's prompt as warning
 }
 
 /**
@@ -245,34 +246,34 @@ function detectOverrides(
   if (lens === 'technical') {
     // Fundamental overrides force the technical Lead to look at fundamentals
     if (daysToEarnings !== null && daysToEarnings >= 0 && daysToEarnings <= 3) {
-      reasons.push(`Earnings in ${daysToEarnings} day${daysToEarnings === 1 ? '' : 's'} — fundamental risk cannot be ignored regardless of chart setup`)
+      reasons.push(`Earnings in ${daysToEarnings} day${daysToEarnings === 1 ? '' : 's'} --- fundamental risk cannot be ignored regardless of chart setup`)
     }
     // Analyst consensus shift: if the balance is lopsided toward sells
     if (analystSell > 0 && analystBuy > 0 && analystSell >= analystBuy) {
-      reasons.push(`Analyst consensus has turned bearish (${analystSell} sell vs ${analystBuy} buy) — reconcile with your chart thesis`)
+      reasons.push(`Analyst consensus has turned bearish (${analystSell} sell vs ${analystBuy} buy) --- reconcile with your chart thesis`)
     }
     // Strong insider signal (either direction)
     if (insiderSignal === 'buying' || insiderSignal === 'selling') {
-      reasons.push(`Insider ${insiderSignal === 'buying' ? 'buying activity' : 'selling activity'} detected — insiders know something the chart may not show yet`)
+      reasons.push(`Insider ${insiderSignal === 'buying' ? 'buying activity' : 'selling activity'} detected --- insiders know something the chart may not show yet`)
     }
   }
 
   if (lens === 'fundamental') {
     // Technical overrides force the fundamental Lead to look at the chart
     if (priceChangePct !== null && Math.abs(priceChangePct) >= 5) {
-      reasons.push(`Price moved ${priceChangePct.toFixed(1)}% today — cannot ignore this chart event regardless of valuation thesis`)
+      reasons.push(`Price moved ${priceChangePct.toFixed(1)}% today --- cannot ignore this chart event regardless of valuation thesis`)
     }
     if (pct52wHigh !== null && pct52wHigh >= -2) {
-      reasons.push(`At/near 52-week high (within ${Math.abs(pct52wHigh).toFixed(1)}%) — technical resistance matters even for long-term thesis`)
+      reasons.push(`At/near 52-week high (within ${Math.abs(pct52wHigh).toFixed(1)}%) --- technical resistance matters even for long-term thesis`)
     }
     if (pct52wLow !== null && pct52wLow <= 2) {
-      reasons.push(`At/near 52-week low (within ${pct52wLow.toFixed(1)}%) — potential technical capitulation signal, reconcile with fundamental view`)
+      reasons.push(`At/near 52-week low (within ${pct52wLow.toFixed(1)}%) --- potential technical capitulation signal, reconcile with fundamental view`)
     }
     if (goldenCrossDays !== null && goldenCrossDays >= 0 && goldenCrossDays <= 5) {
-      reasons.push(`Golden cross ${goldenCrossDays} day${goldenCrossDays === 1 ? '' : 's'} ago — major trend signal even if fundamentals haven't changed`)
+      reasons.push(`Golden cross ${goldenCrossDays} day${goldenCrossDays === 1 ? '' : 's'} ago --- major trend signal even if fundamentals haven't changed`)
     }
     if (deathCrossDays !== null && deathCrossDays >= 0 && deathCrossDays <= 5) {
-      reasons.push(`Death cross ${deathCrossDays} day${deathCrossDays === 1 ? '' : 's'} ago — major trend signal even if fundamentals haven't changed`)
+      reasons.push(`Death cross ${deathCrossDays} day${deathCrossDays === 1 ? '' : 's'} ago --- major trend signal even if fundamentals haven't changed`)
     }
   }
 
@@ -330,7 +331,7 @@ ${ctx.fundamentalsSection}
 
 ${ctx.smartMoneySection}`
     } else {
-      secondary = `━━━ BACKGROUND ONLY — treat as noise unless it contradicts your chart thesis ━━━
+      secondary = `━━━ BACKGROUND ONLY --- treat as noise unless it contradicts your chart thesis ━━━
 ${(ctx.fundamentalsSection || '').slice(0, 700)}
 
 ${(ctx.smartMoneySection || '').slice(0, 400)}`
@@ -358,7 +359,7 @@ ${ctx.technicalsSection}
 
 ${ctx.optionsSection}`
     } else {
-      secondary = `━━━ BACKGROUND ONLY — treat as noise unless price moved 5%+ today or broke a major level ━━━
+      secondary = `━━━ BACKGROUND ONLY --- treat as noise unless price moved 5%+ today or broke a major level ━━━
 ${(ctx.technicalsSection || '').slice(0, 700)}
 
 ${(ctx.optionsSection || '').slice(0, 400)}`
@@ -382,7 +383,7 @@ PATTERNS: If the data shows candle/chart patterns, gaps, trend structure (higher
   }
   if (lens === 'fundamental') {
     return `REQUIRED CITATIONS (fundamental lens): Your fundamentalBasis MUST cite at least 3 of: earnings date, days to earnings, analyst consensus, analyst target upside, P/E vs history, EPS growth, insider signal, congressional trade signal, earnings implied move vs historical. Your technicalBasis may be brief unless a catalyst override fired.
-PATTERNS: Fundamental patterns (consistent earnings beats, margin expansion, revenue acceleration, institutional accumulation) matter more than chart patterns for this lens — cite them if present.`
+PATTERNS: Fundamental patterns (consistent earnings beats, margin expansion, revenue acceleration, institutional accumulation) matter more than chart patterns for this lens --- cite them if present.`
   }
   // balanced
   return `REQUIRED CITATIONS (balanced lens): Your technicalBasis MUST reference at least 2 of: Ichimoku cloud position, ATR-derived stop/target, Williams %R, CCI, ROC momentum, relative strength vs sector. Your fundamentalBasis MUST reference at least 2 of: analyst consensus, earnings proximity, P/E context, insider signal. When technicals and fundamentals conflict, note the conflict explicitly.
@@ -391,19 +392,19 @@ PATTERNS: If the data includes a candle pattern, chart pattern, gap, or trend st
 
 /**
  * Persona-specific system prompt for the Lead Analyst.
- * This is the WHO the Lead is — their analytical identity.
+ * This is the WHO the Lead is --- their analytical identity.
  */
 function buildLeadSystemPrompt(bundle: SignalBundle, lens: 'technical' | 'fundamental' | 'balanced', overrides: CatalystOverrides): string {
   const isForexPair = bundle.ticker.length === 6 && /^[A-Z]{6}$/.test(bundle.ticker) && ['USD','EUR','GBP','JPY','AUD','CAD','NZD','CHF','SEK','NOK','DKK','SGD','HKD','MXN','ZAR','TRY'].some(c => bundle.ticker.startsWith(c) || bundle.ticker.endsWith(c))
 
   if (isForexPair) {
-    return `You are the Lead Analyst in an elite AI council analyzing ${bundle.ticker}. This is a FOREX currency pair. Analysis focuses on: central bank policy divergence, macroeconomic data (inflation, employment, GDP), interest rate differentials, technical price action, and global risk sentiment. There are no earnings, P/E, or insider data for forex. Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data — only use what you have. IMPORTANT: If price data shows period change >±200%, treat as potential data error.
+    return `You are the Lead Analyst in an elite AI council analyzing ${bundle.ticker}. This is a FOREX currency pair. Analysis focuses on: central bank policy divergence, macroeconomic data (inflation, employment, GDP), interest rate differentials, technical price action, and global risk sentiment. There are no earnings, P/E, or insider data for forex. Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data --- only use what you have. IMPORTANT: If price data shows period change >±200%, treat as potential data error.
 
 ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
   }
 
   // Fund-type tickers (ETFs, commodity ETFs, volatility ETPs, bond funds, leveraged funds)
-  // get a different analytical framework — they are NOT operating companies.
+  // get a different analytical framework --- they are NOT operating companies.
   if (isFundTicker(bundle.ticker)) {
     const fundInfo = getFundInfo(bundle.ticker)
     const fundContext = buildFundContext(fundInfo)
@@ -411,24 +412,24 @@ ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsCo
 
 ${fundContext}
 
-Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data — only use what you have. IMPORTANT: If price data shows period change >±200%, treat as potential data error.
+Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data --- only use what you have. IMPORTANT: If price data shows period change >±200%, treat as potential data error.
 
 ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
   }
 
   const personaIdentity = {
-    technical: `You are the Lead Analyst (TECHNICAL lens) in an elite AI council for ${bundle.ticker}. You are a price-action trader who believes the chart leads everything else. A death cross is bearish regardless of P/E ratio. RSI divergences warn before fundamentals catch up. Moving averages, volume, and pattern breaks are your primary evidence. Fundamentals are background noise unless a catalyst forces your attention — then, and only then, do you factor them in.`,
+    technical: `You are the Lead Analyst (TECHNICAL lens) in an elite AI council for ${bundle.ticker}. You are a price-action trader who believes the chart leads everything else. A death cross is bearish regardless of P/E ratio. RSI divergences warn before fundamentals catch up. Moving averages, volume, and pattern breaks are your primary evidence. Fundamentals are background noise unless a catalyst forces your attention --- then, and only then, do you factor them in.`,
     fundamental: `You are the Lead Analyst (FUNDAMENTAL lens) in an elite AI council for ${bundle.ticker}. You are a value-focused analyst who believes business quality and earnings drive long-term price. A 30% drawdown in a high-quality business with strong fundamentals is an opportunity, not a sell signal. Analyst consensus, insider signals, earnings trajectory, and valuation vs history are your primary evidence. Technical chart patterns are background noise unless a major technical event (5%+ gap, 52-week break, death/golden cross) forces your attention.`,
-    balanced: `You are the Lead Analyst (BALANCED lens) in an elite AI council for ${bundle.ticker}. You weight technical and fundamental signals equally. When they conflict, note it explicitly and let data quality determine conviction. A clean chart with weak fundamentals and a strong business with a weak chart are BOTH worth flagging — the Judge wants to see how you reconcile them.`,
+    balanced: `You are the Lead Analyst (BALANCED lens) in an elite AI council for ${bundle.ticker}. You weight technical and fundamental signals equally. When they conflict, note it explicitly and let data quality determine conviction. A clean chart with weak fundamentals and a strong business with a weak chart are BOTH worth flagging --- the Judge wants to see how you reconcile them.`,
   }[lens]
 
   const overrideNote = overrides.triggered
-    ? `\n\nCATALYST OVERRIDE ACTIVE: The data contains conditions that require you to look beyond your normal lens. These overrides will be flagged in the evidence section below. Do NOT dismiss them as background noise — address them directly in your reasoning.`
+    ? `\n\nCATALYST OVERRIDE ACTIVE: The data contains conditions that require you to look beyond your normal lens. These overrides will be flagged in the evidence section below. Do NOT dismiss them as background noise --- address them directly in your reasoning.`
     : ''
 
   return `${personaIdentity}${overrideNote}
 
-Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data — only use what you have. IMPORTANT: If the price data shows a period change exceeding ±200%, treat this as a potential data error and note it explicitly rather than building your analysis on it.
+Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data --- only use what you have. IMPORTANT: If the price data shows a period change exceeding ±200%, treat this as a potential data error and note it explicitly rather than building your analysis on it.
 
 NEWS RECENCY: Weight news by freshness. Last 24 hours is current and actionable. Last 48-72 hours is recent context. Anything older is background unless it's a structural development (M&A close, leadership change, regulatory ruling). Breaking news from the last 6 hours overrides older narrative coverage.
 
@@ -449,15 +450,15 @@ function buildDevilSystemPrompt(bundle: SignalBundle, lens: 'technical' | 'funda
   if (isFundTicker(bundle.ticker)) {
     const fundInfo = getFundInfo(bundle.ticker)
     const fundContext = buildFundContext(fundInfo)
-    return `You are the Devil's Advocate in an elite AI council for ${bundle.ticker}. The Lead Analyst will present a thesis for this fund — your role is to stress-test it.
+    return `You are the Devil's Advocate in an elite AI council for ${bundle.ticker}. The Lead Analyst will present a thesis for this fund --- your role is to stress-test it.
 
 ${fundContext}
 
-CALIBRATION RULES — follow these carefully:
+CALIBRATION RULES --- follow these carefully:
 
-1. The Lead Analyst's thesis is wrong by default until proven right by data. However, if you cannot find compelling data-backed counter-evidence, you MUST return NEUTRAL with honest reasoning — do NOT manufacture disagreement. Honest NEUTRAL is the correct answer when data supports the Lead.
+1. The Lead Analyst's thesis is wrong by default until proven right by data. However, if you cannot find compelling data-backed counter-evidence, you MUST return NEUTRAL with honest reasoning --- do NOT manufacture disagreement. Honest NEUTRAL is the correct answer when data supports the Lead.
 
-2. CATEGORY DISCIPLINE: This is a FUND, not an operating company. NEVER cite operating-company concerns (P/E ratio, EPS misses, dilution from prospectus filings, insider transactions, "negative revenue", "net income losses") — these don't apply to funds. Routine 424B3 prospectus filings are continuous ETF mechanics, NOT dilution events. Citing these is a category error and will weaken your case in the Judge's eyes.
+2. CATEGORY DISCIPLINE: This is a FUND, not an operating company. NEVER cite operating-company concerns (P/E ratio, EPS misses, dilution from prospectus filings, insider transactions, "negative revenue", "net income losses") --- these don't apply to funds. Routine 424B3 prospectus filings are continuous ETF mechanics, NOT dilution events. Citing these is a category error and will weaken your case in the Judge's eyes.
 
 3. APPROPRIATE CROSS-PRESSURE for funds:
    - Contango/backwardation in futures curves (especially for commodity, volatility, leveraged products)
@@ -468,73 +469,73 @@ CALIBRATION RULES — follow these carefully:
    - Sector-level rotation risk (for sector ETFs)
    - Concentration risk in top holdings (for thematic equity ETFs)
 
-4. Timeframe honesty. Lead's target may be achievable but not within the ${bundle.timeframe} window — challenge time-to-target alignment.
+4. Timeframe honesty. Lead's target may be achievable but not within the ${bundle.timeframe} window --- challenge time-to-target alignment.
 
 5. Reflexivity check. Strong technical setups at all-time highs in commodity/leveraged/volatility products are where retail traders get trapped.
 
-6. Absence of a metric is not evidence. Never mention unavailable data — only argue with what you actually have.
+6. Absence of a metric is not evidence. Never mention unavailable data --- only argue with what you actually have.
 
 7. Quality over volume. Two rigorous fund-appropriate challenges beat five operating-company challenges that don't apply.
 
 ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
   }
 
-  const baseCalibration = `CALIBRATION RULES — follow these carefully:
+  const baseCalibration = `CALIBRATION RULES --- follow these carefully:
 
-1. The Lead Analyst's thesis is wrong by default until proven right by data. Your job is to find the specific reasons it might fail. However, if you cannot find compelling data-backed counter-evidence, you MUST return NEUTRAL with honest reasoning — do NOT weakly agree with the Lead Analyst, and do NOT manufacture disagreement. Honest NEUTRAL is the correct answer when the data genuinely supports the Lead.
+1. The Lead Analyst's thesis is wrong by default until proven right by data. Your job is to find the specific reasons it might fail. However, if you cannot find compelling data-backed counter-evidence, you MUST return NEUTRAL with honest reasoning --- do NOT weakly agree with the Lead Analyst, and do NOT manufacture disagreement. Honest NEUTRAL is the correct answer when the data genuinely supports the Lead.
 
 2. Timeframe honesty. The Lead Analyst's target may be achievable on paper but not within the stated ${bundle.timeframe} window. Challenge time-to-target alignment, not just direction.
 
 3. Reflexivity check. Strong technical setups at all-time highs are where retail traders get trapped. Strong fundamental setups after 40%+ runs are where late money gets burned. If the Lead is BULLISH on a stock already up significantly, your burden of proof to agree should be higher.
 
-4. Absence of a metric is not evidence. Never mention unavailable data — only argue with what you actually have.
+4. Absence of a metric is not evidence. Never mention unavailable data --- only argue with what you actually have.
 
 5. Quality over volume. The Judge weighs the STRENGTH of your challenges, not the count. Two rigorous data-backed challenges beat five weak ones.`
 
   if (lens === 'technical') {
-    return `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. The Lead Analyst is running a TECHNICAL LENS — they are anchored on chart signals, price action, and momentum. Your role is to CROSS-PRESSURE their thesis from the FUNDAMENTAL side — the dimension they have structurally deprioritized.
+    return `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. The Lead Analyst is running a TECHNICAL LENS --- they are anchored on chart signals, price action, and momentum. Your role is to CROSS-PRESSURE their thesis from the FUNDAMENTAL side --- the dimension they have structurally deprioritized.
 
 CROSS-PRESSURE STRATEGY:
 - Their chart looks clean? Fine. Are earnings coming up? What's the implied move vs their target? Are analysts cutting estimates? Has the insider signal turned? Is valuation already priced in?
 - Their momentum is strong? Fine. Is this late-cycle momentum? What's the revenue growth trajectory vs the price? Is the stock trading at a premium to history without earnings support?
 - Their breakout is confirmed? Fine. What happens to the breakout if earnings miss by 2 cents? Is the options market pricing more volatility than their target implies?
 
-Your job is to make the Lead DEFEND their technical thesis against the fundamental risks they've structurally underweighted. You are not replacing their lens — you are stress-testing it from the OPPOSITE side.
+Your job is to make the Lead DEFEND their technical thesis against the fundamental risks they've structurally underweighted. You are not replacing their lens --- you are stress-testing it from the OPPOSITE side.
 
 ${baseCalibration}
 
-6. Cross-pressure discipline: Your challenges should primarily cite fundamental/earnings/analyst/valuation evidence, not re-argue the chart. Let the Lead have their chart — attack on fundamentals.
+6. Cross-pressure discipline: Your challenges should primarily cite fundamental/earnings/analyst/valuation evidence, not re-argue the chart. Let the Lead have their chart --- attack on fundamentals.
 7. Earnings proximity: When earnings are within 7 days (see EARNINGS PROXIMITY context if present), pressure-test specifically how much earnings risk is being priced in. A bullish technical thesis 3 days before a print needs to address: (a) what's the implied move? (b) what's analyst revision trend? (c) is the entry level above or below the implied-move band? Don't let the Lead skip past binary catalyst risk.
-8. News recency: Weight news by freshness same as the Lead — last 24h current, 24-72h recent, older background. Don't cite stale narrative as a reason to disagree.
+8. News recency: Weight news by freshness same as the Lead --- last 24h current, 24-72h recent, older background. Don't cite stale narrative as a reason to disagree.
 
 ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
   }
 
   if (lens === 'fundamental') {
-    return `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. The Lead Analyst is running a FUNDAMENTAL LENS — they are anchored on earnings quality, valuation, analyst consensus, and insider signals. Your role is to CROSS-PRESSURE their thesis from the TECHNICAL side — the dimension they have structurally deprioritized.
+    return `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. The Lead Analyst is running a FUNDAMENTAL LENS --- they are anchored on earnings quality, valuation, analyst consensus, and insider signals. Your role is to CROSS-PRESSURE their thesis from the TECHNICAL side --- the dimension they have structurally deprioritized.
 
 CROSS-PRESSURE STRATEGY:
 - Their fundamental thesis is strong? Fine. What is the chart actually doing RIGHT NOW? Is it in a downtrend? Below key moving averages? Showing RSI divergence? Death cross? Breaking key support?
 - Their valuation is cheap? Fine. Cheap can get cheaper. Is there chart evidence of continued weakness? Has momentum turned? Is relative strength vs sector negative?
-- Their earnings trajectory is strong? Fine. But stocks often peak before the best earnings are reported. What is the chart saying about forward expectations — is smart money already distributing?
+- Their earnings trajectory is strong? Fine. But stocks often peak before the best earnings are reported. What is the chart saying about forward expectations --- is smart money already distributing?
 
-Your job is to make the Lead DEFEND their fundamental thesis against the technical risks they've structurally underweighted. You are not replacing their lens — you are stress-testing it from the OPPOSITE side.
+Your job is to make the Lead DEFEND their fundamental thesis against the technical risks they've structurally underweighted. You are not replacing their lens --- you are stress-testing it from the OPPOSITE side.
 
 ${baseCalibration}
 
-6. Cross-pressure discipline: Your challenges should primarily cite chart patterns, price action, technical indicators, and flow evidence — not re-argue the fundamentals. Let the Lead have their fundamental thesis — attack on technicals.
+6. Cross-pressure discipline: Your challenges should primarily cite chart patterns, price action, technical indicators, and flow evidence --- not re-argue the fundamentals. Let the Lead have their fundamental thesis --- attack on technicals.
 
 ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
   }
 
-  // balanced — original calibrated prompt (attack on whatever is weakest)
-  return `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. The Lead Analyst is running a BALANCED LENS — they considered both technicals and fundamentals. Your role is to identify the SPECIFIC dimension where their case is weakest and press there.
+  // balanced --- original calibrated prompt (attack on whatever is weakest)
+  return `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. The Lead Analyst is running a BALANCED LENS --- they considered both technicals and fundamentals. Your role is to identify the SPECIFIC dimension where their case is weakest and press there.
 
 SELECTION DISCIPLINE:
 - If their technical case is strong but fundamentals are weak, attack on fundamentals
 - If their fundamental case is strong but technicals are weak, attack on technicals
 - If both look strong, attack on risk/timeframe alignment or broader macro
-- Do not try to attack everything — one deep well-argued challenge beats five scattered ones
+- Do not try to attack everything --- one deep well-argued challenge beats five scattered ones
 
 ${baseCalibration}
 
@@ -560,15 +561,15 @@ TARGETS/STOPS: Use 1.5–2× ATR. Time horizon: 3-10 trading days.`
     case '1M': return `TIMEFRAME CONTEXT: This is a 1-MONTH position trade analysis. Bars are daily candles.
 FOCUS ON: Monthly trend, daily SMA50/200 position, fundamentals as primary thesis driver.
 WEIGHT HEAVILY: SMA50/200 position and crossovers, golden/death cross, Ichimoku cloud, earnings catalyst, analyst upgrades.
-WEIGHT HEAVILY: Fundamentals — P/E vs history, EPS growth, analyst consensus and price targets.
+WEIGHT HEAVILY: Fundamentals --- P/E vs history, EPS growth, analyst consensus and price targets.
 WEIGHT NORMALLY: RSI (for entry timing only), MACD on daily.
 TARGETS/STOPS: Use 2–3× ATR, align with key monthly S/R. Time horizon: 3-6 weeks.`
 
     case '3M': return `TIMEFRAME CONTEXT: This is a 3-MONTH investment analysis. Bars are daily candles with full trend context.
 FOCUS ON: Macro trend, structural support/resistance, fundamental quality vs valuation, institutional flows.
-WEIGHT HEAVILY: Fundamentals — earnings growth, margins, revenue trajectory, analyst target vs current price.
+WEIGHT HEAVILY: Fundamentals --- earnings growth, margins, revenue trajectory, analyst target vs current price.
 WEIGHT HEAVILY: Ichimoku cloud (structural trend), SMA200 (long-term bias), relative strength vs sector.
-WEIGHT HEAVILY: Smart money — institutional holdings, insider buying, congressional trades.
+WEIGHT HEAVILY: Smart money --- institutional holdings, insider buying, congressional trades.
 WEIGHT NORMALLY: Short-term technicals (for entry timing only).
 TARGETS/STOPS: Wider stops (3–4× ATR), align with major monthly S/R. Time horizon: 6-13 weeks.
 NOTE: Minor technical noise is acceptable in a strong fundamental thesis. What matters is the 3-month trajectory.`
@@ -600,13 +601,13 @@ function extendedHoursContext(bundle: SignalBundle): string {
  * Wired into all 9 prompt assembly sites alongside extendedHoursContext.
  *
  * Tier breakdown:
- *   today       — earnings reporting today (highest catalyst risk)
- *   tomorrow    — earnings tomorrow (positioning dominates)
- *   imminent    — earnings in 2-3 days (implied move pricing in)
- *   this_week   — earnings in 4-7 days (drift + IV expansion)
- *   next_week   — earnings in 8-14 days (approaching catalyst)
- *   this_month  — earnings in 15-30 days (on horizon)
- *   distant     — >30 days or unknown (no injection)
+ *   today       --- earnings reporting today (highest catalyst risk)
+ *   tomorrow    --- earnings tomorrow (positioning dominates)
+ *   imminent    --- earnings in 2-3 days (implied move pricing in)
+ *   this_week   --- earnings in 4-7 days (drift + IV expansion)
+ *   next_week   --- earnings in 8-14 days (approaching catalyst)
+ *   this_month  --- earnings in 15-30 days (on horizon)
+ *   distant     --- >30 days or unknown (no injection)
  */
 function earningsContext(bundle: SignalBundle): string {
   const days = bundle.fundamentals?.daysToEarnings
@@ -687,7 +688,7 @@ function repairJSON(raw: string): string {
 }
 
 function parseJSON<T>(text: string): T {
-  if (!text || typeof text !== 'string') throw new Error('No JSON in response — empty or non-string input')
+  if (!text || typeof text !== 'string') throw new Error('No JSON in response --- empty or non-string input')
   const clean = text.replace(/```json|```/g, '').trim()
   const start = clean.indexOf('{')
   const end = clean.lastIndexOf('}')
@@ -738,7 +739,7 @@ async function fetchFreshAlpacaNews(ticker: string, hours = 6): Promise<string[]
       const ts = new Date(n.created_at).toISOString().slice(5, 16).replace('T', ' ')
       const headline = (n.headline || '').slice(0, 140)
       const summary  = (n.summary  || '').slice(0, 140)
-      return `[${ts}] ${headline}${summary ? ' — ' + summary : ''}`
+      return `[${ts}] ${headline}${summary ? ' --- ' + summary : ''}`
     })
   } catch { return [] }
 }
@@ -765,7 +766,7 @@ async function fetchFreshFinnhubNews(ticker: string, hours = 6): Promise<string[
         const ts = new Date(n.datetime * 1000).toISOString().slice(5, 16).replace('T', ' ')
         const headline = (n.headline || '').slice(0, 140)
         const summary  = (n.summary  || '').slice(0, 140)
-        return `[${ts}] ${headline}${summary ? ' — ' + summary : ''}`
+        return `[${ts}] ${headline}${summary ? ' --- ' + summary : ''}`
       })
   } catch { return [] }
 }
@@ -867,7 +868,7 @@ export async function runTargetedResearch(
         if (earningsRes.ok) {
           const cal = await earningsRes.json()
           const next = (cal.earningsCalendar ?? []).find((e: {date: string}) => new Date(e.date) >= new Date())
-          if (next) liveDataParts.push(`NEXT EARNINGS: ${next.date} — EPS estimate $${next.epsEstimate ?? 'N/A'}, Revenue estimate $${next.revenueEstimate ? (next.revenueEstimate/1e9).toFixed(2)+'B' : 'N/A'}`)
+          if (next) liveDataParts.push(`NEXT EARNINGS: ${next.date} --- EPS estimate $${next.epsEstimate ?? 'N/A'}, Revenue estimate $${next.revenueEstimate ? (next.revenueEstimate/1e9).toFixed(2)+'B' : 'N/A'}`)
         }
       }
     } catch { /* non-critical */ }
@@ -969,7 +970,7 @@ export async function runTargetedResearch(
     try {
       const model = getGenAI().getGenerativeModel({ model: modelName })
       const result = await model.generateContent(`You are the News Scout providing urgent real-time research during a live stock debate about ${bundle.ticker} (currently $${bundle.currentPrice.toFixed(2)}).
-DEBATE TIMEFRAME: ${bundle.timeframe} — keep your answer relevant to this horizon.
+DEBATE TIMEFRAME: ${bundle.timeframe} --- keep your answer relevant to this horizon.
 
 A council member has asked: "${question}"
 ${liveData}
@@ -977,7 +978,7 @@ ${liveData}
 SIGNAL DATA FROM BUNDLE:
 ${sections.join('\n\n')}
 
-Answer in 2-4 sentences using the freshest data available, prioritizing the LIVE DATA section if present. When FRESH HEADLINES are shown, cite at least one by timestamp if it's directly relevant. When LIVE X SENTIMENT is shown, reference it explicitly. Include specific numbers, dates, and percentages. Be direct and decisive — this goes straight into the debate. If the data genuinely doesn't support the question, say so clearly.`)
+Answer in 2-4 sentences using the freshest data available, prioritizing the LIVE DATA section if present. When FRESH HEADLINES are shown, cite at least one by timestamp if it's directly relevant. When LIVE X SENTIMENT is shown, reference it explicitly. Include specific numbers, dates, and percentages. Be direct and decisive --- this goes straight into the debate. If the data genuinely doesn't support the question, say so clearly.`)
       return result.response.text().trim().slice(0, 700)
     } catch (e) {
       const msg = (e as Error).message ?? ''
@@ -994,10 +995,10 @@ export async function runGemini(bundle: SignalBundle): Promise<GeminiResult> {
     try {
       const model = getGenAI().getGenerativeModel({ model: modelName })
       const tfFocus: Record<string, string> = {
-        '1D': 'FOCUS on TODAY only — intraday news, pre/post-market moves, breaking catalysts. Ignore multi-week trends.',
-        '1W': 'FOCUS on THIS WEEK — earnings this week, analyst actions, macro data releases in the next 5 days.',
-        '1M': 'FOCUS on THIS MONTH — upcoming earnings date, recent upgrades/downgrades, sector rotation.',
-        '3M': 'FOCUS on NEXT QUARTER — earnings trajectory, macro tailwinds/headwinds, institutional positioning.',
+        '1D': 'FOCUS on TODAY only --- intraday news, pre/post-market moves, breaking catalysts. Ignore multi-week trends.',
+        '1W': 'FOCUS on THIS WEEK --- earnings this week, analyst actions, macro data releases in the next 5 days.',
+        '1M': 'FOCUS on THIS MONTH --- upcoming earnings date, recent upgrades/downgrades, sector rotation.',
+        '3M': 'FOCUS on NEXT QUARTER --- earnings trajectory, macro tailwinds/headwinds, institutional positioning.',
       }
       const newsInput = (bundle.aiContext.newsSection || '').slice(0, 6000)
       const marketInput = (bundle.aiContext.marketSection || '').slice(0, 2000)
@@ -1005,7 +1006,7 @@ export async function runGemini(bundle: SignalBundle): Promise<GeminiResult> {
       const result = await model.generateContent(`You are the News Scout and Macro Analyst for an elite AI stock council.
 
 Analyze all news, macro, and market context for ${bundle.ticker}. You go first. Be specific.
-TIMEFRAME: ${bundle.timeframe} — ${tfFocus[bundle.timeframe] ?? ''}
+TIMEFRAME: ${bundle.timeframe} --- ${tfFocus[bundle.timeframe] ?? ''}
 
 ${newsInput}
 
@@ -1023,11 +1024,11 @@ Respond JSON ONLY (no fences):
       console.warn(`News Scout model ${modelName} failed (${msg.slice(0,60)}), trying next...`)
     }
   }
-  throw lastError ?? new Error('News Scout unavailable — all models failed')
+  throw lastError ?? new Error('News Scout unavailable --- all models failed')
 }
 
 // ─────────────────────────────────────────────────────────────
-// LEAD ANALYST — persona-aware evidence filtering (Gap #7)
+// LEAD ANALYST --- persona-aware evidence filtering (Gap #7)
 // ─────────────────────────────────────────────────────────────
 export async function runClaude(bundle: SignalBundle, gemini: GeminiResult, social?: SocialSentiment, aggregator?: AggregatorScoutResult): Promise<ClaudeResult> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1064,7 +1065,7 @@ ${evidenceBlock}
 ${/* eslint-disable-next-line @typescript-eslint/no-explicit-any */ ''}${(bundle.aiContext as any).macroIntelligenceSection ? (bundle.aiContext as any).macroIntelligenceSection + '\n\n' : ''}${citationReqs}
 
 JSON ONLY:
-{"signal":"BULLISH|BEARISH|NEUTRAL","reasoning":"4-5 sentences integrating all signals through your ${lens} lens","target":"price target e.g. $195","confidence":<0-100>,"technicalBasis":"2-3 sentences${lens === 'technical' ? ' — this is your primary evidence' : lens === 'fundamental' ? ' — brief, this is background unless override fired' : ''}","fundamentalBasis":"2 sentences${lens === 'fundamental' ? ' — this is your primary evidence' : lens === 'technical' ? ' — brief, this is background unless override fired' : ''}","catalysts":["2-3 catalysts"],"keyRisks":["2-3 risks"]}`
+{"signal":"BULLISH|BEARISH|NEUTRAL","reasoning":"4-5 sentences integrating all signals through your ${lens} lens","target":"price target e.g. $195","confidence":<0-100>,"technicalBasis":"2-3 sentences${lens === 'technical' ? ' --- this is your primary evidence' : lens === 'fundamental' ? ' --- brief, this is background unless override fired' : ''}","fundamentalBasis":"2 sentences${lens === 'fundamental' ? ' --- this is your primary evidence' : lens === 'technical' ? ' --- brief, this is background unless override fired' : ''}","catalysts":["2-3 catalysts"],"keyRisks":["2-3 risks"]}`
     }]
   })
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1072,7 +1073,7 @@ JSON ONLY:
 }
 
 // ─────────────────────────────────────────────────────────────
-// DEVIL'S ADVOCATE — cross-pressure by Lead's lens (Gap #7)
+// DEVIL'S ADVOCATE --- cross-pressure by Lead's lens (Gap #7)
 // ─────────────────────────────────────────────────────────────
 export async function runGPT(bundle: SignalBundle, gemini: GeminiResult, claude: ClaudeResult, social?: SocialSentiment, aggregator?: AggregatorScoutResult): Promise<GptResult> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1086,7 +1087,7 @@ export async function runGPT(bundle: SignalBundle, gemini: GeminiResult, claude:
   if (lens === 'technical') {
     devilEvidence = `━━━ CROSS-PRESSURE TARGETS (use these to attack the technical Lead) ━━━
 
-FUNDAMENTALS (the Lead deprioritized these — you should exploit them):
+FUNDAMENTALS (the Lead deprioritized these --- you should exploit them):
 ${bundle.aiContext.fundamentalsSection}
 
 ${bundle.aiContext.smartMoneySection}
@@ -1100,7 +1101,7 @@ ${bundle.aiContext.convictionSection}`
   } else if (lens === 'fundamental') {
     devilEvidence = `━━━ CROSS-PRESSURE TARGETS (use these to attack the fundamental Lead) ━━━
 
-TECHNICALS (the Lead deprioritized these — you should exploit them):
+TECHNICALS (the Lead deprioritized these --- you should exploit them):
 ${bundle.aiContext.technicalsSection}
 
 ${bundle.aiContext.optionsSection}
@@ -1112,7 +1113,7 @@ ${bundle.aiContext.smartMoneySection}
 
 ${bundle.aiContext.convictionSection}`
   } else {
-    // balanced — Devil sees everything equally
+    // balanced --- Devil sees everything equally
     devilEvidence = `${bundle.aiContext.technicalsSection}
 ${bundle.aiContext.fundamentalsSection}
 ${bundle.aiContext.optionsSection}
@@ -1141,7 +1142,7 @@ ${devilEvidence}
 Before you respond, ask yourself: "If the Lead Analyst is right, what specific data would I expect to see? Do I see it?" If the answer is "yes, I see it," return NEUTRAL with that honest reasoning. Do not invent opposition.
 
 JSON ONLY:
-{"agrees":<true|false>,"signal":"BULLISH|BEARISH|NEUTRAL","reasoning":"4 sentences — if returning NEUTRAL because data supports the Lead, be explicit about that","confidence":<0-100>,"challenges":["2-4 specific data-backed challenges${lens !== 'balanced' ? ` — cite ${lens === 'technical' ? 'fundamental/earnings/analyst/valuation' : 'chart/momentum/flow/technical'} evidence per your cross-pressure discipline` : ''}; if no substantive challenges exist, return 1-2 items describing why the Lead's confidence should be lower"],"alternateScenario":"scenario the Lead Analyst underweights — or 'none, the Lead's scenario accounts for known risks'","strongestCounterArgument":"single most compelling counter — or 'no compelling counter; the thesis survives scrutiny'"}` }
+{"agrees":<true|false>,"signal":"BULLISH|BEARISH|NEUTRAL","reasoning":"4 sentences --- if returning NEUTRAL because data supports the Lead, be explicit about that","confidence":<0-100>,"challenges":["2-4 specific data-backed challenges${lens !== 'balanced' ? ` --- cite ${lens === 'technical' ? 'fundamental/earnings/analyst/valuation' : 'chart/momentum/flow/technical'} evidence per your cross-pressure discipline` : ''}; if no substantive challenges exist, return 1-2 items describing why the Lead's confidence should be lower"],"alternateScenario":"scenario the Lead Analyst underweights --- or 'none, the Lead's scenario accounts for known risks'","strongestCounterArgument":"single most compelling counter --- or 'no compelling counter; the thesis survives scrutiny'"}` }
     ]
   })
   return parseJSON<GptResult>(completion.choices[0].message.content!)
@@ -1178,7 +1179,7 @@ What ONE question should the News Scout research right now to help you respond? 
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 800,
-    system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research to help you respond. Use it. Defend your position where data supports you, concede where the Devil's Advocate is correct. Intellectual honesty wins with the Judge — a thoughtful concession beats a dishonest defense.`,
+    system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research to help you respond. Use it. Defend your position where data supports you, concede where the Devil's Advocate is correct. Intellectual honesty wins with the Judge --- a thoughtful concession beats a dishonest defense.`,
     messages: [{
       role: 'user',
       content: `YOUR ORIGINAL CALL: ${claude.signal} on ${bundle.ticker} at $${bundle.currentPrice.toFixed(2)}, target ${claude.target}
@@ -1193,7 +1194,7 @@ NEWS SCOUT RESEARCH (fresh data, just retrieved):
 Question asked: "${researchQuestion}"
 Answer: ${researchAnswer}
 
-Now respond directly to each challenge. Reference the fresh research where relevant. Concede valid points — you are not required to defend every position. Defend positions backed by data. Update your price target if warranted.
+Now respond directly to each challenge. Reference the fresh research where relevant. Concede valid points --- you are not required to defend every position. Defend positions backed by data. Update your price target if warranted.
 
 JSON ONLY:
 {
@@ -1202,10 +1203,10 @@ JSON ONLY:
   "researchQuestion": "${researchQuestion.replace(/"/g, "'")}",
   "researchAnswer": ${JSON.stringify(researchAnswer)},
   "rebuttal": "3-4 sentences directly responding to the challenges, referencing the fresh research",
-  "concedes": ["specific points you now agree the Devil's Advocate got right — be honest, 1-3 items"],
-  "maintains": ["specific points you stand firm on with data backing — 2-4 items"],
+  "concedes": ["specific points you now agree the Devil's Advocate got right --- be honest, 1-3 items"],
+  "maintains": ["specific points you stand firm on with data backing --- 2-4 items"],
   "updatedTarget": "revised price target or same as before",
-  "finalStance": "one sentence — your maintained position after considering all challenges and research"
+  "finalStance": "one sentence --- your maintained position after considering all challenges and research"
 }`
     }]
   })
@@ -1244,7 +1245,7 @@ What ONE question should the News Scout research right now to help you counter? 
 
   const counterSystem = `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research. Use it. This is your final shot.
 
-CALIBRATION: If the Lead Analyst's rebuttal genuinely resolved your strongest challenges and the fresh research confirms their thesis, you must yield honestly — a thoughtful yield beats manufactured pressure. The Judge weighs argument QUALITY. If you still see cracks, press on them with the fresh research as ammunition. Be sharp, specific, and data-driven.`
+CALIBRATION: If the Lead Analyst's rebuttal genuinely resolved your strongest challenges and the fresh research confirms their thesis, you must yield honestly --- a thoughtful yield beats manufactured pressure. The Judge weighs argument QUALITY. If you still see cracks, press on them with the fresh research as ammunition. Be sharp, specific, and data-driven.`
 
   const completion = await getOpenAI().chat.completions.create({
     model: 'gpt-4o',
@@ -1263,16 +1264,16 @@ YOUR FRESH RESEARCH (just retrieved):
 Question: "${researchQuestion}"
 Answer: ${researchAnswer}
 
-Now fire back. Acknowledge where their rebuttal was convincing — yielding on weak challenges strengthens your remaining ones. Use the fresh research to press on unresolved weaknesses. What must the Judge not ignore?
+Now fire back. Acknowledge where their rebuttal was convincing --- yielding on weak challenges strengthens your remaining ones. Use the fresh research to press on unresolved weaknesses. What must the Judge not ignore?
 
 JSON ONLY:
 {
   "researchQuestion": ${JSON.stringify(researchQuestion)},
   "researchAnswer": ${JSON.stringify(researchAnswer)},
-  "finalChallenge": "2-3 sentences — your strongest remaining challenge, referencing fresh research where relevant",
-  "yieldsOn": ["points where their rebuttal genuinely convinced you — be honest, 1-2 items"],
-  "pressesOn": ["points that remain unresolved and the Judge must weigh — 2-3 items"],
-  "closingArgument": "one sentence — the single most important thing for the Judge to consider"
+  "finalChallenge": "2-3 sentences --- your strongest remaining challenge, referencing fresh research where relevant",
+  "yieldsOn": ["points where their rebuttal genuinely convinced you --- be honest, 1-2 items"],
+  "pressesOn": ["points that remain unresolved and the Judge must weigh --- 2-3 items"],
+  "closingArgument": "one sentence --- the single most important thing for the Judge to consider"
 }` }
     ]
   })
@@ -1285,7 +1286,7 @@ JSON ONLY:
 }
 
 // ─────────────────────────────────────────────────────────────
-// JUDGE — NEUTRAL across all personas (Gap #7)
+// JUDGE --- NEUTRAL across all personas (Gap #7)
 // Removed persona-specific weighting. The user picked a lens for the Lead,
 // the Devil cross-pressured it; Judge's job is to weigh the debate on merit
 // regardless of what persona the user selected.
@@ -1294,10 +1295,10 @@ function buildJudgeSystemPrompt(bundle: SignalBundle): string {
   return `You are the Judge of an elite AI stock council for ${bundle.ticker}. The council has three roles: News Scout, Lead Analyst, and Devil's Advocate. You hold NO prior position. You weigh technical and fundamental arguments EQUALLY regardless of what analytical lens the Lead Analyst used. Higher quality evidence wins regardless of type.
 
 PROCEDURAL RULES:
-- YOUR JOB IS TO JUDGE THE DEBATE, NOT REDO THE ANALYSIS. The Lead Analyst already analyzed the data. The Devil's Advocate already cross-pressured. The News Scout already filtered news. Your job is to weigh which side built the stronger case — not to re-evaluate the underlying signals from scratch. If you find yourself starting a sentence with "the RSI is..." or "the price is X% below the SMA200..." you've gone wrong. Cite the COUNCIL MEMBER, not the raw indicator. Example: "The Lead correctly identified the death cross, but the Devil's Advocate's research into insider buying at higher prices materially weakened the bearish case." That's judging. "RSI at 30 with MACD bearish suggests further downside" is re-analyzing — don't do that.
+- YOUR JOB IS TO JUDGE THE DEBATE, NOT REDO THE ANALYSIS. The Lead Analyst already analyzed the data. The Devil's Advocate already cross-pressured. The News Scout already filtered news. Your job is to weigh which side built the stronger case --- not to re-evaluate the underlying signals from scratch. If you find yourself starting a sentence with "the RSI is..." or "the price is X% below the SMA200..." you've gone wrong. Cite the COUNCIL MEMBER, not the raw indicator. Example: "The Lead correctly identified the death cross, but the Devil's Advocate's research into insider buying at higher prices materially weakened the bearish case." That's judging. "RSI at 30 with MACD bearish suggests further downside" is re-analyzing --- don't do that.
 - WEIGHT NOVELTY OVER REPETITION. If the Devil's Round 2 research surfaced a fact neither side considered initially (e.g., insider buy prices, supply-chain detail, regulatory deadline), give it disproportionate weight. The debate progressed because of new information; honor that progression. Do NOT weight a point more heavily just because both sides discussed it at length.
 - Weigh argument QUALITY, not vote count or word count.
-- The Lead Analyst ran with a specific lens (technical, fundamental, or balanced). The Devil's Advocate cross-pressured from the opposite dimension (or attacked the weakest point for balanced). This is by design. Weight both arguments on their merit — do not automatically favor the Lead's lens because the user picked it.
+- The Lead Analyst ran with a specific lens (technical, fundamental, or balanced). The Devil's Advocate cross-pressured from the opposite dimension (or attacked the weakest point for balanced). This is by design. Weight both arguments on their merit --- do not automatically favor the Lead's lens because the user picked it.
 - Both sides received equal research access (each consulted the News Scout once in Round 2). Weight their research contributions equally.
 - Treat concessions as signs of intellectual honesty, not weakness. A side that concedes a point and defends the rest well often has the stronger case than a side that refuses to concede anything.
 - If the Devil's Advocate returned NEUTRAL honestly because the data supports the Lead, weight that higher than an aggressive but weakly-supported BEARISH call.
@@ -1330,7 +1331,7 @@ Key events: ${gemini.keyEvents.join('; ')}`
   const socialBlock = social ? formatSocialSentimentForPrompt(social, 'judge') : ''
   const aggregatorBlock = aggregator ? formatAggregatorForPrompt(aggregator, 'judge') : ''
 
-  const round1 = `━━━ ROUND 1 — Initial Positions ━━━
+  const round1 = `━━━ ROUND 1 --- Initial Positions ━━━
 
 LEAD ANALYST position: ${claude.signal} @ ${claude.confidence}% confidence [${lens.toUpperCase()} lens${isPersonaExplicit(persona) ? ', user-selected' : ', timeframe default'}]
   Thesis:             ${claude.reasoning}
@@ -1348,7 +1349,7 @@ DEVIL'S ADVOCATE position: ${gpt.signal} @ ${gpt.confidence}% confidence (${gpt.
 
   const round2 = rebuttal ? `
 
-━━━ ROUND 2 — After Independent Research ━━━
+━━━ ROUND 2 --- After Independent Research ━━━
 
 LEAD ANALYST researched: "${rebuttal.researchQuestion}"
   News Scout returned: ${rebuttal.researchAnswer}
@@ -1372,9 +1373,9 @@ DEVIL'S ADVOCATE researched: "${counter?.researchQuestion ?? '(no research)'}"
 
 ━━━ Your Task as Judge ━━━
 
-The Lead Analyst ran a ${lens.toUpperCase()} lens — they structurally emphasized ${lens === 'technical' ? 'chart/momentum/flow evidence and deprioritized fundamentals' : lens === 'fundamental' ? 'earnings/valuation/analyst/insider evidence and deprioritized technicals' : 'both dimensions equally'}. The Devil's Advocate ${lens === 'balanced' ? 'attacked the weakest point of the thesis' : `cross-pressured from the ${lens === 'technical' ? 'fundamental' : 'technical'} dimension`}. Both sides had equal research access in Round 2.
+The Lead Analyst ran a ${lens.toUpperCase()} lens --- they structurally emphasized ${lens === 'technical' ? 'chart/momentum/flow evidence and deprioritized fundamentals' : lens === 'fundamental' ? 'earnings/valuation/analyst/insider evidence and deprioritized technicals' : 'both dimensions equally'}. The Devil's Advocate ${lens === 'balanced' ? 'attacked the weakest point of the thesis' : `cross-pressured from the ${lens === 'technical' ? 'fundamental' : 'technical'} dimension`}. Both sides had equal research access in Round 2.
 
-Reach a verdict based on which set of evidence is stronger on the weight of the data. You are NEUTRAL — do not automatically favor the Lead's lens. If the Devil's cross-pressure challenge genuinely exposed a blind spot the user's lens missed, reflect that in your verdict. If the Lead's lens was appropriate for the setup and the Devil manufactured opposition from a dimension that didn't matter, reward that.
+Reach a verdict based on which set of evidence is stronger on the weight of the data. You are NEUTRAL --- do not automatically favor the Lead's lens. If the Devil's cross-pressure challenge genuinely exposed a blind spot the user's lens missed, reflect that in your verdict. If the Lead's lens was appropriate for the setup and the Devil manufactured opposition from a dimension that didn't matter, reward that.
 
 Reward honest NEUTRAL calls when data warranted them. Penalize aggressive positions that weren't supported by the specific evidence presented.`
 
@@ -1400,14 +1401,14 @@ ${(bundle.aiContext.technicalsSection || '').slice(0, 1500)}
 CONVICTION ENGINE:
 ${(bundle.aiContext.convictionSection || '').slice(0, 1000)}
 
-JSON ONLY — include ALL fields below:
+JSON ONLY --- include ALL fields below:
 {
   "signal": "BULLISH|BEARISH|NEUTRAL",
   "confidence": <0-100>,
   "target": "specific price target that MUST align with takeProfit. For BULLISH: above current price. For BEARISH: below current price. For NEUTRAL: within 5% of current price either direction.",
   "risk": "single most critical risk in one sentence",
   "summary": "4-5 sentence professional verdict",
-  "winningArgument": "who made the strongest case and exactly why — name the side and the specific argument",
+  "winningArgument": "who made the strongest case and exactly why --- name the side and the specific argument",
   "dissent": "strongest opposing view in one sentence",
   "scenarios": [
     {"label":"bull","probability":<0-100>,"trigger":"specific catalyst"},
@@ -1417,7 +1418,7 @@ JSON ONLY — include ALL fields below:
   "invalidationTrigger": "the single clearest signal this thesis is wrong",
   "rounds": ${round},
   "entryPrice": "recommended entry price or range e.g. $195-$198 on a pullback to support",
-  "stopLoss": "CRITICAL: For BULLISH signal this MUST be a price BELOW the entry price. For BEARISH signal this MUST be ABOVE entry. Use ATR-derived stop. e.g. BULLISH at $197: '$171 — 2× ATR below entry' NOT a price above $197",
+  "stopLoss": "CRITICAL: For BULLISH signal this MUST be a price BELOW the entry price. For BEARISH signal this MUST be ABOVE entry. Use ATR-derived stop. e.g. BULLISH at $197: '$171 --- 2× ATR below entry' NOT a price above $197",
   "takeProfit": "CRITICAL: For BULLISH signal this MUST be a price ABOVE entry. For BEARISH signal this MUST be BELOW entry. e.g. BULLISH at $197: '$236 first target (3× ATR above entry)' NOT a price below $197",
   "timeHorizon": "MUST match the selected timeframe: 1D=same day to next session, 1W=3-10 trading days, 1M=3-6 weeks, 3M=6-13 weeks. Currently: ${bundle.timeframe}",
   "plainEnglish": "Explain the verdict in simple plain English as if talking to someone who has never traded before. 3-4 sentences. No jargon.",
@@ -1471,23 +1472,19 @@ async function runJudgeGemini(
   const userPrompt   = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator)
   const fullPrompt = `${systemPrompt}\n\n${userPrompt}`
 
-  const model = getGenAI().getGenerativeModel({
-    model: 'gemini-2.5-pro',
-    generationConfig: {
-      temperature: 0.2,
-      maxOutputTokens: 8192,
-      responseMimeType: 'application/json',
-    },
+  const { text, modelUsed } = await generateWithFallback({
+    prompt: fullPrompt,
+    caller: 'judge:draft',
+    temperature: 0.2,
+    maxOutputTokens: 8192,
+    responseMimeType: 'application/json',
   })
-
-  const result = await model.generateContent(fullPrompt)
-  const text = result.response.text()
   const raw = parseJSON<JudgeResult>(text)
-  return { ...raw, judgeModel: 'gemini-2.5-pro' }
+  return { ...raw, judgeModel: modelUsed }
 }
 
 // ─────────────────────────────────────────────────────────────
-// GAP #8 — Confidence Calibration Round
+// GAP #8 --- Confidence Calibration Round
 // ─────────────────────────────────────────────────────────────
 // LLMs systematically overconfidence their predictions. The calibrator
 // reads the full debate transcript + draft verdict and recommends a
@@ -1503,7 +1500,7 @@ async function runJudgeGemini(
  * because calibration is about confidence math, not analytical framing.
  */
 function buildCalibratorSystemPrompt(bundle: SignalBundle): string {
-  return `You are the Confidence Calibrator in an elite AI stock council for ${bundle.ticker}. The Judge has just produced a DRAFT verdict. Your job — your ONLY job — is to review the debate and recommend whether the Judge's confidence number should move up, down, or stay.
+  return `You are the Confidence Calibrator in an elite AI stock council for ${bundle.ticker}. The Judge has just produced a DRAFT verdict. Your job --- your ONLY job --- is to review the debate and recommend whether the Judge's confidence number should move up, down, or stay.
 
 You are NOT re-arguing the case. You are NOT second-guessing the direction (BULLISH/BEARISH/NEUTRAL). You are auditing the CONFIDENCE NUMBER.
 
@@ -1511,13 +1508,13 @@ CALIBRATION PRINCIPLES:
 
 1. LLMs systematically overconfidence predictions. The base rate bias is toward numbers that are too high. When in doubt, lean toward lowering.
 
-2. Mutual concessions indicate real uncertainty. If BOTH Lead and Devil conceded meaningful points in Round 2, confidence should reflect that this was a genuinely ambiguous setup — regardless of how strong the winning argument sounded. A 78% confidence on a debate where both sides honestly conceded is almost certainly overcalibrated.
+2. Mutual concessions indicate real uncertainty. If BOTH Lead and Devil conceded meaningful points in Round 2, confidence should reflect that this was a genuinely ambiguous setup --- regardless of how strong the winning argument sounded. A 78% confidence on a debate where both sides honestly conceded is almost certainly overcalibrated.
 
 3. Asymmetric thresholds:
    - PUSH DOWN when you see: mutual concessions, unresolved challenge from the losing side, research answers that partially supported the other side, surface-level argument quality, reflexivity concerns (late cycle, all-time highs, extreme positioning)
    - PUSH UP requires: strong mutual convergence from both sides, losing side explicitly yielded on multiple points, overwhelming data convergence, clear catalyst alignment
 
-4. Timeframe honesty. A 3-month thesis with 80% confidence is often more justified than a 1-day call with 80% confidence — short timeframes have more noise. Factor this in.
+4. Timeframe honesty. A 3-month thesis with 80% confidence is often more justified than a 1-day call with 80% confidence --- short timeframes have more noise. Factor this in.
 
 5. Signal-specific calibration:
    - NEUTRAL can warrant HIGH confidence (70-80%+) when data is genuinely ambiguous
@@ -1575,7 +1572,7 @@ DEVIL'S ADVOCATE (${gpt.signal} @ ${gpt.confidence}% initially):
 NEWS SCOUT: ${gemini.summary}
 
 ━━━ CALIBRATION OBSERVATIONS ━━━
-- Both sides conceded meaningful points: ${bothConceded ? 'YES — this is a strong signal of genuine ambiguity; confidence should be moderate' : 'NO — one or both sides did not concede, check if this was intellectual honesty or stubbornness'}
+- Both sides conceded meaningful points: ${bothConceded ? 'YES --- this is a strong signal of genuine ambiguity; confidence should be moderate' : 'NO --- one or both sides did not concede, check if this was intellectual honesty or stubbornness'}
 - Rebuttal research contradicted Lead's initial thesis: inspect rebuttal.researchAnswer vs Lead reasoning
 - Counter research strengthened or weakened Devil's case: inspect counter.researchAnswer
 
@@ -1589,7 +1586,7 @@ JSON ONLY:
 {
   "draftConfidence": ${draftJudge.confidence},
   "draftSignal": "${draftJudge.signal}",
-  "recommendedConfidence": <0-100 integer — your calibrated recommendation>,
+  "recommendedConfidence": <0-100 integer --- your calibrated recommendation>,
   "adjustmentDelta": <recommendedConfidence - draftConfidence, can be negative>,
   "adjustmentDirection": "up|down|unchanged",
   "confidenceBand": { "low": <integer>, "high": <integer> },
@@ -1634,7 +1631,7 @@ JSON ONLY:
       adjustmentDelta: 0,
       adjustmentDirection: 'unchanged',
       confidenceBand: { low: draftJudge.confidence, high: draftJudge.confidence },
-      reasoning: 'Calibrator unavailable — draft confidence preserved unchanged.',
+      reasoning: 'Calibrator unavailable --- draft confidence preserved unchanged.',
       overconfidenceFlags: [],
       underconfidenceFlags: [],
       mutualConcessions: bothConceded,
@@ -1646,7 +1643,7 @@ JSON ONLY:
 
 /**
  * Log calibration result to the calibration_log table for backtest analysis.
- * Fire-and-forget — never blocks pipeline on logging failure.
+ * Fire-and-forget --- never blocks pipeline on logging failure.
  */
 function logCalibration(
   bundle: SignalBundle,
@@ -1709,7 +1706,7 @@ export async function runJudge(
  * can log the calibration and expose it to the UI.
  *
  * If calibration produces an 'unchanged' recommendation, we skip the second
- * Judge call entirely and apply the draft as the final verdict — saves cost
+ * Judge call entirely and apply the draft as the final verdict --- saves cost
  * in the common case where the draft was already well-calibrated.
  */
 export async function runJudgeWithCalibration(
@@ -1749,7 +1746,7 @@ export async function runJudgeWithCalibration(
   let finalJudge: JudgeResult
 
   if (calibration.adjustmentDirection === 'unchanged') {
-    // Draft was well-calibrated — no second Judge call needed
+    // Draft was well-calibrated --- no second Judge call needed
     finalJudge = sanitizeJudgeResult(draft, bundle)
   } else {
     // Re-run Judge with calibration input
@@ -1810,7 +1807,7 @@ An independent calibrator (Claude Opus) reviewed the full debate and the draft, 
   ${calibration.underconfidenceFlags.length > 0 ? `- Underconfidence flags raised: ${calibration.underconfidenceFlags.join('; ')}` : ''}
   ${calibration.unresolvedChallenge ? `- Strongest unresolved challenge: "${calibration.unresolvedChallenge}"` : ''}
 
-This calibrator did not form an opinion on direction (BULLISH/BEARISH/NEUTRAL) — only on how certain you should be. You are NOT required to follow this recommendation blindly, but well-reasoned calibration advice should rarely be ignored. Use the recommended confidence as your baseline and only deviate if you have a specific reason.
+This calibrator did not form an opinion on direction (BULLISH/BEARISH/NEUTRAL) --- only on how certain you should be. You are NOT required to follow this recommendation blindly, but well-reasoned calibration advice should rarely be ignored. Use the recommended confidence as your baseline and only deviate if you have a specific reason.
 
 Keep your verdict structure identical to the draft. Primarily update the confidence number and, if needed, soften or strengthen the summary/winningArgument/dissent to match the new calibrated confidence level.`
 
@@ -1820,18 +1817,15 @@ Keep your verdict structure identical to the draft. Primarily update the confide
     const userPrompt = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator)
     const fullPrompt = `${systemPrompt}\n\n${userPrompt}${calibrationGuidance}`
 
-    const model = getGenAI().getGenerativeModel({
-      model: 'gemini-2.5-pro',
-      generationConfig: {
-        temperature: 0.2,
-        maxOutputTokens: 8192,
-        responseMimeType: 'application/json',
-      },
+    const { text, modelUsed } = await generateWithFallback({
+      prompt: fullPrompt,
+      caller: 'judge:calibrated-rerun',
+      temperature: 0.2,
+      maxOutputTokens: 8192,
+      responseMimeType: 'application/json',
     })
-    const result = await model.generateContent(fullPrompt)
-    const text = result.response.text()
     const raw = parseJSON<JudgeResult>(text)
-    return { ...raw, judgeModel: 'gemini-2.5-pro-calibrated' }
+    return { ...raw, judgeModel: `-calibrated` }
   } else {
     const systemPrompt = buildJudgeSystemPrompt(bundle)
     const userPrompt = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator) + calibrationGuidance
@@ -1922,9 +1916,9 @@ function sanitizeJudgeResult(judge: JudgeResult, bundle: SignalBundle): JudgeRes
   // Tier 0 + Tier 1: full block
   if (daysToEarnings !== null && daysToEarnings >= 0 && daysToEarnings <= 1) {
     const tierLabel = daysToEarnings === 0 ? 'TODAY' : 'TOMORROW'
-    const blockedEntry = `No entry before earnings (reports ${tierLabel}) — wait for post-earnings reaction`
-    const blockedStop  = `N/A — stop level depends on post-earnings price discovery`
-    const blockedTp    = `N/A — target level depends on post-earnings price discovery`
+    const blockedEntry = `No entry before earnings (reports ${tierLabel}) --- wait for post-earnings reaction`
+    const blockedStop  = `N/A --- stop level depends on post-earnings price discovery`
+    const blockedTp    = `N/A --- target level depends on post-earnings price discovery`
     const guard        = `IMPORTANT: ${bundle.ticker} reports ${tierLabel}. Do not enter before the catalyst. Wait for post-earnings price action to establish a new trend, then re-evaluate using the directional thesis below as a starting hypothesis.\n\n`
     const wasOverridden = (
       extractPrice(judge.entryPrice) !== null ||
@@ -1932,13 +1926,13 @@ function sanitizeJudgeResult(judge: JudgeResult, bundle: SignalBundle): JudgeRes
       extractPrice(judge.takeProfit) !== null
     )
     if (wasOverridden) {
-      console.warn(`[pipeline] earnings tier ${tierLabel} (${daysToEarnings}d) — overriding actionable fields, preserving thesis`)
+      console.warn(`[pipeline] earnings tier ${tierLabel} (${daysToEarnings}d) --- overriding actionable fields, preserving thesis`)
       logJudgeCorrection(bundle, judge.judgeModel, signal, 'stopLoss', judge.stopLoss, blockedStop, atr, entry)
     }
     // Strip price-bearing sentences from the action plan body so it
     // doesn't contradict the blocked structured fields. The LLM may
     // have written 'enter at $X / stop $Y / target $Z' even though
-    // the directive says wait — remove those.
+    // the directive says wait --- remove those.
     const stripPriceSentences = (s: string): string => {
       if (!s) return s
       // Split on sentence terminators while keeping the structure;
@@ -1958,14 +1952,14 @@ function sanitizeJudgeResult(judge: JudgeResult, bundle: SignalBundle): JudgeRes
 
   // Tier 2 + Tier 3: entry allowed, but force binary-risk acknowledgment
   // and position-sizing guidance into the action plan. We do NOT override
-  // the entry/stop/target prices themselves — they fall through to the
+  // the entry/stop/target prices themselves --- they fall through to the
   // BULLISH/BEARISH direction validation below.
   if (daysToEarnings !== null && daysToEarnings >= 2 && daysToEarnings <= 3) {
     const dayWord = daysToEarnings === 2 ? '2 trading days' : '3 trading days'
     const guardTier23 = `BINARY EVENT WARNING: ${bundle.ticker} reports earnings in ${dayWord}. The options market is pricing a meaningful move (see implied move in fundamentals). If you take this trade, use REDUCED POSITION SIZE (target ~50% of normal sizing) and define a clear pre-earnings invalidation level. Plan to either close the position before the report or accept full binary risk through the catalyst.\n\n`
     const wasGuarded = (judge.actionPlan ?? '').startsWith('BINARY EVENT WARNING')
     if (!wasGuarded) {
-      console.warn(`[pipeline] earnings tier ${daysToEarnings}d — prefixing action plan with binary-risk acknowledgment`)
+      console.warn(`[pipeline] earnings tier ${daysToEarnings}d --- prefixing action plan with binary-risk acknowledgment`)
     }
     // Fall through to normal BULLISH/BEARISH validation, but mutate the
     // action plan as we pass through. We capture judge here, run the
@@ -1980,15 +1974,15 @@ function sanitizeJudgeResult(judge: JudgeResult, bundle: SignalBundle): JudgeRes
 
     if (stop !== null && stop >= entry) {
       const corrected = (atr > 0 ? entry - atr * 2 : entry * 0.93).toFixed(2)
-      fixedStop = `$${corrected} — 2× ATR below entry (auto-corrected)`
-      console.warn(`[pipeline] BULLISH stop ${stop} was >= entry ${entry} — corrected to ${corrected}`)
+      fixedStop = `$${corrected} --- 2× ATR below entry (auto-corrected)`
+      console.warn(`[pipeline] BULLISH stop ${stop} was >= entry ${entry} --- corrected to ${corrected}`)
       logJudgeCorrection(bundle, judge.judgeModel, signal, 'stopLoss', judge.stopLoss, fixedStop, atr, entry)
     }
 
     if (tp !== null && tp <= entry) {
       const corrected = (atr > 0 ? entry + atr * 3 : entry * 1.08).toFixed(2)
       fixedTarget = `$${corrected} first target (auto-corrected), extended target at resistance`
-      console.warn(`[pipeline] BULLISH target ${tp} was <= entry ${entry} — corrected to ${corrected}`)
+      console.warn(`[pipeline] BULLISH target ${tp} was <= entry ${entry} --- corrected to ${corrected}`)
       logJudgeCorrection(bundle, judge.judgeModel, signal, 'takeProfit', judge.takeProfit, fixedTarget, atr, entry)
     }
 
@@ -2001,15 +1995,15 @@ function sanitizeJudgeResult(judge: JudgeResult, bundle: SignalBundle): JudgeRes
 
     if (stop !== null && stop <= entry) {
       const corrected = (atr > 0 ? entry + atr * 2 : entry * 1.07).toFixed(2)
-      fixedStop = `$${corrected} — 2× ATR above entry (auto-corrected)`
-      console.warn(`[pipeline] BEARISH stop ${stop} was <= entry ${entry} — corrected to ${corrected}`)
+      fixedStop = `$${corrected} --- 2× ATR above entry (auto-corrected)`
+      console.warn(`[pipeline] BEARISH stop ${stop} was <= entry ${entry} --- corrected to ${corrected}`)
       logJudgeCorrection(bundle, judge.judgeModel, signal, 'stopLoss', judge.stopLoss, fixedStop, atr, entry)
     }
 
     if (tp !== null && tp >= entry) {
       const corrected = (atr > 0 ? entry - atr * 3 : entry * 0.92).toFixed(2)
       fixedTarget = `$${corrected} first target (auto-corrected)`
-      console.warn(`[pipeline] BEARISH target ${tp} was >= entry ${entry} — corrected to ${corrected}`)
+      console.warn(`[pipeline] BEARISH target ${tp} was >= entry ${entry} --- corrected to ${corrected}`)
       logJudgeCorrection(bundle, judge.judgeModel, signal, 'takeProfit', judge.takeProfit, fixedTarget, atr, entry)
     }
 
@@ -2128,7 +2122,7 @@ export async function runPipeline(
   // ── Trader Filter ─────────────────────────────────────────
   // Evaluates the Council's verdict against trader discipline rules:
   // R:R, confidence floors per setup type, conflict detection.
-  // Output is TAKE / PASS / WAIT — separate from the Judge verdict.
+  // Output is TAKE / PASS / WAIT --- separate from the Judge verdict.
   onProgress('trader_start', {})
   const trader = await evaluateTrade(judge, bundle, bundle.timeframe)
   onProgress('trader_done', trader)

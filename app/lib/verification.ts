@@ -1,12 +1,12 @@
 // ═════════════════════════════════════════════════════════════
 // app/lib/verification.ts
 //
-// Gap #9 — Factual claim verification using Gemini 2.5 Pro with
+// Gap #9 --- Factual claim verification using Gemini 2.5 Pro with
 // Google Search grounding. Catches the failure mode where Lead or
 // Devil cite UNVERIFIED X tweets as if they were factual claims.
 //
 // Example caught: Devil cites "@TheCryptoU says NY Fed's $7.5B Treasury
-// buy is bullish for BTC" — but the tweet was a QUESTION, not a report.
+// buy is bullish for BTC" --- but the tweet was a QUESTION, not a report.
 // Verification finds no credible outlet reporting the claim, strips it
 // before the Judge sees it.
 //
@@ -21,6 +21,7 @@
 // ═════════════════════════════════════════════════════════════
 
 import { GoogleGenerativeAI } from '@google/generative-ai'
+import { generateWithFallback, generateJSON } from './gemini-helper'
 import { createClient } from '@supabase/supabase-js'
 
 const getGenAI = () => new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
@@ -31,13 +32,13 @@ const getAdmin = () => createClient(
 )
 
 // ─────────────────────────────────────────────────────────────
-// Credible outlet whitelist — used to inspect groundingMetadata
+// Credible outlet whitelist --- used to inspect groundingMetadata
 // ─────────────────────────────────────────────────────────────
 // A claim is "verified" only if Gemini's grounded search returned a
 // source from one of these domains. X/Twitter are explicitly excluded
 // because that's where the unverified claims originated.
 const CREDIBLE_DOMAINS = new Set([
-  // Tier 1 — major financial journalism
+  // Tier 1 --- major financial journalism
   'reuters.com',
   'bloomberg.com',
   'wsj.com',
@@ -46,7 +47,7 @@ const CREDIBLE_DOMAINS = new Set([
   'economist.com',
   'washingtonpost.com',
 
-  // Tier 2 — reputable financial news
+  // Tier 2 --- reputable financial news
   'cnbc.com',
   'marketwatch.com',
   'barrons.com',
@@ -63,7 +64,7 @@ const CREDIBLE_DOMAINS = new Set([
   'nbcnews.com',
   'foxbusiness.com',
 
-  // Tier 3 — financial coverage (slightly looser)
+  // Tier 3 --- financial coverage (slightly looser)
   'seekingalpha.com',
   'benzinga.com',
   'investing.com',
@@ -180,7 +181,7 @@ function isCredibleDomain(url: string): boolean {
 // Names are matched case-insensitively as substrings of the title.
 //
 // Defensive: only includes outlets already in CREDIBLE_DOMAINS. We are
-// not opening the credibility door wider — just adding a name-based
+// not opening the credibility door wider --- just adding a name-based
 // path to the same whitelist.
 const CREDIBLE_OUTLET_NAMES: Array<[string, string]> = [
   // [outlet name fragment (lowercase), canonical domain]
@@ -306,21 +307,16 @@ Return each claim as a standalone self-contained sentence, reworded if needed fo
 Maximum 8 claims.`
 
   try {
-    const model = getGenAI().getGenerativeModel({
-      model: 'gemini-2.5-pro',
-      generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 4000,
-        responseMimeType: 'application/json',
-      },
+    const { data: parsed } = await generateJSON<{ claims?: unknown[] }>({
+      prompt,
+      caller: 'verification:claim-extract',
+      temperature: 0.1,
+      maxOutputTokens: 4000,
     })
-    const result = await model.generateContent(prompt)
-    const text = result.response.text()
-    const parsed = JSON.parse(text)
     const claims = Array.isArray(parsed.claims) ? parsed.claims : []
     return claims
       .filter((c: unknown) => typeof c === 'string' && c.length > 10)
-      .map((c: string) => c.trim().slice(0, 400))
+      .map((c: string) => (c as string).trim().slice(0, 400))
       .slice(0, 8)
   } catch (e) {
     console.warn('[verification] claim extraction failed:', (e as Error).message?.slice(0, 200))
@@ -365,7 +361,7 @@ For EACH claim, determine:
 CRITICAL CONSISTENCY RULE:
 If your reasoning states that sources confirmed the claim, you MUST set verified=true.
 If your reasoning states sources did not confirm or you couldn't find corroboration, you MUST set verified=false.
-Never set verified=false while writing reasoning that says "multiple outlets reported..." or "confirmed by..." — these are contradictions. Read your own reasoning carefully before setting the verified field.
+Never set verified=false while writing reasoning that says "multiple outlets reported..." or "confirmed by..." --- these are contradictions. Read your own reasoning carefully before setting the verified field.
 
 VERIFICATION GUIDANCE:
 - Data/index claims (e.g., "Fear & Greed at 27", "BTC at $74k", "CPI came in at 3.2%") → check canonical data sources first
@@ -390,21 +386,15 @@ Return ONLY this JSON, no other text:
 Return one object per claim in order. If a claim can't be verified, set verified: false and sourceUrl: null.`
 
   try {
-    const model = getGenAI().getGenerativeModel({
-      model: 'gemini-2.5-pro',
-      generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 6000,
-      },
-      // Google Search grounding — critical for verification
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      tools: [{ googleSearch: {} } as any],
+    const { text, rawResponse } = await generateWithFallback({
+      prompt,
+      caller: 'verification:batch-verify',
+      temperature: 0.1,
+      maxOutputTokens: 6000,
+      useGoogleSearchGrounding: true,
     })
 
-    const result = await model.generateContent(prompt)
-    const text = result.response.text()
-
-    // Parse JSON out of response (it may have markdown fences)
+    // Parse JSON out of response (it may have markdown fences even with grounding)
     const cleaned = text.replace(/```json|```/g, '').trim()
     const start = cleaned.indexOf('{')
     const end = cleaned.lastIndexOf('}')
@@ -421,7 +411,7 @@ Return one object per claim in order. If a claim can't be verified, set verified
 
     // Inspect groundingMetadata for an independent check on sources
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const meta = (result.response.candidates?.[0] as any)?.groundingMetadata as GroundingMetadata | undefined
+    const meta = (rawResponse?.candidates?.[0] as any)?.groundingMetadata as GroundingMetadata | undefined
     // Build a richer source list. Gemini's grounding API returns
     // redirect URLs in `uri` (always vertexaisearch.cloud.google.com),
     // but the underlying source name is in `title`. We check BOTH.
@@ -494,7 +484,7 @@ Return one object per claim in order. If a claim can't be verified, set verified
         // Self-contradiction with no credible grounding to rescue it
         cleanReasoning = `Model reasoning suggested verification but verified=false and no credible grounding sources found. Possible structured-output glitch. Original reasoning: ${modelReasoning.slice(0, 200)}`
       } else {
-        // Genuine rejection — use model's reasoning
+        // Genuine rejection --- use model's reasoning
         cleanReasoning = modelReasoning || 'Claim not confirmed by credible mainstream sources'
       }
 
@@ -519,7 +509,7 @@ Return one object per claim in order. If a claim can't be verified, set verified
 }
 
 // ─────────────────────────────────────────────────────────────
-// Main entrypoint — verify a reasoning block
+// Main entrypoint --- verify a reasoning block
 // ─────────────────────────────────────────────────────────────
 export async function verifyFactualClaims(
   ticker: string,
@@ -592,7 +582,7 @@ export async function verifyFactualClaims(
   } catch (e) {
     const msg = (e as Error).message?.slice(0, 200) ?? 'unknown'
     console.error('[verification] top-level failure:', msg)
-    // On error, don't strip anything — fail open so pipeline doesn't break
+    // On error, don't strip anything --- fail open so pipeline doesn't break
     return {
       verifiedClaims: [],
       strippedClaims: [],
