@@ -45,7 +45,7 @@ function PricingCard({
     <div className="flex flex-col rounded-2xl overflow-hidden relative"
       style={{
         background: highlight ? 'linear-gradient(135deg, rgba(124,58,237,0.12), rgba(79,70,229,0.08))' : 'var(--surface)',
-        border: highlight ? '2px solid rgba(167,139,250,0.4)' : '1px solid rgba(255,255,255,0.08)',
+        border: highlight ? '2px solid rgba(167,139,250,0.4)' : '1px solid var(--border)',
       }}>
 
       {highlight && (
@@ -60,7 +60,7 @@ function PricingCard({
       <div className="p-7 pt-8 flex-1">
         <div className="mb-5">
           <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5"
-            style={{ color: highlight ? '#a78bfa' : 'rgba(255,255,255,0.4)' }}>
+            style={{ color: highlight ? '#a78bfa' : 'var(--text3)' }}>
             {title}
           </div>
           <div className="flex items-baseline gap-1.5">
@@ -74,9 +74,9 @@ function PricingCard({
           {features.map((f, i) => (
             <li key={i} className="flex items-start gap-2.5">
               <Check size={13} className="mt-0.5 shrink-0"
-                style={{ color: i === 0 && tier === 'pro' ? 'rgba(255,255,255,0.3)' : '#34d399' }} />
+                style={{ color: i === 0 && tier === 'pro' ? 'var(--text3)' : '#34d399' }} />
               <span className="text-xs leading-relaxed"
-                style={{ color: i === 0 && tier === 'pro' ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.7)' }}>
+                style={{ color: i === 0 && tier === 'pro' ? 'var(--text3)' : 'var(--text2)' }}>
                 {f}
               </span>
             </li>
@@ -91,7 +91,7 @@ function PricingCard({
           className="w-full py-3.5 rounded-xl text-sm font-bold transition-all disabled:opacity-50"
           style={highlight
             ? { background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', color: 'var(--text)' }
-            : { background: 'var(--surface2)', color: 'var(--text)', border: '1px solid rgba(255,255,255,0.12)' }}>
+            : { background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border2)' }}>
           {loading ? 'Opening checkout...' : 'Start 7-day free trial'}
         </button>
         <p className="text-center text-[11px] mt-2.5" style={{ color: 'var(--text3)' }}>
@@ -209,7 +209,7 @@ function SubscribeInner() {
           </div>
 
           {/* Comparison note */}
-          <div className="rounded-2xl p-5" style={{ background: 'var(--surface2)', border: '1px solid rgba(255,255,255,0.06)' }}>
+          <div className="rounded-2xl p-5" style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}>
             <p className="text-xs text-center mb-4" style={{ color: 'var(--text3)' }}>
               Not sure? During the 7-day trial you get full Pro access on both plans.
             </p>
@@ -225,8 +225,8 @@ function SubscribeInner() {
                 <div key={row.label} className="col-span-3 grid grid-cols-3 items-center py-2 border-b last:border-0"
                   style={{ borderColor: 'var(--border)' }}>
                   <span className="text-xs text-left" style={{ color: 'var(--text3)' }}>{row.label}</span>
-                  <span className="text-xs font-mono" style={{ color: row.standard === '✓' ? '#34d399' : 'rgba(255,255,255,0.2)' }}>{row.standard}</span>
-                  <span className="text-xs font-mono" style={{ color: row.pro === '✓' ? '#a78bfa' : 'rgba(255,255,255,0.2)' }}>{row.pro}</span>
+                  <span className="text-xs font-mono" style={{ color: row.standard === '✓' ? '#34d399' : 'var(--text3)' }}>{row.standard}</span>
+                  <span className="text-xs font-mono" style={{ color: row.pro === '✓' ? '#a78bfa' : 'var(--text3)' }}>{row.pro}</span>
                 </div>
               ))}
               <div className="col-span-3 grid grid-cols-3 mt-1">

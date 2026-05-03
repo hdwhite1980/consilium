@@ -11,7 +11,7 @@ function FAQAccordion({ items }: { items: FAQItem[] }) {
   return (
     <div className="space-y-2">
       {items.map((item, i) => (
-        <div key={i} className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
+        <div key={i} className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--border)' }}>
           <button
             onClick={() => setOpen(open === i ? null : i)}
             className="w-full text-left flex items-start justify-between gap-3 px-4 py-3">
@@ -276,7 +276,7 @@ export default function GuidePage() {
         {(['guide', 'faq'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)}
             className="px-4 py-2.5 text-xs font-semibold capitalize border-b-2 transition-all"
-            style={{ color: tab === t ? '#a78bfa' : 'rgba(255,255,255,0.3)', borderColor: tab === t ? '#a78bfa' : 'transparent' }}>
+            style={{ color: tab === t ? '#a78bfa' : 'var(--text3)', borderColor: tab === t ? '#a78bfa' : 'transparent' }}>
             {t === 'guide' ? '📖 User Guide' : '❓ FAQ'}
           </button>
         ))}
