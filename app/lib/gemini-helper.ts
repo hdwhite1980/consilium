@@ -174,11 +174,13 @@ async function callOnce(
     tools.push({ googleSearch: {} })
   }
 
-  const modelConfig: Record<string, unknown> = { model: modelName }
-  if (Object.keys(generationConfig).length > 0) modelConfig.generationConfig = generationConfig
-  if (tools.length > 0) modelConfig.tools = tools
-
-  const model = getGenAI().getGenerativeModel(modelConfig)
+  // Build the model params inline so TypeScript can see the required 'model' field.
+  // Use conditional spread for tools so we don't pass an empty array.
+  const model = getGenAI().getGenerativeModel({
+    model: modelName,
+    generationConfig,
+    ...(tools.length > 0 ? { tools } : {}),
+  })
   return model.generateContent(opts.prompt)
 }
 
