@@ -28,7 +28,7 @@ export default function DisclaimerPage() {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-4 py-12"
-      style={{ background: '#0a0d12' }}>
+      style={{ background: 'var(--bg)' }}>
 
       {/* Logo */}
       <div className="mb-8">
@@ -36,17 +36,17 @@ export default function DisclaimerPage() {
       </div>
 
       <div className="w-full max-w-lg rounded-2xl border overflow-hidden"
-        style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.08)' }}>
+        style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
 
         {/* Header */}
-        <div className="px-6 py-5 border-b" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+        <div className="px-6 py-5 border-b" style={{ borderColor: 'var(--border)' }}>
           <h1 className="text-lg font-bold text-white mb-1">Important Disclaimer</h1>
           <p className="text-sm text-white/40">Please read carefully before using Wali-OS</p>
         </div>
 
         {/* Disclaimer text */}
         <div className="px-6 py-5 space-y-4 text-sm text-white/60 leading-relaxed max-h-96 overflow-y-auto border-b"
-          style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+          style={{ borderColor: 'var(--border)' }}>
 
           <div>
             <h2 className="text-white/80 font-semibold mb-1.5">Not Financial Advice</h2>
@@ -92,10 +92,10 @@ export default function DisclaimerPage() {
                 className="sr-only" />
               <div className="w-5 h-5 rounded border-2 transition-all flex items-center justify-center"
                 style={{
-                  borderColor: checked ? '#7c3aed' : 'rgba(255,255,255,0.2)',
-                  background: checked ? '#7c3aed' : 'transparent'
+                  borderColor: checked ? 'var(--accent)' : 'var(--border2)',
+                  background: checked ? 'var(--accent)' : 'transparent'
                 }}>
-                {checked && <span className="text-white text-xs font-bold">✓</span>}
+                {checked && <span className="text-white text-xs font-bold">{'\u2713'}</span>}
               </div>
             </div>
             <span className="text-sm text-white/60 leading-relaxed">
@@ -105,8 +105,8 @@ export default function DisclaimerPage() {
 
           <button onClick={handleAccept} disabled={!checked || loading}
             className="w-full py-3.5 rounded-xl font-bold text-white transition-all hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed"
-            style={{ background: 'linear-gradient(135deg,#7c3aed,#4f46e5)' }}>
-            {loading ? 'Continuing…' : 'I understand — continue to Wali-OS'}
+            style={{ background: 'linear-gradient(135deg,var(--accent),var(--accent2))' }}>
+            {loading ? `Continuing${'\u2026'}` : `I understand ${'\u2014'} continue to Wali-OS`}
           </button>
         </div>
       </div>
