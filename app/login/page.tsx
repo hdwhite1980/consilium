@@ -170,7 +170,7 @@ function LoginPageInner() {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-4"
-      style={{ background: '#0a0d12' }}>
+      style={{ background: 'var(--bg)' }}>
 
       {/* Logo */}
       <div className="mb-10">
@@ -179,7 +179,7 @@ function LoginPageInner() {
 
       {/* Card */}
       <div className="w-full max-w-sm rounded-2xl border p-8"
-        style={{ background: '#111620', borderColor: 'rgba(255,255,255,0.08)' }}>
+        style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
 
         {/* Title */}
         <div className="mb-7">
@@ -220,12 +220,12 @@ function LoginPageInner() {
                 autoComplete="email"
                 className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-colors border"
                 style={{
-                  background: '#181e2a',
-                  borderColor: 'rgba(255,255,255,0.1)',
+                  background: 'var(--surface2)',
+                  borderColor: 'var(--border2)',
                   color: 'white',
                 }}
-                onFocus={e => e.target.style.borderColor = '#7c3aed'}
-                onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.1)'}
+                onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+                onBlur={e => e.target.style.borderColor = 'var(--border2)'}
               />
             </div>
 
@@ -246,12 +246,12 @@ function LoginPageInner() {
                     minLength={6}
                     className="w-full rounded-lg px-4 py-3 pr-11 text-sm outline-none transition-colors border"
                     style={{
-                      background: '#181e2a',
-                      borderColor: 'rgba(255,255,255,0.1)',
+                      background: 'var(--surface2)',
+                      borderColor: 'var(--border2)',
                       color: 'white',
                     }}
-                    onFocus={e => e.target.style.borderColor = '#7c3aed'}
-                    onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.1)'}
+                    onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+                    onBlur={e => e.target.style.borderColor = 'var(--border2)'}
                   />
                   <button type="button" onClick={() => setShowPw(!showPw)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60 transition-colors">
@@ -326,7 +326,7 @@ function LoginPageInner() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
           style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}>
           <div className="max-w-sm w-full rounded-2xl border p-6 text-center"
-            style={{ background: '#111620', borderColor: 'rgba(248,113,113,0.3)' }}>
+            style={{ background: 'var(--surface)', borderColor: 'rgba(248,113,113,0.3)' }}>
             <div className="text-3xl mb-3">⚠️</div>
             <h2 className="text-base font-bold text-white mb-2">Signed out</h2>
             <p className="text-sm text-white/60">
@@ -356,7 +356,7 @@ function LoginPageInner() {
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={<div style={{ background: '#0a0d12', minHeight: '100vh' }} />}>
+    <Suspense fallback={<div style={{ background: 'var(--bg)', minHeight: '100vh' }} />}>
       <LoginPageInner />
     </Suspense>
   )

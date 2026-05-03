@@ -114,7 +114,7 @@ function ConfirmInner() {
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4"
-      style={{ background: '#0a0d12' }}>
+      style={{ background: 'var(--bg)' }}>
       <div className="w-full max-w-sm text-center space-y-6">
 
         {/* Logo */}
@@ -172,7 +172,7 @@ function ConfirmInner() {
 
 export default function ConfirmPage() {
   return (
-    <Suspense fallback={<div style={{ background: '#0a0d12', minHeight: '100vh' }} />}>
+    <Suspense fallback={<div style={{ background: 'var(--bg)', minHeight: '100vh' }} />}>
       <ConfirmInner />
     </Suspense>
   )

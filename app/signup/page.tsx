@@ -58,7 +58,7 @@ function SignupInner() {
   if (sent) {
     return (
       <div className="min-h-screen flex items-center justify-center px-4"
-        style={{ background: '#0a0d12' }}>
+        style={{ background: 'var(--bg)' }}>
         <div className="w-full max-w-sm text-center space-y-5">
           <div className="flex justify-center mb-6">
             <WaliLogo size="xl" priority />
@@ -91,11 +91,11 @@ function SignupInner() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col lg:flex-row" style={{ background: '#0a0d12' }}>
+    <div className="min-h-screen flex flex-col lg:flex-row" style={{ background: 'var(--bg)' }}>
 
       {/* Left — value props (hidden on small screens) */}
       <div className="hidden lg:flex flex-col justify-center px-12 py-16 flex-1 border-r"
-        style={{ borderColor: 'rgba(255,255,255,0.06)', background: '#0d1117' }}>
+        style={{ borderColor: 'var(--border)', background: '#0d1117' }}>
 
         <div className="max-w-md">
           {/* Logo */}
@@ -122,7 +122,7 @@ function SignupInner() {
             ))}
           </div>
 
-          <div className="mt-12 pt-8 border-t" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+          <div className="mt-12 pt-8 border-t" style={{ borderColor: 'var(--border)' }}>
             <div className="flex items-baseline gap-2 mb-1">
               <span className="text-2xl font-bold text-white">$29</span>
               <span className="text-white/40 text-sm">/month Standard · </span>
@@ -156,9 +156,9 @@ function SignupInner() {
               <input type="email" value={email} onChange={e => setEmail(e.target.value)}
                 placeholder="you@example.com" required autoComplete="email"
                 className="w-full rounded-xl px-4 py-3 text-sm outline-none border transition-all"
-                style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }}
-                onFocus={e => e.target.style.borderColor = '#7c3aed'}
-                onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.1)'} />
+                style={{ background: 'var(--surface2)', borderColor: 'var(--border2)', color: 'white' }}
+                onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+                onBlur={e => e.target.style.borderColor = 'var(--border2)'} />
             </div>
 
             {/* Password */}
@@ -169,9 +169,9 @@ function SignupInner() {
                   onChange={e => setPassword(e.target.value)}
                   placeholder="Min. 6 characters" required minLength={6} autoComplete="new-password"
                   className="w-full rounded-xl px-4 py-3 pr-11 text-sm outline-none border transition-all"
-                  style={{ background: '#181e2a', borderColor: 'rgba(255,255,255,0.1)', color: 'white' }}
-                  onFocus={e => e.target.style.borderColor = '#7c3aed'}
-                  onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.1)'} />
+                  style={{ background: 'var(--surface2)', borderColor: 'var(--border2)', color: 'white' }}
+                  onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+                  onBlur={e => e.target.style.borderColor = 'var(--border2)'} />
                 <button type="button" onClick={() => setShowPw(!showPw)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60 transition-colors">
                   {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -226,7 +226,7 @@ function SignupInner() {
 
 export default function SignupPage() {
   return (
-    <Suspense fallback={<div style={{ background: '#0a0d12', minHeight: '100vh' }} />}>
+    <Suspense fallback={<div style={{ background: 'var(--bg)', minHeight: '100vh' }} />}>
       <SignupInner />
     </Suspense>
   )
