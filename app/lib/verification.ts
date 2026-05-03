@@ -315,8 +315,8 @@ Maximum 8 claims.`
     })
     const claims = Array.isArray(parsed.claims) ? parsed.claims : []
     return claims
-      .filter((c: unknown) => typeof c === 'string' && c.length > 10)
-      .map((c: string) => (c as string).trim().slice(0, 400))
+      .filter((c: unknown): c is string => typeof c === 'string' && c.length > 10)
+      .map((c) => c.trim().slice(0, 400))
       .slice(0, 8)
   } catch (e) {
     console.warn('[verification] claim extraction failed:', (e as Error).message?.slice(0, 200))
