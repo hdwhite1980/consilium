@@ -88,50 +88,50 @@ export default async function TrackRecordPage() {
   const stats = await fetchPreviewStats()
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100">
+    <div className="min-h-screen t-bg t-text">
       <div className="max-w-6xl mx-auto px-4 py-8">
         {/* Header */}
         <div className="mb-8">
           <Link href="/" className="text-blue-400 hover:text-blue-300 text-sm">{'\u2190'} Back</Link>
-          <h1 className="text-3xl font-bold mt-2">Wali-OS Verdict Track Record</h1>
-          <p className="text-gray-400 mt-2">
+          <h1 className="text-3xl font-bold mt-2 t-text">Wali-OS Verdict Track Record</h1>
+          <p className="t-text2 mt-2">
             Transparent backtest of every non-neutral AI council verdict. Updated daily.
           </p>
         </div>
 
         {/* Headline tiles (preview) */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-          <div className="bg-gray-900 border border-gray-800 rounded p-6">
-            <div className="text-gray-400 text-sm mb-1">Total Verdicts</div>
-            <div className="text-3xl font-bold">
+          <div className="t-card rounded p-6">
+            <div className="t-text2 text-sm mb-1">Total Verdicts</div>
+            <div className="text-3xl font-bold t-text">
               {stats?.totalVerdicts.toLocaleString() ?? '\u2014'}
             </div>
-            <div className="text-xs text-gray-500 mt-1">non-neutral calls tracked</div>
+            <div className="text-xs t-text3 mt-1">non-neutral calls tracked</div>
           </div>
-          <div className="bg-gray-900 border border-gray-800 rounded p-6">
-            <div className="text-gray-400 text-sm mb-1">Hit Rate (1w)</div>
+          <div className="t-card rounded p-6">
+            <div className="t-text2 text-sm mb-1">Hit Rate (1w)</div>
             <div className="text-3xl font-bold text-green-400">
               {stats?.hitRatePct ?? '\u2014'}
             </div>
-            <div className="text-xs text-gray-500 mt-1">target hit vs stop hit</div>
+            <div className="text-xs t-text3 mt-1">target hit vs stop hit</div>
           </div>
-          <div className="bg-gray-900 border border-gray-800 rounded p-6">
-            <div className="text-gray-400 text-sm mb-1">Direction Accuracy (1w)</div>
+          <div className="t-card rounded p-6">
+            <div className="t-text2 text-sm mb-1">Direction Accuracy (1w)</div>
             <div className="text-3xl font-bold text-blue-400">
               {stats?.directionPct ?? '\u2014'}
             </div>
-            <div className="text-xs text-gray-500 mt-1">price moved in right direction</div>
+            <div className="text-xs t-text3 mt-1">price moved in right direction</div>
           </div>
         </div>
 
         {/* Methodology callout */}
         <div className="bg-blue-950/30 border border-blue-900/50 rounded p-5 mb-8">
           <h2 className="font-semibold text-blue-300 mb-2">How we measure the track record</h2>
-          <p className="text-sm text-gray-300 leading-relaxed">
+          <p className="text-sm t-text2 leading-relaxed">
             Every non-neutral AI council verdict is logged with its entry price, stop, and target.
             Outcomes are resolved against real market data: a verdict is a <span className="text-green-400">win</span> if
             price hits the target, a <span className="text-red-400">loss</span> if it hits the stop,
-            and <span className="text-gray-400">expired</span> otherwise. Hit rate excludes expired
+            and <span className="t-text3">expired</span> otherwise. Hit rate excludes expired
             verdicts. Direction accuracy measures whether price moved the predicted direction
             regardless of stop/target. Updated daily at 4am ET. NEUTRAL verdicts are excluded.
           </p>
@@ -139,32 +139,32 @@ export default async function TrackRecordPage() {
 
         {/* Filter row (visible but disabled) */}
         <div className="flex flex-wrap gap-3 mb-6 text-sm opacity-50 pointer-events-none select-none">
-          <div className="flex bg-gray-900 rounded overflow-hidden">
+          <div className="flex t-surface rounded overflow-hidden">
             <button disabled className="px-4 py-2 bg-blue-600 text-white">All Users</button>
-            <button disabled className="px-4 py-2 text-gray-400">My Verdicts</button>
+            <button disabled className="px-4 py-2 t-text2">My Verdicts</button>
           </div>
-          <div className="flex bg-gray-900 rounded overflow-hidden">
-            <button disabled className="px-4 py-2 text-gray-400">1 Day</button>
+          <div className="flex t-surface rounded overflow-hidden">
+            <button disabled className="px-4 py-2 t-text2">1 Day</button>
             <button disabled className="px-4 py-2 bg-blue-600 text-white">1 Week</button>
-            <button disabled className="px-4 py-2 text-gray-400">1 Month</button>
+            <button disabled className="px-4 py-2 t-text2">1 Month</button>
           </div>
-          <select disabled className="bg-gray-900 border border-gray-800 rounded px-3 py-2">
+          <select disabled className="t-surface t-border t-text border rounded px-3 py-2">
             <option>All personas</option>
           </select>
-          <select disabled className="bg-gray-900 border border-gray-800 rounded px-3 py-2">
+          <select disabled className="t-surface t-border t-text border rounded px-3 py-2">
             <option>All timeframes</option>
           </select>
         </div>
 
         {/* 3 most recent verdicts */}
-        <div className="bg-gray-900 border border-gray-800 rounded overflow-hidden mb-8">
-          <div className="px-4 py-3 border-b border-gray-800">
-            <h2 className="font-semibold">Most Recent Verdicts</h2>
-            <div className="text-xs text-gray-500 mt-1">Showing 3 of {stats?.totalVerdicts ?? 0} {'\u2014'} unlock to see all</div>
+        <div className="t-card rounded overflow-hidden mb-8">
+          <div className="px-4 py-3 border-b t-border">
+            <h2 className="font-semibold t-text">Most Recent Verdicts</h2>
+            <div className="text-xs t-text3 mt-1">Showing 3 of {stats?.totalVerdicts ?? 0} {'\u2014'} unlock to see all</div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-gray-950/50 text-gray-400 text-xs">
+              <thead className="t-surface3 t-text2 text-xs">
                 <tr>
                   <th className="px-3 py-2 text-left">Date</th>
                   <th className="px-3 py-2 text-left">Ticker</th>
@@ -175,12 +175,12 @@ export default async function TrackRecordPage() {
                   <th className="px-3 py-2 text-left">Outcome</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-800">
+              <tbody>
                 {(stats?.recent ?? []).map((v, i) => {
                   const outcomeColor =
                     v.outcome_strict === 'win' ? 'text-green-400' :
                     v.outcome_strict === 'loss' ? 'text-red-400' :
-                    v.outcome_strict === 'expired' ? 'text-gray-400' :
+                    v.outcome_strict === 'expired' ? 't-text3' :
                     'text-yellow-400'
                   const outcomeLabel =
                     v.outcome_strict === 'win' ? 'Win' :
@@ -188,15 +188,15 @@ export default async function TrackRecordPage() {
                     v.outcome_strict === 'expired' ? 'Expired' :
                     'Pending'
                   return (
-                    <tr key={i}>
-                      <td className="px-3 py-2 text-gray-400">{v.verdict_date}</td>
-                      <td className="px-3 py-2 font-mono font-semibold">{v.ticker}</td>
+                    <tr key={i} style={{ borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
+                      <td className="px-3 py-2 t-text2">{v.verdict_date}</td>
+                      <td className="px-3 py-2 font-mono font-semibold t-text">{v.ticker}</td>
                       <td className={`px-3 py-2 font-semibold ${v.signal === 'BULLISH' ? 'text-green-400' : 'text-red-400'}`}>
                         {v.signal}
                       </td>
-                      <td className="px-3 py-2 text-right">{v.confidence ?? '\u2014'}%</td>
-                      <td className="px-3 py-2 text-right font-mono">{v.entry_price ? '$' + v.entry_price.toFixed(2) : '\u2014'}</td>
-                      <td className="px-3 py-2 text-right font-mono">{v.outcome_price ? '$' + v.outcome_price.toFixed(2) : '\u2014'}</td>
+                      <td className="px-3 py-2 text-right t-text">{v.confidence ?? '\u2014'}%</td>
+                      <td className="px-3 py-2 text-right font-mono t-text">{v.entry_price ? '$' + v.entry_price.toFixed(2) : '\u2014'}</td>
+                      <td className="px-3 py-2 text-right font-mono t-text">{v.outcome_price ? '$' + v.outcome_price.toFixed(2) : '\u2014'}</td>
                       <td className={`px-3 py-2 ${outcomeColor}`}>{outcomeLabel}</td>
                     </tr>
                   )
@@ -205,7 +205,7 @@ export default async function TrackRecordPage() {
             </table>
           </div>
           {(!stats || stats.recent.length === 0) && (
-            <div className="p-8 text-center text-gray-500">
+            <div className="p-8 text-center t-text3">
               No verdicts to display yet.
             </div>
           )}
@@ -214,7 +214,7 @@ export default async function TrackRecordPage() {
         {/* Email gate */}
         <TrackRecordGate />
 
-        <div className="mt-8 text-xs text-gray-500 text-center">
+        <div className="mt-8 text-xs t-text3 text-center">
           Outcomes updated daily at 4am ET. NEUTRAL verdicts excluded from all stats.
         </div>
       </div>

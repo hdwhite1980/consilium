@@ -74,50 +74,50 @@ export default function BacktestDashboard() {
   }, [scope, horizon, personaFilter, timeframeFilter])
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100">
+    <div className="min-h-screen t-bg t-text">
       <div className="max-w-6xl mx-auto px-4 py-8">
         {/* Header */}
         <div className="mb-8">
           <Link href="/" className="text-blue-400 hover:text-blue-300 text-sm">{'\u2190'} Back</Link>
-          <h1 className="text-3xl font-bold mt-2">Wali-OS Verdict Track Record</h1>
-          <p className="text-gray-400 mt-2">
+          <h1 className="text-3xl font-bold mt-2 t-text">Wali-OS Verdict Track Record</h1>
+          <p className="t-text2 mt-2">
             Transparent backtest of every non-neutral AI council verdict. Updated daily.
           </p>
         </div>
 
         {/* Scope + filter controls */}
         <div className="flex flex-wrap gap-3 mb-6 text-sm">
-          <div className="flex bg-gray-900 rounded overflow-hidden">
+          <div className="flex t-surface rounded overflow-hidden">
             <button
               onClick={() => setScope('public')}
-              className={`px-4 py-2 ${scope === 'public' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+              className={`px-4 py-2 ${scope === 'public' ? 'bg-blue-600 text-white' : 't-text2 hover:t-text'}`}
             >
               All Users
             </button>
             <button
               onClick={() => setScope('user')}
-              className={`px-4 py-2 ${scope === 'user' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+              className={`px-4 py-2 ${scope === 'user' ? 'bg-blue-600 text-white' : 't-text2 hover:t-text'}`}
             >
               My Verdicts
             </button>
           </div>
 
-          <div className="flex bg-gray-900 rounded overflow-hidden">
+          <div className="flex t-surface rounded overflow-hidden">
             <button
               onClick={() => setHorizon('1d')}
-              className={`px-4 py-2 ${horizon === '1d' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+              className={`px-4 py-2 ${horizon === '1d' ? 'bg-blue-600 text-white' : 't-text2 hover:t-text'}`}
             >
               1 Day
             </button>
             <button
               onClick={() => setHorizon('1w')}
-              className={`px-4 py-2 ${horizon === '1w' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+              className={`px-4 py-2 ${horizon === '1w' ? 'bg-blue-600 text-white' : 't-text2 hover:t-text'}`}
             >
               1 Week
             </button>
             <button
               onClick={() => setHorizon('1m')}
-              className={`px-4 py-2 ${horizon === '1m' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+              className={`px-4 py-2 ${horizon === '1m' ? 'bg-blue-600 text-white' : 't-text2 hover:t-text'}`}
             >
               1 Month
             </button>
@@ -126,7 +126,7 @@ export default function BacktestDashboard() {
           <select
             value={personaFilter}
             onChange={(e) => setPersonaFilter(e.target.value)}
-            className="bg-gray-900 border border-gray-800 rounded px-3 py-2"
+            className="t-surface t-border t-text border rounded px-3 py-2"
           >
             <option value="all">All personas</option>
             <option value="balanced">Balanced</option>
@@ -137,7 +137,7 @@ export default function BacktestDashboard() {
           <select
             value={timeframeFilter}
             onChange={(e) => setTimeframeFilter(e.target.value)}
-            className="bg-gray-900 border border-gray-800 rounded px-3 py-2"
+            className="t-surface t-border t-text border rounded px-3 py-2"
           >
             <option value="all">All timeframes</option>
             <option value="1D">1 Day</option>
@@ -147,7 +147,7 @@ export default function BacktestDashboard() {
           </select>
         </div>
 
-        {loading && <div className="text-gray-400 py-8 text-center">Loading stats...</div>}
+        {loading && <div className="t-text2 py-8 text-center">Loading stats...</div>}
         {error && !loading && (
           <div className="bg-red-900/30 border border-red-800 rounded p-4 text-red-300">
             {error.includes('authentication required')
@@ -160,30 +160,30 @@ export default function BacktestDashboard() {
           <>
             {/* Headline stats */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-              <div className="bg-gray-900 border border-gray-800 rounded p-6">
-                <div className="text-gray-400 text-sm mb-1">Total Verdicts</div>
-                <div className="text-3xl font-bold">{data.totalVerdicts.toLocaleString()}</div>
-                <div className="text-xs text-gray-500 mt-1">non-neutral calls tracked</div>
+              <div className="t-card rounded p-6">
+                <div className="t-text2 text-sm mb-1">Total Verdicts</div>
+                <div className="text-3xl font-bold t-text">{data.totalVerdicts.toLocaleString()}</div>
+                <div className="text-xs t-text3 mt-1">non-neutral calls tracked</div>
               </div>
-              <div className="bg-gray-900 border border-gray-800 rounded p-6">
-                <div className="text-gray-400 text-sm mb-1">Hit Rate ({horizon})</div>
+              <div className="t-card rounded p-6">
+                <div className="t-text2 text-sm mb-1">Hit Rate ({horizon})</div>
                 <div className="text-3xl font-bold text-green-400">
                   {pct(data.overall.hitRate.hitRate)}
                 </div>
-                <div className="text-xs text-gray-500 mt-1">
+                <div className="text-xs t-text3 mt-1">
                   {data.overall.hitRate.wins}W / {data.overall.hitRate.losses}L / {data.overall.hitRate.expired} expired
                 </div>
-                <div className="text-xs text-gray-600 mt-1">target hit vs stop hit</div>
+                <div className="text-xs t-text3 mt-1">target hit vs stop hit</div>
               </div>
-              <div className="bg-gray-900 border border-gray-800 rounded p-6">
-                <div className="text-gray-400 text-sm mb-1">Direction Accuracy ({horizon})</div>
+              <div className="t-card rounded p-6">
+                <div className="t-text2 text-sm mb-1">Direction Accuracy ({horizon})</div>
                 <div className="text-3xl font-bold text-blue-400">
                   {pct(data.overall.direction.accuracy)}
                 </div>
-                <div className="text-xs text-gray-500 mt-1">
+                <div className="text-xs t-text3 mt-1">
                   {data.overall.direction.correct} correct / {data.overall.direction.incorrect} incorrect
                 </div>
-                <div className="text-xs text-gray-600 mt-1">price moved in right direction</div>
+                <div className="text-xs t-text3 mt-1">price moved in right direction</div>
               </div>
             </div>
 
@@ -236,14 +236,14 @@ export default function BacktestDashboard() {
             </div>
 
             {/* Recent verdicts */}
-            <div className="bg-gray-900 border border-gray-800 rounded overflow-hidden">
-              <div className="px-4 py-3 border-b border-gray-800">
-                <h2 className="font-semibold">Recent Verdicts</h2>
-                <div className="text-xs text-gray-500 mt-1">Last 100 verdicts (newest first)</div>
+            <div className="t-card rounded overflow-hidden">
+              <div className="px-4 py-3 border-b t-border">
+                <h2 className="font-semibold t-text">Recent Verdicts</h2>
+                <div className="text-xs t-text3 mt-1">Last 100 verdicts (newest first)</div>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
-                  <thead className="bg-gray-950/50 text-gray-400 text-xs">
+                  <thead className="t-surface3 t-text2 text-xs">
                     <tr>
                       <th className="px-3 py-2 text-left">Date</th>
                       <th className="px-3 py-2 text-left">Ticker</th>
@@ -257,22 +257,22 @@ export default function BacktestDashboard() {
                       <th className="px-3 py-2 text-left">Directional</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-800">
+                  <tbody>
                     {data.recent.map((v, i) => {
                       const strict = formatOutcome(v.outcome_strict)
                       const direction = formatOutcome(v.outcome_directional)
                       return (
-                        <tr key={i} className="hover:bg-gray-950/50">
-                          <td className="px-3 py-2 text-gray-400">{v.verdict_date}</td>
-                          <td className="px-3 py-2 font-mono font-semibold">{v.ticker}</td>
+                        <tr key={i} style={{ borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
+                          <td className="px-3 py-2 t-text2">{v.verdict_date}</td>
+                          <td className="px-3 py-2 font-mono font-semibold t-text">{v.ticker}</td>
                           <td className={`px-3 py-2 font-semibold ${v.signal === 'BULLISH' ? 'text-green-400' : 'text-red-400'}`}>
                             {v.signal}
                           </td>
-                          <td className="px-3 py-2 text-right">{v.confidence ?? '\u2014'}%</td>
-                          <td className="px-3 py-2 text-gray-400 capitalize">{v.persona ?? '\u2014'}</td>
-                          <td className="px-3 py-2 text-gray-400">{v.timeframe ?? '\u2014'}</td>
-                          <td className="px-3 py-2 text-right font-mono">{v.entry_price ? '$' + v.entry_price.toFixed(2) : '\u2014'}</td>
-                          <td className="px-3 py-2 text-right font-mono">{v.outcome_price ? '$' + v.outcome_price.toFixed(2) : '\u2014'}</td>
+                          <td className="px-3 py-2 text-right t-text">{v.confidence ?? '\u2014'}%</td>
+                          <td className="px-3 py-2 t-text2 capitalize">{v.persona ?? '\u2014'}</td>
+                          <td className="px-3 py-2 t-text2">{v.timeframe ?? '\u2014'}</td>
+                          <td className="px-3 py-2 text-right font-mono t-text">{v.entry_price ? '$' + v.entry_price.toFixed(2) : '\u2014'}</td>
+                          <td className="px-3 py-2 text-right font-mono t-text">{v.outcome_price ? '$' + v.outcome_price.toFixed(2) : '\u2014'}</td>
                           <td className={`px-3 py-2 ${strict.color}`}>{strict.label}</td>
                           <td className={`px-3 py-2 ${direction.color}`}>{direction.label}</td>
                         </tr>
@@ -282,13 +282,13 @@ export default function BacktestDashboard() {
                 </table>
               </div>
               {data.recent.length === 0 && (
-                <div className="p-8 text-center text-gray-500">
+                <div className="p-8 text-center t-text3">
                   No verdicts yet {'\u2014'} run some analyses to populate the track record.
                 </div>
               )}
             </div>
 
-            <div className="mt-6 text-xs text-gray-500 text-center">
+            <div className="mt-6 text-xs t-text3 text-center">
               Stats generated at {new Date(data.generatedAt).toLocaleString()}.{' '}
               Outcomes updated daily at 4am ET. NEUTRAL verdicts excluded from all stats.
             </div>
@@ -310,12 +310,12 @@ interface BreakdownRow {
 
 function BreakdownTable({ title, rows }: { title: string; rows: BreakdownRow[] }) {
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded">
-      <div className="px-4 py-3 border-b border-gray-800">
-        <h3 className="font-semibold">{title}</h3>
+    <div className="t-card rounded">
+      <div className="px-4 py-3 border-b t-border">
+        <h3 className="font-semibold t-text">{title}</h3>
       </div>
       <table className="w-full text-sm">
-        <thead className="text-gray-400 text-xs">
+        <thead className="t-text2 text-xs">
           <tr>
             <th className="px-3 py-2 text-left">Group</th>
             <th className="px-3 py-2 text-right">Sample</th>
@@ -323,24 +323,24 @@ function BreakdownTable({ title, rows }: { title: string; rows: BreakdownRow[] }
             <th className="px-3 py-2 text-right">Direction</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-800">
-          {rows.map((r) => (
-            <tr key={r.label}>
-              <td className="px-3 py-2 capitalize">{r.label}</td>
-              <td className="px-3 py-2 text-right text-gray-400">{r.sampleSize}</td>
+        <tbody>
+          {rows.map((r, idx) => (
+            <tr key={r.label} style={{ borderTop: idx === 0 ? 'none' : '1px solid var(--border)' }}>
+              <td className="px-3 py-2 capitalize t-text">{r.label}</td>
+              <td className="px-3 py-2 text-right t-text2">{r.sampleSize}</td>
               <td className="px-3 py-2 text-right">
                 {r.decidedSize > 0 ? (
                   <span className={r.hitRate >= 0.5 ? 'text-green-400' : 'text-red-400'}>
-                    {pct(r.hitRate)} <span className="text-xs text-gray-500">({r.decidedSize})</span>
+                    {pct(r.hitRate)} <span className="text-xs t-text3">({r.decidedSize})</span>
                   </span>
-                ) : <span className="text-gray-600">{'\u2014'}</span>}
+                ) : <span className="t-text3">{'\u2014'}</span>}
               </td>
               <td className="px-3 py-2 text-right">
                 {r.directionSize > 0 ? (
-                  <span className={r.direction >= 0.5 ? 'text-blue-400' : 'text-gray-400'}>
-                    {pct(r.direction)} <span className="text-xs text-gray-500">({r.directionSize})</span>
+                  <span className={r.direction >= 0.5 ? 'text-blue-400' : 't-text2'}>
+                    {pct(r.direction)} <span className="text-xs t-text3">({r.directionSize})</span>
                   </span>
-                ) : <span className="text-gray-600">{'\u2014'}</span>}
+                ) : <span className="t-text3">{'\u2014'}</span>}
               </td>
             </tr>
           ))}
