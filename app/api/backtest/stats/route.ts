@@ -1,462 +1,256 @@
-import { NextRequest } from 'next/server'
-import { buildSignalBundle } from '@/app/lib/aggregator'
-import { technicalsToPayload } from '@/app/lib/signals/technicals'
-import { runPipeline } from '@/app/lib/pipeline'
-import { runSocialScout } from '@/app/lib/social-scout'
-import { createServerClient } from '@/app/lib/supabase'
-import { createClient as createAuthClient } from '@/app/lib/auth/server'
+// ═════════════════════════════════════════════════════════════
+// /api/backtest/stats — Aggregated backtest statistics
+//
+// Query params:
+//   scope: 'public' (default) | 'user' — user requires auth
+//   horizon: '1w' (default) | '1d' | '1m'
+//   persona: 'all' (default) | 'balanced' | 'technical' | 'fundamental'
+//   timeframe: 'all' (default) | '1D' | '1W' | '1M' | '3M'
+//
+// Returns:
+//   - Headline stats: hit rate (strict), direction accuracy (directional)
+//   - Breakdowns by persona, timeframe, confidence band
+//   - Sample size for each cell
+//   - Recent verdicts list (last 100, for public transparency)
+// ═════════════════════════════════════════════════════════════
 
-export const maxDuration = 300
+import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
+import { cookies } from 'next/headers'
+import { createServerClient } from '@supabase/ssr'
 
-// Cache durations in minutes per timeframe
-const CACHE_MINUTES: Record<string, number> = {
-  '1D': 20,   // 20 min — intraday moves fast
-  '1W': 45,   // 45 min — price staleness check also runs
-  '1M': 60,   // 1 hour — daily bars, price check guards against big moves
-  '3M': 90,   // 90 min — longer view but price still matters
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+interface VerdictRow {
+  ticker: string
+  signal: string
+  confidence: number | null
+  persona: string | null
+  timeframe: string | null
+  verdict_date: string
+  entry_price: number | null
+  trader_decision: string | null
+  trader_grade: string | null
+  trader_risk_reward: number | null
+  outcome_1d_strict: string
+  outcome_1d_directional: string
+  outcome_1d_price: number | null
+  outcome_1w_strict: string
+  outcome_1w_directional: string
+  outcome_1w_price: number | null
+  outcome_1m_strict: string
+  outcome_1m_directional: string
+  outcome_1m_price: number | null
 }
 
-export async function POST(req: NextRequest) {
-  let ticker: string, timeframe: string, forceRefresh: boolean, persona: string
-  try {
-    const body = await req.json()
-    ticker = body.ticker; timeframe = body.timeframe; forceRefresh = body.forceRefresh; persona = body.persona
-  } catch {
-    return Response.json({ error: 'Invalid request body' }, { status: 400 })
+function computeHitRate(rows: VerdictRow[], horizon: '1d' | '1w' | '1m'): {
+  wins: number; losses: number; expired: number; total: number; hitRate: number
+} {
+  const strictCol =
+    horizon === '1d' ? 'outcome_1d_strict' :
+    horizon === '1w' ? 'outcome_1w_strict' :
+    'outcome_1m_strict'
+  let wins = 0, losses = 0, expired = 0
+  for (const r of rows) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const v = (r as any)[strictCol]
+    if (v === 'win') wins++
+    else if (v === 'loss') losses++
+    else if (v === 'expired') expired++
   }
-  if (!ticker) return Response.json({ error: 'ticker required' }, { status: 400 })
+  const total = wins + losses + expired
+  // Hit rate = wins / (wins + losses); expired excluded (thesis never played out)
+  const decided = wins + losses
+  const hitRate = decided > 0 ? wins / decided : 0
+  return { wins, losses, expired, total, hitRate }
+}
 
-  const symbol = ticker.toUpperCase().trim()
-  const tf = timeframe || '1W'
-  const encoder = new TextEncoder()
+function computeDirectionAccuracy(rows: VerdictRow[], horizon: '1d' | '1w' | '1m'): {
+  correct: number; incorrect: number; pending: number; total: number; accuracy: number
+} {
+  const col =
+    horizon === '1d' ? 'outcome_1d_directional' :
+    horizon === '1w' ? 'outcome_1w_directional' :
+    'outcome_1m_directional'
+  let correct = 0, incorrect = 0, pending = 0
+  for (const r of rows) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const v = (r as any)[col]
+    if (v === 'win') correct++
+    else if (v === 'loss') incorrect++
+    else pending++
+  }
+  const total = correct + incorrect + pending
+  const decided = correct + incorrect
+  const accuracy = decided > 0 ? correct / decided : 0
+  return { correct, incorrect, pending, total, accuracy }
+}
 
-  // --- DIAG: per-request id for tracing through Railway logs ---
-  const reqId = Math.random().toString(36).slice(2, 10)
-  const startedAt = Date.now()
-  const dlog = (msg: string, extra?: unknown) => {
-    const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1)
-    if (extra !== undefined) {
-      console.log(`[analyze:${reqId}] +${elapsed}s ${msg}`, extra)
-    } else {
-      console.log(`[analyze:${reqId}] +${elapsed}s ${msg}`)
+function bucketConfidence(c: number | null): string {
+  if (c === null || c === undefined) return 'unknown'
+  if (c >= 80) return 'high (80+)'
+  if (c >= 65) return 'medium (65-79)'
+  if (c >= 50) return 'low (50-64)'
+  return 'very low (<50)'
+}
+
+export async function GET(req: NextRequest) {
+  const url = new URL(req.url)
+  const scope = url.searchParams.get('scope') ?? 'public'
+  const horizon = (url.searchParams.get('horizon') ?? '1w') as '1d' | '1w' | '1m'
+  const personaFilter = url.searchParams.get('persona') ?? 'all'
+  const timeframeFilter = url.searchParams.get('timeframe') ?? 'all'
+
+  // Auth for user-scope requests
+  let userId: string | null = null
+  if (scope === 'user') {
+    const cookieStore = await cookies()
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll: () => cookieStore.getAll(),
+          setAll: () => {},
+        },
+      }
+    )
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+      return NextResponse.json({ error: 'authentication required for user scope' }, { status: 401 })
     }
+    userId = user.id
   }
-  dlog(`START ticker=${symbol} tf=${tf} forceRefresh=${forceRefresh ?? false} persona=${persona ?? 'balanced'}`)
 
-  // Get user ID for track record logging — non-blocking, null if not authed
-  let currentUserId: string | null = null
-  try {
-    const authClient = await createAuthClient()
-    const { data: { user } } = await authClient.auth.getUser()
-    currentUserId = user?.id ?? null
-  } catch { /* not blocking */ }
-  dlog(`auth resolved userId=${currentUserId ?? '(anonymous)'}`)
+  const admin = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  )
 
-  const stream = new ReadableStream({
-    async start(controller) {
-      let controllerClosed = false
-      let controllerClosedAt: { stage: string; elapsedSec: string } | null = null
-      const send = (event: string, data: unknown) => {
-        if (controllerClosed) return
-        try {
-          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
-        } catch {
-          controllerClosed = true
-          controllerClosedAt = { stage: event, elapsedSec: ((Date.now() - startedAt) / 1000).toFixed(1) }
-          dlog(`!! CONTROLLER CLOSED at event=${event} (client disconnected, pipeline continues server-side)`)
-        }
-      }
+  let query = admin
+    .from('verdict_log')
+    .select('ticker, signal, confidence, persona, timeframe, verdict_date, entry_price, trader_decision, trader_grade, trader_risk_reward, outcome_1d_strict, outcome_1d_directional, outcome_1d_price, outcome_1w_strict, outcome_1w_directional, outcome_1w_price, outcome_1m_strict, outcome_1m_directional, outcome_1m_price')
+    .order('verdict_date', { ascending: false })
+    .limit(5000)
 
-      // Heartbeat — sends a SSE comment every 15s to prevent Railway/proxy from
-      // closing an idle connection while AI stages are running
-      const heartbeat = setInterval(() => {
-        try { controller.enqueue(encoder.encode(`: heartbeat\n\n`)) } catch { /* stream closed */ }
-      }, 15000)
+  // Filter out NEUTRAL signals — they're not meaningful for backtest
+  query = query.neq('signal', 'NEUTRAL')
 
-      try {
-        const supabase = createServerClient()
+  if (userId) {
+    query = query.eq('user_id', userId)
+  }
+  if (personaFilter !== 'all') {
+    query = query.eq('persona', personaFilter)
+  }
+  if (timeframeFilter !== 'all') {
+    query = query.eq('timeframe', timeframeFilter)
+  }
 
-        // ── Cache check ────────────────────────────────────────
-        if (!forceRefresh) {
-          const cacheMinutes = CACHE_MINUTES[tf] ?? 120
-          const cutoff = new Date(Date.now() - cacheMinutes * 60 * 1000).toISOString()
+  const { data: rows, error } = await query
+  if (error) {
+    console.error('[backtest-stats] query failed:', error.message)
+    return NextResponse.json({ error: 'stats query failed', detail: error.message }, { status: 500 })
+  }
 
-          const { data: cached } = await supabase
-            .from('analyses')
-            .select('*')
-            .eq('ticker', symbol)
-            .eq('timeframe', tf)
-            .eq('persona', persona ?? 'balanced')
-            .gte('created_at', cutoff)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle()
+  const allRows = (rows ?? []) as VerdictRow[]
 
-          if (cached) {
-            // ── Price staleness check ──────────────────────────
-            let priceStale = false
-            let livePrice = 0
-            try {
-              const finnhubKey = process.env.FINNHUB_API_KEY
-              if (finnhubKey) {
-                const quoteRes = await fetch(
-                  `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${finnhubKey}`,
-                  { cache: 'no-store' }
-                )
-                if (quoteRes.ok) {
-                  const quoteData = await quoteRes.json()
-                  livePrice = quoteData?.c ?? 0
-                }
-              }
-            } catch { /* fallthrough */ }
+  // Overall stats
+  const overall = {
+    hitRate: computeHitRate(allRows, horizon),
+    direction: computeDirectionAccuracy(allRows, horizon),
+  }
 
-            const cachedPrice: number = cached.price ?? 0
-            const cacheAgeMs = Date.now() - new Date(cached.created_at).getTime()
-            const cacheAgeHours = cacheAgeMs / 3600000
-
-            if (cachedPrice <= 0) {
-              // No price stored — can't verify freshness, force refresh if over 30 min
-              if (cacheAgeMs > 30 * 60 * 1000) {
-                priceStale = true
-                send('status', { stage: 'building_bundle', message: 'Cache has no price data — running fresh analysis...' })
-              }
-            } else if (livePrice > 0) {
-              const priceDrift = Math.abs(livePrice - cachedPrice) / cachedPrice
-              if (priceDrift > 0.015) {  // >1.5% drift = stale
-                priceStale = true
-                send('status', { stage: 'building_bundle', message: `Price moved ${(priceDrift*100).toFixed(1)}% since last analysis ($${cachedPrice.toFixed(2)} → $${livePrice.toFixed(2)}) — running fresh...` })
-              }
-            } else {
-              // Finnhub returned 0 — market closed or API issue, fall back to age check
-              if (cacheAgeHours > 2) {
-                priceStale = true
-                send('status', { stage: 'building_bundle', message: 'Cache is over 2 hours old — running fresh analysis...' })
-              }
-            }
-
-            // Hard maximum: never serve cache older than 2 hours regardless of price check
-            if (cacheAgeMs > 2 * 60 * 60 * 1000) {
-              priceStale = true
-              send('status', { stage: 'building_bundle', message: 'Cache expired (>2 hours) — running fresh analysis...' })
-            }
-
-            if (!priceStale) {
-            const ageMinutes = Math.round(
-              (Date.now() - new Date(cached.created_at).getTime()) / 60000
-            )
-            dlog(`cache HIT (age ${ageMinutes}m, will replay)`)
-            // Stream cached results exactly like a live run
-            send('status', { stage: 'cache_hit', message: `Serving cached analysis from ${ageMinutes} minute${ageMinutes === 1 ? '' : 's'} ago` })
-
-            // Restore market_data from stored signal_bundle
-            const sb = cached.signal_bundle ?? {}
-            send('market_data', {
-              bars: [],
-              currentPrice: cached.price ?? 0,
-              cached: true,
-              cachedAt: cached.created_at,
-              ageMinutes,
-              // Restore all dashboard data from signal_bundle if available
-              technicals: sb.technicals ?? null,
-              conviction: sb.conviction ?? null,
-              fundamentals: sb.fundamentals ?? null,
-              smartMoney: sb.smartMoney ?? null,
-              options: sb.options ?? null,
-              marketContext: sb.marketContext ?? null,
-            })
-
-            // Option 2: re-run Social Scout even on cache hit (sentiment decays fast).
-            // Runs in parallel with cached replay so UI stays snappy. Non-blocking.
-            const freshSocialPromise = runSocialScout(symbol, cached.price ?? 0, tf)
-              .then(fresh => send('grok_done', fresh))
-              .catch(() => { /* silent fallback - social is optional */ })
-
-            // Stream each AI stage result with a small delay so the UI animates
-            await new Promise(r => setTimeout(r, 300))
-            send('gemini_done', cached.gemini_news)
-
-            // Ensure social promise doesn't leak if user disconnects
-            void freshSocialPromise
-
-            await new Promise(r => setTimeout(r, 300))
-            send('claude_done', cached.claude_analysis)
-
-            await new Promise(r => setTimeout(r, 300))
-            send('gpt_done', cached.gpt_validation)
-
-            await new Promise(r => setTimeout(r, 300))
-            send('judge_done', cached.judge_verdict)
-
-            send('complete', {
-              analysisId: cached.id,
-              cached: true,
-              cachedAt: cached.created_at,
-              ageMinutes,
-              gemini: cached.gemini_news,
-              claude: cached.claude_analysis,
-              gpt: cached.gpt_validation,
-              judge: cached.judge_verdict,
-              transcript: cached.transcript,
-            })
-            dlog(`DONE via cache hit (controllerClosed=${controllerClosed})`)
-            return
-            } // end !priceStale
-          }
-        }
-
-        // ── Live pipeline ──────────────────────────────────────
-        dlog(`LIVE pipeline starting (cache miss or stale)`)
-        send('status', { stage: 'building_bundle', message: 'Gathering market data and computing signals...' })
-
-        const bundle = await buildSignalBundle(symbol, tf, (step) =>
-          send('status', { stage: 'building_bundle', message: step })
-        )
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ;(bundle as any).persona = persona ?? 'balanced'
-
-        send('market_data', {
-          bars: bundle.bars,
-          currentPrice: bundle.currentPrice,
-          cached: false,
-          technicals: technicalsToPayload(bundle.technicals, bundle.currentPrice),
-          conviction: {
-            direction: bundle.conviction.direction,
-            conviction: bundle.conviction.conviction,
-            convergenceScore: bundle.conviction.convergenceScore,
-            convergingSignals: bundle.conviction.convergingSignals,
-            divergingSignals: bundle.conviction.divergingSignals,
-            scenarios: bundle.conviction.scenarios,
-            regime: bundle.conviction.regime,
-            signals: bundle.conviction.signals.slice(0, 10),
-            invalidationConditions: bundle.conviction.invalidationConditions,
-          },
-          fundamentals: {
-            earningsDate: bundle.fundamentals.nextEarningsDate,
-            daysToEarnings: bundle.fundamentals.daysToEarnings,
-            earningsRisk: bundle.fundamentals.earningsRisk,
-            earningsHour: bundle.fundamentals.earningsHour,
-            earningsTimestamp: bundle.fundamentals.earningsTimestamp,
-            hoursUntilEarnings: bundle.fundamentals.hoursUntilEarnings,
-            epsEstimate: bundle.fundamentals.epsEstimate,
-            epsActual: bundle.fundamentals.epsActual,
-            revenueEstimate: bundle.fundamentals.revenueEstimate,
-            revenueActual: bundle.fundamentals.revenueActual,
-            analystConsensus: bundle.fundamentals.analystConsensus,
-            analystUpside: bundle.fundamentals.analystUpside,
-            analystBuy: bundle.fundamentals.analystBuy,
-            analystHold: bundle.fundamentals.analystHold,
-            analystSell: bundle.fundamentals.analystSell,
-            peRatio: bundle.fundamentals.peRatio,
-            consistentBeater: bundle.fundamentals.consistentBeater,
-            avgSurprisePct: bundle.fundamentals.avgSurprisePct,
-            insiderSignal: bundle.fundamentals.insiderSignal,
-          },
-          smartMoney: {
-            insiderSignal: bundle.smartMoney.insiderSignal,
-            congressSignal: bundle.smartMoney.congressSignal,
-            congressTrades: bundle.smartMoney.congressionalTrades.length,
-            notableHolders: bundle.smartMoney.notableHolders,
-          },
-          options: {
-            putCallRatio: bundle.optionsFlow.putCallRatio,
-            putCallSignal: bundle.optionsFlow.putCallSignal,
-            shortInterestPct: bundle.optionsFlow.shortInterestPct,
-            shortSignal: bundle.optionsFlow.shortSignal,
-            unusualCount: bundle.optionsFlow.unusualActivity.length,
-            unusualActivity: bundle.optionsFlow.unusualActivity.slice(0, 3),
-            ivSignal: bundle.optionsFlow.ivSignal,
-            maxPainStrike: bundle.optionsFlow.maxPainStrike,
-          },
-          marketContext: {
-            regime: bundle.marketContext.regime,
-            spy: bundle.marketContext.spy,
-            vix: bundle.marketContext.vix,
-            sectorETF: bundle.marketContext.sectorETF,
-            competitors: bundle.marketContext.competitors,
-          },
-        })
-
-        dlog(`bundle built (price=$${bundle.currentPrice.toFixed(2)}), entering runPipeline`)
-        const result = await runPipeline(bundle, (event, data) => send(event, data))
-        dlog(`runPipeline RETURNED (signal=${result.judge?.signal} confidence=${result.judge?.confidence})`)
-
-        // Save to Supabase — store full dashboard data in signal_bundle for cache restore
-        dlog(`starting analyses insert`)
-        const { data: saved, error: savedErr } = await supabase.from('analyses').insert({
-          ticker: symbol,
-          timeframe: tf,
-          persona: persona ?? 'balanced',
-          price: bundle.currentPrice,
-          gemini_news: result.gemini,
-          claude_analysis: result.claude,
-          gpt_validation: result.gpt,
-          social_sentiment: result.social,
-          judge_verdict: result.judge,
-          final_signal: result.judge.signal,
-          final_confidence: result.judge.confidence,
-          final_target: result.judge.target,
-          final_risk: result.judge.risk,
-          rounds_taken: result.judge.rounds,
-          transcript: result.transcript,
-          signal_bundle: {
-            technicals: technicalsToPayload(bundle.technicals, bundle.currentPrice),
-            conviction: {
-              direction: bundle.conviction.direction,
-              conviction: bundle.conviction.conviction,
-              convergenceScore: bundle.conviction.convergenceScore,
-              convergingSignals: bundle.conviction.convergingSignals,
-              divergingSignals: bundle.conviction.divergingSignals,
-              scenarios: bundle.conviction.scenarios,
-              regime: bundle.conviction.regime,
-              signals: bundle.conviction.signals.slice(0, 10),
-              invalidationConditions: bundle.conviction.invalidationConditions,
-            },
-            fundamentals: {
-              earningsDate: bundle.fundamentals.nextEarningsDate,
-              daysToEarnings: bundle.fundamentals.daysToEarnings,
-              earningsRisk: bundle.fundamentals.earningsRisk,
-              earningsHour: bundle.fundamentals.earningsHour,
-              earningsTimestamp: bundle.fundamentals.earningsTimestamp,
-              hoursUntilEarnings: bundle.fundamentals.hoursUntilEarnings,
-              epsEstimate: bundle.fundamentals.epsEstimate,
-              epsActual: bundle.fundamentals.epsActual,
-              revenueEstimate: bundle.fundamentals.revenueEstimate,
-              revenueActual: bundle.fundamentals.revenueActual,
-              analystConsensus: bundle.fundamentals.analystConsensus,
-              analystUpside: bundle.fundamentals.analystUpside,
-              analystBuy: bundle.fundamentals.analystBuy,
-              analystHold: bundle.fundamentals.analystHold,
-              analystSell: bundle.fundamentals.analystSell,
-              peRatio: bundle.fundamentals.peRatio,
-              consistentBeater: bundle.fundamentals.consistentBeater,
-              avgSurprisePct: bundle.fundamentals.avgSurprisePct,
-              insiderSignal: bundle.fundamentals.insiderSignal,
-            },
-            smartMoney: {
-              insiderSignal: bundle.smartMoney.insiderSignal,
-              congressSignal: bundle.smartMoney.congressSignal,
-              congressTrades: bundle.smartMoney.congressionalTrades.length,
-              notableHolders: bundle.smartMoney.notableHolders,
-            },
-            options: {
-              putCallRatio: bundle.optionsFlow.putCallRatio,
-              putCallSignal: bundle.optionsFlow.putCallSignal,
-              shortInterestPct: bundle.optionsFlow.shortInterestPct,
-              shortSignal: bundle.optionsFlow.shortSignal,
-              unusualCount: bundle.optionsFlow.unusualActivity.length,
-              unusualActivity: bundle.optionsFlow.unusualActivity.slice(0, 3),
-              ivSignal: bundle.optionsFlow.ivSignal,
-              maxPainStrike: bundle.optionsFlow.maxPainStrike,
-            },
-            marketContext: {
-              regime: bundle.marketContext.regime,
-              spy: bundle.marketContext.spy,
-              vix: bundle.marketContext.vix,
-              sectorETF: bundle.marketContext.sectorETF,
-              competitors: bundle.marketContext.competitors,
-            },
-          },
-        }).select().single()
-        if (savedErr) {
-          dlog(`!! analyses INSERT FAILED: ${savedErr.message}`, { code: savedErr.code, details: savedErr.details })
-        } else {
-          dlog(`analyses inserted OK id=${saved?.id ?? '(no id returned)'}`)
-        }
-
-        // Auto-log to track record directly via service role (no HTTP round-trip)
-        if (currentUserId && result.judge?.signal && result.judge.signal !== 'NEUTRAL') {
-          const today = new Date().toISOString().split('T')[0]
-          const parseP = (s: string | undefined): number | null => {
-            if (!s) return null
-            // Match the FIRST $-prefixed positive number, e.g. $15.25 from
-            // "Enter on a pullback to the $15.25 - $15.60 range".
-            // Rejects bare numbers, ranges, percentages, and (critically)
-            // anything with a leading minus like "-$15.70" or "$-15.70".
-            const match = String(s).match(/\$(\d{1,6}(?:\.\d{1,2})?)/)
-            if (!match) return null
-            const num = parseFloat(match[1])
-            return Number.isFinite(num) && num > 0 ? num : null
-          }
-          // Dedup — don't log same ticker+signal on same day
-          dlog(`checking verdict_log for dup`)
-          const { data: existing } = await supabase
-            .from('verdict_log')
-            .select('id')
-            .eq('user_id', currentUserId)
-            .eq('ticker', symbol)
-            .eq('verdict_date', today)
-            .eq('signal', result.judge.signal)
-            .maybeSingle()
-          if (!existing) {
-            try {
-              dlog(`inserting verdict_log row`)
-              const { error: vlErr } = await supabase.from('verdict_log').insert({
-                user_id: currentUserId,
-                ticker: symbol,
-                signal: result.judge.signal,
-                confidence: result.judge.confidence ?? null,
-                entry_price: parseP(result.judge.entryPrice),
-                stop_loss: parseP(result.judge.stopLoss),
-                take_profit: parseP(result.judge.takeProfit),
-                time_horizon: result.judge.timeHorizon ?? null,
-                persona: persona ?? 'balanced',
-                timeframe: tf,
-                outcome_1w: 'pending',
-                outcome_1m: 'pending',
-                trader_decision: result.trader?.decision ?? null,
-                trader_grade: result.trader?.grade ?? null,
-                trader_position_size: result.trader?.positionSizePct ?? null,
-                trader_risk_reward: result.trader?.riskReward ?? null,
-                trader_pass_reasons: result.trader?.passReasons ?? null,
-                trader_wait_conditions: result.trader?.waitConditions ?? null,
-                trader_rationale: result.trader?.rationale ?? null,
-                trader_evaluated_at: result.trader?.evaluatedAt ?? null,
-                code_era: 'post-fix-may-4-2026',
-              })
-              if (vlErr) {
-                dlog(`!! verdict_log INSERT FAILED: ${vlErr.message}`, { code: vlErr.code })
-              } else {
-                dlog(`verdict_log inserted OK`)
-              }
-            } catch (e) {
-              dlog(`!! verdict_log threw exception: ${(e as Error).message}`)
-            }
-          } else {
-            dlog(`verdict_log skipped (dup found, id=${existing.id})`)
-          }
-        } else if (currentUserId) {
-          dlog(`verdict_log skipped (signal=${result.judge?.signal ?? 'undefined'}, must be BULLISH/BEARISH and userId present)`)
-        }
-
-        send('complete', {
-          analysisId: saved?.id,
-          cached: false,
-          ...result,
-        })
-        const _cca = controllerClosedAt as { stage: string; elapsedSec: string } | null
-        const _ccaTag = _cca ? ` at stage=${_cca.stage}` : ''
-        dlog(`DONE via live run (controllerClosed=${controllerClosed}${_ccaTag})`)
-
-
-      } catch (err) {
-        dlog(`!! UNCAUGHT pipeline error: ${err instanceof Error ? err.message : String(err)}`)
-        console.error('Pipeline error:', err)
-        send('error', { message: err instanceof Error ? err.message : 'Pipeline failed' })
-      } finally {
-        clearInterval(heartbeat)
-        if (!controllerClosed) {
-          try { controller.close() } catch { /* already closed */ }
-        }
-        controllerClosed = true
-      }
+  // Breakdown by persona
+  const personas = ['balanced', 'technical', 'fundamental']
+  const byPersona = personas.map(p => {
+    const subset = allRows.filter(r => r.persona === p)
+    return {
+      persona: p,
+      sampleSize: subset.length,
+      hitRate: computeHitRate(subset, horizon),
+      direction: computeDirectionAccuracy(subset, horizon),
     }
   })
 
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    },
+  // Breakdown by timeframe
+  const timeframes = ['1D', '1W', '1M', '3M']
+  const byTimeframe = timeframes.map(tf => {
+    const subset = allRows.filter(r => r.timeframe === tf)
+    return {
+      timeframe: tf,
+      sampleSize: subset.length,
+      hitRate: computeHitRate(subset, horizon),
+      direction: computeDirectionAccuracy(subset, horizon),
+    }
+  })
+
+  // Breakdown by confidence band
+  const bands = ['high (80+)', 'medium (65-79)', 'low (50-64)', 'very low (<50)']
+  const byConfidence = bands.map(b => {
+    const subset = allRows.filter(r => bucketConfidence(r.confidence) === b)
+    return {
+      band: b,
+      sampleSize: subset.length,
+      hitRate: computeHitRate(subset, horizon),
+      direction: computeDirectionAccuracy(subset, horizon),
+    }
+  })
+
+  // Signal breakdown (bullish vs bearish)
+  const bullish = allRows.filter(r => r.signal === 'BULLISH')
+  const bearish = allRows.filter(r => r.signal === 'BEARISH')
+
+  const bySignal = [
+    { signal: 'BULLISH', sampleSize: bullish.length, hitRate: computeHitRate(bullish, horizon), direction: computeDirectionAccuracy(bullish, horizon) },
+    { signal: 'BEARISH', sampleSize: bearish.length, hitRate: computeHitRate(bearish, horizon), direction: computeDirectionAccuracy(bearish, horizon) },
+  ]
+
+  // Recent verdicts (last 100 for display)
+  const horizonStrict =
+    horizon === '1d' ? 'outcome_1d_strict' :
+    horizon === '1w' ? 'outcome_1w_strict' :
+    'outcome_1m_strict'
+  const horizonDir =
+    horizon === '1d' ? 'outcome_1d_directional' :
+    horizon === '1w' ? 'outcome_1w_directional' :
+    'outcome_1m_directional'
+  const horizonPrice =
+    horizon === '1d' ? 'outcome_1d_price' :
+    horizon === '1w' ? 'outcome_1w_price' :
+    'outcome_1m_price'
+
+  const recent = allRows.slice(0, 100).map(r => ({
+    ticker: r.ticker,
+    signal: r.signal,
+    confidence: r.confidence,
+    persona: r.persona,
+    timeframe: r.timeframe,
+    verdict_date: r.verdict_date,
+    entry_price: r.entry_price,
+    trader_decision: r.trader_decision,
+    trader_grade: r.trader_grade,
+    trader_risk_reward: r.trader_risk_reward,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    outcome_strict: (r as any)[horizonStrict],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    outcome_directional: (r as any)[horizonDir],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    outcome_price: (r as any)[horizonPrice],
+  }))
+
+  return NextResponse.json({
+    ok: true,
+    scope,
+    horizon,
+    filters: { persona: personaFilter, timeframe: timeframeFilter },
+    totalVerdicts: allRows.length,
+    overall,
+    byPersona,
+    byTimeframe,
+    byConfidence,
+    bySignal,
+    recent,
+    generatedAt: new Date().toISOString(),
   })
 }
