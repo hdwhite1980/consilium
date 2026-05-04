@@ -667,6 +667,59 @@ function sectorContextString(bundle: SignalBundle): string {
 
 
 
+// ─────────────────────────────────────────────────────────────
+// Verification results formatter for Judge prompt
+// ─────────────────────────────────────────────────────────────
+// Surfaces specific stripped claims (those that failed Google-search
+// verification against credible sources) to the Judge so it can
+// discount those claims when weighing the debate. Returns empty
+// string if there are no stripped claims to surface — keeps the
+// prompt clean when verification was clean or unavailable.
+type VerificationsByStage = {
+  lead?: VerificationResult
+  devil?: VerificationResult
+  rebuttal?: VerificationResult
+  counter?: VerificationResult
+}
+
+function formatVerificationBlockForJudge(v: VerificationsByStage | undefined): string {
+  if (!v) return ''
+
+  const stages: Array<{ label: string; result: VerificationResult | undefined }> = [
+    { label: 'LEAD ANALYST',     result: v.lead     },
+    { label: "DEVIL'S ADVOCATE", result: v.devil    },
+    { label: 'REBUTTAL',         result: v.rebuttal },
+    { label: 'COUNTER',          result: v.counter  },
+  ]
+
+  // Collect stages with at least one stripped claim
+  const stagesWithStrips = stages.filter(s => (s.result?.strippedCount ?? 0) > 0)
+  if (stagesWithStrips.length === 0) return ''
+
+  // Build the formatted block. Include the stripped claim text and a brief
+  // reason (truncated). Keep total verbose enough to inform without bloating
+  // the prompt too much --- cap each stage at the top 4 strips.
+  const sections = stagesWithStrips.map(s => {
+    const strips = (s.result?.strippedClaims ?? []).slice(0, 4)
+    const lines = strips.map(c => {
+      const reason = (c.reasoning ?? '').slice(0, 180).trim()
+      return `  - "${c.claim.slice(0, 200)}"${reason ? ` (rejected: ${reason})` : ''}`
+    })
+    return `${s.label} stripped claims:\n${lines.join('\n')}`
+  })
+
+  return `
+
+━━━ Verification Results ━━━
+
+The following specific factual claims from the debate FAILED external verification (Google search against credible non-social-media sources). Discount these claims in your weighing, especially when they are central to a side's thesis. Claims may be hallucinated, stale (model citing outdated training data as current fact), or unsourced fabrications.
+
+${sections.join('\n\n')}
+
+If a side's argument materially relies on a stripped claim, that side's case is weaker than its surface argument suggests. If the stripped claims are tangential and the side's main thesis stands without them, weight the case normally. Do not redo the analysis yourself --- just adjust how much credit each side earns based on whether their evidence held up.`
+}
+
+
 function repairJSON(raw: string): string {
   let s = raw.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
   let result = ''
@@ -1318,6 +1371,7 @@ function buildJudgeUserPrompt(
   round: number,
   social: SocialSentiment | undefined,
   aggregator: AggregatorScoutResult | undefined,
+  verifications: VerificationsByStage | undefined,
 ): string {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const persona = ((bundle as any).persona ?? 'balanced') as PersonaKey
@@ -1387,6 +1441,7 @@ ${newsScout}
 
 ${socialBlock}
 ${aggregatorBlock}
+${formatVerificationBlockForJudge(verifications)}
 
 ${round1}${round2}${judgeTask}
 
@@ -1440,9 +1495,10 @@ async function runJudgeClaude(
   round: number,
   social: SocialSentiment | undefined,
   aggregator: AggregatorScoutResult | undefined,
+  verifications: VerificationsByStage | undefined,
 ): Promise<JudgeResult> {
   const systemPrompt = buildJudgeSystemPrompt(bundle)
-  const userPrompt   = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator)
+  const userPrompt   = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator, verifications)
 
   const msg = await getAnthropic().messages.create({
     model: 'claude-opus-4-7',
@@ -1467,9 +1523,10 @@ async function runJudgeGemini(
   round: number,
   social: SocialSentiment | undefined,
   aggregator: AggregatorScoutResult | undefined,
+  verifications: VerificationsByStage | undefined,
 ): Promise<JudgeResult> {
   const systemPrompt = buildJudgeSystemPrompt(bundle)
-  const userPrompt   = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator)
+  const userPrompt   = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator, verifications)
   const fullPrompt = `${systemPrompt}\n\n${userPrompt}`
 
   const { text, modelUsed } = await generateWithFallback({
@@ -1691,12 +1748,13 @@ export async function runJudge(
   counter?: CounterResult,
   round = 1,
   social?: SocialSentiment,
-  aggregator?: AggregatorScoutResult
+  aggregator?: AggregatorScoutResult,
+  verifications?: VerificationsByStage,
 ): Promise<JudgeResult> {
   // Note: calibration result is stored on the returned judge via a side-channel
   // attached during pipeline orchestration. This function returns JudgeResult
   // for backward compatibility with any caller that just wants the final verdict.
-  return runJudgeWithCalibration(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator)
+  return runJudgeWithCalibration(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator, verifications)
     .then(r => r.judge)
 }
 
@@ -1718,7 +1776,8 @@ export async function runJudgeWithCalibration(
   counter?: CounterResult,
   round = 1,
   social?: SocialSentiment,
-  aggregator?: AggregatorScoutResult
+  aggregator?: AggregatorScoutResult,
+  verifications?: VerificationsByStage,
 ): Promise<{ judge: JudgeResult; calibration: CalibrationResult }> {
 
   const useGemini = process.env.GEMINI_JUDGE !== 'false'
@@ -1727,11 +1786,11 @@ export async function runJudgeWithCalibration(
   // ── Step 1: Draft verdict from the primary Judge ──
   let draft: JudgeResult
   try {
-    draft = await judgeRunner(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator)
+    draft = await judgeRunner(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator, verifications)
   } catch (err) {
     if (useGemini) {
       console.warn('[judge] Gemini failed on draft, falling back to Claude Opus:', (err as Error).message?.slice(0, 200))
-      draft = await runJudgeClaude(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator)
+      draft = await runJudgeClaude(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator, verifications)
       draft.judgeModel = 'claude-opus-4-7-fallback'
     } else {
       throw err
@@ -1753,7 +1812,7 @@ export async function runJudgeWithCalibration(
     try {
       finalJudge = await runJudgeWithCalibrationInput(
         bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator,
-        draft, calibration, useGemini
+        draft, calibration, useGemini, verifications
       )
       finalJudge = sanitizeJudgeResult(finalJudge, bundle)
     } catch (err) {
@@ -1791,6 +1850,7 @@ async function runJudgeWithCalibrationInput(
   draft: JudgeResult,
   calibration: CalibrationResult,
   useGemini: boolean,
+  verifications: VerificationsByStage | undefined,
 ): Promise<JudgeResult> {
 
   const calibrationGuidance = `
@@ -1814,7 +1874,7 @@ Keep your verdict structure identical to the draft. Primarily update the confide
   // Build a user prompt that re-uses the main Judge logic but appends calibration guidance
   if (useGemini) {
     const systemPrompt = buildJudgeSystemPrompt(bundle)
-    const userPrompt = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator)
+    const userPrompt = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator, verifications)
     const fullPrompt = `${systemPrompt}\n\n${userPrompt}${calibrationGuidance}`
 
     const { text, modelUsed } = await generateWithFallback({
@@ -1828,7 +1888,7 @@ Keep your verdict structure identical to the draft. Primarily update the confide
     return { ...raw, judgeModel: `-calibrated` }
   } else {
     const systemPrompt = buildJudgeSystemPrompt(bundle)
-    const userPrompt = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator) + calibrationGuidance
+    const userPrompt = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator, verifications) + calibrationGuidance
 
     const msg = await getAnthropic().messages.create({
       model: 'claude-opus-4-7',
@@ -2116,7 +2176,7 @@ export async function runPipeline(
   })
 
   onProgress('judge_start', {})
-  const { judge, calibration } = await runJudgeWithCalibration(bundle, gemini, claude, gpt, rebuttal, counter, 1, social, aggregator)
+  const { judge, calibration } = await runJudgeWithCalibration(bundle, gemini, claude, gpt, rebuttal, counter, 1, social, aggregator, verifications)
   transcript.push({ role: 'judge', stage: 'arbitrator', content: judge.summary, signal: judge.signal, confidence: judge.confidence, timestamp: ts() })
 
   // ── Trader Filter ─────────────────────────────────────────
