@@ -68,6 +68,7 @@ const CREDIBLE_DOMAINS = new Set([
   'seekingalpha.com',
   'benzinga.com',
   'investing.com',
+  'marketbeat.com',
   'thestreet.com',
   'morningstar.com',
   'zerohedge.com',
@@ -214,6 +215,7 @@ const CREDIBLE_OUTLET_NAMES: Array<[string, string]> = [
   ['seeking alpha', 'seekingalpha.com'],
   ['benzinga', 'benzinga.com'],
   ['investing.com', 'investing.com'],
+  ['marketbeat', 'marketbeat.com'],
   ['thestreet', 'thestreet.com'],
   ['the street', 'thestreet.com'],
   ['morningstar', 'morningstar.com'],
@@ -367,6 +369,7 @@ VERIFICATION GUIDANCE:
 - Data/index claims (e.g., "Fear & Greed at 27", "BTC at $74k", "CPI came in at 3.2%") → check canonical data sources first
 - Event claims (e.g., "NY Fed buying Treasuries tomorrow", "SEC approved ETF") → require credible news coverage
 - Price movements with news context → verify the underlying news event, not the exact price
+- Headline citations → verify the underlying event/topic, NOT the exact headline wording. Outlets phrase the same story differently. If the model cites a headline like "AI's $725 Billion Power Problem" and credible sources cover the underlying topic (AI infrastructure capex around that figure), mark VERIFIED. Only mark UNVERIFIED if the underlying topic itself isn't reported by credible sources.
 - Vague claims ("sentiment is bearish") → mark UNVERIFIED, these are not factual
 - Future events → look for announcements from the relevant institution
 

@@ -712,11 +712,19 @@ function formatVerificationBlockForJudge(v: VerificationsByStage | undefined): s
 
 ━━━ Verification Results ━━━
 
-The following specific factual claims from the debate FAILED external verification (Google search against credible non-social-media sources). Discount these claims in your weighing, especially when they are central to a side's thesis. Claims may be hallucinated, stale (model citing outdated training data as current fact), or unsourced fabrications.
+The following specific factual claims from the debate FAILED external verification (Google search against credible non-social-media sources). Each entry includes the rejection reason — USE THE REASON to calibrate how much to discount the claim. NOT all stripped claims are equally invalid:
 
 ${sections.join('\n\n')}
 
-If a side's argument materially relies on a stripped claim, that side's case is weaker than its surface argument suggests. If the stripped claims are tangential and the side's main thesis stands without them, weight the case normally. Do not redo the analysis yourself --- just adjust how much credit each side earns based on whether their evidence held up.`
+CALIBRATION GUIDANCE — read each rejection reason carefully:
+
+1. CONTRADICTED BY DATA (full discount, treat as false): If the rejection reason cites credible sources reporting the OPPOSITE of the claim — e.g., "multiple sources report a positive net income of $X, contrary to the claim" or "sources confirm the deal was approved, not rejected" — the claim is likely a hallucination or stale training data. Treat it as factually wrong. The argument it supported is materially weakened.
+
+2. UNVERIFIABLE BUT POSSIBLY REAL (partial discount): If the rejection reason cites no contradicting evidence and notes things like "source not in credible whitelist," "0 credible grounding sources found," or "could not corroborate" — the claim may be real internal data the council had access to that just isn't on the public web. Apply moderate skepticism but do not treat as false. The directional argument may still be valid.
+
+3. SPECIFIC NUMBER WRONG, DIRECTION RIGHT (minor discount on the number only): If the rejection reason cites a RANGE of values from credible sources — e.g., "claim was 133.8x but sources show range 130-206x" — the model picked an unverifiable specific number, but the directional claim it was supporting (e.g., "expensively valued") is still valid. Discount only the precise figure, not the overall point.
+
+Apply these distinctions when weighing each side's case. If a side's thesis hinges on a category-1 claim (factually contradicted), that side's case is materially weaker. If it relies on a category-2 (unverifiable) or category-3 (figure-only) claim, the weakening is partial. Do not redo the analysis yourself --- just adjust how much credit each side earns based on which kind of failure their evidence had.`
 }
 
 
