@@ -411,6 +411,7 @@ export async function POST(req: NextRequest) {
                 trader_wait_conditions: result.trader?.waitConditions ?? null,
                 trader_rationale: result.trader?.rationale ?? null,
                 trader_evaluated_at: result.trader?.evaluatedAt ?? null,
+                code_era: 'post-fix-may-4-2026',
               })
               if (vlErr) {
                 dlog(`!! verdict_log INSERT FAILED: ${vlErr.message}`, { code: vlErr.code })
