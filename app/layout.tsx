@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import { ThemeProvider } from './lib/theme'
+import MobileBottomNav from './components/MobileBottomNav'
 
 export const metadata: Metadata = {
   title: 'Wali-OS — AI Stock Analysis',
@@ -66,6 +67,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="antialiased">
         <ThemeProvider>
           {children}
+          <MobileBottomNav />
         </ThemeProvider>
       </body>
     </html>
