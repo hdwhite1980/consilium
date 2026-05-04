@@ -1245,7 +1245,7 @@ What ONE question should the News Scout research right now to help you counter? 
 
   const counterSystem = `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research. Use it. This is your final shot.
 
-CALIBRATION: If the Lead Analyst's rebuttal genuinely resolved your strongest challenges and the fresh research confirms their thesis, you must yield honestly --- a thoughtful yield beats manufactured pressure. The Judge weighs argument QUALITY. If you still see cracks, press on them with the fresh research as ammunition. Be sharp, specific, and data-driven.`
+CALIBRATION: Yield on a challenge ONLY if the Lead Analyst directly refuted it AND your fresh research confirms their refutation. Mitigation is not refutation --- if the Lead's rebuttal merely softened a challenge by adding an offsetting factor, your challenge still stands. Defensive admissions about risk do not count as resolution. The Judge weighs argument QUALITY. Yielding on weakly-pressured challenges is fine; yielding on points the Lead failed to actually refute is dishonest. If your strongest challenges remain materially unresolved, say so plainly and press them with the fresh research.`
 
   const completion = await getOpenAI().chat.completions.create({
     model: 'gpt-4o',
@@ -1271,7 +1271,7 @@ JSON ONLY:
   "researchQuestion": ${JSON.stringify(researchQuestion)},
   "researchAnswer": ${JSON.stringify(researchAnswer)},
   "finalChallenge": "2-3 sentences --- your strongest remaining challenge, referencing fresh research where relevant",
-  "yieldsOn": ["points where their rebuttal genuinely convinced you --- be honest, 1-2 items"],
+  "yieldsOn": ["points where their rebuttal directly refuted your challenge AND fresh research confirms the refutation --- 0-2 items, leave empty array if no genuine refutations"],
   "pressesOn": ["points that remain unresolved and the Judge must weigh --- 2-3 items"],
   "closingArgument": "one sentence --- the single most important thing for the Judge to consider"
 }` }
