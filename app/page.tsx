@@ -1944,14 +1944,42 @@ function HomeInner() {
             </div>{/* end verdict wrapper */}
 
             <div className={cnTradeTab}>
-            {/* Trade Plan card — green-tinted */}
+            {/* Trade Plan card — green-tinted (greyed when Trader = PASS) */}
             {jud && (
             <div className="animate-slide-up rounded-xl p-5 border-2 space-y-4"
-              style={{ background: 'rgba(52,211,153,0.05)', borderColor: 'rgba(52,211,153,0.3)' }}>
+              style={{
+                background: trader?.decision === 'PASS' ? 'rgba(148,163,184,0.05)' : 'rgba(52,211,153,0.05)',
+                borderColor: trader?.decision === 'PASS' ? 'rgba(148,163,184,0.3)' : 'rgba(52,211,153,0.3)',
+              }}>
               <div className="flex items-center gap-2">
-                <Target size={13} style={{ color: '#34d399' }} />
-                <span className="text-sm font-bold" style={{ color: '#34d399' }}>Trade Plan</span>
+                <Target size={13} style={{ color: trader?.decision === 'PASS' ? '#94a3b8' : '#34d399' }} />
+                <span className="text-sm font-bold" style={{ color: trader?.decision === 'PASS' ? '#94a3b8' : '#34d399' }}>Trade Plan</span>
               </div>
+
+              {/* Trader = PASS banner — surfaces the rejection above the levels */}
+              {trader?.decision === 'PASS' && (
+                <div className="rounded-lg p-3 flex items-start gap-2"
+                  style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.3)' }}>
+                  <AlertTriangle size={14} style={{ color: '#f87171', marginTop: 2, flexShrink: 0 }} />
+                  <div className="text-xs leading-relaxed" style={{ color: 'var(--text)' }}>
+                    <span className="font-bold" style={{ color: '#f87171' }}>Trader passed on this setup.</span> Levels below are shown for reference only — not actionable. See Trader Assessment above for why.
+                  </div>
+                </div>
+              )}
+
+              {/* Trader = WAIT banner — setup is real but timing isn't */}
+              {trader?.decision === 'WAIT' && (
+                <div className="rounded-lg p-3 flex items-start gap-2"
+                  style={{ background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)' }}>
+                  <Clock size={14} style={{ color: '#fbbf24', marginTop: 2, flexShrink: 0 }} />
+                  <div className="text-xs leading-relaxed" style={{ color: 'var(--text)' }}>
+                    <span className="font-bold" style={{ color: '#fbbf24' }}>Trader is waiting.</span> Setup is real but conditions aren't right yet — see Trader Assessment above for entry triggers.
+                  </div>
+                </div>
+              )}
+
+              {/* Content wrapper — opacity-reduced when Trader = PASS */}
+              <div style={{ opacity: trader?.decision === 'PASS' ? 0.4 : 1, transition: 'opacity 0.2s ease' }}>
 
                 {/* ── TRADE PLAN — prominent, right under verdict ── */}
                 {jud.entryPrice && (
@@ -2208,6 +2236,7 @@ function HomeInner() {
                   ]
                   return <LogTradeMenu destinations={destinations} />
                 })()}
+              </div>{/* end content wrapper (opacity for PASS) */}
             </div>
             )}
             </div>{/* end trade plan wrapper */}
