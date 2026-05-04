@@ -271,6 +271,55 @@ function Think({ label, color }: { label: string; color: string }) {
   )
 }
 
+type MobileTab = 'verdict' | 'trade' | 'transcript'
+
+function MobileTabBar({ active, onChange }: { active: MobileTab; onChange: (t: MobileTab) => void }) {
+  const tabs: Array<{ key: MobileTab; label: string; color: string }> = [
+    { key: 'verdict',    label: 'Verdict',    color: '#fbbf24' },
+    { key: 'trade',      label: 'Trade Plan', color: '#34d399' },
+    { key: 'transcript', label: 'Transcript', color: '#a78bfa' },
+  ]
+  return (
+    <div role="tablist" aria-label="Council Verdict view"
+      className="flex items-stretch sticky top-0 z-10 mb-3 rounded-xl overflow-hidden"
+      style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+      {tabs.map(t => {
+        const isActive = active === t.key
+        return (
+          <button key={t.key}
+            role="tab"
+            aria-selected={isActive}
+            aria-controls={`council-tab-${t.key}`}
+            onClick={() => onChange(t.key)}
+            className="flex-1 px-2 py-2.5 text-xs font-semibold transition-all"
+            style={{
+              background: isActive ? `${t.color}15` : 'transparent',
+              color: isActive ? t.color : 'var(--text3)',
+              borderBottom: isActive ? `2px solid ${t.color}` : '2px solid transparent',
+            }}>
+            {t.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function MobileTabPlaceholder({ label }: { label: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 py-12 px-4 text-center">
+      <div className="flex gap-1.5">
+        {[0,1,2].map(i => (
+          <span key={i} className="w-2 h-2 rounded-full thinking-dot"
+            style={{ background: 'var(--text3)', animationDelay: `${i * 0.15}s` }} />
+        ))}
+      </div>
+      <div className="text-sm" style={{ color: 'var(--text2)' }}>Waiting for AI council{'…'}</div>
+      <div className="text-xs" style={{ color: 'var(--text3)' }}>{label} will appear here once the verdict is ready.</div>
+    </div>
+  )
+}
+
 function Collapsible({
   title, icon, color, badge, defaultOpen = false, children
 }: {
@@ -336,6 +385,7 @@ function HomeInner() {
   const { theme, toggle: toggleTheme } = useTheme()
   const [navOpen, setNavOpen] = useState(false)
   const [navGroupOpen, setNavGroupOpen] = useState<string | null>(null)
+  const [mobileTab, setMobileTab] = useState<MobileTab>('verdict')
   const [showTutorial, setShowTutorial] = useState(false)
   const [preMarketBrief, setPreMarketBrief] = useState<{headline?:string;one_line?:string;risk_of_day?:string;watchlist?:string[];portfolio_alerts?:string[]} | null>(null)
   const [showBrief, setShowBrief] = useState(false)
@@ -592,6 +642,14 @@ function HomeInner() {
   ]
   const stepIdx = STEPS.findIndex(s => s.key === stage)
   const isDark = theme === 'dark'
+
+  // Mobile tab visibility helpers — used by the Council right pane.
+  // On desktop everything is always visible (md:block). On mobile only the
+  // active tab's content is rendered (or pre-verdict placeholder for empty tabs).
+  const mobileShowTabs = stage !== 'idle'
+  const cnVerdictTab = mobileShowTabs && mobileTab !== 'verdict' ? 'hidden md:block' : ''
+  const cnTradeTab = mobileShowTabs && mobileTab !== 'trade' ? 'hidden md:block' : ''
+  const cnTranscriptTab = mobileShowTabs && mobileTab !== 'transcript' ? 'hidden md:block' : ''
 
   // Always-visible top-level nav items (high-frequency actions + utilities)
   const NAV_TOP: Array<{ label: string; icon: React.ReactNode; path: string; color: string }> = [
@@ -1428,6 +1486,29 @@ function HomeInner() {
               </div>
             )}
 
+            {/* Mobile-only tab bar — visible whenever stage isn't idle (i.e. analysis in progress or done) */}
+            {mobileShowTabs && (
+              <div className="md:hidden">
+                <MobileTabBar active={mobileTab} onChange={setMobileTab} />
+              </div>
+            )}
+
+            {/* Mobile placeholder: when on Verdict tab but verdict isn't ready yet */}
+            {mobileShowTabs && mobileTab === 'verdict' && !jud && (
+              <div className="md:hidden">
+                <MobileTabPlaceholder label="Verdict" />
+              </div>
+            )}
+
+            {/* Mobile placeholder: when on Trade Plan tab but verdict isn't ready yet */}
+            {mobileShowTabs && mobileTab === 'trade' && !jud && (
+              <div className="md:hidden">
+                <MobileTabPlaceholder label="Trade Plan" />
+              </div>
+            )}
+
+            {/* Transcript content — News Scout through Counter blocks */}
+            <div className={cnTranscriptTab}>
             {/* News Scout */}
             {stage === 'gemini' && !gem && <Think label="News Scout" color="#60a5fa" />}
             {gem && (
@@ -1673,7 +1754,9 @@ function HomeInner() {
               </div>
               </Collapsible>
             )}
+            </div>{/* end transcript wrapper */}
 
+            <div className={cnVerdictTab}>
             {/* Judge */}
             {stage === 'judge' && !jud && <Think label="Council" color="#fbbf24" />}
             {jud && (
@@ -1809,6 +1892,66 @@ function HomeInner() {
                     )}
                   </div>
                 )}
+
+
+                <Bar2 val={jud.confidence} color="#fbbf24" label="confidence" />
+
+                {/* Plain English — always visible */}
+                {jud.plainEnglish && (
+                  <div className="rounded-xl p-4 space-y-2" style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+                    <div className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: 'var(--text3)' }}>Plain English</div>
+                    <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{jud.plainEnglish}</p>
+                  </div>
+                )}
+
+
+
+
+                {/* Collapsible deep-dive sections — inside the verdict card */}
+                {(jud.technicalsExplained || jud.fundamentalsExplained || jud.smartMoneyExplained) && (
+                  <Collapsible title="Signal Explanations" icon={<BarChart2 size={14}/>} color="#a78bfa">
+                    <div className="space-y-3 pt-2">
+                      {jud.technicalsExplained && (
+                        <div className="rounded-lg p-3" style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)' }}>
+                          <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#a78bfa' }}>Technicals</div>
+                          <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{jud.technicalsExplained}</p>
+                        </div>
+                      )}
+                      {jud.fundamentalsExplained && (
+                        <div className="rounded-lg p-3" style={{ background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.15)' }}>
+                          <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#60a5fa' }}>Fundamentals</div>
+                          <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{jud.fundamentalsExplained}</p>
+                        </div>
+                      )}
+                      {jud.smartMoneyExplained && (
+                        <div className="rounded-lg p-3" style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.15)' }}>
+                          <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#34d399' }}>Smart Money</div>
+                          <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{jud.smartMoneyExplained}</p>
+                        </div>
+                      )}
+                    </div>
+                  </Collapsible>
+                )}
+
+                {/* Council options view — collapsible */}
+                {jud.optionsStrategy && (
+                  <Collapsible title="Council Options View" icon={<Scale size={14} />} color="#a78bfa">
+                    <p className="text-sm leading-relaxed pt-2" style={{ color: 'var(--text2)' }}>{jud.optionsStrategy}</p>
+                  </Collapsible>
+                )}
+              </div>
+            )}
+            </div>{/* end verdict wrapper */}
+
+            <div className={cnTradeTab}>
+            {/* Trade Plan card — green-tinted */}
+            {jud && (
+            <div className="animate-slide-up rounded-xl p-5 border-2 space-y-4"
+              style={{ background: 'rgba(52,211,153,0.05)', borderColor: 'rgba(52,211,153,0.3)' }}>
+              <div className="flex items-center gap-2">
+                <Target size={13} style={{ color: '#34d399' }} />
+                <span className="text-sm font-bold" style={{ color: '#34d399' }}>Trade Plan</span>
+              </div>
 
                 {/* ── TRADE PLAN — prominent, right under verdict ── */}
                 {jud.entryPrice && (
@@ -1981,16 +2124,6 @@ function HomeInner() {
                   </div>
                 )}
 
-                <Bar2 val={jud.confidence} color="#fbbf24" label="confidence" />
-
-                {/* Plain English — always visible */}
-                {jud.plainEnglish && (
-                  <div className="rounded-xl p-4 space-y-2" style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}>
-                    <div className="text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: 'var(--text3)' }}>Plain English</div>
-                    <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{jud.plainEnglish}</p>
-                  </div>
-                )}
-
                 {/* Log to Journal */}
                 {jud?.signal && jud.signal !== 'NEUTRAL' && (
                   <button
@@ -2075,41 +2208,9 @@ function HomeInner() {
                   ]
                   return <LogTradeMenu destinations={destinations} />
                 })()}
-
-                {/* Collapsible deep-dive sections — inside the verdict card */}
-                {(jud.technicalsExplained || jud.fundamentalsExplained || jud.smartMoneyExplained) && (
-                  <Collapsible title="Signal Explanations" icon={<BarChart2 size={14}/>} color="#a78bfa">
-                    <div className="space-y-3 pt-2">
-                      {jud.technicalsExplained && (
-                        <div className="rounded-lg p-3" style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)' }}>
-                          <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#a78bfa' }}>Technicals</div>
-                          <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{jud.technicalsExplained}</p>
-                        </div>
-                      )}
-                      {jud.fundamentalsExplained && (
-                        <div className="rounded-lg p-3" style={{ background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.15)' }}>
-                          <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#60a5fa' }}>Fundamentals</div>
-                          <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{jud.fundamentalsExplained}</p>
-                        </div>
-                      )}
-                      {jud.smartMoneyExplained && (
-                        <div className="rounded-lg p-3" style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.15)' }}>
-                          <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: '#34d399' }}>Smart Money</div>
-                          <p className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>{jud.smartMoneyExplained}</p>
-                        </div>
-                      )}
-                    </div>
-                  </Collapsible>
-                )}
-
-                {/* Council options view — collapsible */}
-                {jud.optionsStrategy && (
-                  <Collapsible title="Council Options View" icon={<Scale size={14} />} color="#a78bfa">
-                    <p className="text-sm leading-relaxed pt-2" style={{ color: 'var(--text2)' }}>{jud.optionsStrategy}</p>
-                  </Collapsible>
-                )}
-              </div>
+            </div>
             )}
+            </div>{/* end trade plan wrapper */}
 
             {/* Technical Charts — collapsible */}
             {stage === 'done' && md && (
