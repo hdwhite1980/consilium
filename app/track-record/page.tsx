@@ -14,6 +14,7 @@
 
 import { cookies } from 'next/headers'
 import Link from 'next/link'
+import { createClient } from '@/app/lib/auth/server'
 import BacktestDashboard from '@/app/components/BacktestDashboard'
 import TrackRecordGate from '@/app/components/TrackRecordGate'
 
@@ -81,7 +82,20 @@ export default async function TrackRecordPage() {
   const cookieStore = await cookies()
   const unlocked = cookieStore.get(UNLOCK_COOKIE_NAME)?.value === '1'
 
-  if (unlocked) {
+  // Logged-in users bypass the gate entirely — we already have their email
+  // from signup, so the lead-capture form is pointless. Wrap in try/catch
+  // because auth failures shouldn't break the page; worst case we fall
+  // through to the cookie-only check below.
+  let isAuthenticated = false
+  try {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    isAuthenticated = !!user
+  } catch {
+    isAuthenticated = false
+  }
+
+  if (unlocked || isAuthenticated) {
     return <BacktestDashboard />
   }
 
