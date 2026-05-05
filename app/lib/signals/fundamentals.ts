@@ -443,9 +443,42 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
   // This is the architectural change: a CFO selling $5M moves the
   // signal; a PE fund selling $500M doesn't (it appears in the
   // summary so personas can weight it appropriately).
+  //
+  // ── Magnitude floor (Bug 14 fix, May 2026) ──
+  // Operational insider activity below a magnitude threshold is
+  // statistical noise — a director selling $200K for tax reasons,
+  // an officer exercising a small option grant. Treating these as
+  // 'selling' or 'buying' signals invites personas to elevate
+  // trivial sums into thesis-supporting evidence. (Observed: a
+  // $783K director sale on a $30B-cap company being cited as
+  // "insiders may know something" alongside the technical setup.)
+  // The floor scales with market cap (0.05%) so the threshold is
+  // meaningful for both micro-caps and mega-caps, with a $1M
+  // absolute minimum for cases where market cap is unavailable
+  // or pathologically small.
+  const sharesOutstandingM = Number(m['shareOutstanding']) || 0
+  const marketCapFromShares = sharesOutstandingM * 1e6 * currentPrice
+  const marketCapFromMetric = (Number(m['marketCapitalization']) || 0) * 1e6
+  const marketCapEstimate = marketCapFromShares > 0 ? marketCapFromShares : marketCapFromMetric
+
+  const operationalActivityTotal = officerBuyValue + officerSellValue
+  const insiderMagnitudeFloor = Math.max(1_000_000, marketCapEstimate * 0.0005)
+  const subThresholdMagnitude = operationalActivityTotal > 0 && operationalActivityTotal < insiderMagnitudeFloor
+
   const insiderSignal: FundamentalSignals['insiderSignal'] =
+    subThresholdMagnitude ? 'neutral' :
     officerBuyValue > officerSellValue * 2 ? 'buying' :
     officerSellValue > officerBuyValue * 2 ? 'selling' : 'neutral'
+
+  // Surface the sub-threshold reason inline so personas reading
+  // "signal: NEUTRAL" with $0.8M of officer activity understand why
+  // it's labeled neutral rather than treating it as ambiguous.
+  let magnitudeNote = ''
+  if (subThresholdMagnitude && marketCapEstimate > 0) {
+    magnitudeNote = ` — sub-threshold: $${(operationalActivityTotal/1e6).toFixed(2)}M of officer activity is below the $${(insiderMagnitudeFloor/1e6).toFixed(1)}M floor for a ${marketCapEstimate >= 1e9 ? `$${(marketCapEstimate/1e9).toFixed(0)}B` : `$${(marketCapEstimate/1e6).toFixed(0)}M`} market cap — treat as statistical noise`
+  } else if (subThresholdMagnitude) {
+    magnitudeNote = ` — sub-threshold: $${(operationalActivityTotal/1e6).toFixed(2)}M operational activity is below the $${(insiderMagnitudeFloor/1e6).toFixed(1)}M floor — treat as statistical noise`
+  }
 
   // ── Insider concentration detection (Bug 12, partition-aware) ──
   // Concentration check now operates on OFFICER sells only. A single
@@ -453,8 +486,12 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
   // signal (e.g., the CEO selling $50M). Institutional concentration
   // is naturally implied by surfacing institutional totals separately
   // in the summary line below.
+  // When sub-threshold magnitude (Bug 14) has fired, suppress the
+  // concentration note — saying "CONCENTRATED in $0.8M of activity"
+  // adds noise after we've already labeled the total as statistical
+  // noise. The magnitude note covers it.
   let insiderConcentrationNote = ''
-  if (officerSellTxns.length > 0 && officerSellValue > 0) {
+  if (officerSellTxns.length > 0 && officerSellValue > 0 && !subThresholdMagnitude) {
     const valueByName = new Map<string, number>()
     for (const tx of officerSellTxns) {
       const name = String(tx.insider_name ?? 'Unknown').trim()
@@ -597,7 +634,7 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
     recentUpgrades.length ? `Recent upgrades: ${recentUpgrades.map(u => `${u.firm} (${u.fromGrade}→${u.toGrade})`).join(', ')}` : '',
     recentDowngrades.length ? `Recent downgrades: ${recentDowngrades.map(d => `${d.firm} (${d.fromGrade}→${d.toGrade})`).join(', ')}` : '',
     ``,
-    `Insider activity (90d): Officer/director — bought $${(officerBuyValue/1e6).toFixed(1)}M, sold $${(officerSellValue/1e6).toFixed(1)}M — signal: ${insiderSignal.toUpperCase()}${insiderConcentrationNote}${institutionalNote}`,
+    `Insider activity (90d): Officer/director — bought $${(officerBuyValue/1e6).toFixed(1)}M, sold $${(officerSellValue/1e6).toFixed(1)}M — signal: ${insiderSignal.toUpperCase()}${magnitudeNote}${insiderConcentrationNote}${institutionalNote}`,
   ].filter(Boolean)
 
   return {
