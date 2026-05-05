@@ -12,8 +12,12 @@ const TRADIER_BASE = () => process.env.TRADIER_API_KEY
 const TRADIER_KEY = () => process.env.TRADIER_API_KEY
 
 export interface OptionsFlowSignals {
-  // Put/Call ratio
-  putCallRatio: number | null
+  // Put/Call ratios — both volume (today's flow) and open interest (cumulative
+  // positioning). Volume reacts to sentiment shifts; OI reflects structural
+  // positioning. Computed across the front N monthly expiries (see
+  // fetchOptionsChain) so the ratios are comparable to terminal-source numbers.
+  putCallRatio: number | null      // volume-based (today's flow)
+  putCallOIRatio: number | null    // open-interest-based (cumulative positioning)
   putCallSignal: 'bullish' | 'bearish' | 'neutral'
 
   // Open interest
@@ -58,7 +62,7 @@ export interface UnusualOption {
 async function fetchOptionsChain(ticker: string) {
   if (!TRADIER_KEY()) return null
   try {
-    // Get nearest expiry
+    // Get all available expiries
     const expRes = await fetch(
       `${TRADIER_BASE()}/markets/options/expirations?symbol=${ticker}&includeAllRoots=true`,
       {
@@ -74,28 +78,98 @@ async function fetchOptionsChain(ticker: string) {
     // Tradier returns expirations.date as either an array (multiple expiries)
     // or a single string (one expiry). Handle both shapes.
     const dateField = expData?.expirations?.date
-    let expiry: string | null = null
+    let allExpiries: string[] = []
     if (Array.isArray(dateField)) {
-      // Prefer 2nd expiry (typically next monthly, less weeklies-noise) with [0] fallback
-      expiry = dateField[1] ?? dateField[0] ?? null
+      allExpiries = dateField
     } else if (typeof dateField === 'string') {
-      expiry = dateField
+      allExpiries = [dateField]
     }
-    if (!expiry) return null
+    if (allExpiries.length === 0) return null
 
-    const chainRes = await fetch(
-      `${TRADIER_BASE()}/markets/options/chains?symbol=${ticker}&expiration=${expiry}&greeks=true`,
-      {
-        headers: {
-          'Authorization': `Bearer ${TRADIER_KEY()}`,
-          'Accept': 'application/json',
-        },
-        next: { revalidate: 3600 }
-      }
+    // Cap to the front 3 monthly expiries within ~120 days. Volume
+    // and OI in expiries beyond that decay rapidly and add noise to
+    // the P/C ratio without representing real near-term positioning.
+    const cutoffMs = Date.now() + 120 * 86400_000
+    const candidateExpiries = allExpiries
+      .filter(d => {
+        const t = new Date(d).getTime()
+        return Number.isFinite(t) && t <= cutoffMs
+      })
+      .slice(0, 3)
+    const expiries = candidateExpiries.length > 0
+      ? candidateExpiries
+      : allExpiries.slice(0, 1)  // fallback if filter rejected everything
+
+    // Primary expiry for IV skew / max pain / unusual sweeps / GEX.
+    // Same selection rule as before — prefer the 2nd to skip front
+    // weeklies-noise, fall back to the 1st.
+    const primaryExpiry = expiries[1] ?? expiries[0]
+
+    // Pull all chains in parallel
+    const chainResponses = await Promise.all(
+      expiries.map(exp =>
+        fetch(
+          `${TRADIER_BASE()}/markets/options/chains?symbol=${ticker}&expiration=${exp}&greeks=true`,
+          {
+            headers: {
+              'Authorization': `Bearer ${TRADIER_KEY()}`,
+              'Accept': 'application/json',
+            },
+            next: { revalidate: 3600 }
+          }
+        ).then(r => r.ok ? r.json() : null).catch(() => null)
+      )
     )
-    if (!chainRes.ok) return null
-    const chainData = await chainRes.json()
-    return { expiry, options: chainData?.options?.option ?? [] }
+
+    // Aggregate volume + OI sums across all fetched expiries
+    let aggregateVolCalls = 0, aggregateVolPuts = 0
+    let aggregateOICalls = 0, aggregateOIPuts = 0
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let primaryOptions: any[] = []
+
+    for (let i = 0; i < expiries.length; i++) {
+      const exp = expiries[i]
+      const chainData = chainResponses[i]
+      const opts: Array<Record<string, unknown>> = chainData?.options?.option ?? []
+      for (const o of opts) {
+        const vol = Number(o.volume) || 0
+        const oi  = Number(o.open_interest) || 0
+        if (o.option_type === 'call') {
+          aggregateVolCalls += vol
+          aggregateOICalls  += oi
+        } else if (o.option_type === 'put') {
+          aggregateVolPuts += vol
+          aggregateOIPuts  += oi
+        }
+      }
+      if (exp === primaryExpiry) primaryOptions = opts
+    }
+
+    // If primary expiry's chain failed but other expiries succeeded, fall
+    // back to whichever non-empty chain we have for the per-option work.
+    if (primaryOptions.length === 0) {
+      for (let i = 0; i < expiries.length; i++) {
+        const opts = chainResponses[i]?.options?.option ?? []
+        if (opts.length > 0) { primaryOptions = opts; break }
+      }
+    }
+
+    if (primaryOptions.length === 0 && aggregateVolCalls === 0 && aggregateVolPuts === 0) {
+      return null
+    }
+
+    return {
+      // Backward-compat: existing callers read `expiry` and `options` to
+      // mean primary expiry (for max pain, sweeps, IV, GEX).
+      expiry: primaryExpiry,
+      options: primaryOptions,
+      // New: aggregate sums across multiple expiries for accurate P/C ratios.
+      aggregateExpiries: expiries,
+      aggregateVolCalls,
+      aggregateVolPuts,
+      aggregateOICalls,
+      aggregateOIPuts,
+    }
   } catch {
     return null
   }
@@ -201,6 +275,7 @@ export async function fetchOptionsFlow(ticker: string, currentPrice: number): Pr
 
   // ── Process options chain ──────────────────────────────────
   let putCallRatio: number | null = null
+  let putCallOIRatio: number | null = null
   let totalCallOI = 0, totalPutOI = 0
   let totalCallVol = 0, totalPutVol = 0
   let maxPainStrike: number | null = null
@@ -212,23 +287,35 @@ export async function fetchOptionsFlow(ticker: string, currentPrice: number): Pr
     const calls = chain.options.filter((o: OptionContract) => o.option_type === 'call')
     const puts  = chain.options.filter((o: OptionContract) => o.option_type === 'put')
 
-    totalCallOI  = calls.reduce((s: number, o: OptionContract) => s + (Number(o.open_interest) || 0), 0)
-    totalPutOI   = puts.reduce((s: number, o: OptionContract) => s + (Number(o.open_interest) || 0), 0)
-    totalCallVol = calls.reduce((s: number, o: OptionContract) => s + (Number(o.volume) || 0), 0)
-    totalPutVol  = puts.reduce((s: number, o: OptionContract) => s + (Number(o.volume) || 0), 0)
+    // Volume + OI ratios use aggregate sums across the front N monthly
+    // expiries (computed in fetchOptionsChain) — single-expiry P/C
+    // ratios were misleading on tickers where front-month volume is
+    // skewed by event-driven flow (e.g., earnings-week put buying with
+    // simultaneous call-side bid pulls). Aggregating across expiries
+    // produces ratios comparable to terminal sources (Barchart etc).
+    totalCallVol = chain.aggregateVolCalls ?? 0
+    totalPutVol  = chain.aggregateVolPuts ?? 0
+    totalCallOI  = chain.aggregateOICalls ?? 0
+    totalPutOI   = chain.aggregateOIPuts ?? 0
 
-    // Diagnostic — see what Tradier returned so we can verify P/C math.
-    // Permanent observability, low cost. Search Railway logs for "[options ${ticker}]".
-    console.log(`[options ${ticker}] expiry=${chain.expiry} calls=${calls.length} puts=${puts.length} totalCallVol=${totalCallVol} totalPutVol=${totalPutVol} totalCallOI=${totalCallOI} totalPutOI=${totalPutOI}`)
+    putCallRatio   = totalCallVol > 0 ? totalPutVol / totalCallVol : null
+    putCallOIRatio = totalCallOI  > 0 ? totalPutOI  / totalCallOI  : null
 
-    putCallRatio = totalCallVol > 0 ? totalPutVol / totalCallVol : null
+    // Diagnostic — verify aggregate vs primary-expiry math.
+    // Permanent observability. Search Railway logs for "[options ${ticker}]".
+    const primaryCallVol = calls.reduce((s: number, o: OptionContract) => s + (Number(o.volume) || 0), 0)
+    const primaryPutVol  = puts.reduce((s: number, o: OptionContract) => s + (Number(o.volume) || 0), 0)
+    console.log(`[options ${ticker}] primary_expiry=${chain.expiry} aggregate_expiries=${(chain.aggregateExpiries ?? []).join(',')} primaryCallVol=${primaryCallVol} primaryPutVol=${primaryPutVol} aggCallVol=${totalCallVol} aggPutVol=${totalPutVol} aggCallOI=${totalCallOI} aggPutOI=${totalPutOI} pcVol=${putCallRatio?.toFixed(2) ?? 'null'} pcOI=${putCallOIRatio?.toFixed(2) ?? 'null'}`)
 
+    // IV skew computed from primary-expiry chain only (mixing far-month
+    // and near-month IVs would dilute the term-structure signal).
     const callIVs = calls.map((o: OptionContract) => Number(o.greeks?.mid_iv) || 0).filter(Boolean)
     const putIVs  = puts.map((o: OptionContract) => Number(o.greeks?.mid_iv) || 0).filter(Boolean)
     avgIVCall = callIVs.length ? (callIVs as number[]).reduce((a: number, b: number) => a + b, 0) / callIVs.length : null
     avgIVPut  = putIVs.length ? (putIVs as number[]).reduce((a: number, b: number) => a + b, 0) / putIVs.length : null
 
-    // Unusual sweeps: volume > 3x open interest is a flag
+    // Unusual sweeps: volume > 3x open interest is a flag.
+    // Scoped to primary expiry — sweep is an expiry-specific event.
     for (const opt of chain.options as OptionContract[]) {
       const vol = Number(opt.volume) || 0
       const oi  = Number(opt.open_interest) || 1
@@ -249,7 +336,8 @@ export async function fetchOptionsFlow(ticker: string, currentPrice: number): Pr
     unusualActivity.sort((a, b) => b.volOIRatio - a.volOIRatio)
     unusualActivity.splice(5) // keep top 5
 
-    // Max pain: strike where total options value is minimized
+    // Max pain: strike where total options value is minimized.
+    // Scoped to primary expiry — max pain is an expiry-specific concept.
     const strikes = [...new Set((chain.options as OptionContract[]).map((o) => Number(o.strike)))].sort((a: number, b: number) => a - b)
     let minPain = Infinity
     for (const strike of strikes) {
@@ -311,19 +399,24 @@ export async function fetchOptionsFlow(ticker: string, currentPrice: number): Pr
   }
 
   // ── Summary ────────────────────────────────────────────────
+  const aggExpCount = chain?.aggregateExpiries?.length ?? 0
+  const aggLabel = aggExpCount > 1
+    ? ` (across ${aggExpCount} expiries: ${chain?.aggregateExpiries?.join(', ')})`
+    : chain?.expiry ? ` (expiry ${chain.expiry})` : ''
   const lines = [
     `=== OPTIONS FLOW & SHORT INTEREST ===`,
     ``,
     chain
       ? [
-          `Options (expiry ${chain.expiry}):`,
-          putCallRatio !== null ? `  Put/Call ratio: ${putCallRatio.toFixed(2)} — ${putCallSignal.toUpperCase()} signal` : '',
+          `Options${aggLabel}:`,
+          putCallRatio !== null ? `  Put/Call Vol ratio: ${putCallRatio.toFixed(2)} — ${putCallSignal.toUpperCase()} signal` : '',
+          putCallOIRatio !== null ? `  Put/Call OI ratio: ${putCallOIRatio.toFixed(2)}` : '',
           `  Call OI: ${totalCallOI.toLocaleString()} | Put OI: ${totalPutOI.toLocaleString()}`,
-          maxPainStrike ? `  Max pain strike: $${maxPainStrike} (price gravitates here at expiry)` : '',
-          ivSkew !== null ? `  IV skew (put-call): ${(ivSkew*100).toFixed(1)}% — market ${ivSignal}` : '',
+          maxPainStrike ? `  Max pain strike (${chain.expiry}): $${maxPainStrike} (price gravitates here at expiry)` : '',
+          ivSkew !== null ? `  IV skew (put-call, ${chain.expiry}): ${(ivSkew*100).toFixed(1)}% — market ${ivSignal}` : '',
           gexNote ? `  GEX: ${gexNote}` : '',
           unusualActivity.length > 0
-            ? [`  Unusual sweeps detected:`,
+            ? [`  Unusual sweeps detected (${chain.expiry}):`,
                ...unusualActivity.slice(0, 3).map(u =>
                  `    ${u.type.toUpperCase()} $${u.strike} — ${u.volume.toLocaleString()} vol vs ${u.openInterest.toLocaleString()} OI (${u.volOIRatio.toFixed(1)}x) → ${u.signal}`
                )].join('\n')
@@ -343,13 +436,13 @@ export async function fetchOptionsFlow(ticker: string, currentPrice: number): Pr
       : [
           `Short interest: not available from data providers for this security.`,
           putCallRatio !== null
-            ? `  Proxy signal from options: P/C ratio ${putCallRatio.toFixed(2)} (${putCallSignal}) — ${putCallRatio > 1.0 ? 'elevated put buying suggests significant bearish positioning exists' : putCallRatio < 0.7 ? 'low put activity suggests limited bearish conviction' : 'balanced positioning'}.`
+            ? `  Proxy signal from options: P/C Vol ratio ${putCallRatio.toFixed(2)} (${putCallSignal}) — ${putCallRatio > 1.0 ? 'elevated put buying suggests significant bearish positioning exists' : putCallRatio < 0.7 ? 'low put activity suggests limited bearish conviction' : 'balanced positioning'}.`
             : `  No proxy data available. Treat short position data as unknown — do not cite absence as evidence.`,
         ].filter(Boolean).join('\n'),
   ].filter(Boolean)
 
   return {
-    putCallRatio, putCallSignal,
+    putCallRatio, putCallOIRatio, putCallSignal,
     totalCallOI, totalPutOI,
     maxPainStrike, avgIVCall, avgIVPut,
     ivSkew, ivSignal,

@@ -1035,6 +1035,51 @@ export async function runTargetedResearch(
   }
 
   if (needsOptions) {
+    // ── Bundle options data (computed at bundle build) ────────────
+    // Surface the pre-computed P/C ratio, max pain, GEX, IV signal,
+    // short interest, and unusual activity sweeps. The persona should
+    // anchor on these numbers rather than infer them from the live
+    // Tradier chain pull below — the bundle's analysis already
+    // applied volume/OI/IV thresholds and dealer-positioning logic.
+    const of = bundle.optionsFlow
+    if (of) {
+      const lines = ['BUNDLE OPTIONS ANALYSIS (pre-computed, source-of-truth):']
+      if (of.putCallRatio !== null && of.putCallRatio !== undefined) {
+        lines.push(`  Put/Call Vol ratio: ${of.putCallRatio.toFixed(2)} (signal: ${of.putCallSignal?.toUpperCase() ?? 'N/A'})`)
+      }
+      if (of.putCallOIRatio !== null && of.putCallOIRatio !== undefined) {
+        lines.push(`  Put/Call OI ratio: ${of.putCallOIRatio.toFixed(2)}`)
+      }
+      lines.push(`  Open interest: ${of.totalCallOI?.toLocaleString() ?? 'N/A'} calls / ${of.totalPutOI?.toLocaleString() ?? 'N/A'} puts`)
+      if (of.maxPainStrike !== null && of.maxPainStrike !== undefined) {
+        lines.push(`  Max pain strike: $${of.maxPainStrike.toFixed(2)} (price gravitates here at expiry)`)
+      }
+      if (of.ivSkew !== null && of.ivSkew !== undefined) {
+        lines.push(`  IV skew (put-call): ${(of.ivSkew * 100).toFixed(1)}% — market sentiment: ${of.ivSignal?.toUpperCase() ?? 'N/A'}`)
+      }
+      if (of.gex !== null && of.gex !== undefined) {
+        lines.push(`  Gamma exposure: $${of.gex.toFixed(0)}M (${of.gexSignal?.toUpperCase() ?? 'N/A'})`)
+        if (of.gexNote) lines.push(`    ${of.gexNote}`)
+      }
+      if (of.shortInterestPct !== null && of.shortInterestPct !== undefined) {
+        lines.push(`  Short interest: ${of.shortInterestPct.toFixed(1)}% of float (signal: ${of.shortSignal?.toUpperCase().replace('_', ' ') ?? 'N/A'})`)
+      } else {
+        lines.push(`  Short interest: not available`)
+      }
+      if (of.unusualActivity && of.unusualActivity.length > 0) {
+        lines.push(`  Unusual activity flagged (${of.unusualActivity.length} sweep${of.unusualActivity.length === 1 ? '' : 's'}):`)
+        for (const u of of.unusualActivity.slice(0, 5)) {
+          lines.push(`    • ${u.signal?.replace('_', ' ').toUpperCase() ?? 'UNUSUAL'}: $${u.strike} ${u.type} expiring ${u.expiry} — vol ${u.volume?.toLocaleString() ?? '?'} vs OI ${u.openInterest?.toLocaleString() ?? '?'} (${u.volOIRatio?.toFixed(1) ?? '?'}× vol/OI ratio, IV ${u.ivPct?.toFixed(0) ?? '?'}%)`)
+        }
+      } else {
+        lines.push(`  Unusual activity: none flagged in bundle`)
+      }
+      liveDataParts.push(lines.join('\n'))
+    }
+
+    // ── Live Tradier chain (intraday snapshot) ────────────────────
+    // Adds current chain volume + high-IV strikes on top of the bundle
+    // analysis. Useful for confirming or contradicting bundle figures.
     try {
       const tradierKey = process.env.TRADIER_API_KEY
       const tradierBase = tradierKey ? 'https://api.tradier.com/v1' : 'https://sandbox.tradier.com/v1'
@@ -1064,7 +1109,7 @@ export async function runTargetedResearch(
               .slice(0, 3)
               .map((o: {strike: number; option_type: string; greeks: {mid_iv: number}; volume: number}) =>
                 `$${o.strike} ${o.option_type} IV ${(o.greeks.mid_iv * 100).toFixed(0)}% vol ${o.volume}`)
-            liveDataParts.push(`OPTIONS (${expiries[0]}): P/C ratio ${pcr}, Call vol ${callVol}, Put vol ${putVol}`)
+            liveDataParts.push(`LIVE OPTIONS CHAIN (${expiries[0]}): P/C ratio ${pcr}, Call vol ${callVol}, Put vol ${putVol}`)
             if (highIV.length) liveDataParts.push(`HIGH IV OPTIONS: ${highIV.join(' | ')}`)
           }
         }

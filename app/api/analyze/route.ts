@@ -69,6 +69,7 @@ function projectOptionsForDashboard(of: any) {
   if (!of) return null
   return {
     putCallRatio: of.putCallRatio ?? null,
+    putCallOIRatio: of.putCallOIRatio ?? null,
     putCallSignal: of.putCallSignal ?? null,
     shortInterestPct: of.shortInterestPct ?? null,
     shortSignal: of.shortSignal ?? null,
@@ -397,16 +398,11 @@ export async function POST(req: NextRequest) {
             // an identical shape regardless of cache vs live.
             fundamentals: bundle.fundamentals,
             smartMoney: bundle.smartMoney,
-            options: {
-              putCallRatio: bundle.optionsFlow.putCallRatio,
-              putCallSignal: bundle.optionsFlow.putCallSignal,
-              shortInterestPct: bundle.optionsFlow.shortInterestPct,
-              shortSignal: bundle.optionsFlow.shortSignal,
-              unusualCount: bundle.optionsFlow.unusualActivity.length,
-              unusualActivity: bundle.optionsFlow.unusualActivity.slice(0, 3),
-              ivSignal: bundle.optionsFlow.ivSignal,
-              maxPainStrike: bundle.optionsFlow.maxPainStrike,
-            },
+            // Same Bug 7 pattern applied to options. Persist FULL optionsFlow
+            // object — narrow projection drops putCallOIRatio, totalCallOI,
+            // totalPutOI, ivSkew, gex, gexSignal, gexNote, avgIVCall/Put,
+            // shortRatio. Cache-replay re-projects via projectOptionsForDashboard.
+            options: bundle.optionsFlow,
             marketContext: {
               regime: bundle.marketContext.regime,
               spy: bundle.marketContext.spy,
