@@ -4,6 +4,8 @@
 // Covers: earnings calendar, analyst ratings, basic financials
 // ─────────────────────────────────────────────────────────────
 
+import { getInsiderActivity } from '@/app/lib/data/sec-filings'
+
 const FINNHUB_BASE = 'https://finnhub.io/api/v1'
 const KEY = () => process.env.FINNHUB_API_KEY!
 
@@ -147,12 +149,15 @@ async function getRatingChanges(ticker: string) {
   )
 }
 
-async function getInsiderTransactions(ticker: string) {
-  const from = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0]
-  return finnhubGet<{ data: Array<{ transactionType: string; transactionPrice: number; share: number; date: string }> }>(
-    `/stock/insider-transactions?symbol=${ticker}&from=${from}`
-  )
-}
+// NOTE: Insider transactions previously fetched from Finnhub
+// (/stock/insider-transactions). That source returned phantom rows that
+// EDGAR did not have — e.g., NRG 2026-03-04 included two 14.3M-share
+// "sell" entries totaling $4.69B that did not exist in EDGAR Form 4
+// filings. This inflated NRG insider selling from $600.8M (truth) to
+// $5.29B in the bundle, which the council then propagated as factual.
+// Insider data now comes from getInsiderActivity() which reads the
+// EDGAR-ingested insider_transactions table populated by
+// fetchInsiderTransactions in sec-filings.ts.
 
 
 // ── Earnings tier directive ─────────────────────────────────
@@ -194,7 +199,7 @@ function buildEarningsTierDirective(
 }
 
 export async function fetchFundamentals(ticker: string, currentPrice: number): Promise<FundamentalSignals> {
-  // Parallel fetch all Finnhub endpoints
+  // Parallel fetch all Finnhub endpoints + EDGAR insider data
   const [metrics, calendar, surprises, recommendations, priceTarget, ratings, insiders] = await Promise.all([
     getBasicFinancials(ticker),
     getEarningsCalendar(ticker),
@@ -202,7 +207,7 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
     getRecommendations(ticker),
     getPriceTarget(ticker),
     getRatingChanges(ticker),
-    getInsiderTransactions(ticker),
+    getInsiderActivity(ticker, 90),
   ])
 
   const m = metrics?.metric ?? {}
@@ -328,24 +333,24 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
     .slice(0, 5)
     .map(r => ({ firm: r.firm, fromGrade: r.fromGrade, toGrade: r.toGrade, action: 'downgrade', date: r.gradeDate }))
 
-  // ── Insider transactions ──────────────────────────────────
-  // Finnhub /stock/insider-transactions returns:
-  //   share         = shares HELD AFTER transaction (running total)
-  //   change        = signed transaction size (+ buy, - sell)
-  //   transactionCode = single letter ('P' = Purchase, 'S' = Sale, 'A' = Award, etc.)
+  // ── Insider transactions (EDGAR-sourced, May 2026 fix for Bug 5/7) ──
+  // Source: insider_transactions table, populated by sec-filings.ts from
+  // SEC EDGAR Form 4 XML. Replaces previous Finnhub-based aggregation.
   //
-  // We use change (transaction size) NOT share (holdings) for $ valuation.
-  // We accept transactionCode 'P' for purchase and 'S' for sale.
-  // Other codes (A=Award, M=Conversion, F=Tax-related) are ignored as they're
-  // not market-signal events.
+  // Schema:
+  //   transaction_type:  'P' = Purchase, 'S' = Sale (open-market)
+  //   shares:            integer count of shares transacted
+  //   price_per_share:   numeric per-share price
+  //   total_value:       numeric (shares × price), pre-computed at ingest
+  //   is_open_market:    bool — query already filters to true
+  //
+  // We use total_value directly (pre-computed at ingest). No need to
+  // recompute shares × price as the previous Finnhub path did.
   let insiderBuyValue = 0, insiderSellValue = 0
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  for (const tx of (insiders?.data ?? []) as any[]) {
-    const code = String(tx.transactionCode ?? '').trim().toUpperCase()
-    const txShares = Math.abs(Number(tx.change) || 0)
-    const txPrice  = Number(tx.transactionPrice) || 0
-    if (txShares === 0 || txPrice === 0) continue
-    const val = txShares * txPrice
+  for (const tx of insiders) {
+    const code = String(tx.transaction_type ?? '').trim().toUpperCase()
+    const val = Number(tx.total_value) || 0
+    if (val <= 0) continue
     if (code === 'P') insiderBuyValue += val
     else if (code === 'S') insiderSellValue += val
   }

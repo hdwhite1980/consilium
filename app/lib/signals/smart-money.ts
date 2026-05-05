@@ -81,48 +81,40 @@ async function fetchCongressionalTrades(ticker: string): Promise<CongressionalTr
   }
 }
 
-// ── Finnhub insider transactions (Form 4 with real buy/sell data) ──
+// ── EDGAR-sourced insider transactions (Form 4, via sec-filings.ts) ──
+// Replaces the previous Finnhub /stock/insider-transactions path which
+// returned phantom rows EDGAR didn't have (e.g., NRG 2026-03-04 included
+// two 14.3M-share entries totaling $4.69B not present in EDGAR Form 4
+// filings). Reads from the insider_transactions table that's populated
+// by fetchInsiderTransactions in sec-filings.ts.
 async function fetchInsiderTransactions(ticker: string): Promise<InsiderTransaction[]> {
-  const key = process.env.FINNHUB_API_KEY
-  if (!key) return []
   try {
-    const from = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0]
-    const to   = new Date().toISOString().split('T')[0]
-    const res = await fetch(
-      `https://finnhub.io/api/v1/stock/insider-transactions?symbol=${ticker}&from=${from}&to=${to}&token=${key}`,
-      { next: { revalidate: 3600 } }
-    )
-    if (!res.ok) return []
-    const data = await res.json()
-    const txns: Array<Record<string, unknown>> = data?.data ?? []
-    // Filter raw txns to P (purchase) or S (sale) codes BEFORE mapping.
-    // Other Finnhub codes (A=Award, M=Conversion, F=Tax-related, G=Gift, D=Return-to-issuer)
-    // are not market-signal events and must be excluded.
-    return txns
-      .filter(t => {
-        const code = String(t.transactionCode ?? '').trim().toUpperCase()
+    const { getInsiderActivity } = await import('@/app/lib/data/sec-filings')
+    const rows = await getInsiderActivity(ticker, 90)
+    return rows
+      .filter((r: { transaction_type?: string }) => {
+        const code = String(r.transaction_type ?? '').trim().toUpperCase()
         return code === 'P' || code === 'S'
       })
       .slice(0, 15)
-      .map(t => {
-        // Finnhub /stock/insider-transactions response shape:
-        //   share         = total shares HELD AFTER the transaction (running total)
-        //   change        = signed transaction size (+buy, -sell)
-        //   transactionCode = single letter ('P'=Purchase, 'S'=Sale, 'A'=Award, etc.)
-        // We MUST use `change` for the transaction size, not `share` (which is the
-        // executive's total holdings — using that inflates dollar values 100-1000x).
-        const txShares  = Math.abs(Number(t.change ?? 0))
-        const price     = Number(t.transactionPrice ?? 0)
-        const totalVal  = txShares * price
-        const code = String(t.transactionCode ?? '').trim().toUpperCase()
+      .map((r: {
+        insider_name?: string
+        title?: string
+        transaction_type?: string
+        shares?: number
+        price_per_share?: number
+        total_value?: number
+        transaction_date?: string
+      }) => {
+        const code = String(r.transaction_type ?? '').trim().toUpperCase()
         return {
-          name:           String(t.name ?? 'Insider'),
-          title:          String(t.reportedTitle ?? 'Executive'),
-          type:           code === 'P' ? 'buy' as const : 'sell' as const,
-          shares:         txShares,
-          pricePerShare:  price,
-          totalValue:     totalVal,  // always positive; direction lives on `type` field
-          date:           String(t.transactionDate ?? t.filingDate ?? ''),
+          name:           String(r.insider_name ?? 'Insider'),
+          title:          String(r.title ?? 'Executive'),
+          type:           (code === 'P' ? 'buy' : 'sell') as 'buy' | 'sell',
+          shares:         Number(r.shares) || 0,
+          pricePerShare:  Number(r.price_per_share) || 0,
+          totalValue:     Number(r.total_value) || 0,
+          date:           String(r.transaction_date ?? ''),
         }
       })
       .filter(t => t.shares > 0 && t.totalValue > 0)
