@@ -1,0 +1,99 @@
+name: Active Stories Cron
+
+# Schedules in UTC. Equivalent ET times during EDT (May-Nov) — adjust by +1 hr during EST (Nov-Mar)
+# - 10:00 UTC =  6:00 AM ET (EDT) | pre-market prep
+# - 16:00 UTC = 12:00 PM ET (EDT) | midday rotation check
+# - 21:00 UTC =  5:00 PM ET (EDT) | post-close + earnings reactions
+# - 01:00 UTC =  9:00 PM ET prior day (EDT) | international open + overnight setup
+on:
+  schedule:
+    - cron: '0 10 * * *'   # 6 AM ET (EDT)
+    - cron: '0 16 * * *'   # 12 PM ET (EDT)
+    - cron: '0 21 * * *'   # 5 PM ET (EDT)
+    - cron: '0 1 * * *'    # 9 PM ET (EDT, previous day in UTC terms)
+  workflow_dispatch:        # manual trigger from GitHub Actions UI
+
+jobs:
+  trigger-cron:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Identify trigger
+        id: trigger-info
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "source=manual" >> $GITHUB_OUTPUT
+          else
+            HOUR_UTC=$(date -u +%H)
+            case "$HOUR_UTC" in
+              10) echo "source=cron_6am" >> $GITHUB_OUTPUT ;;
+              16) echo "source=cron_12pm" >> $GITHUB_OUTPUT ;;
+              21) echo "source=cron_5pm" >> $GITHUB_OUTPUT ;;
+              01) echo "source=cron_9pm" >> $GITHUB_OUTPUT ;;
+              *)  echo "source=cron_unknown_${HOUR_UTC}utc" >> $GITHUB_OUTPUT ;;
+            esac
+          fi
+          echo "Trigger source: $GITHUB_OUTPUT"
+
+      - name: Call active-stories cron endpoint
+        id: cron-call
+        env:
+          ENDPOINT_URL: ${{ secrets.ACTIVE_STORIES_CRON_URL }}
+          CRON_SECRET:  ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$ENDPOINT_URL" ]; then
+            echo "::error::ACTIVE_STORIES_CRON_URL secret not set"
+            exit 1
+          fi
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET secret not set"
+            exit 1
+          fi
+
+          echo "Triggering: $ENDPOINT_URL"
+          # POST with Bearer auth, capture body + HTTP code separately
+          RESPONSE=$(curl -sS -w "\n__HTTP_CODE__%{http_code}" \
+            -X POST "$ENDPOINT_URL" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "Content-Type: application/json" \
+            --max-time 300 \
+            --retry 2 \
+            --retry-delay 30 \
+            --retry-connrefused) || CURL_EXIT=$?
+
+          if [ -n "$CURL_EXIT" ]; then
+            echo "::error::curl failed with exit code $CURL_EXIT"
+            exit "$CURL_EXIT"
+          fi
+
+          # Split body and HTTP code
+          HTTP_CODE=$(echo "$RESPONSE" | grep -oP '(?<=__HTTP_CODE__)\d+' | tail -1)
+          BODY=$(echo "$RESPONSE" | sed 's/__HTTP_CODE__[0-9]*$//')
+
+          echo "HTTP code: $HTTP_CODE"
+          echo "Response body:"
+          echo "$BODY" | head -c 4000
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::error::Cron endpoint returned non-2xx HTTP code $HTTP_CODE"
+            exit 1
+          fi
+
+          # Best-effort parse of summary fields for the run log
+          SUMMARY_OK=$(echo "$BODY" | grep -oP '(?<="ok":)\s*(true|false)' | head -1 | tr -d ' ')
+          if [ "$SUMMARY_OK" = "false" ]; then
+            echo "::warning::Cron returned ok=false — pipeline error caught server-side, see Railway logs for details"
+            # Don't fail the job — server already logged the error to run_log table
+          fi
+
+          # Pretty-print summary fields if present
+          echo "::notice::Active Stories run completed"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Active Stories cron run" >> $GITHUB_STEP_SUMMARY
+          echo "- Trigger: ${{ steps.trigger-info.outputs.source }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Time: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_STEP_SUMMARY
