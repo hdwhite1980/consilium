@@ -76,8 +76,14 @@ export interface GptResult {
 export interface RebuttalResult {
   signal: Signal
   confidence: number
-  researchQuestion: string
-  researchAnswer: string
+  /** @deprecated Bug 19: replaced by researchQuestions; kept for legacy transcript compat */
+  researchQuestion?: string
+  /** @deprecated Bug 19: replaced by researchAnswers; kept for legacy transcript compat */
+  researchAnswer?: string
+  // Bug 19: arrays of paired Q&A from R2 News Scout consultations.
+  // Always 2 entries (Lead asks two questions in parallel).
+  researchQuestions: string[]
+  researchAnswers: string[]
   rebuttal: string
   concedes: string[]
   maintains: string[]
@@ -86,8 +92,14 @@ export interface RebuttalResult {
 }
 
 export interface CounterResult {
-  researchQuestion: string
-  researchAnswer: string
+  /** @deprecated Bug 19: replaced by researchQuestions; kept for legacy transcript compat */
+  researchQuestion?: string
+  /** @deprecated Bug 19: replaced by researchAnswers; kept for legacy transcript compat */
+  researchAnswer?: string
+  // Bug 19: arrays of paired Q&A from R2 News Scout consultations.
+  // Always 2 entries (Devil asks two questions in parallel).
+  researchQuestions: string[]
+  researchAnswers: string[]
   finalChallenge: string
   yieldsOn: string[]
   pressesOn: string[]
@@ -1354,6 +1366,117 @@ JSON ONLY:
   return parseJSON<GptResult>(completion.choices[0].message.content!)
 }
 
+// ─────────────────────────────────────────────────────────────
+// BUG 19: Research cache — pulls prior R2 research questions for
+// the same ticker from analyses.transcript within a time window.
+// Allows Lead/Devil to know what's already been asked and
+// generate NEW questions exploring different angles.
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Parse a numbered list of questions from LLM output.
+ * Robust to: "1. Q\n2. Q", "1) Q\n2) Q", lone questions, missing numbering.
+ * Always returns exactly `expected` entries; pads/trims as needed.
+ */
+function parseNumberedQuestions(text: string, expected: number): string[] {
+  const trimmed = (text || '').trim()
+  if (!trimmed) return Array(expected).fill('What is the most important recent data point for this ticker?')
+  // Try to match "1. Question\n2. Question" or "1) Question\n2) Question"
+  const lineMatches = trimmed.split(/\r?\n/).map(line => {
+    const m = line.match(/^\s*\d+\s*[.)\]]\s*(.+?)\s*$/)
+    return m ? m[1].trim() : line.trim()
+  }).filter(s => s.length > 8 && s.includes('?'))
+  if (lineMatches.length >= expected) return lineMatches.slice(0, expected)
+  // Fallback: split on sentence boundaries with question marks
+  const sentenceMatches = trimmed.split(/(?<=\?)\s+/).map(s => s.trim()).filter(s => s.endsWith('?') && s.length > 8)
+  if (sentenceMatches.length >= expected) return sentenceMatches.slice(0, expected)
+  // Combine what we have, pad with generic if short
+  const collected = [...lineMatches, ...sentenceMatches.filter(s => !lineMatches.includes(s))]
+  while (collected.length < expected) {
+    collected.push(`What additional data should I know about ${collected.length === 0 ? 'this thesis' : 'unresolved aspects'}?`)
+  }
+  return collected.slice(0, expected)
+}
+const RESEARCH_CACHE_WINDOW_MINUTES = Number(process.env.RESEARCH_CACHE_WINDOW_MINUTES ?? '60')
+const RESEARCH_CACHE_MAX_ROWS = 3   // pull from up to 3 most-recent prior runs
+
+interface CachedResearchEntry {
+  question: string
+  answer: string
+  ageMinutes: number
+}
+
+/**
+ * Fetch prior R2 research Q&A pairs for a ticker within the configured window.
+ * Used by runRebuttal and runCounter to inform their question-generation.
+ * Returns empty array on any error (cache miss is non-fatal).
+ */
+async function getCachedResearchQuestions(
+  ticker: string,
+  forRole: 'claude' | 'gpt',   // whose prior questions we want
+): Promise<CachedResearchEntry[]> {
+  try {
+    const { createClient } = await import('@supabase/supabase-js')
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+    if (!url || !key) return []
+    const admin = createClient(url, key)
+    const cutoff = new Date(Date.now() - RESEARCH_CACHE_WINDOW_MINUTES * 60 * 1000).toISOString()
+    const { data, error } = await admin
+      .from('analyses')
+      .select('created_at, transcript')
+      .eq('ticker', ticker)
+      .gte('created_at', cutoff)
+      .order('created_at', { ascending: false })
+      .limit(RESEARCH_CACHE_MAX_ROWS)
+    if (error || !data) return []
+    const stage = forRole === 'claude' ? 'rebuttal' : 'counter'
+    const out: CachedResearchEntry[] = []
+    for (const row of data) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const transcript = row.transcript as any[]
+      if (!Array.isArray(transcript)) continue
+      const entry = transcript.find(t => t?.stage === stage && t?.role === forRole)
+      if (!entry) continue
+      const ageMs = Date.now() - new Date(row.created_at).getTime()
+      const ageMinutes = Math.floor(ageMs / 60_000)
+      // Read both new (researchQuestions[]) and legacy (researchQuestion) shapes
+      const qs: string[] = Array.isArray(entry.researchQuestions)
+        ? entry.researchQuestions
+        : (typeof entry.researchQuestion === 'string' ? [entry.researchQuestion] : [])
+      const as: string[] = Array.isArray(entry.researchAnswers)
+        ? entry.researchAnswers
+        : (typeof entry.researchAnswer === 'string' ? [entry.researchAnswer] : [])
+      const n = Math.min(qs.length, as.length)
+      for (let i = 0; i < n; i++) {
+        if (qs[i] && as[i]) {
+          out.push({ question: qs[i], answer: as[i], ageMinutes })
+        }
+      }
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Format cached research as a prompt block for the Lead/Devil to see what's
+ * already been asked. Empty string when no cached entries.
+ */
+function formatCachedResearchBlock(cached: CachedResearchEntry[]): string {
+  if (cached.length === 0) return ''
+  const lines = cached.slice(0, 6).map((c, i) =>
+    `${i + 1}. (${c.ageMinutes}min ago) "${c.question}"\n   Answer: ${c.answer.slice(0, 400)}${c.answer.length > 400 ? '...' : ''}`
+  )
+  return `
+
+PREVIOUSLY ASKED RESEARCH (within last ${RESEARCH_CACHE_WINDOW_MINUTES}min, do NOT re-ask these):
+${lines.join('\n')}
+
+Generate questions exploring DIFFERENT angles than what's listed above.`
+}
+
 // Lead Analyst rebuts the Devil's Advocate challenges
 export async function runRebuttal(
   bundle: SignalBundle,
@@ -1361,31 +1484,45 @@ export async function runRebuttal(
   gpt: GptResult
 ): Promise<RebuttalResult> {
 
+  // Bug 19: pull cached prior research for this ticker so we don't re-ask
+  const cachedResearch = await getCachedResearchQuestions(bundle.ticker, 'claude')
+  const cacheBlock = formatCachedResearchBlock(cachedResearch)
+
   const researchAsk = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
-    max_tokens: 150,
-    system: `You are the Lead Analyst in a stock debate about ${bundle.ticker}. You can send ONE research question to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before you respond to the Devil's Advocate. Ask about the single most important data point that would resolve the most significant challenge.`,
+    max_tokens: 250,
+    system: `You are the Lead Analyst in a stock debate about ${bundle.ticker}. You can send TWO research questions to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before you respond to the Devil's Advocate. Choose two questions that target the most important data points to resolve the Devil's strongest challenges. The two questions should explore DIFFERENT angles --- do not ask variations of the same thing. Return them as a numbered list, ONE QUESTION PER LINE: "1. <question>\\n2. <question>". Nothing else.`,
     messages: [{
       role: 'user',
       content: `YOUR ORIGINAL CALL: ${claude.signal} at $${bundle.currentPrice.toFixed(2)}, target ${claude.target}
 
 DEVIL'S ADVOCATE CHALLENGES:
 ${gpt.challenges.map((c, i) => `${i+1}. ${c}`).join('\n')}
-STRONGEST COUNTER: ${gpt.strongestCounterArgument}
+STRONGEST COUNTER: ${gpt.strongestCounterArgument}${cacheBlock}
 
-What ONE question should the News Scout research right now to help you respond? Reply with just the question, nothing else.`
+What TWO questions should the News Scout research right now to help you respond? Format as:
+1. <first question>
+2. <second question>`
     }]
   })
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const researchQuestion = extractText(researchAsk.content as any[]).trim()
+  const researchAskText = extractText(researchAsk.content as any[]).trim()
+  const researchQuestions = parseNumberedQuestions(researchAskText, 2)
 
   const researchContext = `${bundle.aiContext.technicalsSection}\n${bundle.aiContext.fundamentalsSection}\n${bundle.aiContext.smartMoneySection}\n${bundle.aiContext.optionsSection}\n${bundle.aiContext.marketSection}`
-  const researchAnswer = await runTargetedResearch(bundle, researchQuestion, researchContext)
+  // Run both research calls in parallel — News Scout is independent per question
+  const researchAnswers = await Promise.all(
+    researchQuestions.map(q => runTargetedResearch(bundle, q, researchContext))
+  )
+
+  const researchBlock = researchQuestions.map((q, i) =>
+    `Question ${i + 1}: "${q}"\nAnswer ${i + 1}: ${researchAnswers[i]}`
+  ).join('\n\n')
 
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 800,
-    system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research to help you respond. Use it. Defend your position where data supports you, concede where the Devil's Advocate is correct. Intellectual honesty wins with the Judge --- a thoughtful concession beats a dishonest defense.`,
+    system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research from TWO of your questions. Use both responses. Defend your position where data supports you, concede where the Devil's Advocate is correct. Intellectual honesty wins with the Judge --- a thoughtful concession beats a dishonest defense.`,
     messages: [{
       role: 'user',
       content: `YOUR ORIGINAL CALL: ${claude.signal} on ${bundle.ticker} at $${bundle.currentPrice.toFixed(2)}, target ${claude.target}
@@ -1396,9 +1533,8 @@ ${gpt.challenges.map((c, i) => `${i+1}. ${c}`).join('\n')}
 STRONGEST COUNTER: ${gpt.strongestCounterArgument}
 ALTERNATE SCENARIO: ${gpt.alternateScenario}
 
-NEWS SCOUT RESEARCH (fresh data, just retrieved):
-Question asked: "${researchQuestion}"
-Answer: ${researchAnswer}
+NEWS SCOUT RESEARCH (fresh data from TWO questions, just retrieved):
+${researchBlock}
 
 Now respond directly to each challenge. Reference the fresh research where relevant. Concede valid points --- you are not required to defend every position. Defend positions backed by data. Update your price target if warranted. CRITICAL: If the research came back inconclusive ("data not available," "not disclosed in filings," or otherwise failed to confirm or deny what was asked), treat that as a null finding --- NOT as evidence for or against your thesis. Do not write "the lack of X confirms my view" or similar constructions. If research was inconclusive, say so plainly and rely on your other evidence. This applies to PARTIAL nulls too. If the research returned some content but didn't address one of your sub-questions (e.g., gave you company financials but no comment on insider behavior), do not flag the missing sub-question as a "red flag" or use phrases like "notably lacks explanation." Use what the research DID provide; ignore what it didn't.
 
@@ -1406,8 +1542,8 @@ JSON ONLY:
 {
   "signal": "BULLISH|BEARISH|NEUTRAL",
   "confidence": <0-100>,
-  "researchQuestion": "${researchQuestion.replace(/"/g, "'")}",
-  "researchAnswer": ${JSON.stringify(researchAnswer)},
+  "researchQuestions": ${JSON.stringify(researchQuestions)},
+  "researchAnswers": ${JSON.stringify(researchAnswers)},
   "rebuttal": "3-4 sentences directly responding to the challenges, referencing the fresh research",
   "concedes": ["specific points you now agree the Devil's Advocate got right --- be honest, 1-3 items"],
   "maintains": ["specific points you stand firm on with data backing --- 2-4 items"],
@@ -1420,8 +1556,11 @@ JSON ONLY:
   const raw = parseJSON<RebuttalResult>(extractText(msg.content as any[]))
   return {
     ...raw,
-    researchQuestion,
-    researchAnswer,
+    researchQuestions,
+    researchAnswers,
+    // Legacy aliases for any consumer still reading old fields
+    researchQuestion: researchQuestions.join(' | '),
+    researchAnswer: researchAnswers.join('\n\n---\n\n'),
   }
 }
 
@@ -1431,25 +1570,44 @@ export async function runCounter(
   rebuttal: RebuttalResult
 ): Promise<CounterResult> {
 
+  // Bug 19: pull cached prior research for this ticker (Devil's prior questions)
+  const cachedResearch = await getCachedResearchQuestions(bundle.ticker, 'gpt')
+  const cacheBlock = formatCachedResearchBlock(cachedResearch)
+
+  // Format the Lead's R2 research (now array shape) into a string for prompt context
+  const leadResearchSummary = (rebuttal.researchQuestions ?? []).map((q, i) =>
+    `"${q}" → ${(rebuttal.researchAnswers ?? [])[i] ?? '(no answer)'}`
+  ).join('; ')
+
   const researchAsk = await getOpenAI().chat.completions.create({
     model: 'gpt-4o',
-    max_tokens: 150,
+    max_tokens: 250,
     messages: [
-      { role: 'system', content: `You are the Devil's Advocate in a stock debate about ${bundle.ticker}. You can send ONE research question to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before firing back at the Lead Analyst. Ask about the single most important thing that could strengthen your challenge or expose a weakness in their rebuttal.` },
+      { role: 'system', content: `You are the Devil's Advocate in a stock debate about ${bundle.ticker}. You can send TWO research questions to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before firing back at the Lead Analyst. Choose two questions that strengthen your challenges from DIFFERENT angles --- do not ask variations of the same thing. Return them as a numbered list, ONE QUESTION PER LINE: "1. <question>\\n2. <question>". Nothing else.` },
       { role: 'user', content: `LEAD ANALYST'S REBUTTAL: ${rebuttal.rebuttal}
 THEY CONCEDE: ${rebuttal.concedes.join('; ')}
 THEY MAINTAIN: ${rebuttal.maintains.join('; ')}
-FRESH RESEARCH THEY USED: "${rebuttal.researchQuestion}" → ${rebuttal.researchAnswer}
+FRESH RESEARCH THEY USED: ${leadResearchSummary}${cacheBlock}
 
-What ONE question should the News Scout research right now to help you counter? Reply with just the question, nothing else.` }
+What TWO questions should the News Scout research right now to help you counter? Format as:
+1. <first question>
+2. <second question>` }
     ]
   })
-  const researchQuestion = researchAsk.choices[0].message.content?.trim() ?? ''
+  const researchAskText = researchAsk.choices[0].message.content?.trim() ?? ''
+  const researchQuestions = parseNumberedQuestions(researchAskText, 2)
 
   const researchContext = `${bundle.aiContext.technicalsSection}\n${bundle.aiContext.fundamentalsSection}\n${bundle.aiContext.smartMoneySection}\n${bundle.aiContext.optionsSection}\n${bundle.aiContext.marketSection}`
-  const researchAnswer = await runTargetedResearch(bundle, researchQuestion, researchContext)
+  // Run both research calls in parallel
+  const researchAnswers = await Promise.all(
+    researchQuestions.map(q => runTargetedResearch(bundle, q, researchContext))
+  )
 
-  const counterSystem = `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research. Use it. This is your final shot.
+  const researchBlock = researchQuestions.map((q, i) =>
+    `Question ${i + 1}: "${q}"\nAnswer ${i + 1}: ${researchAnswers[i]}`
+  ).join('\n\n')
+
+  const counterSystem = `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research from TWO of your questions. Use both responses. This is your final shot.
 
 CALIBRATION: Yield on a challenge ONLY if the Lead Analyst directly refuted it AND your fresh research confirms their refutation. Mitigation is not refutation --- if the Lead's rebuttal merely softened a challenge by adding an offsetting factor, your challenge still stands. Defensive admissions about risk do not count as resolution. The Judge weighs argument QUALITY. Yielding on weakly-pressured challenges is fine; yielding on points the Lead failed to actually refute is dishonest. If your strongest challenges remain materially unresolved, say so plainly and press them with the fresh research.`
 
@@ -1464,18 +1622,17 @@ LEAD ANALYST'S REBUTTAL: ${rebuttal.rebuttal}
 THEY CONCEDE: ${rebuttal.concedes.join('; ')}
 THEY MAINTAIN: ${rebuttal.maintains.join('; ')}
 UPDATED TARGET: ${rebuttal.updatedTarget}
-RESEARCH THEY CITED: "${rebuttal.researchQuestion}" → ${rebuttal.researchAnswer}
+RESEARCH THEY CITED: ${leadResearchSummary}
 
-YOUR FRESH RESEARCH (just retrieved):
-Question: "${researchQuestion}"
-Answer: ${researchAnswer}
+YOUR FRESH RESEARCH (from TWO questions, just retrieved):
+${researchBlock}
 
 Now fire back. Acknowledge where their rebuttal was convincing --- yielding on weak challenges strengthens your remaining ones. Use the fresh research to press on unresolved weaknesses. What must the Judge not ignore?
 
 JSON ONLY:
 {
-  "researchQuestion": ${JSON.stringify(researchQuestion)},
-  "researchAnswer": ${JSON.stringify(researchAnswer)},
+  "researchQuestions": ${JSON.stringify(researchQuestions)},
+  "researchAnswers": ${JSON.stringify(researchAnswers)},
   "finalChallenge": "2-3 sentences --- your strongest remaining challenge, referencing fresh research where relevant",
   "yieldsOn": ["points where their rebuttal directly refuted your challenge AND fresh research confirms the refutation --- 0-2 items, leave empty array if no genuine refutations"],
   "pressesOn": ["points that remain unresolved and the Judge must weigh --- 2-3 items"],
@@ -1486,8 +1643,11 @@ JSON ONLY:
   const raw = parseJSON<CounterResult>(completion.choices[0].message.content!)
   return {
     ...raw,
-    researchQuestion,
-    researchAnswer,
+    researchQuestions,
+    researchAnswers,
+    // Legacy aliases for any consumer still reading old fields
+    researchQuestion: researchQuestions.join(' | '),
+    researchAnswer: researchAnswers.join('\n\n---\n\n'),
   }
 }
 
@@ -1554,12 +1714,22 @@ DEVIL'S ADVOCATE position: ${gpt.signal} @ ${gpt.confidence}% confidence (${gpt.
   Alternate scenario:    ${gpt.alternateScenario}
   Strongest single counter: ${gpt.strongestCounterArgument}`
 
+  // Bug 19: Format multiple research Q&A pairs (now arrays) into a clean prompt block
+  const formatResearchPairs = (qs: string[] | undefined, as: string[] | undefined): string => {
+    const questions = qs ?? []
+    const answers = as ?? []
+    if (questions.length === 0) return '(no research)'
+    return questions.map((q, i) =>
+      `    Q${i + 1}: "${q}"\n    A${i + 1}: ${answers[i] ?? '(no answer)'}`
+    ).join('\n')
+  }
+
   const round2 = rebuttal ? `
 
 ━━━ ROUND 2 --- After Independent Research ━━━
 
-LEAD ANALYST researched: "${rebuttal.researchQuestion}"
-  News Scout returned: ${rebuttal.researchAnswer}
+LEAD ANALYST researched:
+${formatResearchPairs(rebuttal.researchQuestions, rebuttal.researchAnswers)}
   
   Updated position:  ${rebuttal.signal} @ ${rebuttal.confidence}% confidence
   Response to Devil: ${rebuttal.rebuttal}
@@ -1568,8 +1738,8 @@ LEAD ANALYST researched: "${rebuttal.researchQuestion}"
   Updated target:    ${rebuttal.updatedTarget}
   Final stance:      ${rebuttal.finalStance}
 
-DEVIL'S ADVOCATE researched: "${counter?.researchQuestion ?? '(no research)'}"
-  News Scout returned: ${counter?.researchAnswer ?? '(no research)'}
+DEVIL'S ADVOCATE researched:
+${formatResearchPairs(counter?.researchQuestions, counter?.researchAnswers)}
   
   Final challenge:   ${counter?.finalChallenge ?? ''}
   Points pressing:   ${(counter?.pressesOn ?? []).join('; ')}

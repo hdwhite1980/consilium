@@ -176,13 +176,25 @@ interface GptResult {
 
 interface RebuttalResult {
   signal: Signal; confidence: number
-  researchQuestion: string; researchAnswer: string
+  /** @deprecated Bug 19: legacy singular field; new shape uses researchQuestions[]/researchAnswers[] */
+  researchQuestion?: string
+  /** @deprecated Bug 19: legacy singular field */
+  researchAnswer?: string
+  // Bug 19: new array shape (always 2 entries when present)
+  researchQuestions?: string[]
+  researchAnswers?: string[]
   rebuttal: string
   concedes: string[]; maintains: string[]; updatedTarget: string; finalStance: string
 }
 
 interface CounterResult {
-  researchQuestion: string; researchAnswer: string
+  /** @deprecated Bug 19: legacy singular field */
+  researchQuestion?: string
+  /** @deprecated Bug 19: legacy singular field */
+  researchAnswer?: string
+  // Bug 19: new array shape (always 2 entries when present)
+  researchQuestions?: string[]
+  researchAnswers?: string[]
   finalChallenge: string; yieldsOn: string[]; pressesOn: string[]; closingArgument: string
 }
 
@@ -1690,13 +1702,27 @@ function HomeInner() {
                 badge={<><SBadge s={reb.signal} sm /><span className="text-[10px] font-mono ml-1" style={{ color: 'var(--text3)' }}>Round 2</span></>}
                 defaultOpen={true}>
               <div className="pt-2 space-y-3">
-                {reb.researchQuestion && (
-                  <div className="rounded-lg p-3" style={{ background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.15)' }}>
-                    <div className="text-[10px] font-mono uppercase tracking-widest mb-1" style={{ color: '#60a5fa' }}>News Scout consulted</div>
-                    <div className="text-xs mb-1.5 italic" style={{ color: 'var(--text2)' }}>Q: {reb.researchQuestion}</div>
-                    <div className="text-xs leading-relaxed" style={{ color: 'var(--text)' }}>{reb.researchAnswer}</div>
-                  </div>
-                )}
+                {(() => {
+                  // Bug 19: prefer the array shape; fall back to singular legacy fields
+                  const qs = (reb.researchQuestions && reb.researchQuestions.length > 0)
+                    ? reb.researchQuestions
+                    : (reb.researchQuestion ? [reb.researchQuestion] : [])
+                  const as = (reb.researchAnswers && reb.researchAnswers.length > 0)
+                    ? reb.researchAnswers
+                    : (reb.researchAnswer ? [reb.researchAnswer] : [])
+                  if (qs.length === 0) return null
+                  return (
+                    <div className="rounded-lg p-3" style={{ background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.15)' }}>
+                      <div className="text-[10px] font-mono uppercase tracking-widest mb-1" style={{ color: '#60a5fa' }}>News Scout consulted{qs.length > 1 ? ` (${qs.length} questions)` : ''}</div>
+                      {qs.map((q, i) => (
+                        <div key={i} className={i > 0 ? 'mt-2 pt-2' : ''} style={i > 0 ? { borderTop: '1px solid rgba(96,165,250,0.10)' } : undefined}>
+                          <div className="text-xs mb-1.5 italic" style={{ color: 'var(--text2)' }}>{qs.length > 1 ? `Q${i + 1}: ` : 'Q: '}{q}</div>
+                          <div className="text-xs leading-relaxed" style={{ color: 'var(--text)' }}>{as[i] ?? '(no answer)'}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })()}
                 <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{reb.rebuttal}</p>
                 {reb.concedes.length > 0 && (
                   <div className="rounded-lg p-3" style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.15)' }}>
@@ -1730,13 +1756,27 @@ function HomeInner() {
                 badge={<span className="text-[10px] font-mono ml-1" style={{ color: 'var(--text3)' }}>Round 2</span>}
                 defaultOpen={true}>
               <div className="pt-2 space-y-3">
-                {ctr.researchQuestion && (
-                  <div className="rounded-lg p-3" style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.15)' }}>
-                    <div className="text-[10px] font-mono uppercase tracking-widest mb-1" style={{ color: '#f87171' }}>News Scout consulted</div>
-                    <div className="text-xs mb-1.5 italic" style={{ color: 'var(--text2)' }}>Q: {ctr.researchQuestion}</div>
-                    <div className="text-xs leading-relaxed" style={{ color: 'var(--text)' }}>{ctr.researchAnswer}</div>
-                  </div>
-                )}
+                {(() => {
+                  // Bug 19: prefer the array shape; fall back to singular legacy fields
+                  const qs = (ctr.researchQuestions && ctr.researchQuestions.length > 0)
+                    ? ctr.researchQuestions
+                    : (ctr.researchQuestion ? [ctr.researchQuestion] : [])
+                  const as = (ctr.researchAnswers && ctr.researchAnswers.length > 0)
+                    ? ctr.researchAnswers
+                    : (ctr.researchAnswer ? [ctr.researchAnswer] : [])
+                  if (qs.length === 0) return null
+                  return (
+                    <div className="rounded-lg p-3" style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.15)' }}>
+                      <div className="text-[10px] font-mono uppercase tracking-widest mb-1" style={{ color: '#f87171' }}>News Scout consulted{qs.length > 1 ? ` (${qs.length} questions)` : ''}</div>
+                      {qs.map((q, i) => (
+                        <div key={i} className={i > 0 ? 'mt-2 pt-2' : ''} style={i > 0 ? { borderTop: '1px solid rgba(248,113,113,0.10)' } : undefined}>
+                          <div className="text-xs mb-1.5 italic" style={{ color: 'var(--text2)' }}>{qs.length > 1 ? `Q${i + 1}: ` : 'Q: '}{q}</div>
+                          <div className="text-xs leading-relaxed" style={{ color: 'var(--text)' }}>{as[i] ?? '(no answer)'}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })()}
                 <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{ctr.finalChallenge}</p>
                 {ctr.yieldsOn.length > 0 && (
                   <div className="rounded-lg p-3" style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.15)' }}>
