@@ -23,6 +23,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { generateWithFallback, generateJSON } from './gemini-helper'
 import { createClient } from '@supabase/supabase-js'
+import type { SignalBundle } from './aggregator'
 
 const getGenAI = () => new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
 
@@ -78,6 +79,12 @@ const CREDIBLE_DOMAINS = new Set([
 
   // Primary sources
   'sec.gov',
+  'efts.sec.gov',           // EDGAR full-text search
+  'data.sec.gov',           // EDGAR data API
+  'macrotrends.net',        // long-running aggregator sourced from filings
+  'stockanalysis.com',      // commonly cited, sourced from filings
+  'tipranks.com',           // analyst consensus aggregator
+  'fintel.io',              // institutional + insider data aggregator
   'federalreserve.gov',
   'treasury.gov',
   'bls.gov',
@@ -514,10 +521,261 @@ Return one object per claim in order. If a claim can't be verified, set verified
 // ─────────────────────────────────────────────────────────────
 // Main entrypoint --- verify a reasoning block
 // ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// Bundle source-of-truth pre-check (Bug 11 fix, May 2026)
+// ─────────────────────────────────────────────────────────────
+// Verification's Google Search approach generates false-positive strips
+// for facts the bundle already knows authoritatively. Examples seen
+// in production:
+//   - Persona cites "$600.8M insider selling" (correct, EDGAR-sourced).
+//     MarketBeat reports "$58.7M over 24 months" (different time window
+//     and definition). Verification strips the persona claim because
+//     credible source disagrees → Judge thinks correct fact is wrong.
+//   - Persona cites "P/E 38.1x". Investing.com says 38.30. Verification
+//     strips because of 0.5% rounding difference.
+//   - Persona cites "10.49 P/C ratio". Fintel says 0.64 (chain-wide
+//     OI ratio). Verification strips correct single-expiry math.
+//
+// This pre-check runs BEFORE Google Search. It checks each claim
+// against the bundle's source-of-truth fields. If the bundle confirms
+// (within tolerance), mark verified and skip Gemini. If the bundle
+// directly contradicts, mark stripped with a clear "bundle disagrees"
+// reason. If the bundle is silent on the topic, return null and let
+// the existing Google Search verification run as before.
+//
+// Conservative by design: we'd rather fall through to Google Search
+// (worst case: false-strip) than mark a hallucination verified because
+// the math accidentally lands near a real bundle value.
+// ─────────────────────────────────────────────────────────────
+
+interface BundleCheckResult {
+  matched: boolean              // true = bundle has authoritative answer; false = silent
+  verified?: boolean            // when matched: true=confirms, false=contradicts
+  sourceOutlet?: string
+  reasoning?: string
+}
+
+// Pull a numeric dollar amount from a claim. Returns the dollar value as
+// a Number (e.g., "600.8M" → 600_800_000, "$5.3B" → 5_300_000_000).
+// Returns null if no clear dollar amount is found.
+function extractDollarAmount(text: string): number | null {
+  // Match patterns like $600.8M, 600.8M, $5.3B, $58.7 million, $1.2 billion
+  const re = /\$?\s*([\d,]+(?:\.\d+)?)\s*(b|m|k|billion|million|thousand)\b/i
+  const m = text.match(re)
+  if (!m) return null
+  const num = parseFloat(m[1].replace(/,/g, ''))
+  if (!Number.isFinite(num)) return null
+  const unit = m[2].toLowerCase()
+  const multiplier =
+    unit === 'b' || unit === 'billion'  ? 1e9 :
+    unit === 'm' || unit === 'million'  ? 1e6 :
+    unit === 'k' || unit === 'thousand' ? 1e3 : 1
+  return num * multiplier
+}
+
+// Pull the first plain numeric value from a claim (no $ or unit required).
+// Used for ratio/percentage matching. Returns null if no number found.
+function extractFirstNumber(text: string): number | null {
+  const m = text.match(/(\d+(?:\.\d+)?)/)
+  if (!m) return null
+  const num = parseFloat(m[1])
+  return Number.isFinite(num) ? num : null
+}
+
+function withinTolerance(claimed: number, actual: number, tolerancePct: number): boolean {
+  if (actual === 0) return claimed === 0
+  return Math.abs(claimed - actual) / Math.abs(actual) <= tolerancePct
+}
+
+// Main pre-check. Returns matched=false to let Google Search handle the claim.
+function tryVerifyAgainstBundle(claim: string, bundle: SignalBundle | undefined): BundleCheckResult {
+  if (!bundle) return { matched: false }
+  const c = claim.toLowerCase()
+
+  // ── Insider activity claims ────────────────────────────────
+  // Match patterns: "insider selling of $X", "$X in insider sales",
+  // "insiders sold $X", "executive selling $X", etc.
+  const isInsiderClaim = /insider/i.test(c) || /\b(executive|officer|director)s?\b.*\b(sold|sell|selling|bought|buy|buying)\b/i.test(c)
+  if (isInsiderClaim) {
+    const claimedDollars = extractDollarAmount(claim)
+    if (claimedDollars !== null && claimedDollars > 0) {
+      // Detect direction (bought vs sold) from the claim text
+      const isSelling = /\b(sold|sell|selling|sale|sales|exit|divest)\b/i.test(c)
+      const isBuying  = /\b(bought|buy|buying|purchase|purchases|accumulat)\b/i.test(c)
+      const sellValue = bundle.fundamentals?.insiderSellValue ?? 0
+      const buyValue  = bundle.fundamentals?.insiderBuyValue ?? 0
+
+      // Pick the bundle value that matches the claim's direction.
+      // If direction is ambiguous (claim says just "insider activity"),
+      // compare against gross flow (buy + sell) since that's what's typically
+      // reported as "insider trading volume."
+      const bundleValue =
+        isSelling && !isBuying ? sellValue :
+        isBuying && !isSelling ? buyValue :
+        sellValue + buyValue
+
+      // ±10% tolerance on insider dollar amounts. Authoritative source is
+      // EDGAR Form 4 filings via insider_transactions table (90-day window,
+      // open-market only).
+      if (withinTolerance(claimedDollars, bundleValue, 0.10)) {
+        return {
+          matched: true,
+          verified: true,
+          sourceOutlet: 'EDGAR (bundle source-of-truth)',
+          reasoning: `Bundle confirms: 90-day open-market insider ${isSelling ? 'selling' : isBuying ? 'buying' : 'activity'} = $${(bundleValue/1e6).toFixed(1)}M (claim: $${(claimedDollars/1e6).toFixed(1)}M, within tolerance).`,
+        }
+      }
+      // Bundle has authoritative data and the claim doesn't match.
+      // Only mark as a contradiction if the bundle has non-trivial data
+      // (otherwise we might be stripping correct claims for tickers where
+      // we just don't have insider data ingested yet).
+      if (sellValue > 0 || buyValue > 0) {
+        return {
+          matched: true,
+          verified: false,
+          sourceOutlet: 'EDGAR (bundle source-of-truth)',
+          reasoning: `Bundle contradicts: claim cites $${(claimedDollars/1e6).toFixed(1)}M but EDGAR Form 4 (90d open-market) shows insider buying $${(buyValue/1e6).toFixed(1)}M / selling $${(sellValue/1e6).toFixed(1)}M.`,
+        }
+      }
+      // Bundle has no insider data at all → fall through to Google Search.
+      return { matched: false }
+    }
+  }
+
+  // ── Put/Call ratio claims ─────────────────────────────────
+  // Match: "put/call ratio of X.XX", "P/C ratio X.XX", "put-call X.XX"
+  const isPCClaim = /\b(put[/\s-]?call|p[/\s-]?c)\s*(ratio|vol|volume|oi)?/i.test(c)
+  if (isPCClaim) {
+    const claimedRatio = extractFirstNumber(claim)
+    if (claimedRatio !== null && claimedRatio > 0 && claimedRatio < 50) {
+      const volRatio = bundle.optionsFlow?.putCallRatio ?? null
+      const oiRatio = (bundle.optionsFlow as { putCallOIRatio?: number | null } | undefined)?.putCallOIRatio ?? null
+      // Allow match against either vol or OI ratio (claim may not specify which).
+      // ±10% tolerance — slightly looser than dollars to tolerate rounding +
+      // intraday volatility in the snapshot vs the bundle's earlier sample.
+      const matches: string[] = []
+      if (volRatio !== null && withinTolerance(claimedRatio, volRatio, 0.10)) {
+        matches.push(`Put/Call Vol ratio = ${volRatio.toFixed(2)}`)
+      }
+      if (oiRatio !== null && withinTolerance(claimedRatio, oiRatio, 0.10)) {
+        matches.push(`Put/Call OI ratio = ${oiRatio.toFixed(2)}`)
+      }
+      if (matches.length > 0) {
+        return {
+          matched: true,
+          verified: true,
+          sourceOutlet: 'Tradier options chain (bundle source-of-truth)',
+          reasoning: `Bundle confirms: ${matches.join(', ')} (claim: ${claimedRatio.toFixed(2)}, within tolerance).`,
+        }
+      }
+      // Bundle has data but neither matches → contradicts.
+      if (volRatio !== null || oiRatio !== null) {
+        const parts: string[] = []
+        if (volRatio !== null) parts.push(`Vol=${volRatio.toFixed(2)}`)
+        if (oiRatio !== null) parts.push(`OI=${oiRatio.toFixed(2)}`)
+        return {
+          matched: true,
+          verified: false,
+          sourceOutlet: 'Tradier options chain (bundle source-of-truth)',
+          reasoning: `Bundle contradicts: claim cites P/C ${claimedRatio.toFixed(2)} but bundle (front 3 monthlies) shows ${parts.join(', ')}.`,
+        }
+      }
+      return { matched: false }
+    }
+  }
+
+  // ── P/E ratio claims ──────────────────────────────────────
+  // Match: "P/E of 38.1x", "P/E ratio 38.1", "trailing P/E 38.1",
+  //        "forward P/E 16.2x". Detect forward vs trailing.
+  const isPEClaim = /\bp[/\s-]?e\s*(ratio|of|is|=|:)?\s*(\d+(?:\.\d+)?)/i.test(c)
+  if (isPEClaim) {
+    const claimedPE = extractFirstNumber(claim.replace(/p[/\s-]?e/ig, ''))
+    if (claimedPE !== null && claimedPE > 0 && claimedPE < 1000) {
+      const isForward = /\bforward\b/i.test(c) || /\bfwd\b/i.test(c)
+      const isTrailing = /\b(trailing|ttm|normalized)\b/i.test(c)
+      const fwdPE = bundle.fundamentals?.forwardPE ?? null
+      const ttmPE = bundle.fundamentals?.peRatio ?? null
+      const target =
+        isForward && !isTrailing ? fwdPE :
+        isTrailing && !isForward ? ttmPE :
+        ttmPE  // default to TTM if ambiguous
+
+      // ±5% tolerance — P/E is often quoted with rounding; provider
+      // disagreement on "exactly 38.1 vs 38.30" shouldn't strip claims.
+      if (target !== null && withinTolerance(claimedPE, target, 0.05)) {
+        return {
+          matched: true,
+          verified: true,
+          sourceOutlet: 'Bundle fundamentals (Finnhub-sourced)',
+          reasoning: `Bundle confirms: ${isForward ? 'forward' : 'trailing'} P/E = ${target.toFixed(2)} (claim: ${claimedPE.toFixed(2)}, within 5%).`,
+        }
+      }
+      // Don't actively contradict — P/E values vary by methodology
+      // (which earnings to use, adjusted vs GAAP, etc.). Just fall
+      // through and let Google Search handle the disagreement.
+    }
+  }
+
+  // ── Analyst consensus claims ──────────────────────────────
+  // Match exact strings: "STRONG BUY", "BUY", "HOLD", "SELL", "STRONG SELL"
+  const consensusMatch = c.match(/\b(strong\s+buy|strong\s+sell|buy|hold|sell)\b/i)
+  if (consensusMatch && /\b(consensus|rating|recommendation|analyst)/i.test(c)) {
+    const claimedConsensus = consensusMatch[1].toLowerCase().replace(/\s+/g, '_')
+    const bundleConsensus = bundle.fundamentals?.analystConsensus ?? null
+    if (bundleConsensus !== null && bundleConsensus !== 'unknown') {
+      if (claimedConsensus === bundleConsensus) {
+        return {
+          matched: true,
+          verified: true,
+          sourceOutlet: 'Bundle fundamentals (Finnhub-sourced)',
+          reasoning: `Bundle confirms: analyst consensus = ${bundleConsensus.toUpperCase().replace('_', ' ')}.`,
+        }
+      }
+      // Don't actively contradict — different aggregators (TipRanks,
+      // MarketBeat, Stock Analysis) routinely disagree on consensus
+      // labeling because they weight strong-buy/buy differently. Fall
+      // through to Google Search, which can find at least one source
+      // confirming most consensus claims.
+    }
+  }
+
+  // ── Earnings date claims ──────────────────────────────────
+  // Match "earnings tomorrow", "earnings on May 6", "reports earnings Friday", etc.
+  if (/\b(earnings|report)\b/i.test(c) && /\b(tomorrow|today|this\s+week|next\s+week|on\s+\w+|\b[a-z]+\s+\d{1,2}\b)/i.test(c)) {
+    const earningsDate = bundle.fundamentals?.nextEarningsDate ?? null
+    const days = bundle.fundamentals?.daysToEarnings ?? null
+    if (earningsDate !== null && days !== null) {
+      const sayTomorrow = /\btomorrow\b/i.test(c)
+      const sayToday    = /\btoday\b/i.test(c)
+      const sayThisWeek = /\bthis\s+week\b/i.test(c)
+      // We only positively-verify the simple cases. Date matching for
+      // "May 6" style requires more parsing and isn't worth the bug
+      // surface area; let Google Search handle those.
+      if (sayToday && days === 0) {
+        return { matched: true, verified: true, sourceOutlet: 'Bundle fundamentals (Finnhub-sourced)',
+          reasoning: `Bundle confirms: earnings today (${earningsDate}).` }
+      }
+      if (sayTomorrow && days === 1) {
+        return { matched: true, verified: true, sourceOutlet: 'Bundle fundamentals (Finnhub-sourced)',
+          reasoning: `Bundle confirms: earnings tomorrow (${earningsDate}).` }
+      }
+      if (sayThisWeek && days >= 0 && days <= 7) {
+        return { matched: true, verified: true, sourceOutlet: 'Bundle fundamentals (Finnhub-sourced)',
+          reasoning: `Bundle confirms: earnings in ${days} days (${earningsDate}).` }
+      }
+    }
+  }
+
+  // Bundle is silent on this claim category — fall through to Google Search.
+  return { matched: false }
+}
+
+
 export async function verifyFactualClaims(
   ticker: string,
   sourceStage: 'lead' | 'devil' | 'rebuttal' | 'counter',
   textBlock: string,
+  bundle?: SignalBundle,
   analysisId?: string,
 ): Promise<VerificationResult> {
   const started = Date.now()
@@ -553,14 +811,38 @@ export async function verifyFactualClaims(
       }
     }
 
-    // Step 2: batch verify
-    const verifications = await batchVerifyClaims(ticker, claims)
+    // Step 2a: bundle pre-check (Bug 11 fix) — settle claims the bundle
+    // can speak to authoritatively, BEFORE burning a Gemini search call.
+    // Claims the bundle can't speak to fall through to Step 2b.
+    const bundleSettled: ClaimVerification[] = []
+    const remainingClaims: string[] = []
+    for (const claim of claims) {
+      const r = tryVerifyAgainstBundle(claim, bundle)
+      if (r.matched) {
+        bundleSettled.push({
+          claim,
+          verified: r.verified ?? false,
+          sourceUrl: null,
+          sourceOutlet: r.sourceOutlet ?? null,
+          reasoning: r.reasoning ?? '',
+        })
+      } else {
+        remainingClaims.push(claim)
+      }
+    }
 
+    // Step 2b: batch verify remaining claims via Google Search
+    const searchVerifications = remainingClaims.length > 0
+      ? await batchVerifyClaims(ticker, remainingClaims)
+      : []
+
+    // Step 3: combine bundle-settled + search-verified into final lists
+    const allVerifications: ClaimVerification[] = [...bundleSettled, ...searchVerifications]
     const verifiedClaims: string[] = []
     const strippedClaims: ClaimVerification[] = []
     const allSourceUrls: string[] = []
 
-    for (const v of verifications) {
+    for (const v of allVerifications) {
       if (v.verified) {
         verifiedClaims.push(v.claim)
         if (v.sourceUrl) allSourceUrls.push(v.sourceUrl)
@@ -569,7 +851,7 @@ export async function verifyFactualClaims(
       }
     }
 
-    // Step 3: log to DB (fire-and-forget)
+    // Step 4: log to DB (fire-and-forget)
     logVerification(ticker, sourceStage, verifiedClaims, strippedClaims, analysisId, Date.now() - started)
 
     return {

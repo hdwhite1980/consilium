@@ -2243,7 +2243,7 @@ export async function runPipeline(
 
   // ── Gap #9: kick off verification of Lead's reasoning in parallel ──
   // Doesn't block GPT/Rebuttal; we await all verifications at the end.
-  const leadVerifyPromise = verifyFactualClaims(bundle.ticker, 'lead', claude.reasoning)
+  const leadVerifyPromise = verifyFactualClaims(bundle.ticker, 'lead', claude.reasoning, bundle)
     .catch((e) => { console.warn('[verification/lead] failed:', (e as Error).message); return null })
 
   onProgress('gpt_start', { gemini, claude })
@@ -2253,7 +2253,7 @@ export async function runPipeline(
 
   // Verify Devil's challenges in parallel
   const devilText = [gpt.reasoning, ...gpt.challenges, gpt.strongestCounterArgument].filter(Boolean).join('\n\n')
-  const devilVerifyPromise = verifyFactualClaims(bundle.ticker, 'devil', devilText)
+  const devilVerifyPromise = verifyFactualClaims(bundle.ticker, 'devil', devilText, bundle)
     .catch((e) => { console.warn('[verification/devil] failed:', (e as Error).message); return null })
 
   onProgress('rebuttal_start', { claude, gpt })
@@ -2263,7 +2263,7 @@ export async function runPipeline(
 
   // Verify Rebuttal's research answer + rebuttal text
   const rebuttalText = [rebuttal.rebuttal, rebuttal.researchAnswer, ...rebuttal.maintains, rebuttal.finalStance].filter(Boolean).join('\n\n')
-  const rebuttalVerifyPromise = verifyFactualClaims(bundle.ticker, 'rebuttal', rebuttalText)
+  const rebuttalVerifyPromise = verifyFactualClaims(bundle.ticker, 'rebuttal', rebuttalText, bundle)
     .catch((e) => { console.warn('[verification/rebuttal] failed:', (e as Error).message); return null })
 
   onProgress('counter_start', { gpt, rebuttal })
@@ -2273,7 +2273,7 @@ export async function runPipeline(
 
   // Verify Counter's research answer + challenge text
   const counterText = [counter.finalChallenge, counter.researchAnswer, ...counter.pressesOn, counter.closingArgument].filter(Boolean).join('\n\n')
-  const counterVerifyPromise = verifyFactualClaims(bundle.ticker, 'counter', counterText)
+  const counterVerifyPromise = verifyFactualClaims(bundle.ticker, 'counter', counterText, bundle)
     .catch((e) => { console.warn('[verification/counter] failed:', (e as Error).message); return null })
 
   // Await all verifications before Judge so calibration has clean data
