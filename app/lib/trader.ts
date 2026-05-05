@@ -92,10 +92,21 @@ const TRADER_RULES = {
   } as Record<SetupGrade, number>,
 
   // Earnings proximity rules — binary risk reduces position
+  // (Bug 18 fix, May 2026): per-timeframe so 1D users who explicitly
+  // chose to trade catalysts aren't blocked. Block triggers automatic
+  // PASS; reduce caps grade at C.
+  // - 1D: block=0 means only same-day earnings veto (user trading tomorrow's
+  //       print is opting into the binary; reduce=0 means no grade cap from earnings).
+  // - 1W: 1d/3d preserves prior behavior — swing trades through earnings
+  //       are bad regardless of conviction.
+  // - 1M: wider window, earnings is one event of many over the horizon.
+  // - 3M: even wider — many earnings events expected within the position.
   earningsProximityDays: {
-    block: 1,         // <=1 day: PASS regardless
-    reduce: 3,        // <=3 days: cap grade at C
-  },
+    '1D': { block: 0, reduce: 0 },
+    '1W': { block: 1, reduce: 3 },
+    '1M': { block: 3, reduce: 7 },
+    '3M': { block: 7, reduce: 21 },
+  } as Record<string, { block: number; reduce: number }>,
 
   // Conflict thresholds
   conflictRules: {
@@ -211,6 +222,7 @@ function detectConflicts(
   signal: Signal,
   confidence: number,
   bundle: SignalBundle,
+  timeframe: string,
 ): string[] {
   const conflicts: string[] = []
 
@@ -249,7 +261,8 @@ function detectConflicts(
 
   // Earnings binary risk
   const days = bundle.fundamentals?.daysToEarnings
-  if (days !== null && days !== undefined && days >= 0 && days <= TRADER_RULES.earningsProximityDays.reduce) {
+  const tfEarnings = TRADER_RULES.earningsProximityDays[timeframe] ?? TRADER_RULES.earningsProximityDays['1W']
+  if (days !== null && days !== undefined && days >= 0 && days <= tfEarnings.reduce) {
     conflicts.push(
       `Earnings in ${days} day${days === 1 ? '' : 's'} — directional trades face binary catalyst risk that R:R math doesn't capture`
     )
@@ -293,7 +306,7 @@ function applyRules(
   const rr = computeRiskReward(signal, entry, stop, target)
 
   const setupType = classifySetup(signal, bundle)
-  const conflicts = detectConflicts(signal, confidence, bundle)
+  const conflicts = detectConflicts(signal, confidence, bundle, timeframe)
 
   const tfRules = TRADER_RULES.rrThresholds[timeframe] ?? TRADER_RULES.rrThresholds['1W']
   const confFloor = TRADER_RULES.confidenceFloors[setupType] ?? TRADER_RULES.confidenceFloors.unknown
@@ -317,19 +330,29 @@ function applyRules(
 
   // ── Hard PASS conditions ──
 
-  // Earnings within 1 day = automatic PASS
+  // Earnings within block window = automatic PASS (per-timeframe; Bug 18 fix)
+  // For 1D timeframe with block=0, only same-day earnings veto trades.
+  // For 1W (block=1), earnings tomorrow vetoes the swing trade.
   const daysToEarnings = bundle.fundamentals?.daysToEarnings
-  if (daysToEarnings !== null && daysToEarnings !== undefined && daysToEarnings >= 0 && daysToEarnings <= TRADER_RULES.earningsProximityDays.block) {
+  const tfEarnings = TRADER_RULES.earningsProximityDays[timeframe] ?? TRADER_RULES.earningsProximityDays['1W']
+  const earningsBlocks =
+    daysToEarnings !== null && daysToEarnings !== undefined &&
+    daysToEarnings >= 0 && daysToEarnings <= tfEarnings.block
+  if (earningsBlocks) {
     passReasons.push(
-      `Earnings ${daysToEarnings === 0 ? 'today' : 'tomorrow'} — directional trades have binary risk that overrides the analytical edge. Wait for post-earnings price discovery.`
+      `Earnings ${daysToEarnings === 0 ? 'today' : daysToEarnings === 1 ? 'tomorrow' : `in ${daysToEarnings} days`} — directional trades have binary risk that overrides the analytical edge. Wait for post-earnings price discovery.`
     )
   }
 
   // Missing trade plan = automatic PASS (can't evaluate what isn't there)
-  if (entry === null) {
+  // Bug 18 fix: when earnings is the underlying reason for missing levels
+  // (Judge intentionally returned "wait for post-earnings"), suppress
+  // the redundant missing-entry / incomplete-plan reasons. The earnings
+  // reason alone is sufficient and avoids triple-stacking the same PASS.
+  if (entry === null && !earningsBlocks) {
     passReasons.push('No valid entry price in the verdict — cannot evaluate trade quality without a defined entry.')
   }
-  if (signal !== 'NEUTRAL' && (stop === null || target === null)) {
+  if (signal !== 'NEUTRAL' && (stop === null || target === null) && !earningsBlocks) {
     passReasons.push(`Trade plan incomplete — ${stop === null ? 'stop' : 'target'} not specified or could not be parsed.`)
   }
 
@@ -426,8 +449,8 @@ function applyRules(
     grade = 'C'
   }
 
-  // Earnings within reduce window caps grade at C
-  if (daysToEarnings !== null && daysToEarnings !== undefined && daysToEarnings >= 0 && daysToEarnings <= TRADER_RULES.earningsProximityDays.reduce) {
+  // Earnings within reduce window caps grade at C (per-timeframe; Bug 18 fix)
+  if (daysToEarnings !== null && daysToEarnings !== undefined && daysToEarnings >= 0 && daysToEarnings <= tfEarnings.reduce) {
     if (grade === 'A' || grade === 'B') {
       grade = 'C'
     }
