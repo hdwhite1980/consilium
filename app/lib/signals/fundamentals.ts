@@ -70,6 +70,7 @@ export interface FundamentalSignals {
   // Insider transactions (from Finnhub)
   insiderBuyValue: number    // $ bought last 90 days
   insiderSellValue: number   // $ sold last 90 days
+  insiderNetValue: number    // buyValue - sellValue (negative = net selling); derived for verification
   insiderSignal: 'buying' | 'selling' | 'neutral'
 
   // Earnings implied move vs historical actual
@@ -511,6 +512,11 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
     officerBuyValue > officerSellValue * 2 ? 'buying' :
     officerSellValue > officerBuyValue * 2 ? 'selling' : 'neutral'
 
+  // Bug 17.1: derived net value for verification handler. Positive = net buying,
+  // negative = net selling. Total flow includes both officer and institutional
+  // (matches insiderBuyValue/insiderSellValue totals — backwards compatible).
+  const insiderNetValue = insiderBuyValue - insiderSellValue
+
   // Surface the sub-threshold reason inline so personas reading
   // "signal: NEUTRAL" with $0.8M of officer activity understand why
   // it's labeled neutral rather than treating it as ambiguous.
@@ -706,7 +712,7 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
     analystBuy, analystHold, analystSell, analystTargetPrice,
     analystConsensus, analystUpside,
     recentUpgrades, recentDowngrades,
-    insiderBuyValue, insiderSellValue, insiderSignal,
+    insiderBuyValue, insiderSellValue, insiderNetValue, insiderSignal,
     earningsImpliedMove, earningsHistoricalMove, earningsEdge,
     summary: lines.join('\n'),
   }

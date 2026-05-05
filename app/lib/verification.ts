@@ -660,6 +660,55 @@ function tryVerifyAgainstBundle(claim: string, bundle: SignalBundle | undefined)
     }
   }
 
+  // ── Net insider flow claims (Bug 17.1 fix, May 2026) ──────
+  // Catches derived claims like "net insider outflow of $9.9M",
+  // "net inflow of $X", "net selling of $Y" — derived arithmetic
+  // that Google Search struggles to verify because aggregators
+  // typically publish buy and sell separately, not the difference.
+  // Cross-references vs bundle.fundamentals.insiderNetValue (= buy - sell).
+  const isNetFlowClaim =
+    /\bnet\s+(insider\s+)?(outflow|inflow|flow|selling|buying|sales|purchases)\b/i.test(c) ||
+    /\b(insider\s+)?(buys?|purchases?|buying)\s+(?:were\s+)?offset\s+by/i.test(c) ||
+    /\b(net|on\s+balance|overall)\s+(\$\s*[\d,]+(?:\.\d+)?\s*(m|b|million|billion))\s+(?:was\s+)?(?:in|of|from)\s+insider/i.test(c)
+  if (isNetFlowClaim) {
+    const claimedDollars = extractDollarAmount(claim)
+    if (claimedDollars !== null && claimedDollars > 0) {
+      const bundleNet = bundle.fundamentals?.insiderNetValue ?? null
+      if (bundleNet !== null && (bundle.fundamentals?.insiderBuyValue ?? 0) + (bundle.fundamentals?.insiderSellValue ?? 0) > 0) {
+        // Detect direction in the claim: outflow/selling = negative, inflow/buying = positive.
+        const claimImpliesNegative = /\b(outflow|net\s+selling|net\s+sales|offset\s+by|negative)\b/i.test(c)
+        const claimImpliesPositive = /\b(inflow|net\s+buying|net\s+purchases|positive)\b/i.test(c)
+        const effectiveClaimedNet =
+          claimImpliesNegative ? -Math.abs(claimedDollars) :
+          claimImpliesPositive ? Math.abs(claimedDollars) :
+          // Direction ambiguous — match against absolute value of bundle's net
+          (bundleNet < 0 ? -Math.abs(claimedDollars) : Math.abs(claimedDollars))
+
+        // ±15% tolerance. Net flow is deterministic from buy/sell figures so
+        // tolerance can be tight, but allow some slack for the persona using
+        // slightly different time-window aggregations.
+        if (Math.sign(effectiveClaimedNet) === Math.sign(bundleNet) || bundleNet === 0) {
+          if (withinTolerance(Math.abs(effectiveClaimedNet), Math.abs(bundleNet), 0.15)) {
+            return {
+              matched: true,
+              verified: true,
+              sourceOutlet: 'EDGAR (bundle source-of-truth)',
+              reasoning: `Bundle confirms: net insider flow (90d open-market) = $${(bundleNet/1e6).toFixed(1)}M (${bundleNet < 0 ? 'net selling' : 'net buying'}); claim of $${(effectiveClaimedNet/1e6).toFixed(1)}M is within tolerance.`,
+            }
+          }
+        }
+        // Sign mismatch (claim says inflow but bundle shows net outflow, or vice versa)
+        // OR magnitude way off → contradicts.
+        return {
+          matched: true,
+          verified: false,
+          sourceOutlet: 'EDGAR (bundle source-of-truth)',
+          reasoning: `Bundle contradicts: claim cites net flow $${(effectiveClaimedNet/1e6).toFixed(1)}M but EDGAR Form 4 (90d open-market) shows net $${(bundleNet/1e6).toFixed(1)}M (buy $${((bundle.fundamentals?.insiderBuyValue ?? 0)/1e6).toFixed(1)}M − sell $${((bundle.fundamentals?.insiderSellValue ?? 0)/1e6).toFixed(1)}M).`,
+        }
+      }
+    }
+  }
+
   // ── Put/Call ratio claims ─────────────────────────────────
   // Match: "put/call ratio of X.XX", "P/C ratio X.XX", "put-call X.XX"
   const isPCClaim = /\b(put[/\s-]?call|p[/\s-]?c)\s*(ratio|vol|volume|oi)?/i.test(c)

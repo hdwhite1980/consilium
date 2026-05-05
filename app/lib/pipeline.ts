@@ -722,13 +722,30 @@ ${sections.join('\n\n')}
 
 CALIBRATION GUIDANCE — read each rejection reason carefully:
 
-1. CONTRADICTED BY DATA (full discount, treat as false): If the rejection reason cites credible sources reporting the OPPOSITE of the claim — e.g., "multiple sources report a positive net income of $X, contrary to the claim" or "sources confirm the deal was approved, not rejected" — the claim is likely a hallucination or stale training data. Treat it as factually wrong. The argument it supported is materially weakened.
+1. CONTRADICTED BY DATA (full discount, treat as false): Apply ONLY when the rejection reason contains explicit contradiction language:
+   - "credible sources show X instead of Y"
+   - "multiple outlets report X, contradicting the claim"
+   - "primary sources confirm X (not Y)"
+   - "Bundle contradicts: claim cites X but [authoritative source] shows Y"
+   - The reason names a specific opposing value or fact.
+   The claim is likely a hallucination or stale training data. Treat it as factually wrong. The argument it supported is materially weakened.
 
-2. UNVERIFIABLE BUT POSSIBLY REAL (partial discount): If the rejection reason cites no contradicting evidence and notes things like "source not in credible whitelist," "0 credible grounding sources found," or "could not corroborate" — the claim may be real internal data the council had access to that just isn't on the public web. Apply moderate skepticism but do not treat as false. The directional argument may still be valid.
+2. UNVERIFIABLE BUT POSSIBLY REAL (partial discount, DEFAULT for ambiguous cases): Apply when the rejection reason indicates absence-of-evidence rather than counter-evidence:
+   - "do not report"
+   - "no credible source found"
+   - "could not corroborate"
+   - "insufficient evidence"
+   - "source not in credible whitelist"
+   - "0 credible grounding sources found"
+   - "Possible structured-output glitch"
+   The claim may be real internal data the council had access to that just isn't on the public web, or a derived figure (like net insider flow) that aggregators don't typically publish as a single number. Apply moderate skepticism but DO NOT treat as false. The directional argument may still be valid.
+   IMPORTANT: When the rejection reason is ambiguous between Category 1 and Category 2, default to Category 2. False-negative verification (missing real facts) is more common than false-positive (manufactured facts), and the cost of mis-categorizing real data as wrong is high.
 
 3. SPECIFIC NUMBER WRONG, DIRECTION RIGHT (minor discount on the number only): If the rejection reason cites a RANGE of values from credible sources — e.g., "claim was 133.8x but sources show range 130-206x" — the model picked an unverifiable specific number, but the directional claim it was supporting (e.g., "expensively valued") is still valid. Discount only the precise figure, not the overall point.
 
-Apply these distinctions when weighing each side's case. If a side's thesis hinges on a category-1 claim (factually contradicted), that side's case is materially weaker. If it relies on a category-2 (unverifiable) or category-3 (figure-only) claim, the weakening is partial. Do not redo the analysis yourself --- just adjust how much credit each side earns based on which kind of failure their evidence had.`
+Apply these distinctions when weighing each side's case. If a side's thesis hinges on a category-1 claim (factually contradicted), that side's case is materially weaker. If it relies on a category-2 (unverifiable) or category-3 (figure-only) claim, the weakening is partial. Do not redo the analysis yourself --- just adjust how much credit each side earns based on which kind of failure their evidence had.
+
+DO NOT write phrases like "proven factually incorrect" or "shown to be false" unless the strip falls squarely into Category 1 with explicit contradiction language. For Category 2 strips, use phrases like "could not be independently verified" or "lacked corroborating credible sources."`
 }
 
 

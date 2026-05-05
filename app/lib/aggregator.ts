@@ -184,7 +184,7 @@ ${cryptoMeta.description ? 'About: ' + cryptoMeta.description : ''}`,
       recentUpgrades: [],
       recentDowngrades: [],
       // Insider
-      insiderBuyValue: 0, insiderSellValue: 0,
+      insiderBuyValue: 0, insiderSellValue: 0, insiderNetValue: 0,
       insiderSignal: 'neutral' as const,
       // Earnings implied move (N/A for crypto)
       earningsImpliedMove: null,
@@ -300,7 +300,7 @@ Note: Forex has no P/E ratio, earnings, or insider data. Analysis focuses on tec
       analystBuy: 0, analystHold: 0, analystSell: 0, analystTargetPrice: null,
       analystConsensus: 'unknown' as const, analystUpside: null,
       recentUpgrades: [], recentDowngrades: [],
-      insiderBuyValue: 0, insiderSellValue: 0, insiderSignal: 'neutral' as const,
+      insiderBuyValue: 0, insiderSellValue: 0, insiderNetValue: 0, insiderSignal: 'neutral' as const,
       earningsImpliedMove: null, earningsHistoricalMove: null, earningsEdge: null,
     }
 
