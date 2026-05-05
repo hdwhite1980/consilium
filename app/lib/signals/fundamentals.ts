@@ -473,11 +473,15 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
   // Surface the sub-threshold reason inline so personas reading
   // "signal: NEUTRAL" with $0.8M of officer activity understand why
   // it's labeled neutral rather than treating it as ambiguous.
+  // The "DO NOT CITE" token is recognized by the persona system
+  // prompts (Bug 15 fix) — when this token appears next to a metric,
+  // personas treat that metric as effectively zero and do not cite
+  // it as evidence in either direction.
   let magnitudeNote = ''
   if (subThresholdMagnitude && marketCapEstimate > 0) {
-    magnitudeNote = ` — sub-threshold: $${(operationalActivityTotal/1e6).toFixed(2)}M of officer activity is below the $${(insiderMagnitudeFloor/1e6).toFixed(1)}M floor for a ${marketCapEstimate >= 1e9 ? `$${(marketCapEstimate/1e9).toFixed(0)}B` : `$${(marketCapEstimate/1e6).toFixed(0)}M`} market cap — treat as statistical noise`
+    magnitudeNote = ` — DO NOT CITE: $${(operationalActivityTotal/1e6).toFixed(2)}M of officer activity is sub-threshold for a ${marketCapEstimate >= 1e9 ? `$${(marketCapEstimate/1e9).toFixed(0)}B` : `$${(marketCapEstimate/1e6).toFixed(0)}M`}-cap company (floor: $${(insiderMagnitudeFloor/1e6).toFixed(1)}M). This is statistical noise, NOT a directional signal — operational insider signal is effectively zero.`
   } else if (subThresholdMagnitude) {
-    magnitudeNote = ` — sub-threshold: $${(operationalActivityTotal/1e6).toFixed(2)}M operational activity is below the $${(insiderMagnitudeFloor/1e6).toFixed(1)}M floor — treat as statistical noise`
+    magnitudeNote = ` — DO NOT CITE: $${(operationalActivityTotal/1e6).toFixed(2)}M operational activity is below the $${(insiderMagnitudeFloor/1e6).toFixed(1)}M floor. This is statistical noise, NOT a directional signal — operational insider signal is effectively zero.`
   }
 
   // ── Insider concentration detection (Bug 12, partition-aware) ──
