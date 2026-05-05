@@ -665,8 +665,7 @@ function HomeInner() {
 
   // Always-visible top-level nav items (high-frequency actions + utilities)
   const NAV_TOP: Array<{ label: string; icon: React.ReactNode; path: string; color: string }> = [
-    { label: 'Today',        icon: <Zap size={12} />,           path: '/news',         color: '#fbbf24' },
-    { label: 'Tomorrow',     icon: <Calendar size={12} />,      path: '/tomorrow',     color: '#a78bfa' },
+    { label: 'Active Stories', icon: <Zap size={12} />,        path: '/active-stories', color: '#fbbf24' },
     { label: 'Invest',       icon: <Flame size={12} />,         path: '/invest',       color: '#f97316' },
     { label: 'Compare',      icon: <Scale size={12} />,         path: '/compare',      color: '#f87171' },
     { label: 'Track Record', icon: <Trophy size={12} />,        path: '/track-record', color: '#fbbf24' },
@@ -1984,25 +1983,58 @@ function HomeInner() {
             </div>{/* end verdict wrapper */}
 
             <div className={cnTradeTab}>
-            {/* Trade Plan card — green-tinted (greyed when Trader = PASS) */}
-            {jud && (
+            {/* Trade Plan card — green when actionable, amber when soft-fail (warning), grey when hard-fail */}
+            {jud && (() => {
+              // Soft PASS = Trader said PASS but all reasons are "almost made it" (severity 'soft').
+              // Visual treatment: amber warning, full opacity, levels are still actionable (just barely below floor).
+              // Hard PASS = at least one blocking reason (earnings imminent, no entry, way below R:R floor).
+              // Visual treatment: grey-out, opacity reduced, levels for reference only.
+              const isSoftPass = trader?.decision === 'PASS'
+                && Array.isArray(trader.passReasonSeverities)
+                && trader.passReasonSeverities.length > 0
+                && trader.passReasonSeverities.every(s => s === 'soft')
+              const isHardPass = trader?.decision === 'PASS' && !isSoftPass
+              return (
             <div className="animate-slide-up rounded-xl p-5 border-2 space-y-4"
               style={{
-                background: trader?.decision === 'PASS' ? 'rgba(148,163,184,0.05)' : 'rgba(52,211,153,0.05)',
-                borderColor: trader?.decision === 'PASS' ? 'rgba(148,163,184,0.3)' : 'rgba(52,211,153,0.3)',
+                background: isHardPass ? 'rgba(148,163,184,0.05)'
+                          : isSoftPass ? 'rgba(251,191,36,0.06)'
+                          : 'rgba(52,211,153,0.05)',
+                borderColor: isHardPass ? 'rgba(148,163,184,0.3)'
+                           : isSoftPass ? 'rgba(251,191,36,0.4)'
+                           : 'rgba(52,211,153,0.3)',
               }}>
               <div className="flex items-center gap-2">
-                <Target size={13} style={{ color: trader?.decision === 'PASS' ? '#94a3b8' : '#34d399' }} />
-                <span className="text-sm font-bold" style={{ color: trader?.decision === 'PASS' ? '#94a3b8' : '#34d399' }}>Trade Plan</span>
+                <Target size={13} style={{
+                  color: isHardPass ? '#94a3b8'
+                       : isSoftPass ? '#fbbf24'
+                       : '#34d399'
+                }} />
+                <span className="text-sm font-bold" style={{
+                  color: isHardPass ? '#94a3b8'
+                       : isSoftPass ? '#fbbf24'
+                       : '#34d399'
+                }}>Trade Plan</span>
               </div>
 
-              {/* Trader = PASS banner — surfaces the rejection above the levels */}
-              {trader?.decision === 'PASS' && (
+              {/* Hard PASS banner — blocking failure, levels are reference-only */}
+              {isHardPass && (
                 <div className="rounded-lg p-3 flex items-start gap-2"
                   style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.3)' }}>
                   <AlertTriangle size={14} style={{ color: '#f87171', marginTop: 2, flexShrink: 0 }} />
                   <div className="text-xs leading-relaxed" style={{ color: 'var(--text)' }}>
                     <span className="font-bold" style={{ color: '#f87171' }}>Trader passed on this setup.</span> Levels below are shown for reference only — not actionable. See Trader Assessment above for why.
+                  </div>
+                </div>
+              )}
+
+              {/* Soft PASS banner — "almost made it", trade plan is real but below comfort floor */}
+              {isSoftPass && (
+                <div className="rounded-lg p-3 flex items-start gap-2"
+                  style={{ background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.4)' }}>
+                  <AlertTriangle size={14} style={{ color: '#fbbf24', marginTop: 2, flexShrink: 0 }} />
+                  <div className="text-xs leading-relaxed" style={{ color: 'var(--text)' }}>
+                    <span className="font-bold" style={{ color: '#fbbf24' }}>Below your discipline floor — but only barely.</span> The setup is structurally sound; one or more thresholds (R:R or confidence) is just under what the Trader requires. Levels are shown as actionable — proceed with caution and tighter sizing if you take it. See Trader Assessment above for the gap.
                   </div>
                 </div>
               )}
@@ -2018,8 +2050,8 @@ function HomeInner() {
                 </div>
               )}
 
-              {/* Content wrapper — opacity-reduced when Trader = PASS */}
-              <div style={{ opacity: trader?.decision === 'PASS' ? 0.4 : 1, transition: 'opacity 0.2s ease' }}>
+              {/* Content wrapper — opacity-reduced ONLY on hard PASS. Soft PASS keeps full opacity (warning, not block). */}
+              <div style={{ opacity: isHardPass ? 0.4 : 1, transition: 'opacity 0.2s ease' }}>
 
                 {/* ── TRADE PLAN — prominent, right under verdict ── */}
                 {jud.entryPrice && (
@@ -2278,7 +2310,8 @@ function HomeInner() {
                 })()}
               </div>{/* end content wrapper (opacity for PASS) */}
             </div>
-            )}
+              )
+            })()}
             </div>{/* end trade plan wrapper */}
 
             {/* Technical Charts — collapsible */}

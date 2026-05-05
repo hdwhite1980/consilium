@@ -42,6 +42,7 @@ export interface TraderVerdict {
   positionSizePct: number               // 0-1; fraction of normal position size
   riskReward: number | null             // computed R:R ratio
   passReasons: string[]                 // when PASS — specific reasons (1 per line)
+  passReasonSeverities: ('hard' | 'soft')[]  // parallel to passReasons; same length. 'hard' = blocking failure (no entry, earnings tonight, R:R way below floor). 'soft' = within ~25% of threshold ("almost made it"). Used by frontend to choose grey-out vs warning treatment.
   waitConditions: string[]              // when WAIT — what would flip this to TAKE
   rationale: string                     // LLM-written plain-English explanation
   evaluatedAt: string
@@ -92,21 +93,10 @@ const TRADER_RULES = {
   } as Record<SetupGrade, number>,
 
   // Earnings proximity rules — binary risk reduces position
-  // (Bug 18 fix, May 2026): per-timeframe so 1D users who explicitly
-  // chose to trade catalysts aren't blocked. Block triggers automatic
-  // PASS; reduce caps grade at C.
-  // - 1D: block=0 means only same-day earnings veto (user trading tomorrow's
-  //       print is opting into the binary; reduce=0 means no grade cap from earnings).
-  // - 1W: 1d/3d preserves prior behavior — swing trades through earnings
-  //       are bad regardless of conviction.
-  // - 1M: wider window, earnings is one event of many over the horizon.
-  // - 3M: even wider — many earnings events expected within the position.
   earningsProximityDays: {
-    '1D': { block: 0, reduce: 0 },
-    '1W': { block: 1, reduce: 3 },
-    '1M': { block: 3, reduce: 7 },
-    '3M': { block: 7, reduce: 21 },
-  } as Record<string, { block: number; reduce: number }>,
+    block: 1,         // <=1 day: PASS regardless
+    reduce: 3,        // <=3 days: cap grade at C
+  },
 
   // Conflict thresholds
   conflictRules: {
@@ -222,7 +212,6 @@ function detectConflicts(
   signal: Signal,
   confidence: number,
   bundle: SignalBundle,
-  timeframe: string,
 ): string[] {
   const conflicts: string[] = []
 
@@ -261,8 +250,7 @@ function detectConflicts(
 
   // Earnings binary risk
   const days = bundle.fundamentals?.daysToEarnings
-  const tfEarnings = TRADER_RULES.earningsProximityDays[timeframe] ?? TRADER_RULES.earningsProximityDays['1W']
-  if (days !== null && days !== undefined && days >= 0 && days <= tfEarnings.reduce) {
+  if (days !== null && days !== undefined && days >= 0 && days <= TRADER_RULES.earningsProximityDays.reduce) {
     conflicts.push(
       `Earnings in ${days} day${days === 1 ? '' : 's'} — directional trades face binary catalyst risk that R:R math doesn't capture`
     )
@@ -288,6 +276,7 @@ interface RulesDecision {
   grade: SetupGrade | null
   positionSizePct: number
   passReasons: string[]
+  passReasonSeverities: ('hard' | 'soft')[]
   waitConditions: string[]
   diagnostics: TraderVerdict['diagnostics']
 }
@@ -306,7 +295,7 @@ function applyRules(
   const rr = computeRiskReward(signal, entry, stop, target)
 
   const setupType = classifySetup(signal, bundle)
-  const conflicts = detectConflicts(signal, confidence, bundle, timeframe)
+  const conflicts = detectConflicts(signal, confidence, bundle)
 
   const tfRules = TRADER_RULES.rrThresholds[timeframe] ?? TRADER_RULES.rrThresholds['1W']
   const confFloor = TRADER_RULES.confidenceFloors[setupType] ?? TRADER_RULES.confidenceFloors.unknown
@@ -326,40 +315,42 @@ function applyRules(
   }
 
   const passReasons: string[] = []
+  const passReasonSeverities: ('hard' | 'soft')[] = []
   const waitConditions: string[] = []
+
+  /** Push a pass reason with explicit severity. Keeps the two parallel arrays in lockstep. */
+  function addPassReason(text: string, severity: 'hard' | 'soft'): void {
+    passReasons.push(text)
+    passReasonSeverities.push(severity)
+  }
 
   // ── Hard PASS conditions ──
 
-  // Earnings within block window = automatic PASS (per-timeframe; Bug 18 fix)
-  // For 1D timeframe with block=0, only same-day earnings veto trades.
-  // For 1W (block=1), earnings tomorrow vetoes the swing trade.
+  // Earnings within 1 day = automatic PASS (HARD — binary risk overrides analytical edge)
   const daysToEarnings = bundle.fundamentals?.daysToEarnings
-  const tfEarnings = TRADER_RULES.earningsProximityDays[timeframe] ?? TRADER_RULES.earningsProximityDays['1W']
-  const earningsBlocks =
-    daysToEarnings !== null && daysToEarnings !== undefined &&
-    daysToEarnings >= 0 && daysToEarnings <= tfEarnings.block
-  if (earningsBlocks) {
-    passReasons.push(
-      `Earnings ${daysToEarnings === 0 ? 'today' : daysToEarnings === 1 ? 'tomorrow' : `in ${daysToEarnings} days`} — directional trades have binary risk that overrides the analytical edge. Wait for post-earnings price discovery.`
+  if (daysToEarnings !== null && daysToEarnings !== undefined && daysToEarnings >= 0 && daysToEarnings <= TRADER_RULES.earningsProximityDays.block) {
+    addPassReason(
+      `Earnings ${daysToEarnings === 0 ? 'today' : 'tomorrow'} — directional trades have binary risk that overrides the analytical edge. Wait for post-earnings price discovery.`,
+      'hard',
     )
   }
 
-  // Missing trade plan = automatic PASS (can't evaluate what isn't there)
-  // Bug 18 fix: when earnings is the underlying reason for missing levels
-  // (Judge intentionally returned "wait for post-earnings"), suppress
-  // the redundant missing-entry / incomplete-plan reasons. The earnings
-  // reason alone is sufficient and avoids triple-stacking the same PASS.
-  if (entry === null && !earningsBlocks) {
-    passReasons.push('No valid entry price in the verdict — cannot evaluate trade quality without a defined entry.')
+  // Missing trade plan = automatic PASS (HARD — can't evaluate what isn't there)
+  if (entry === null) {
+    addPassReason('No valid entry price in the verdict — cannot evaluate trade quality without a defined entry.', 'hard')
   }
-  if (signal !== 'NEUTRAL' && (stop === null || target === null) && !earningsBlocks) {
-    passReasons.push(`Trade plan incomplete — ${stop === null ? 'stop' : 'target'} not specified or could not be parsed.`)
+  if (signal !== 'NEUTRAL' && (stop === null || target === null)) {
+    addPassReason(`Trade plan incomplete — ${stop === null ? 'stop' : 'target'} not specified or could not be parsed.`, 'hard')
   }
 
-  // R:R below the C threshold = PASS
+  // R:R below the C threshold = PASS. Severity depends on HOW far below.
+  // "Soft" = R:R is at least 75% of threshold (the "5% below comfort" case the user flagged).
+  // "Hard" = R:R is way below threshold — trade economics genuinely don't work.
   if (rr !== null && rr < tfRules.C) {
-    passReasons.push(
-      `Risk-to-reward ratio of ${rr.toFixed(2)}:1 is below the ${tfRules.C}:1 minimum for ${timeframe} timeframe. Even a winning thesis loses money over many trades at this R:R.`
+    const isSoftRR = rr >= tfRules.C * 0.75
+    addPassReason(
+      `Risk-to-reward ratio of ${rr.toFixed(2)}:1 is below the ${tfRules.C}:1 minimum for ${timeframe} timeframe. Even a winning thesis loses money over many trades at this R:R.`,
+      isSoftRR ? 'soft' : 'hard',
     )
 
     // If R:R is just barely below C, suggest a WAIT condition
@@ -379,14 +370,18 @@ function applyRules(
     }
   }
 
-  // Confidence below floor = PASS
+  // Confidence below floor = PASS. Severity depends on how far below.
+  // "Soft" = within 5 points of floor (the existing WAIT-suggestion threshold).
+  // "Hard" = more than 5 points below — Council itself isn't confident enough.
   if (confidence < confFloor) {
-    passReasons.push(
-      `Confidence (${confidence}%) is below the ${confFloor}% floor for ${setupType.replace('_', '-')} setups. ${setupType === 'counter_trend' ? 'Counter-trend trades require higher conviction because you\'re fighting the dominant flow.' : 'The Council\'s own confidence does not justify taking this trade.'}`
+    const gap = confFloor - confidence
+    const isSoftConf = gap <= 5
+    addPassReason(
+      `Confidence (${confidence}%) is below the ${confFloor}% floor for ${setupType.replace('_', '-')} setups. ${setupType === 'counter_trend' ? 'Counter-trend trades require higher conviction because you\'re fighting the dominant flow.' : 'The Council\'s own confidence does not justify taking this trade.'}`,
+      isSoftConf ? 'soft' : 'hard',
     )
 
     // If confidence is just barely below, that's a WAIT condition
-    const gap = confFloor - confidence
     if (gap <= 5) {
       waitConditions.push(
         `Confidence is ${gap} point${gap === 1 ? '' : 's'} below the ${confFloor}% floor for this setup type. New evidence reinforcing the thesis could push it over.`
@@ -394,14 +389,15 @@ function applyRules(
     }
   }
 
-  // Strong conflict (smart money strongly opposing) = PASS
+  // Strong conflict (smart money strongly opposing) = PASS (HARD — directional contradiction)
   const insiderSig = bundle.smartMoney?.insiderSignal ?? 'neutral'
   const strongInsiderConflict =
     (signal === 'BULLISH' && insiderSig === 'strong_sell') ||
     (signal === 'BEARISH' && insiderSig === 'strong_buy')
   if (strongInsiderConflict) {
-    passReasons.push(
-      `Insider signal is ${insiderSig.replace('_', ' ')} — directly contradicts the ${signal} verdict. When insiders are putting their own money in the opposite direction, the verdict needs much stronger conviction to override.`
+    addPassReason(
+      `Insider signal is ${insiderSig.replace('_', ' ')} — directly contradicts the ${signal} verdict. When insiders are putting their own money in the opposite direction, the verdict needs much stronger conviction to override.`,
+      'hard',
     )
   }
 
@@ -416,6 +412,7 @@ function applyRules(
         grade: null,
         positionSizePct: 0,
         passReasons,
+        passReasonSeverities,
         waitConditions,
         diagnostics,
       }
@@ -426,6 +423,7 @@ function applyRules(
       grade: null,
       positionSizePct: 0,
       passReasons,
+      passReasonSeverities,
       waitConditions: [],
       diagnostics,
     }
@@ -449,8 +447,8 @@ function applyRules(
     grade = 'C'
   }
 
-  // Earnings within reduce window caps grade at C (per-timeframe; Bug 18 fix)
-  if (daysToEarnings !== null && daysToEarnings !== undefined && daysToEarnings >= 0 && daysToEarnings <= tfEarnings.reduce) {
+  // Earnings within reduce window caps grade at C
+  if (daysToEarnings !== null && daysToEarnings !== undefined && daysToEarnings >= 0 && daysToEarnings <= TRADER_RULES.earningsProximityDays.reduce) {
     if (grade === 'A' || grade === 'B') {
       grade = 'C'
     }
@@ -461,6 +459,7 @@ function applyRules(
     grade,
     positionSizePct: TRADER_RULES.positionSize[grade],
     passReasons: [],
+    passReasonSeverities: [],
     waitConditions: [],
     diagnostics,
   }
@@ -579,6 +578,7 @@ export async function evaluateTrade(
         positionSizePct: 0,
         riskReward: null,
         passReasons: ['Council returned NEUTRAL — no directional thesis to trade against. The honest answer here is to wait for clearer signals.'],
+        passReasonSeverities: ['hard'],
         waitConditions: [],
         rationale: 'No trade. The Council itself didn\'t reach a directional verdict, so there\'s nothing to evaluate or take. Wait for the data to clarify.',
         evaluatedAt: new Date().toISOString(),
@@ -621,6 +621,7 @@ export async function evaluateTrade(
       positionSizePct: decision.positionSizePct,
       riskReward: rr,
       passReasons: decision.passReasons,
+      passReasonSeverities: decision.passReasonSeverities,
       waitConditions: decision.waitConditions,
       rationale,
       evaluatedAt: new Date().toISOString(),
@@ -634,6 +635,7 @@ export async function evaluateTrade(
       positionSizePct: 0,
       riskReward: null,
       passReasons: ['Trader evaluation failed due to an internal error. Defaulting to PASS for safety.'],
+      passReasonSeverities: ['hard'],
       waitConditions: [],
       rationale: 'Trader filter could not complete its evaluation. When the system can\'t evaluate a trade, the safe default is to pass.',
       evaluatedAt: new Date().toISOString(),
@@ -665,6 +667,7 @@ export function emptyTraderVerdict(): TraderVerdict {
     positionSizePct: 0,
     riskReward: null,
     passReasons: [],
+    passReasonSeverities: [],
     waitConditions: [],
     rationale: '',
     evaluatedAt: new Date().toISOString(),
