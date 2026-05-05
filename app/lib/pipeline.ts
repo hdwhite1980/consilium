@@ -885,7 +885,86 @@ export async function runTargetedResearch(
                              q.includes('fomo') || q.includes('bearish talk') || q.includes('bullish talk') ||
                              q.includes('management said') || q.includes('conference call') || q.includes('reacting')
 
+  // Smart-money branches added May 2026 — prior to this fix the keyword
+  // router had no handlers for insider / congressional / institutional
+  // questions, so the persona's research call would silently fall back
+  // to a generic answer ("data not available in this bundle") even
+  // though the bundle's smartMoney object had detailed records the
+  // whole time. Now we surface that data directly.
+  const needsInsider       = q.includes('insider') || q.includes('10b5-1') || q.includes('form 4') || q.includes('executive sold') || q.includes('executive bought') || q.includes('officer sold') || q.includes('officer bought') || q.includes('director sold') || q.includes('director bought') || q.includes('who sold') || q.includes('who bought')
+  const needsCongress      = q.includes('congress') || q.includes('senator') || q.includes('representative') || q.includes('house member') || q.includes('pelosi') || q.includes('political')
+  const needsInstitutional = q.includes('institutional') || q.includes('hedge fund') || q.includes('13f') || q.includes('13-f') || q.includes('fund holding') || q.includes('big holder') || q.includes('top holder')
+
   const liveDataParts: string[] = []
+
+  // ── Bundle-sourced smart-money data (no external calls) ───────────
+  // The bundle already carries detailed insider transactions, congressional
+  // trades, and institutional holdings. Surface them here so personas
+  // doing fresh research get authoritative data instead of a "not
+  // available" fallback. EDGAR-sourced (Form 4 + 13F) and Finnhub
+  // congressional — these are the source-of-truth numbers the council
+  // should anchor on.
+
+  if (needsInsider) {
+    const txns = bundle.smartMoney?.insiderTransactions ?? []
+    const buyValue = txns.filter(t => t.type === 'buy').reduce((s, t) => s + (t.totalValue ?? 0), 0)
+    const sellValue = txns.filter(t => t.type === 'sell').reduce((s, t) => s + (t.totalValue ?? 0), 0)
+    if (txns.length > 0) {
+      const fmt = (n: number) => n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `$${(n / 1_000).toFixed(0)}K` : `$${n.toFixed(0)}`
+      const lines = [
+        `INSIDER TRANSACTIONS (last 90 days, EDGAR Form 4 — open-market only):`,
+        `  Aggregate: bought ${fmt(buyValue)} | sold ${fmt(sellValue)} | net ${fmt(buyValue - sellValue)}`,
+        `  Per-transaction detail (most recent first):`,
+        ...txns.slice(0, 15).map(t => {
+          const action = t.type === 'buy' ? 'BOUGHT' : 'SOLD'
+          return `    • ${t.date} — ${t.name} (${t.title || 'Insider'}) ${action} ${t.shares.toLocaleString()} shares @ $${t.pricePerShare.toFixed(2)} = ${fmt(t.totalValue)}`
+        }),
+      ]
+      liveDataParts.push(lines.join('\n'))
+    } else {
+      liveDataParts.push(`INSIDER TRANSACTIONS: No open-market Form 4 filings in the last 90 days.`)
+    }
+  }
+
+  if (needsCongress) {
+    const trades = bundle.smartMoney?.congressionalTrades ?? []
+    if (trades.length > 0) {
+      const buys = trades.filter(t => t.type === 'purchase').length
+      const sells = trades.filter(t => t.type === 'sale').length
+      const lines = [
+        `CONGRESSIONAL TRADES (last 365 days):`,
+        `  Total: ${trades.length} (${buys} purchases / ${sells} sales)`,
+        `  Per-trade detail:`,
+        ...trades.slice(0, 10).map(t =>
+          `    • ${t.date} — ${t.member} (${t.chamber}) ${t.type.toUpperCase()} ${t.amount}`
+        ),
+      ]
+      liveDataParts.push(lines.join('\n'))
+    } else {
+      liveDataParts.push(`CONGRESSIONAL TRADES: No reported trades in the last 365 days.`)
+    }
+  }
+
+  if (needsInstitutional) {
+    const holders = bundle.smartMoney?.institutionalOwnership ?? []
+    const notable = bundle.smartMoney?.notableHolders ?? []
+    if (holders.length > 0) {
+      const lines = [
+        `INSTITUTIONAL OWNERSHIP (latest 13F):`,
+        `  Top holders (by share count):`,
+        ...holders.slice(0, 5).map(h => {
+          const dir = h.changeInShares > 0 ? `added ${h.changeInShares.toLocaleString()}`
+                    : h.changeInShares < 0 ? `reduced by ${Math.abs(h.changeInShares).toLocaleString()}`
+                    : 'unchanged'
+          return `    • ${h.name}: ${h.sharesHeld.toLocaleString()} shares — ${dir}`
+        }),
+      ]
+      if (notable.length > 0) lines.push(`  Notable holders flagged: ${notable.join(', ')}`)
+      liveDataParts.push(lines.join('\n'))
+    } else {
+      liveDataParts.push(`INSTITUTIONAL OWNERSHIP: No 13F holder data available.`)
+    }
+  }
 
   if (needsTechnicals || needsFundamentals) {
     try {
