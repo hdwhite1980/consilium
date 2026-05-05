@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { buildSignalBundle } from '@/app/lib/aggregator'
+import { buildSignalBundle, type SignalBundle } from '@/app/lib/aggregator'
 import { technicalsToPayload } from '@/app/lib/signals/technicals'
 import { runPipeline } from '@/app/lib/pipeline'
 import { runSocialScout } from '@/app/lib/social-scout'
@@ -7,6 +7,136 @@ import { createServerClient } from '@/app/lib/supabase'
 import { createClient as createAuthClient } from '@/app/lib/auth/server'
 
 export const maxDuration = 300
+
+// ─────────────────────────────────────────────────────────────
+// Dashboard projections — narrow subsets of fundamentals/smartMoney
+// shaped for the SSE `market_data` payload sent to the browser.
+//
+// IMPORTANT: These are dashboard-only projections. The persisted
+// `signal_bundle` JSON in the analyses table now carries the FULL
+// fundamentals/smartMoney objects so:
+//   - the model/Judge can cite specific dollar values
+//     (insiderBuyValue, insiderSellValue, insiderNetValue)
+//   - cache replay re-projects from the same full source as a
+//     fresh run, ensuring shape parity
+//   - downstream consumers (track-record analysis, future RAG)
+//     see the same data the council saw
+//
+// If you change a dashboard field, change it HERE. Do not duplicate
+// the projection logic in the cache-hit branch or the market_data
+// emit — both call these helpers.
+// ─────────────────────────────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function projectFundamentalsForDashboard(f: any) {
+  if (!f) return null
+  return {
+    earningsDate: f.nextEarningsDate ?? f.earningsDate ?? null,
+    daysToEarnings: f.daysToEarnings ?? null,
+    earningsRisk: f.earningsRisk ?? null,
+    earningsHour: f.earningsHour ?? null,
+    earningsTimestamp: f.earningsTimestamp ?? null,
+    hoursUntilEarnings: f.hoursUntilEarnings ?? null,
+    epsEstimate: f.epsEstimate ?? null,
+    epsActual: f.epsActual ?? null,
+    revenueEstimate: f.revenueEstimate ?? null,
+    revenueActual: f.revenueActual ?? null,
+    analystConsensus: f.analystConsensus ?? null,
+    analystUpside: f.analystUpside ?? null,
+    analystBuy: f.analystBuy ?? null,
+    analystHold: f.analystHold ?? null,
+    analystSell: f.analystSell ?? null,
+    peRatio: f.peRatio ?? null,
+    consistentBeater: f.consistentBeater ?? null,
+    avgSurprisePct: f.avgSurprisePct ?? null,
+    insiderSignal: f.insiderSignal ?? null,
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function projectSmartMoneyForDashboard(sm: any) {
+  if (!sm) return null
+  return {
+    insiderSignal: sm.insiderSignal ?? null,
+    congressSignal: sm.congressSignal ?? null,
+    congressTrades: Array.isArray(sm.congressionalTrades) ? sm.congressionalTrades.length : 0,
+    notableHolders: sm.notableHolders ?? [],
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function projectOptionsForDashboard(of: any) {
+  if (!of) return null
+  return {
+    putCallRatio: of.putCallRatio ?? null,
+    putCallSignal: of.putCallSignal ?? null,
+    shortInterestPct: of.shortInterestPct ?? null,
+    shortSignal: of.shortSignal ?? null,
+    unusualCount: Array.isArray(of.unusualActivity) ? of.unusualActivity.length : 0,
+    unusualActivity: Array.isArray(of.unusualActivity) ? of.unusualActivity.slice(0, 3) : [],
+    ivSignal: of.ivSignal ?? null,
+    maxPainStrike: of.maxPainStrike ?? null,
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function projectMarketContextForDashboard(mc: any) {
+  if (!mc) return null
+  return {
+    regime: mc.regime ?? null,
+    spy: mc.spy ?? null,
+    vix: mc.vix ?? null,
+    sectorETF: mc.sectorETF ?? null,
+    competitors: mc.competitors ?? null,
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function projectConvictionForDashboard(c: any) {
+  if (!c) return null
+  return {
+    direction: c.direction ?? null,
+    conviction: c.conviction ?? null,
+    convergenceScore: c.convergenceScore ?? null,
+    convergingSignals: c.convergingSignals ?? [],
+    divergingSignals: c.divergingSignals ?? [],
+    scenarios: c.scenarios ?? null,
+    regime: c.regime ?? null,
+    signals: Array.isArray(c.signals) ? c.signals.slice(0, 10) : [],
+    invalidationConditions: c.invalidationConditions ?? null,
+  }
+}
+
+// Build the full narrow dashboard payload from a SignalBundle (live path)
+function buildDashboardPayloadFromBundle(bundle: SignalBundle) {
+  return {
+    technicals: technicalsToPayload(bundle.technicals, bundle.currentPrice),
+    conviction: projectConvictionForDashboard(bundle.conviction),
+    fundamentals: projectFundamentalsForDashboard(bundle.fundamentals),
+    smartMoney: projectSmartMoneyForDashboard(bundle.smartMoney),
+    options: projectOptionsForDashboard(bundle.optionsFlow),
+    marketContext: projectMarketContextForDashboard(bundle.marketContext),
+  }
+}
+
+// Build the same narrow dashboard payload from a persisted signal_bundle
+// JSON (cache-hit path). signal_bundle now carries full fundamentals +
+// smartMoney objects, so we re-project them here exactly like a fresh run.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildDashboardPayloadFromCache(sb: any) {
+  if (!sb) return {
+    technicals: null, conviction: null, fundamentals: null,
+    smartMoney: null, options: null, marketContext: null,
+  }
+  return {
+    technicals: sb.technicals ?? null,
+    conviction: projectConvictionForDashboard(sb.conviction),
+    fundamentals: projectFundamentalsForDashboard(sb.fundamentals),
+    smartMoney: projectSmartMoneyForDashboard(sb.smartMoney),
+    options: projectOptionsForDashboard(sb.options),
+    marketContext: projectMarketContextForDashboard(sb.marketContext),
+  }
+}
 
 // Cache durations in minutes per timeframe
 const CACHE_MINUTES: Record<string, number> = {
@@ -148,7 +278,10 @@ export async function POST(req: NextRequest) {
             // Stream cached results exactly like a live run
             send('status', { stage: 'cache_hit', message: `Serving cached analysis from ${ageMinutes} minute${ageMinutes === 1 ? '' : 's'} ago` })
 
-            // Restore market_data from stored signal_bundle
+            // Restore market_data from stored signal_bundle.
+            // signal_bundle now stores the FULL fundamentals/smartMoney
+            // objects; we re-project to the narrow dashboard shape here
+            // so cached responses match live ones exactly.
             const sb = cached.signal_bundle ?? {}
             send('market_data', {
               bars: [],
@@ -156,13 +289,7 @@ export async function POST(req: NextRequest) {
               cached: true,
               cachedAt: cached.created_at,
               ageMinutes,
-              // Restore all dashboard data from signal_bundle if available
-              technicals: sb.technicals ?? null,
-              conviction: sb.conviction ?? null,
-              fundamentals: sb.fundamentals ?? null,
-              smartMoney: sb.smartMoney ?? null,
-              options: sb.options ?? null,
-              marketContext: sb.marketContext ?? null,
+              ...buildDashboardPayloadFromCache(sb),
             })
 
             // Option 2: re-run Social Scout even on cache hit (sentiment decays fast).
@@ -218,62 +345,7 @@ export async function POST(req: NextRequest) {
           bars: bundle.bars,
           currentPrice: bundle.currentPrice,
           cached: false,
-          technicals: technicalsToPayload(bundle.technicals, bundle.currentPrice),
-          conviction: {
-            direction: bundle.conviction.direction,
-            conviction: bundle.conviction.conviction,
-            convergenceScore: bundle.conviction.convergenceScore,
-            convergingSignals: bundle.conviction.convergingSignals,
-            divergingSignals: bundle.conviction.divergingSignals,
-            scenarios: bundle.conviction.scenarios,
-            regime: bundle.conviction.regime,
-            signals: bundle.conviction.signals.slice(0, 10),
-            invalidationConditions: bundle.conviction.invalidationConditions,
-          },
-          fundamentals: {
-            earningsDate: bundle.fundamentals.nextEarningsDate,
-            daysToEarnings: bundle.fundamentals.daysToEarnings,
-            earningsRisk: bundle.fundamentals.earningsRisk,
-            earningsHour: bundle.fundamentals.earningsHour,
-            earningsTimestamp: bundle.fundamentals.earningsTimestamp,
-            hoursUntilEarnings: bundle.fundamentals.hoursUntilEarnings,
-            epsEstimate: bundle.fundamentals.epsEstimate,
-            epsActual: bundle.fundamentals.epsActual,
-            revenueEstimate: bundle.fundamentals.revenueEstimate,
-            revenueActual: bundle.fundamentals.revenueActual,
-            analystConsensus: bundle.fundamentals.analystConsensus,
-            analystUpside: bundle.fundamentals.analystUpside,
-            analystBuy: bundle.fundamentals.analystBuy,
-            analystHold: bundle.fundamentals.analystHold,
-            analystSell: bundle.fundamentals.analystSell,
-            peRatio: bundle.fundamentals.peRatio,
-            consistentBeater: bundle.fundamentals.consistentBeater,
-            avgSurprisePct: bundle.fundamentals.avgSurprisePct,
-            insiderSignal: bundle.fundamentals.insiderSignal,
-          },
-          smartMoney: {
-            insiderSignal: bundle.smartMoney.insiderSignal,
-            congressSignal: bundle.smartMoney.congressSignal,
-            congressTrades: bundle.smartMoney.congressionalTrades.length,
-            notableHolders: bundle.smartMoney.notableHolders,
-          },
-          options: {
-            putCallRatio: bundle.optionsFlow.putCallRatio,
-            putCallSignal: bundle.optionsFlow.putCallSignal,
-            shortInterestPct: bundle.optionsFlow.shortInterestPct,
-            shortSignal: bundle.optionsFlow.shortSignal,
-            unusualCount: bundle.optionsFlow.unusualActivity.length,
-            unusualActivity: bundle.optionsFlow.unusualActivity.slice(0, 3),
-            ivSignal: bundle.optionsFlow.ivSignal,
-            maxPainStrike: bundle.optionsFlow.maxPainStrike,
-          },
-          marketContext: {
-            regime: bundle.marketContext.regime,
-            spy: bundle.marketContext.spy,
-            vix: bundle.marketContext.vix,
-            sectorETF: bundle.marketContext.sectorETF,
-            competitors: bundle.marketContext.competitors,
-          },
+          ...buildDashboardPayloadFromBundle(bundle),
         })
 
         dlog(`bundle built (price=$${bundle.currentPrice.toFixed(2)}), entering runPipeline`)
@@ -311,33 +383,20 @@ export async function POST(req: NextRequest) {
               signals: bundle.conviction.signals.slice(0, 10),
               invalidationConditions: bundle.conviction.invalidationConditions,
             },
-            fundamentals: {
-              earningsDate: bundle.fundamentals.nextEarningsDate,
-              daysToEarnings: bundle.fundamentals.daysToEarnings,
-              earningsRisk: bundle.fundamentals.earningsRisk,
-              earningsHour: bundle.fundamentals.earningsHour,
-              earningsTimestamp: bundle.fundamentals.earningsTimestamp,
-              hoursUntilEarnings: bundle.fundamentals.hoursUntilEarnings,
-              epsEstimate: bundle.fundamentals.epsEstimate,
-              epsActual: bundle.fundamentals.epsActual,
-              revenueEstimate: bundle.fundamentals.revenueEstimate,
-              revenueActual: bundle.fundamentals.revenueActual,
-              analystConsensus: bundle.fundamentals.analystConsensus,
-              analystUpside: bundle.fundamentals.analystUpside,
-              analystBuy: bundle.fundamentals.analystBuy,
-              analystHold: bundle.fundamentals.analystHold,
-              analystSell: bundle.fundamentals.analystSell,
-              peRatio: bundle.fundamentals.peRatio,
-              consistentBeater: bundle.fundamentals.consistentBeater,
-              avgSurprisePct: bundle.fundamentals.avgSurprisePct,
-              insiderSignal: bundle.fundamentals.insiderSignal,
-            },
-            smartMoney: {
-              insiderSignal: bundle.smartMoney.insiderSignal,
-              congressSignal: bundle.smartMoney.congressSignal,
-              congressTrades: bundle.smartMoney.congressionalTrades.length,
-              notableHolders: bundle.smartMoney.notableHolders,
-            },
+            // Bug 7 fix (May 2026): persist FULL fundamentals + smartMoney
+            // objects, not the narrow dashboard projection. The previous
+            // version dropped insiderBuyValue, insiderSellValue, summary,
+            // insiderNetValue, institutionalOwnership, notableHolders, and
+            // insiderTransactions[], leaving downstream consumers (cache
+            // replay, track-record analysis, future RAG over verdicts)
+            // with no source-of-truth dollar values to anchor against.
+            // The dashboard does NOT consume signal_bundle directly during
+            // a live run — it gets the narrow shape via the SSE market_data
+            // event above. On cache hit, buildDashboardPayloadFromCache
+            // re-projects from these full objects so the dashboard sees
+            // an identical shape regardless of cache vs live.
+            fundamentals: bundle.fundamentals,
+            smartMoney: bundle.smartMoney,
             options: {
               putCallRatio: bundle.optionsFlow.putCallRatio,
               putCallSignal: bundle.optionsFlow.putCallSignal,
