@@ -217,6 +217,10 @@ export async function fetchOptionsFlow(ticker: string, currentPrice: number): Pr
     totalCallVol = calls.reduce((s: number, o: OptionContract) => s + (Number(o.volume) || 0), 0)
     totalPutVol  = puts.reduce((s: number, o: OptionContract) => s + (Number(o.volume) || 0), 0)
 
+    // Diagnostic — see what Tradier returned so we can verify P/C math.
+    // Permanent observability, low cost. Search Railway logs for "[options ${ticker}]".
+    console.log(`[options ${ticker}] expiry=${chain.expiry} calls=${calls.length} puts=${puts.length} totalCallVol=${totalCallVol} totalPutVol=${totalPutVol} totalCallOI=${totalCallOI} totalPutOI=${totalPutOI}`)
+
     putCallRatio = totalCallVol > 0 ? totalPutVol / totalCallVol : null
 
     const callIVs = calls.map((o: OptionContract) => Number(o.greeks?.mid_iv) || 0).filter(Boolean)
