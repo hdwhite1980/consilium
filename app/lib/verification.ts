@@ -839,20 +839,26 @@ export async function verifyFactualClaims(
     // Step 3: combine bundle-settled + search-verified into final lists
     const allVerifications: ClaimVerification[] = [...bundleSettled, ...searchVerifications]
     const verifiedClaims: string[] = []
+    const verifiedFull: ClaimVerification[] = []   // full metadata for logging (Bug 11.1)
     const strippedClaims: ClaimVerification[] = []
     const allSourceUrls: string[] = []
 
     for (const v of allVerifications) {
       if (v.verified) {
         verifiedClaims.push(v.claim)
+        verifiedFull.push(v)
         if (v.sourceUrl) allSourceUrls.push(v.sourceUrl)
       } else {
         strippedClaims.push(v)
       }
     }
 
-    // Step 4: log to DB (fire-and-forget)
-    logVerification(ticker, sourceStage, verifiedClaims, strippedClaims, analysisId, Date.now() - started)
+    // Step 4: log to DB (fire-and-forget). Pass full ClaimVerification
+    // objects for verified rows so the log preserves which path verified
+    // each claim (bundle pre-check vs Google Search) — without this, the
+    // log shows source_outlet=null for everything verified and we can't
+    // tell if Bug 11's bundle pre-check is firing.
+    logVerification(ticker, sourceStage, verifiedFull, strippedClaims, analysisId, Date.now() - started)
 
     return {
       verifiedClaims,
@@ -884,10 +890,16 @@ export async function verifyFactualClaims(
 // ─────────────────────────────────────────────────────────────
 // Fire-and-forget logging to verification_log
 // ─────────────────────────────────────────────────────────────
+// Bug 11.1 fix: takes ClaimVerification[] for verified rows (was string[]
+// previously) so the bundle pre-check's source_outlet stamping survives
+// the trip to the database. This is what makes
+//   source_outlet = 'EDGAR (bundle source-of-truth)'
+// actually appear in the verification_log table for bundle-verified
+// claims, instead of null.
 function logVerification(
   ticker: string,
   sourceStage: 'lead' | 'devil' | 'rebuttal' | 'counter',
-  verified: string[],
+  verified: ClaimVerification[],
   stripped: ClaimVerification[],
   analysisId: string | undefined,
   elapsedMs: number,
@@ -895,17 +907,21 @@ function logVerification(
   void (async () => {
     try {
       const admin = getAdmin()
-      // One row per claim (verified or stripped)
+      // One row per claim (verified or stripped). For verified rows, we
+      // now preserve the source_outlet/source_url/reasoning that come
+      // from either the bundle pre-check (Bug 11) or Google Search.
+      // For stripped rows, source_outlet is the disagreeing outlet and
+      // reasoning is why the claim failed verification.
       const rows = [
-        ...verified.map((claim) => ({
+        ...verified.map((v) => ({
           ticker,
           source_stage: sourceStage,
           analysis_id: analysisId ?? null,
-          claim: claim.slice(0, 1000),
+          claim: v.claim.slice(0, 1000),
           verified: true,
-          source_url: null,
-          source_outlet: null,
-          rejection_reason: null,
+          source_url: v.sourceUrl,
+          source_outlet: v.sourceOutlet,
+          rejection_reason: v.reasoning?.slice(0, 500) ?? null,
           elapsed_ms: elapsedMs,
         })),
         ...stripped.map((s) => ({
