@@ -599,6 +599,24 @@ function tryVerifyAgainstBundle(claim: string, bundle: SignalBundle | undefined)
   if (isInsiderClaim) {
     const claimedDollars = extractDollarAmount(claim)
     if (claimedDollars !== null && claimedDollars > 0) {
+      // Bug 16.1 fix: gate aggregate comparison.
+      // The bundle's insiderBuyValue / insiderSellValue are 90-day
+      // AGGREGATES across all filers. When a claim is clearly about
+      // a SPECIFIC TRANSACTION (named date, small dollar amount),
+      // comparing it against the aggregate creates a false-positive
+      // strip: e.g., "Snabe bought $77K on 3/27" — extractDollarAmount
+      // returns $77K, bundle shows $300K aggregate, claim gets stripped
+      // even though it's truthful.
+      // Skip the aggregate comparison when:
+      //   (a) extracted dollar < $1M (likely a specific transaction)
+      //   (b) claim mentions a specific date (definitely a specific transaction)
+      // In both cases, fall through to Google Search.
+      const mentionsSpecificDate = /\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\b|\bon\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}/i.test(c)
+      const isAboutSpecificTransaction = claimedDollars < 1_000_000 || mentionsSpecificDate
+      if (isAboutSpecificTransaction) {
+        return { matched: false }
+      }
+
       // Detect direction (bought vs sold) from the claim text
       const isSelling = /\b(sold|sell|selling|sale|sales|exit|divest)\b/i.test(c)
       const isBuying  = /\b(bought|buy|buying|purchase|purchases|accumulat)\b/i.test(c)
@@ -793,6 +811,85 @@ function tryVerifyAgainstBundle(claim: string, bundle: SignalBundle | undefined)
       }
     }
     // Bundle has no runway data — fall through to Google Search.
+  }
+
+  // ── Cash balance claims (Bug 17 fix, May 2026) ────────────
+  // Catches claims like "cash and equivalents of $X", "cash position
+  // of $X", "$X in cash", "cash on hand of $X". Cross-references vs
+  // bundle.fundamentals.cashBalance.
+  // Wider tolerance (±20%) than insider because cash figures vary by
+  // reporting period — companies might cite latest 10-Q, end of fiscal
+  // year, or other points; differences of 10-15% are common between
+  // sources, not necessarily errors.
+  const isCashBalanceClaim =
+    /\bcash\s+(and|&)\s+(short[- ]?term\s+investments?|equivalents?|securities)\b/i.test(c) ||
+    /\bcash\s+(position|balance|on\s+hand|reserves?)\b/i.test(c) ||
+    /\b\$\s*[\d,]+(?:\.\d+)?\s*(?:m(?:illion)?|b(?:illion)?)\s+in\s+cash\b/i.test(c)
+  if (isCashBalanceClaim) {
+    const claimedDollars = extractDollarAmount(claim)
+    if (claimedDollars !== null && claimedDollars > 0) {
+      const bundleCash = bundle.fundamentals?.cashBalance ?? null
+      if (bundleCash !== null && bundleCash > 0) {
+        if (withinTolerance(claimedDollars, bundleCash, 0.20)) {
+          return {
+            matched: true,
+            verified: true,
+            sourceOutlet: 'Bundle fundamentals (Finnhub-sourced)',
+            reasoning: `Bundle confirms: cash and short-term investments ≈ $${(bundleCash/1e6).toFixed(0)}M (claim: $${(claimedDollars/1e6).toFixed(0)}M, within methodology tolerance).`,
+          }
+        }
+        // Bundle has authoritative cash figure and claim is way off.
+        // Common error: persona cites cash figure from stale source or
+        // wrong reporting period. Strip with explicit note.
+        return {
+          matched: true,
+          verified: false,
+          sourceOutlet: 'Bundle fundamentals (Finnhub-sourced)',
+          reasoning: `Bundle contradicts: claim cites $${(claimedDollars/1e6).toFixed(0)}M cash but bundle shows ~$${(bundleCash/1e6).toFixed(0)}M. Likely a stale or wrong-period source. Use the bundle "Cash & runway" line for current cash figures.`,
+        }
+      }
+    }
+  }
+
+  // ── Free cash flow claims (Bug 17 fix, May 2026) ──────────
+  // Catches claims like "FCF of -$X", "free cash flow of $X",
+  // "burning $X per year", "annual cash burn of $X".
+  // Cross-references vs bundle.fundamentals.freeCashFlowTTM.
+  const isFcfClaim =
+    /\b(free\s*cash\s*flow|fcf)\b/i.test(c) ||
+    /\b(annual|yearly)\s+(cash\s+)?burn\b/i.test(c) ||
+    /\bburning\s+\$/i.test(c)
+  if (isFcfClaim) {
+    const claimedDollars = extractDollarAmount(claim)
+    if (claimedDollars !== null && claimedDollars > 0) {
+      const bundleFcfTTM = bundle.fundamentals?.freeCashFlowTTM ?? null
+      if (bundleFcfTTM !== null) {
+        // FCF can be positive or negative; claim's sign needs detection.
+        // Look for "negative", "loss", "burn", or "-$" prefix in the claim.
+        const claimImpliesNegative = /\b(negative|loss|burn|deficit|shortfall)\b/i.test(c) || /-\s*\$/.test(claim)
+        const effectiveClaimedFcf = claimImpliesNegative ? -Math.abs(claimedDollars) : claimedDollars
+        // Compare absolute values with ±25% tolerance — FCF figures
+        // vary by methodology (FCF from ops, FCF after capex, etc.)
+        if (Math.sign(effectiveClaimedFcf) === Math.sign(bundleFcfTTM) || bundleFcfTTM === 0) {
+          if (withinTolerance(Math.abs(effectiveClaimedFcf), Math.abs(bundleFcfTTM), 0.25)) {
+            return {
+              matched: true,
+              verified: true,
+              sourceOutlet: 'Bundle fundamentals (Finnhub-sourced)',
+              reasoning: `Bundle confirms: FCF TTM ≈ $${(bundleFcfTTM/1e6).toFixed(0)}M (claim: $${(effectiveClaimedFcf/1e6).toFixed(0)}M, within methodology tolerance).`,
+            }
+          }
+        }
+        // Sign mismatch (claim says burn but bundle shows positive FCF, or vice versa)
+        // OR magnitude way off → contradicts.
+        return {
+          matched: true,
+          verified: false,
+          sourceOutlet: 'Bundle fundamentals (Finnhub-sourced)',
+          reasoning: `Bundle contradicts: claim cites FCF $${(effectiveClaimedFcf/1e6).toFixed(0)}M but bundle shows $${(bundleFcfTTM/1e6).toFixed(0)}M TTM. Use the bundle "Cash & runway" line for current FCF figures.`,
+        }
+      }
+    }
   }
 
   // ── Earnings date claims ──────────────────────────────────
