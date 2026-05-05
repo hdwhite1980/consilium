@@ -15,7 +15,7 @@
 // =============================================================
 
 import { NextRequest, NextResponse } from 'next/server'
-import { fetchMultiSourceNews, formatNewsForPrompt } from '@/app/lib/news-aggregator'
+import { fetchMultiSourceNews, formatNewsForPrompt } from '@/app/lib/multi-source-news'
 import { getMarketRegime } from '@/app/lib/market-regime'
 import {
   loadActiveStories,
