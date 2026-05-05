@@ -1,15 +1,15 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@/app/lib/auth/client'
 import {
   LogOut, TrendingUp, TrendingDown, RefreshCw, ArrowLeft, Eye, Zap, Globe,
-  AlertTriangle, BarChart3, Sun, Moon, Radio, Calendar, Clock, ShieldCheck,
-  Activity, ChevronDown, ChevronUp, History,
+  AlertTriangle, BarChart3, Sun, Moon, Calendar, Clock, ShieldCheck,
+  Activity, ChevronDown, ChevronUp, History, Check, Radio,
 } from 'lucide-react'
+import { MoversHitRateWidget } from '@/app/components/MoversHitRateWidget'
 
-// ── Types — mirror the API contract from active-stories-types.ts ──────
+// ── Types ──────────────────────────────────────────────────────
 type Signal = 'BULLISH' | 'BEARISH' | 'NEUTRAL'
 type SessionAnchor = 'today' | 'tomorrow' | 'weekend'
 type AssetType = 'stock' | 'crypto'
@@ -63,6 +63,39 @@ interface ActiveStoriesPayload {
     byTimeframe: Record<Timeframe, number>
     bySignal: Record<Signal, number>
   }
+}
+
+interface MacroTheme {
+  id: string
+  theme_name: string
+  theme_summary: string
+  playbook: string
+  sectors_to_watch: string[]
+  tickers_to_watch: string[]
+  urgency: string
+}
+
+interface MonitorAlert {
+  id: string
+  headline: string
+  analysis?: string
+  action?: string
+  urgency: 'critical' | 'high' | 'medium' | 'low'
+  market_impact?: 'bullish' | 'bearish' | 'neutral'
+  ticker?: string
+  acknowledged: boolean
+  created_at: string
+}
+
+interface SocialSignal {
+  id: string
+  source: string
+  headline: string
+  analysis?: string
+  impact?: 'bullish' | 'bearish' | 'neutral' | 'mixed'
+  urgency?: 'high' | 'medium' | 'low'
+  tickers?: string[]
+  posted_at?: string
 }
 
 // ── Visual constants ─────────────────────────────────────────────────
@@ -128,7 +161,21 @@ function confidenceColor(c: number): { color: string; bg: string; border: string
   return { color: '#94a3b8', bg: 'rgba(148,163,184,0.10)', border: 'rgba(148,163,184,0.18)' }
 }
 
-// ── Story card ───────────────────────────────────────────────────────
+function urgencyColor(u: string): string {
+  if (u === 'critical') return '#f87171'
+  if (u === 'high') return '#fbbf24'
+  if (u === 'medium') return '#a78bfa'
+  return '#94a3b8'
+}
+
+function impactColor(i?: string): string {
+  if (i === 'bullish') return '#34d399'
+  if (i === 'bearish') return '#f87171'
+  if (i === 'mixed') return '#fbbf24'
+  return '#94a3b8'
+}
+
+// ── Story card (full version, identical to Phase 3) ─────────────────
 
 function StoryCard({ story, onAnalyze }: { story: TrackedStory; onAnalyze: (ticker: string) => void }) {
   const [expanded, setExpanded] = useState(false)
@@ -147,10 +194,8 @@ function StoryCard({ story, onAnalyze }: { story: TrackedStory; onAnalyze: (tick
       className="rounded-xl border transition-all duration-200"
       style={{ background: colors.bg, borderColor: colors.border }}
     >
-      {/* Header — clickable to expand */}
       <div className="p-4 cursor-pointer" onClick={() => setExpanded(v => !v)}>
         <div className="flex items-start justify-between gap-3">
-          {/* Left: ticker + name + meta */}
           <div className="flex items-center gap-2.5 min-w-0">
             <div
               className="shrink-0 px-2.5 py-1 rounded-lg font-mono font-bold text-sm"
@@ -182,9 +227,7 @@ function StoryCard({ story, onAnalyze }: { story: TrackedStory; onAnalyze: (tick
             </div>
           </div>
 
-          {/* Right: badges */}
           <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-            {/* Playing-out badge */}
             {isPlayingOut && (
               <div
                 className="flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-mono font-semibold"
@@ -194,7 +237,6 @@ function StoryCard({ story, onAnalyze }: { story: TrackedStory; onAnalyze: (tick
                 <Activity size={9} className="animate-pulse" /> playing out
               </div>
             )}
-            {/* Confidence */}
             <div
               className="flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-mono font-semibold"
               style={{ background: confColors.bg, color: confColors.color, border: `1px solid ${confColors.border}` }}
@@ -202,7 +244,6 @@ function StoryCard({ story, onAnalyze }: { story: TrackedStory; onAnalyze: (tick
             >
               {story.confidence}%
             </div>
-            {/* Verified */}
             {story.verified === true && (
               <div
                 className="flex items-center gap-0.5 px-1.5 py-1 rounded-full text-[9px] font-mono font-semibold"
@@ -213,7 +254,6 @@ function StoryCard({ story, onAnalyze }: { story: TrackedStory; onAnalyze: (tick
                 <span>verified</span>
               </div>
             )}
-            {/* Signal */}
             <div
               className="flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-mono font-semibold"
               style={{ background: `${colors.accent}15`, color: colors.accent, border: `1px solid ${colors.accent}28` }}
@@ -225,7 +265,6 @@ function StoryCard({ story, onAnalyze }: { story: TrackedStory; onAnalyze: (tick
           </div>
         </div>
 
-        {/* Timeframes + age line */}
         <div className="flex items-center gap-2 mt-3 flex-wrap">
           {story.timeframes.map(tf => (
             <span
@@ -242,12 +281,10 @@ function StoryCard({ story, onAnalyze }: { story: TrackedStory; onAnalyze: (tick
           </span>
         </div>
 
-        {/* Headline */}
         {story.headline && (
           <p className="text-xs text-white/55 mt-2.5 leading-relaxed line-clamp-2">{story.headline}</p>
         )}
 
-        {/* Latest update note (most recent run's note, prominent) */}
         {latestUpdate && (
           <div
             className="mt-2.5 rounded-md px-2.5 py-1.5 text-[11px] text-white/65 leading-relaxed"
@@ -267,10 +304,8 @@ function StoryCard({ story, onAnalyze }: { story: TrackedStory; onAnalyze: (tick
         )}
       </div>
 
-      {/* Expanded content */}
       {expanded && (
         <div className="px-4 pb-4 space-y-3 border-t" style={{ borderColor: `${colors.accent}15` }}>
-          {/* What this means */}
           {story.reason && (
             <div className="pt-3">
               <div className="text-[10px] font-mono uppercase tracking-widest mb-1.5" style={{ color: colors.accent }}>
@@ -279,16 +314,12 @@ function StoryCard({ story, onAnalyze }: { story: TrackedStory; onAnalyze: (tick
               <p className="text-sm text-white/75 leading-relaxed">{story.reason}</p>
             </div>
           )}
-
-          {/* Catalyst */}
           {story.catalyst && (
             <div className="rounded-lg p-3" style={{ background: 'var(--surface2)', border: '1px solid rgba(255,255,255,0.07)' }}>
               <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-1">Catalyst</div>
               <p className="text-xs text-white/65 leading-relaxed">{story.catalyst}</p>
             </div>
           )}
-
-          {/* Timeframe explanations */}
           <div className="rounded-lg p-3" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
             <div className="text-[10px] font-mono uppercase tracking-widest text-white/25 mb-2">Trade horizons</div>
             <div className="space-y-1">
@@ -303,8 +334,6 @@ function StoryCard({ story, onAnalyze }: { story: TrackedStory; onAnalyze: (tick
               ))}
             </div>
           </div>
-
-          {/* Verification sources */}
           {story.verified && story.verificationSources && story.verificationSources.length > 0 && (
             <div className="rounded-lg p-3" style={{ background: 'rgba(96,165,250,0.05)', border: '1px solid rgba(96,165,250,0.18)' }}>
               <div className="flex items-center gap-1.5 mb-1.5">
@@ -328,8 +357,6 @@ function StoryCard({ story, onAnalyze }: { story: TrackedStory; onAnalyze: (tick
               </div>
             </div>
           )}
-
-          {/* Update timeline (collapsible) */}
           {hasUpdates && (
             <div>
               <button
@@ -370,8 +397,6 @@ function StoryCard({ story, onAnalyze }: { story: TrackedStory; onAnalyze: (tick
               )}
             </div>
           )}
-
-          {/* Action button */}
           <button
             onClick={(e) => { e.stopPropagation(); onAnalyze(story.ticker) }}
             className="w-full mt-1 py-2 rounded-lg text-xs font-semibold transition-all hover:opacity-80"
@@ -389,24 +414,254 @@ function StoryCard({ story, onAnalyze }: { story: TrackedStory; onAnalyze: (tick
   )
 }
 
-// ── Empty state ──────────────────────────────────────────────────────
+// ── Sidebar panel wrapper for visual consistency ────────────────────
 
-function EmptyTimeframeBlock({ timeframe }: { timeframe: Timeframe }) {
+function SidePanel({ icon, title, children, accentColor = '#a78bfa', headerExtra }: {
+  icon: ReactNode
+  title: string
+  children: ReactNode
+  accentColor?: string
+  headerExtra?: ReactNode
+}) {
   return (
-    <div className="rounded-xl border border-dashed p-4 text-center"
-      style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-      <span className="text-[10px] font-mono text-white/25 uppercase tracking-widest">
-        No active stories at the {TIMEFRAME_LABELS[timeframe]} horizon
-      </span>
+    <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+      <div className="flex items-center justify-between px-4 py-2.5 border-b" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex items-center gap-2 min-w-0">
+          <span style={{ color: accentColor }} className="shrink-0">{icon}</span>
+          <span className="text-xs font-bold truncate">{title}</span>
+        </div>
+        {headerExtra}
+      </div>
+      {children}
     </div>
   )
 }
 
-// ── Main page ───────────────────────────────────────────────────────
+// ── Macro Intelligence panel ────────────────────────────────────────
+
+function MacroPanel({ themes }: { themes: MacroTheme[] }) {
+  if (themes.length === 0) return null
+  return (
+    <SidePanel icon={<Globe size={12} />} title="Macro Themes" accentColor="#a78bfa"
+      headerExtra={
+        <span className="text-[10px] font-mono text-white/35">{themes.length}</span>
+      }
+    >
+      <div className="divide-y max-h-80 overflow-y-auto" style={{ borderColor: 'rgba(255,255,255,0.04)' }}>
+        {themes.slice(0, 5).map(t => (
+          <div key={t.id} className="px-4 py-2.5">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded uppercase"
+                style={{
+                  background: t.urgency === 'high' ? 'rgba(248,113,113,0.12)' : 'rgba(167,139,250,0.10)',
+                  color: t.urgency === 'high' ? '#f87171' : '#a78bfa',
+                }}>
+                {t.urgency}
+              </span>
+              <span className="text-xs font-semibold text-white/85 truncate">{t.theme_name}</span>
+            </div>
+            <p className="text-[11px] text-white/55 leading-relaxed line-clamp-2">{t.theme_summary}</p>
+            {(t.tickers_to_watch?.length > 0 || t.sectors_to_watch?.length > 0) && (
+              <div className="flex items-center gap-1 mt-1.5 flex-wrap">
+                {t.tickers_to_watch?.slice(0, 4).map(ticker => (
+                  <span key={ticker} className="text-[9px] font-mono px-1.5 py-0.5 rounded"
+                    style={{ background: 'rgba(167,139,250,0.10)', color: '#a78bfa' }}>
+                    {ticker}
+                  </span>
+                ))}
+                {t.sectors_to_watch?.slice(0, 2).map(sector => (
+                  <span key={sector} className="text-[9px] font-mono text-white/35">
+                    {sector}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </SidePanel>
+  )
+}
+
+// ── Live Monitor panel (alerts) ─────────────────────────────────────
+
+function MonitorPanel({
+  alerts, newAlertCount, monitorRunning, onScan, onAcknowledge, onAnalyze,
+}: {
+  alerts: MonitorAlert[]
+  newAlertCount: number
+  monitorRunning: boolean
+  onScan: () => void
+  onAcknowledge: (id: string) => void
+  onAnalyze: (ticker: string) => void
+}) {
+  const headerColor = alerts.some(a => !a.acknowledged && a.urgency === 'critical')
+    ? 'rgba(248,113,113,0.4)'
+    : alerts.some(a => !a.acknowledged && a.urgency === 'high')
+    ? 'rgba(251,191,36,0.3)'
+    : 'rgba(255,255,255,0.07)'
+
+  return (
+    <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: headerColor }}>
+      <div className="flex items-center justify-between px-4 py-2.5 border-b" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="relative shrink-0">
+            <span className="w-2 h-2 rounded-full inline-block animate-pulse" style={{ background: '#f87171' }} />
+            {newAlertCount > 0 && (
+              <span className="absolute -top-1 -right-1 text-[8px] font-bold px-1 rounded-full"
+                style={{ background: '#f87171', color: 'var(--text)', minWidth: '12px', textAlign: 'center' }}>
+                {newAlertCount}
+              </span>
+            )}
+          </div>
+          <span className="text-xs font-bold">Live Monitor</span>
+          <span className="text-[8px] font-mono px-1.5 py-0.5 rounded-full"
+            style={{ background: 'rgba(52,211,153,0.12)', color: '#34d399' }}>
+            3min
+          </span>
+        </div>
+        <button onClick={onScan} disabled={monitorRunning}
+          className="text-[10px] font-mono px-2 py-1 rounded-lg disabled:opacity-40 hover:opacity-80 shrink-0"
+          style={{ background: 'rgba(248,113,113,0.1)', color: '#f87171', border: '1px solid rgba(248,113,113,0.2)' }}>
+          {monitorRunning ? '⟳' : 'Scan'}
+        </button>
+      </div>
+      {alerts.length > 0 ? (
+        <div className="divide-y max-h-96 overflow-y-auto" style={{ borderColor: 'rgba(255,255,255,0.04)' }}>
+          {alerts.slice(0, 10).map(alert => (
+            <div key={alert.id} className="px-4 py-2.5 transition-opacity"
+              style={{ opacity: alert.acknowledged ? 0.4 : 1 }}>
+              <div className="flex items-start gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase"
+                      style={{
+                        background: alert.urgency === 'critical' ? 'rgba(248,113,113,0.2)' : alert.urgency === 'high' ? 'rgba(251,191,36,0.15)' : 'rgba(255,255,255,0.08)',
+                        color: urgencyColor(alert.urgency),
+                      }}>
+                      {alert.urgency}
+                    </span>
+                    {alert.market_impact && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded font-mono"
+                        style={{
+                          background: `${impactColor(alert.market_impact)}15`,
+                          color: impactColor(alert.market_impact),
+                        }}>
+                        {alert.market_impact}
+                      </span>
+                    )}
+                    {alert.ticker && (
+                      <button onClick={() => onAnalyze(alert.ticker!)}
+                        className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded hover:opacity-80"
+                        style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>
+                        {alert.ticker}
+                      </button>
+                    )}
+                    <span className="text-[9px] text-white/25 ml-auto">
+                      {Math.round((Date.now() - new Date(alert.created_at).getTime()) / 60000)}m
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-white/70 leading-relaxed font-medium line-clamp-2">{alert.headline}</p>
+                  {alert.action && (
+                    <p className="text-[10px] font-semibold mt-1" style={{ color: alert.urgency === 'critical' ? '#f87171' : '#fbbf24' }}>
+                      → {alert.action}
+                    </p>
+                  )}
+                </div>
+                {!alert.acknowledged && (
+                  <button onClick={() => onAcknowledge(alert.id)}
+                    className="shrink-0 p-1 rounded hover:opacity-80 mt-0.5"
+                    style={{ background: 'var(--surface2)', color: 'var(--text3)' }}
+                    aria-label="Acknowledge alert">
+                    <Check size={10} />
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="px-4 py-5 text-center">
+          <p className="text-xs text-white/25">No alerts yet</p>
+          <p className="text-[10px] text-white/15 mt-1">Auto-scanning every 3min</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Social Signals panel ────────────────────────────────────────────
+
+function SocialPanel({ signals, onScan, loading, onAnalyze }: {
+  signals: SocialSignal[]
+  onScan: () => void
+  loading: boolean
+  onAnalyze: (ticker: string) => void
+}) {
+  return (
+    <SidePanel icon={<Radio size={12} />} title="Social Signals" accentColor="#60a5fa"
+      headerExtra={
+        <button onClick={onScan} disabled={loading}
+          className="text-[10px] font-mono px-2 py-1 rounded-lg disabled:opacity-40 hover:opacity-80 shrink-0"
+          style={{ background: 'rgba(96,165,250,0.1)', color: '#60a5fa', border: '1px solid rgba(96,165,250,0.2)' }}>
+          {loading ? '⟳' : 'Scan'}
+        </button>
+      }
+    >
+      {signals.length > 0 ? (
+        <div className="divide-y max-h-96 overflow-y-auto" style={{ borderColor: 'rgba(255,255,255,0.04)' }}>
+          {signals.slice(0, 8).map(s => (
+            <div key={s.id} className="px-4 py-2.5">
+              <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase"
+                  style={{
+                    background: s.urgency === 'high' ? 'rgba(248,113,113,0.15)' : 'rgba(96,165,250,0.10)',
+                    color: s.urgency === 'high' ? '#f87171' : '#60a5fa',
+                  }}>
+                  {s.urgency || 'low'}
+                </span>
+                {s.impact && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded font-mono"
+                    style={{ background: `${impactColor(s.impact)}15`, color: impactColor(s.impact) }}>
+                    {s.impact}
+                  </span>
+                )}
+                <span className="text-[10px] font-semibold text-white/65 truncate">{s.source}</span>
+                {s.posted_at && (
+                  <span className="text-[9px] text-white/25 ml-auto">
+                    {new Date(s.posted_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-white/65 leading-relaxed line-clamp-2 mb-1">{s.headline}</p>
+              {(s.tickers && s.tickers.length > 0) && (
+                <div className="flex items-center gap-1 flex-wrap">
+                  {s.tickers.slice(0, 4).map(t => (
+                    <button key={t} onClick={() => onAnalyze(t)}
+                      className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded hover:opacity-80"
+                      style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="px-4 py-5 text-center">
+          <p className="text-xs text-white/25">No signals yet</p>
+          <p className="text-[10px] text-white/15 mt-1">Hit Scan to check for fresh posts</p>
+        </div>
+      )}
+    </SidePanel>
+  )
+}
+
+// ── Main Page ───────────────────────────────────────────────────────
 
 export default function ActiveStoriesPage() {
   const router = useRouter()
-  const supabase = createClient()
 
   const [session, setSession] = useState<SessionAnchor>('today')
   const [data, setData] = useState<ActiveStoriesPayload | null>(null)
@@ -414,6 +669,15 @@ export default function ActiveStoriesPage() {
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
 
+  // Sidebar panel state
+  const [macroThemes, setMacroThemes] = useState<MacroTheme[]>([])
+  const [monitorAlerts, setMonitorAlerts] = useState<MonitorAlert[]>([])
+  const [newAlertCount, setNewAlertCount] = useState(0)
+  const [monitorRunning, setMonitorRunning] = useState(false)
+  const [socialSignals, setSocialSignals] = useState<SocialSignal[]>([])
+  const [socialLoading, setSocialLoading] = useState(false)
+
+  // ─── Active Stories load
   const load = useCallback(async (sess: SessionAnchor) => {
     setError(null)
     try {
@@ -442,10 +706,81 @@ export default function ActiveStoriesPage() {
     load(session)
   }
 
+  // ─── Macro themes
+  useEffect(() => {
+    fetch('/api/macro-intelligence')
+      .then(r => r.json())
+      .then(d => setMacroThemes(d.themes || []))
+      .catch(() => {})
+  }, [])
+
+  // ─── Monitor alerts (auto-poll every 3 min)
+  const loadMonitorAlerts = useCallback(async () => {
+    try {
+      const d = await fetch('/api/monitor').then(r => r.json())
+      const alerts = d.alerts || []
+      setMonitorAlerts(alerts)
+      setNewAlertCount(alerts.filter((a: MonitorAlert) => !a.acknowledged).length)
+    } catch { /* ignore */ }
+  }, [])
+
+  useEffect(() => {
+    loadMonitorAlerts()
+    const interval = setInterval(async () => {
+      try {
+        await fetch('/api/monitor', { method: 'POST' })
+        await loadMonitorAlerts()
+      } catch { /* ignore */ }
+    }, 3 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [loadMonitorAlerts])
+
+  const runMonitor = async () => {
+    setMonitorRunning(true)
+    try {
+      await fetch('/api/monitor', { method: 'POST' })
+      await loadMonitorAlerts()
+    } finally {
+      setMonitorRunning(false)
+    }
+  }
+
+  const acknowledgeAlert = async (id: string) => {
+    try {
+      await fetch('/api/monitor', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [id] }),
+      })
+      setMonitorAlerts(prev => prev.map(a => a.id === id ? { ...a, acknowledged: true } : a))
+      setNewAlertCount(prev => Math.max(0, prev - 1))
+    } catch { /* ignore */ }
+  }
+
+  // ─── Social signals
+  useEffect(() => {
+    fetch('/api/social-signals')
+      .then(r => r.json())
+      .then(d => setSocialSignals(d.signals || []))
+      .catch(() => {})
+  }, [])
+
+  const scanSocial = async () => {
+    setSocialLoading(true)
+    try {
+      await fetch('/api/social-signals', { method: 'POST' })
+      const d = await fetch('/api/social-signals').then(r => r.json())
+      setSocialSignals(d.signals || [])
+    } finally {
+      setSocialLoading(false)
+    }
+  }
+
+  // ─── Auth + nav
   const handleAnalyze = (ticker: string) => router.push(`/?ticker=${ticker}`)
 
   const handleSignOut = async () => {
-    try { await fetch('/api/auth/session', { method: 'DELETE' }) } catch {}
+    try { await fetch('/api/auth/session', { method: 'DELETE' }) } catch { /* ignore */ }
     try {
       Object.keys(localStorage).filter(k => k.startsWith('sb-')).forEach(k => localStorage.removeItem(k))
       document.cookie.split(';').forEach(c => {
@@ -454,11 +789,11 @@ export default function ActiveStoriesPage() {
           document.cookie = name + '=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
         }
       })
-    } catch {}
+    } catch { /* ignore */ }
     window.location.replace('/login')
   }
 
-  // Group stories by timeframe — a story can appear in multiple groups
+  // ─── Group stories by timeframe
   const storiesByTimeframe = useMemo(() => {
     const groups: Record<Timeframe, TrackedStory[]> = { '1D': [], '1W': [], '1M': [], '3M': [] }
     if (!data?.stories) return groups
@@ -467,7 +802,6 @@ export default function ActiveStoriesPage() {
         if (tf in groups) groups[tf].push(s)
       }
     }
-    // Within each timeframe, sort by confidence desc
     for (const tf of TIMEFRAME_ORDER) {
       groups[tf].sort((a, b) => b.confidence - a.confidence)
     }
@@ -526,157 +860,197 @@ export default function ActiveStoriesPage() {
         </div>
       </header>
 
-      {/* ── Main column ───────────────────────────────────────────── */}
-      <main className="flex-1 max-w-5xl mx-auto w-full px-3 py-4 space-y-5">
+      {/* ── Two-column layout: main + right sidebar ──────────────── */}
+      <div className="flex-1 max-w-7xl mx-auto w-full px-3 py-4">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-5">
 
-        {/* Session toggle */}
-        <div
-          className="flex items-center gap-1 p-1 rounded-xl border"
-          style={{ background: 'var(--surface)', borderColor: 'var(--border)', width: 'fit-content' }}
-        >
-          {(['today', 'tomorrow', 'weekend'] as SessionAnchor[]).map(sess => {
-            const isActive = session === sess
-            const count = data?.counts.bySession[sess] ?? 0
-            const Icon = sess === 'today' ? Sun : sess === 'tomorrow' ? Moon : Calendar
-            return (
-              <button
-                key={sess}
-                onClick={() => setSession(sess)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
-                style={{
-                  background: isActive ? 'rgba(167,139,250,0.15)' : 'transparent',
-                  color: isActive ? '#a78bfa' : 'rgba(255,255,255,0.55)',
-                  border: isActive ? '1px solid rgba(167,139,250,0.3)' : '1px solid transparent',
-                }}
+          {/* ── Main column ─────────────────────────────────────── */}
+          <main className="space-y-5 min-w-0">
+
+            {/* Session toggle */}
+            <div
+              className="flex items-center gap-1 p-1 rounded-xl border"
+              style={{ background: 'var(--surface)', borderColor: 'var(--border)', width: 'fit-content' }}
+            >
+              {(['today', 'tomorrow', 'weekend'] as SessionAnchor[]).map(sess => {
+                const isActive = session === sess
+                const count = data?.counts.bySession[sess] ?? 0
+                const Icon = sess === 'today' ? Sun : sess === 'tomorrow' ? Moon : Calendar
+                return (
+                  <button
+                    key={sess}
+                    onClick={() => setSession(sess)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                    style={{
+                      background: isActive ? 'rgba(167,139,250,0.15)' : 'transparent',
+                      color: isActive ? '#a78bfa' : 'rgba(255,255,255,0.55)',
+                      border: isActive ? '1px solid rgba(167,139,250,0.3)' : '1px solid transparent',
+                    }}
+                  >
+                    <Icon size={12} />
+                    {SESSION_LABELS[sess]}
+                    <span className="text-[10px] font-mono opacity-60">({count})</span>
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* Run metadata card */}
+            {data && (data.marketTheme || data.summary) && (
+              <div
+                className="rounded-xl border p-4"
+                style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
               >
-                <Icon size={12} />
-                {SESSION_LABELS[sess]}
-                <span className="text-[10px] font-mono opacity-60">({count})</span>
-              </button>
-            )
-          })}
+                <div className="flex items-center gap-1.5 mb-2">
+                  <Globe size={11} style={{ color: '#a78bfa' }} />
+                  <span className="text-[10px] font-mono uppercase tracking-widest" style={{ color: '#a78bfa' }}>
+                    Market theme
+                  </span>
+                </div>
+                {data.marketTheme && (
+                  <h2 className="text-base font-bold text-white/90 mb-2">{data.marketTheme}</h2>
+                )}
+                {data.marketStatus && (
+                  <p className="text-xs text-white/55 mb-2 italic">{data.marketStatus}</p>
+                )}
+                {data.summary && (
+                  <p className="text-sm text-white/70 leading-relaxed">{data.summary}</p>
+                )}
+
+                <div className="flex items-center gap-3 mt-3 pt-3 border-t flex-wrap" style={{ borderColor: 'var(--border)' }}>
+                  <span className="text-[10px] font-mono text-white/40">{data.counts.total} active</span>
+                  <span className="text-white/15">·</span>
+                  <span className="text-[10px] font-mono" style={{ color: '#34d399' }}>
+                    {data.counts.bySignal.BULLISH} bullish
+                  </span>
+                  <span className="text-[10px] font-mono" style={{ color: '#f87171' }}>
+                    {data.counts.bySignal.BEARISH} bearish
+                  </span>
+                  {data.counts.bySignal.NEUTRAL > 0 && (
+                    <span className="text-[10px] font-mono" style={{ color: '#fbbf24' }}>
+                      {data.counts.bySignal.NEUTRAL} watching
+                    </span>
+                  )}
+                  <span className="text-white/15">·</span>
+                  {TIMEFRAME_ORDER.map(tf =>
+                    data.counts.byTimeframe[tf] > 0 && (
+                      <span key={tf} className="text-[10px] font-mono text-white/35">
+                        {data.counts.byTimeframe[tf]}× {tf}
+                      </span>
+                    )
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Loading state */}
+            {loading && !data && (
+              <div className="flex items-center justify-center py-12">
+                <RefreshCw size={20} className="animate-spin text-white/30" />
+                <span className="ml-2 text-xs text-white/40">Loading active stories...</span>
+              </div>
+            )}
+
+            {/* Error state */}
+            {error && (
+              <div
+                className="rounded-xl border p-4 flex items-start gap-2"
+                style={{ background: 'rgba(248,113,113,0.05)', borderColor: 'rgba(248,113,113,0.2)' }}
+              >
+                <AlertTriangle size={14} style={{ color: '#f87171' }} className="shrink-0 mt-0.5" />
+                <div>
+                  <div className="text-xs font-semibold" style={{ color: '#f87171' }}>Failed to load</div>
+                  <p className="text-[11px] text-white/55 mt-0.5">{error}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Timeframe sections */}
+            {data && !loading && data.stories.length > 0 && TIMEFRAME_ORDER.map(tf => {
+              const stories = storiesByTimeframe[tf]
+              if (stories.length === 0) return null
+              return (
+                <section key={tf}>
+                  <div className="flex items-baseline gap-2 mb-2.5">
+                    <h3 className="text-sm font-bold text-white/85">{TIMEFRAME_LABELS[tf]} horizon</h3>
+                    <span className="text-[10px] font-mono text-white/35">
+                      {stories.length} {stories.length === 1 ? 'story' : 'stories'}
+                    </span>
+                    <span className="text-[10px] text-white/25 ml-1">{TIMEFRAME_DESC[tf]}</span>
+                  </div>
+                  <div className="space-y-2.5">
+                    {stories.map(s => (
+                      <StoryCard key={`${tf}-${s.id}`} story={s} onAnalyze={handleAnalyze} />
+                    ))}
+                  </div>
+                </section>
+              )
+            })}
+
+            {/* Empty state */}
+            {data && !loading && data.stories.length === 0 && (
+              <div
+                className="rounded-xl border border-dashed p-8 text-center"
+                style={{ borderColor: 'rgba(255,255,255,0.08)' }}
+              >
+                <Radio size={20} className="mx-auto text-white/20 mb-2" />
+                <div className="text-xs text-white/45 font-semibold mb-1">No active stories for {SESSION_LABELS[session].toLowerCase()}</div>
+                <p className="text-[11px] text-white/30 leading-relaxed max-w-md mx-auto">
+                  The classifier runs 4× daily (6 AM / 12 PM / 5 PM / 9 PM ET).
+                  Stories appear here when fresh news creates actionable catalysts.
+                </p>
+                {data.generatedAt && (
+                  <p className="text-[10px] text-white/25 font-mono mt-3">
+                    Last cron run: {formatAge(data.generatedAt)} ago
+                  </p>
+                )}
+              </div>
+            )}
+          </main>
+
+          {/* ── Right sidebar ─────────────────────────────────────── */}
+          <aside className="space-y-4 lg:sticky lg:top-[68px] lg:self-start lg:max-h-[calc(100vh-80px)] lg:overflow-y-auto">
+
+            {/* Macro themes */}
+            <MacroPanel themes={macroThemes} />
+
+            {/* Live monitor */}
+            <MonitorPanel
+              alerts={monitorAlerts}
+              newAlertCount={newAlertCount}
+              monitorRunning={monitorRunning}
+              onScan={runMonitor}
+              onAcknowledge={acknowledgeAlert}
+              onAnalyze={handleAnalyze}
+            />
+
+            {/* Social signals */}
+            <SocialPanel
+              signals={socialSignals}
+              loading={socialLoading}
+              onScan={scanSocial}
+              onAnalyze={handleAnalyze}
+            />
+
+            {/* Movers Hit Rate Widget */}
+            <SidePanel icon={<BarChart3 size={12} />} title="Tracking Accuracy" accentColor="#34d399">
+              <div className="px-2 py-2">
+                <MoversHitRateWidget source="today" />
+              </div>
+            </SidePanel>
+
+          </aside>
         </div>
 
-        {/* Run metadata card */}
-        {data && (data.marketTheme || data.summary) && (
-          <div
-            className="rounded-xl border p-4"
-            style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
-          >
-            <div className="flex items-center gap-1.5 mb-2">
-              <Globe size={11} style={{ color: '#a78bfa' }} />
-              <span className="text-[10px] font-mono uppercase tracking-widest" style={{ color: '#a78bfa' }}>
-                Market theme
-              </span>
-            </div>
-            {data.marketTheme && (
-              <h2 className="text-base font-bold text-white/90 mb-2">{data.marketTheme}</h2>
-            )}
-            {data.marketStatus && (
-              <p className="text-xs text-white/55 mb-2 italic">{data.marketStatus}</p>
-            )}
-            {data.summary && (
-              <p className="text-sm text-white/70 leading-relaxed">{data.summary}</p>
-            )}
-
-            {/* Counts strip */}
-            <div className="flex items-center gap-3 mt-3 pt-3 border-t" style={{ borderColor: 'var(--border)' }}>
-              <span className="text-[10px] font-mono text-white/40">{data.counts.total} active</span>
-              <span className="text-white/15">·</span>
-              <span className="text-[10px] font-mono" style={{ color: '#34d399' }}>
-                {data.counts.bySignal.BULLISH} bullish
-              </span>
-              <span className="text-[10px] font-mono" style={{ color: '#f87171' }}>
-                {data.counts.bySignal.BEARISH} bearish
-              </span>
-              {data.counts.bySignal.NEUTRAL > 0 && (
-                <span className="text-[10px] font-mono" style={{ color: '#fbbf24' }}>
-                  {data.counts.bySignal.NEUTRAL} watching
-                </span>
-              )}
-              <span className="text-white/15">·</span>
-              {TIMEFRAME_ORDER.map(tf =>
-                data.counts.byTimeframe[tf] > 0 && (
-                  <span key={tf} className="text-[10px] font-mono text-white/35">
-                    {data.counts.byTimeframe[tf]}× {tf}
-                  </span>
-                )
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Loading state */}
-        {loading && !data && (
-          <div className="flex items-center justify-center py-12">
-            <RefreshCw size={20} className="animate-spin text-white/30" />
-            <span className="ml-2 text-xs text-white/40">Loading active stories...</span>
-          </div>
-        )}
-
-        {/* Error state */}
-        {error && (
-          <div
-            className="rounded-xl border p-4 flex items-start gap-2"
-            style={{ background: 'rgba(248,113,113,0.05)', borderColor: 'rgba(248,113,113,0.2)' }}
-          >
-            <AlertTriangle size={14} style={{ color: '#f87171' }} className="shrink-0 mt-0.5" />
-            <div>
-              <div className="text-xs font-semibold" style={{ color: '#f87171' }}>Failed to load</div>
-              <p className="text-[11px] text-white/55 mt-0.5">{error}</p>
-            </div>
-          </div>
-        )}
-
-        {/* Timeframe sections */}
-        {data && !loading && data.stories.length > 0 && TIMEFRAME_ORDER.map(tf => {
-          const stories = storiesByTimeframe[tf]
-          if (stories.length === 0) return null  // skip empty timeframes — only show what's populated
-          return (
-            <section key={tf}>
-              <div className="flex items-baseline gap-2 mb-2.5">
-                <h3 className="text-sm font-bold text-white/85">{TIMEFRAME_LABELS[tf]} horizon</h3>
-                <span className="text-[10px] font-mono text-white/35">
-                  {stories.length} {stories.length === 1 ? 'story' : 'stories'}
-                </span>
-                <span className="text-[10px] text-white/25 ml-1">{TIMEFRAME_DESC[tf]}</span>
-              </div>
-              <div className="space-y-2.5">
-                {stories.map(s => (
-                  <StoryCard key={`${tf}-${s.id}`} story={s} onAnalyze={handleAnalyze} />
-                ))}
-              </div>
-            </section>
-          )
-        })}
-
-        {/* Empty state — no stories at all in this session */}
-        {data && !loading && data.stories.length === 0 && (
-          <div
-            className="rounded-xl border border-dashed p-8 text-center"
-            style={{ borderColor: 'rgba(255,255,255,0.08)' }}
-          >
-            <Radio size={20} className="mx-auto text-white/20 mb-2" />
-            <div className="text-xs text-white/45 font-semibold mb-1">No active stories for {SESSION_LABELS[session].toLowerCase()}</div>
-            <p className="text-[11px] text-white/30 leading-relaxed max-w-md mx-auto">
-              The classifier runs 4× daily (6 AM / 12 PM / 5 PM / 9 PM ET).
-              Stories appear here when fresh news creates actionable catalysts.
-            </p>
-            {data.generatedAt && (
-              <p className="text-[10px] text-white/25 font-mono mt-3">
-                Last cron run: {formatAge(data.generatedAt)} ago
-              </p>
-            )}
-          </div>
-        )}
-
-        {/* Footer note */}
-        <div className="pt-4 pb-8 text-center">
-          <p className="text-[10px] text-white/20 font-mono">
+        {/* Footer */}
+        <div className="pt-8 pb-6 text-center">
+          <p className="text-[10px] text-white/20 font-mono leading-relaxed">
             Stories tracked across cron runs · LLM-driven decay with time caps · Powered by Wali-OS
+            <br />
+            AI-generated analysis based on news headlines. Not financial advice.
           </p>
         </div>
-      </main>
+      </div>
     </div>
   )
 }
