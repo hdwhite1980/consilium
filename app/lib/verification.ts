@@ -739,6 +739,62 @@ function tryVerifyAgainstBundle(claim: string, bundle: SignalBundle | undefined)
     }
   }
 
+  // ── Runway / cash burn claims (Bug 16 fix, May 2026) ──────
+  // Catches hallucinations like "less than one quarter of runway"
+  // or "burning $814M per year." Cross-references against
+  // bundle.fundamentals pre-computed runway and quarterly burn.
+  // Pattern matches: "runway", "X quarter(s) of runway", "X months
+  // of cash", "less than one quarter", "burn(ing) $X per year".
+  const isRunwayClaim = /\b(runway|cash\s*burn|burn\s*rate|months?\s*of\s*cash|quarters?\s*of\s*(?:cash|runway|operations))\b/i.test(c)
+                     || (/\bless\s+than\s+(?:one|a|1)\s+quarter\b/i.test(c) && /\b(cash|runway|funding)\b/i.test(c))
+  if (isRunwayClaim) {
+    const bundleRunwayQ = bundle.fundamentals?.runwayQuarters ?? null
+    const bundleQuarterlyBurn = bundle.fundamentals?.quarterlyBurn ?? null
+    const bundleFcfTTM = bundle.fundamentals?.freeCashFlowTTM ?? null
+    // If the company is self-funding (positive FCF), no runway concept applies.
+    // Any claim about runway being short is contradicted.
+    if (bundleFcfTTM !== null && bundleFcfTTM >= 0) {
+      // Claim talks about runway but company is self-funding — likely contradiction
+      if (/\b(short|limited|less\s*than|under|only|imminent|exhausted|critical|crisis|bankruptcy)/i.test(c)) {
+        return {
+          matched: true,
+          verified: false,
+          sourceOutlet: 'Bundle fundamentals (Finnhub-sourced)',
+          reasoning: `Bundle contradicts: claim suggests short runway / cash crisis but bundle reports positive free cash flow (FCF TTM $${(bundleFcfTTM/1e6).toFixed(0)}M) — company is self-funding, no runway concept applies.`,
+        }
+      }
+      // Otherwise fall through — claim might be benign ("plenty of runway")
+    }
+    // If bundle has a specific runway figure, check the claim against it
+    if (bundleRunwayQ !== null && bundleRunwayQ > 0) {
+      const claimedQuarters = extractFirstNumber(claim)
+      // Match wording for "less than one quarter" → claimed = 1
+      const sayLessThanOne = /\bless\s+than\s+(?:one|a|1)\s+quarter\b/i.test(c)
+      const effectiveClaimed = sayLessThanOne ? 1 : claimedQuarters
+      if (effectiveClaimed !== null && effectiveClaimed > 0) {
+        // Within ±25% of the bundle figure → verified (runway has methodology variance)
+        if (withinTolerance(effectiveClaimed, bundleRunwayQ, 0.25)) {
+          return {
+            matched: true,
+            verified: true,
+            sourceOutlet: 'Bundle fundamentals (Finnhub-sourced)',
+            reasoning: `Bundle confirms: runway ≈ ${bundleRunwayQ.toFixed(1)} quarters at current burn rate (${bundleQuarterlyBurn !== null ? `$${(bundleQuarterlyBurn/1e6).toFixed(0)}M/Q` : 'burn from FCF'}); claim of ${effectiveClaimed.toFixed(1)} quarters is within methodology tolerance.`,
+          }
+        }
+        // Bundle has a clear answer that differs significantly from the claim
+        // — most relevant when the claim is alarmist ("less than one quarter")
+        // and the actual runway is years.
+        return {
+          matched: true,
+          verified: false,
+          sourceOutlet: 'Bundle fundamentals (Finnhub-sourced)',
+          reasoning: `Bundle contradicts: claim cites ~${effectiveClaimed.toFixed(1)} quarter(s) of runway but bundle shows ${bundleRunwayQ.toFixed(1)} quarters at current burn (${bundleQuarterlyBurn !== null ? `$${(bundleQuarterlyBurn/1e6).toFixed(0)}M/Q quarterly burn` : ''}). A common error is computing runway from net income rather than free cash flow — net income includes non-cash items (SBC, D&A) that distort burn estimates.`,
+        }
+      }
+    }
+    // Bundle has no runway data — fall through to Google Search.
+  }
+
   // ── Earnings date claims ──────────────────────────────────
   // Match "earnings tomorrow", "earnings on May 6", "reports earnings Friday", etc.
   if (/\b(earnings|report)\b/i.test(c) && /\b(tomorrow|today|this\s+week|next\s+week|on\s+\w+|\b[a-z]+\s+\d{1,2}\b)/i.test(c)) {

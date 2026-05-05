@@ -27,6 +27,17 @@ export interface FundamentalSignals {
   freeCashFlowYield: number | null  // %
   roe: number | null                // return on equity %
 
+  // Cash & runway (Bug 16 fix, May 2026)
+  // Surfacing cash balance and burn rate as pre-computed numbers prevents
+  // personas from attempting their own runway math (e.g. cash / netIncome,
+  // which is wrong because netIncome includes non-cash items like SBC and D&A).
+  // Personas should cite these fields directly. When burn is positive (FCF > 0)
+  // or cash data is unavailable, runwayQuarters is null.
+  cashBalance: number | null         // $ — total cash and short-term investments
+  freeCashFlowTTM: number | null     // $ — absolute, can be negative for cash-burning companies
+  quarterlyBurn: number | null       // $ — abs(FCF/4); null when FCF is positive (no burn)
+  runwayQuarters: number | null      // quarters of operations at current burn rate; null when FCF is positive
+
   // Earnings
   nextEarningsDate: string | null
   daysToEarnings: number | null
@@ -289,6 +300,37 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
   const freeCashFlowYield = m['freeCashFlowYieldAnnual'] ?? null
   const roe = m['roeAnnual'] ?? m['roeTTM'] ?? null
 
+  // Shared scalar used by both Bug 14 (market cap) and Bug 16 (cash balance).
+  // Finnhub returns shares outstanding in MILLIONS.
+  const sharesOutstandingM = Number(m['shareOutstanding']) || 0
+
+  // ── Cash & runway (Bug 16 fix, May 2026) ──────────────────
+  // Pre-compute correct burn metrics so personas don't attempt
+  // their own runway math from net income. Net income is NOT cash
+  // burn — it includes large non-cash items (SBC, D&A) that
+  // particularly distort runway estimates for tech/AI companies.
+  // Use FCF (cashFromOps - capex) which is the right measure.
+  const fcfTTM = (m['freeCashFlowTTM'] ?? m['freeCashFlowAnnual']) ?? null
+  // Finnhub reports cash per share; we multiply by shares outstanding
+  // to get absolute cash balance.
+  const cashPerShareAnnual = (m['cashAndShortTermInvestmentsPerShareAnnual'] ?? null) as number | null
+  const cashBalance: number | null =
+    cashPerShareAnnual !== null && sharesOutstandingM > 0
+      ? cashPerShareAnnual * sharesOutstandingM * 1e6
+      : null
+  // Burn only meaningful when FCF is negative (cash-consuming).
+  // When FCF >= 0 the company is self-funding and runway is "indefinite";
+  // we leave both burn and runway as null in that case.
+  const freeCashFlowTTM: number | null = (typeof fcfTTM === 'number' && Number.isFinite(fcfTTM)) ? fcfTTM : null
+  const quarterlyBurn: number | null =
+    freeCashFlowTTM !== null && freeCashFlowTTM < 0
+      ? Math.abs(freeCashFlowTTM) / 4
+      : null
+  const runwayQuarters: number | null =
+    cashBalance !== null && cashBalance > 0 && quarterlyBurn !== null && quarterlyBurn > 0
+      ? cashBalance / quarterlyBurn
+      : null
+
   // ── Earnings calendar ─────────────────────────────────────
   // Finnhub returns multiple entries when the date range spans quarters.
   // Order is NOT guaranteed (often furthest-first), so we must sort ourselves.
@@ -456,7 +498,6 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
   // meaningful for both micro-caps and mega-caps, with a $1M
   // absolute minimum for cases where market cap is unavailable
   // or pathologically small.
-  const sharesOutstandingM = Number(m['shareOutstanding']) || 0
   const marketCapFromShares = sharesOutstandingM * 1e6 * currentPrice
   const marketCapFromMetric = (Number(m['marketCapitalization']) || 0) * 1e6
   const marketCapEstimate = marketCapFromShares > 0 ? marketCapFromShares : marketCapFromMetric
@@ -627,6 +668,15 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
     `Margins: Gross ${fmt(grossMargin, '%')} | Operating ${fmt(operatingMargin, '%')} | Net ${fmt(netMargin, '%')}`,
     `Growth: Revenue YoY ${fmt(revenueGrowthYoY, '%')} | EPS YoY ${fmt(epsGrowthYoY, '%')}`,
     `FCF Yield: ${fmt(freeCashFlowYield, '%')} | ROE: ${fmt(roe, '%')} | Debt/Equity: ${fmt(debtToEquity, 'x')}`,
+    // Cash & runway line (Bug 16). Personas should cite these values directly
+    // for any cash/runway claim instead of computing their own from net income.
+    runwayQuarters !== null
+      ? `Cash & runway: $${(cashBalance!/1e6).toFixed(0)}M cash | quarterly burn $${(quarterlyBurn!/1e6).toFixed(0)}M (FCF TTM $${(freeCashFlowTTM!/1e6).toFixed(0)}M) | runway ~${runwayQuarters.toFixed(1)} quarters at current burn (use these values; do NOT compute runway from net income — net income includes non-cash items like SBC and D&A)`
+      : cashBalance !== null && freeCashFlowTTM !== null && freeCashFlowTTM >= 0
+        ? `Cash & runway: $${(cashBalance/1e6).toFixed(0)}M cash | FCF TTM $${(freeCashFlowTTM/1e6).toFixed(0)}M (positive — self-funding, no burn)`
+        : cashBalance !== null
+          ? `Cash & runway: $${(cashBalance/1e6).toFixed(0)}M cash (FCF data unavailable)`
+          : '',
     ``,
     `Earnings: ${nextEarningsDate ? buildEarningsTierDirective(nextEarningsDate, daysToEarnings, earningsRisk, earningsHour, hoursUntilEarnings) : 'No upcoming earnings found'}`,
     earningsImpliedMove !== null ? `Earnings implied move (ATM straddle): ±${earningsImpliedMove.toFixed(1)}%${earningsHistoricalMove !== null ? ` vs historical avg ±${earningsHistoricalMove.toFixed(1)}% — ${earningsEdge === 'sell_vol' ? 'OPTIONS OVERPRICED (vol selling favored)' : earningsEdge === 'buy_vol' ? 'OPTIONS UNDERPRICED (vol buying favored)' : 'fair value'}` : ''}` : '',
@@ -645,6 +695,7 @@ export async function fetchFundamentals(ticker: string, currentPrice: number): P
     peRatio, forwardPE, pbRatio, psRatio, evEbitda, debtToEquity,
     revenueGrowthYoY, epsGrowthYoY, grossMargin, operatingMargin,
     netMargin, freeCashFlowYield, roe,
+    cashBalance, freeCashFlowTTM, quarterlyBurn, runwayQuarters,
     nextEarningsDate, daysToEarnings, earningsRisk,
     earningsHour, earningsTimestamp, hoursUntilEarnings,
     epsEstimate: (nextEarning as { epsEstimate?: number | null })?.epsEstimate ?? null,
