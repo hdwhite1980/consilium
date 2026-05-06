@@ -70,9 +70,10 @@ export const SYSTEM_VERSIONS: SystemVersion[] = [
       'Trade plans now adjust risk parameters by holding period (1D, 1W, 1M, 3M)',
       'Better recognition of when insider activity is statistically meaningful versus routine',
       'Improved continuity — repeated analyses on the same ticker explore complementary angles instead of repeating',
+      'Smarter framing of stocks that have already moved on a recent catalyst — distinguishes fresh setups from continuation trades and calibrates confidence accordingly',
     ],
     maturity: 'preview',
-    internalTags: ['bugs-5,7,9,10,11,12,13,14,15,16,17,18,19', 'first-multi-question-r2'],
+    internalTags: ['bugs-5,7,9,10,11,12,13,14,15,16,17,18,19', 'first-multi-question-r2', 'post-catalyst-awareness'],
   },
   {
     number: 2,
