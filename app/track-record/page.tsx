@@ -12,7 +12,7 @@
 // in user-facing language.
 // =============================================================
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   ArrowLeft, LogOut, RefreshCw, Trophy, Sparkles, Target, TrendingUp,
@@ -34,8 +34,9 @@ interface VersionStats {
 
 export default function TrackRecordPage() {
   const router = useRouter()
-  const versions = getVersionsNewestFirst()
-  const currentVersion = getCurrentVersion()
+  // Memoized so identity is stable across renders (otherwise loadAll → useEffect → re-render loop)
+  const versions = useMemo(() => getVersionsNewestFirst(), [])
+  const currentVersion = useMemo(() => getCurrentVersion(), [])
 
   const [statsByVersion, setStatsByVersion] = useState<Map<number, VersionStats>>(new Map())
   const [loading, setLoading] = useState(true)

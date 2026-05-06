@@ -12,7 +12,7 @@
 //   Returns: { hitRate1w, directionAcc1w, totalVerdicts, sampleNote }
 // =============================================================
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { ChevronDown, TrendingUp, AlertCircle, RefreshCw } from 'lucide-react'
 import { SYSTEM_VERSIONS, getCurrentVersion, type SystemVersion } from '@/app/lib/system-versions'
 
@@ -31,7 +31,7 @@ interface Props {
 }
 
 export function MoversHitRateWidget({ source = 'sidebar' }: Props) {
-  const currentVersion = getCurrentVersion()
+  const currentVersion = useMemo(() => getCurrentVersion(), [])
   const [selectedVersion, setSelectedVersion] = useState<number | 'all'>(currentVersion.number)
   const [stats, setStats] = useState<Stats | null>(null)
   const [loading, setLoading] = useState(true)
