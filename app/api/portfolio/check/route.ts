@@ -125,6 +125,12 @@ export interface PositionCheck {
   // (9) Council-history integration
   councilHistory: CouncilHistoryContext | null
 
+  // (10) Bundle context — rich technical/fundamental data from the persisted analyses.signal_bundle
+  // (added 2026-05-06 to fix the Health Check "no RSI or volume data" gap when
+  // Finnhub indicators return null. The bundle is built during full Council runs
+  // and persists detailed snapshots that we can surface back into Health Check prose.)
+  bundleContext: BundleContext | null
+
   // Verdict + prose
   verdict: 'EXIT' | 'WATCH' | 'HOLD' | 'ADD' | 'TERMINAL'
   conviction: 'high' | 'medium' | 'low'
@@ -153,6 +159,69 @@ export interface CouncilHistoryContext {
   alignmentNote: string
   /** Set when there's a different-persona run from the same day with a different signal. */
   personaDisagreement: string | null
+}
+
+/**
+ * Rich indicator context pulled from analyses.signal_bundle for the most recent
+ * full Council run. Used to give Health Check a richer prompt than Finnhub
+ * `/quote`+`/indicator` alone provides — the bundle has full technicals,
+ * fundamentals, smart-money signal, and conviction data that Health Check
+ * was previously ignoring.
+ *
+ * All fields are optional because:
+ *   - Some bundles persist only a subset of the full bundle (the analyze
+ *     route's projection has changed over time)
+ *   - Forex/fund tickers don't have all of these (e.g., no insiders for forex)
+ *   - The most-recent bundle may be from an older code era with a narrower shape
+ *
+ * Each field is shaped to be directly citable by the LLM in narrative prose.
+ */
+export interface BundleContext {
+  /** ISO timestamp of the persisted bundle. Used for staleness reasoning. */
+  bundleAt: string
+  /** Hours since the bundle was built. The LLM uses this to decide whether
+   *  the indicators below are fresh enough to cite or stale enough to caveat. */
+  hoursSinceBundle: number
+
+  // ── Technicals (from bundle.technicals) ─────────────────────
+  rsi: number | null
+  macdHistogram: number | null
+  /** Position relative to SMA50: 'above' | 'below' | null */
+  sma50Position: 'above' | 'below' | null
+  /** Position relative to SMA200: 'above' | 'below' | null */
+  sma200Position: 'above' | 'below' | null
+  /** % distance from price to SMA200 (positive = above) */
+  pctFromSma200: number | null
+  /** ATR (average true range) — used to size stops/targets relative to volatility */
+  atr: number | null
+  /** Recent volume vs 20-day average (1.0 = normal, 2.0 = doubled) */
+  volumeVs20Day: number | null
+  /** Trend label from technicals module: 'strong_uptrend' | 'uptrend' | 'sideways' | 'downtrend' | 'strong_downtrend' */
+  trendLabel: string | null
+
+  // ── Smart money (from bundle.smartMoney) ────────────────────
+  /** 'strong_buy' | 'buy' | 'neutral' | 'sell' | 'strong_sell' — already magnitude-floored per Bug 14 */
+  insiderSignal: string | null
+  /** Net insider transaction value (USD), magnitude-floored. Positive = buys, negative = sells. */
+  insiderNetValue: number | null
+  /** Pre-computed summary line, e.g. "Officers buying $4.2M (concentrated in CEO)" */
+  insiderSummary: string | null
+
+  // ── Fundamentals (from bundle.fundamentals) ─────────────────
+  /** Forward P/E ratio if available */
+  forwardPE: number | null
+  /** Trailing P/E ratio if available */
+  trailingPE: number | null
+  /** Days until next earnings event. Negative = earnings within last X days. Null = unknown. */
+  daysToEarnings: number | null
+  /** Pre-computed cash & runway line, e.g. "Cash $2.1B, FCF -$340M/q, runway 6 quarters" */
+  cashAndRunway: string | null
+
+  // ── Conviction (from bundle.conviction) ─────────────────────
+  /** 'BULLISH' | 'BEARISH' | 'NEUTRAL' — the quantitative engine's standalone signal */
+  convictionDirection: string | null
+  /** 0-1 score: how well the qualitative + quantitative layers agree */
+  convergenceScore: number | null
 }
 
 interface OptionDataResult {
@@ -691,6 +760,137 @@ function checkTerminal(args: {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// (10) Bundle context — pull rich indicator data from analyses.signal_bundle
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Health Check previously relied on Finnhub /quote and /indicator for technicals.
+// Finnhub free tier doesn't reliably return RSI or 10-day average volume, so the
+// LLM was being told "RSI N/A | Volume N/A" and writing prose like "no RSI or
+// volume data available to assess momentum." But the analyses table already has
+// the full signal_bundle from the most recent Council run — including technicals,
+// fundamentals, smart-money, and conviction data. Health Check should pull from
+// there as a richer fallback (or primary source), not duplicate the Finnhub fetch.
+
+async function fetchBundleContext(
+  userId: string,
+  ticker: string,
+): Promise<BundleContext | null> {
+  try {
+    const admin = getAdmin()
+
+    // Pull the most recent analysis for this user/ticker. Joining user_id ensures
+    // we don't surface another user's bundle. If the user has never analyzed this
+    // ticker, return null and let the LLM fall back to the council-history note.
+    const { data: rows } = await admin
+      .from('analyses')
+      .select('signal_bundle, created_at')
+      .eq('user_id', userId)
+      .eq('ticker', ticker.toUpperCase())
+      .order('created_at', { ascending: false })
+      .limit(1)
+
+    const row = rows?.[0]
+    if (!row || !row.signal_bundle) return null
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const bundle = row.signal_bundle as any
+    const bundleAt = row.created_at as string
+    const hoursSinceBundle = Math.max(
+      0,
+      Math.floor((Date.now() - new Date(bundleAt).getTime()) / 3_600_000),
+    )
+
+    // ── Technicals ─────────────────────────────────────────────
+    const tech = bundle.technicals ?? {}
+    const rsi = numericOrNull(tech.rsi ?? tech.rsi14 ?? null)
+    const macdHistogram = numericOrNull(tech.macdHistogram ?? tech.macd_histogram ?? null)
+
+    const currentPrice = numericOrNull(bundle.currentPrice ?? bundle.current_price ?? null)
+    const sma50 = numericOrNull(tech.sma50 ?? null)
+    const sma200 = numericOrNull(tech.sma200 ?? null)
+    const sma50Position: 'above' | 'below' | null =
+      currentPrice !== null && sma50 !== null
+        ? currentPrice >= sma50 ? 'above' : 'below'
+        : null
+    const sma200Position: 'above' | 'below' | null =
+      currentPrice !== null && sma200 !== null
+        ? currentPrice >= sma200 ? 'above' : 'below'
+        : null
+    const pctFromSma200 =
+      currentPrice !== null && sma200 !== null && sma200 > 0
+        ? ((currentPrice - sma200) / sma200) * 100
+        : null
+
+    const atr = numericOrNull(tech.atr ?? tech.atr14 ?? null)
+    const volumeVs20Day = numericOrNull(
+      tech.volumeRatio ?? tech.volume_ratio ?? tech.volumeVs20Day ?? null,
+    )
+    const trendLabel: string | null = typeof tech.trend === 'string'
+      ? tech.trend
+      : (typeof tech.trendLabel === 'string' ? tech.trendLabel : null)
+
+    // ── Smart money ────────────────────────────────────────────
+    const sm = bundle.smartMoney ?? {}
+    const insiderSignal: string | null = typeof sm.insiderSignal === 'string'
+      ? sm.insiderSignal
+      : null
+    const insiderNetValue = numericOrNull(sm.insiderNetValue ?? null)
+    const insiderSummary: string | null = typeof sm.summary === 'string'
+      ? sm.summary
+      : (typeof sm.insiderSummary === 'string' ? sm.insiderSummary : null)
+
+    // ── Fundamentals ───────────────────────────────────────────
+    const fund = bundle.fundamentals ?? {}
+    const forwardPE = numericOrNull(fund.forwardPE ?? fund.forward_pe ?? null)
+    const trailingPE = numericOrNull(fund.trailingPE ?? fund.trailing_pe ?? fund.peRatio ?? null)
+    const daysToEarnings = numericOrNull(fund.daysToEarnings ?? null)
+    const cashAndRunway: string | null = typeof fund.cashAndRunway === 'string'
+      ? fund.cashAndRunway
+      : (typeof fund.runwaySummary === 'string' ? fund.runwaySummary : null)
+
+    // ── Conviction ─────────────────────────────────────────────
+    const conv = bundle.conviction ?? {}
+    const convictionDirection: string | null = typeof conv.direction === 'string'
+      ? conv.direction
+      : null
+    const convergenceScore = numericOrNull(conv.convergenceScore ?? conv.convergence_score ?? null)
+
+    return {
+      bundleAt,
+      hoursSinceBundle,
+      rsi,
+      macdHistogram,
+      sma50Position,
+      sma200Position,
+      pctFromSma200: pctFromSma200 !== null ? parseFloat(pctFromSma200.toFixed(1)) : null,
+      atr,
+      volumeVs20Day,
+      trendLabel,
+      insiderSignal,
+      insiderNetValue,
+      insiderSummary,
+      forwardPE,
+      trailingPE,
+      daysToEarnings,
+      cashAndRunway,
+      convictionDirection,
+      convergenceScore,
+    }
+  } catch (e) {
+    console.warn('[portfolio/check] bundleContext lookup failed:', (e as Error).message?.slice(0, 100))
+    return null
+  }
+}
+
+// PG NUMERIC may serialize as string; coerce defensively. Same helper as bug23.
+function numericOrNull(v: unknown): number | null {
+  if (v === null || v === undefined) return null
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // (9) Council-history integration
 // ═════════════════════════════════════════════════════════════════════════════
 //
@@ -886,7 +1086,10 @@ async function buildCheck(pos: any, userId: string): Promise<PositionCheck> {
     })
 
     const positionDirection = inferPositionDirection({ isOption: false })
-    const councilHistory = await fetchCouncilHistory(userId, pos.ticker, positionDirection)
+    const [councilHistory, bundleContext] = await Promise.all([
+      fetchCouncilHistory(userId, pos.ticker, positionDirection),
+      fetchBundleContext(userId, pos.ticker),
+    ])
 
     // Add council-history flag if it contradicts position
     if (councilHistory?.positionContradictsCouncil) {
@@ -895,7 +1098,7 @@ async function buildCheck(pos: any, userId: string): Promise<PositionCheck> {
 
     const parts = [
       pnlPct !== null ? `${pnlPct >= 0 ? '+' : ''}${pnlPct}% P&L` : null,
-      uData.rsi !== null ? `RSI ${uData.rsi}` : null,
+      uData.rsi !== null ? `RSI ${uData.rsi}` : (bundleContext?.rsi !== null && bundleContext?.rsi !== undefined ? `RSI ${bundleContext.rsi}` : null),
       uData.volumeRatio !== null && uData.volumeRatio > 1.2 ? `${uData.volumeRatio}x avg vol` : null,
       pctFromStop !== null ? `${pctFromStop.toFixed(1)}% from stop` : null,
       pctFromTarget !== null ? `${pctFromTarget.toFixed(1)}% from target` : null,
@@ -906,8 +1109,9 @@ async function buildCheck(pos: any, userId: string): Promise<PositionCheck> {
       position_type: 'stock',
       underlyingPrice: uData.price,
       underlyingChange1D: uData.change1D,
-      underlyingRsi: uData.rsi,
-      underlyingVolumeRatio: uData.volumeRatio,
+      // Prefer live Finnhub RSI/volume; fall back to bundle if Finnhub returned null
+      underlyingRsi: uData.rsi ?? bundleContext?.rsi ?? null,
+      underlyingVolumeRatio: uData.volumeRatio ?? bundleContext?.volumeVs20Day ?? null,
       shares: pos.shares,
       entryPrice, pnlPct, pnlDollar,
       stopLoss: pos.stop_loss || null,
@@ -928,6 +1132,7 @@ async function buildCheck(pos: any, userId: string): Promise<PositionCheck> {
       savePathSummary: null, savePathProbabilityVerbal: null, savePathProbabilityNumeric: null,
       terminal: false, terminalReason: null,
       councilHistory,
+      bundleContext,
 
       verdict, conviction,
       reason: parts || `$${uData.price} (${uData.change1D >= 0 ? '+' : ''}${uData.change1D}% today)`,
@@ -1110,9 +1315,12 @@ async function buildCheck(pos: any, userId: string): Promise<PositionCheck> {
     if (optionType === 'put' && uData.price > breakeven) flags.push(`Underlying needs -${needsToMove}% to reach breakeven $${breakeven}`)
   }
 
-  // Council history (improvement #9)
+  // Council history (improvement #9) + bundle context (improvement #10)
   const positionDirection = inferPositionDirection({ isOption: true, optionType })
-  const councilHistory = await fetchCouncilHistory(userId, underlying, positionDirection)
+  const [councilHistory, bundleContext] = await Promise.all([
+    fetchCouncilHistory(userId, underlying, positionDirection),
+    fetchBundleContext(userId, underlying),
+  ])
   if (councilHistory?.positionContradictsCouncil) {
     flags.push(`Council ${councilHistory.recentSignal} ${councilHistory.daysSinceVerdict}d ago — your ${optionType === 'put' ? 'puts' : 'position'} contradict that direction`)
   }
@@ -1242,6 +1450,7 @@ async function buildCheck(pos: any, userId: string): Promise<PositionCheck> {
     terminal: terminalCheck.terminal,
     terminalReason: terminalCheck.reason,
     councilHistory,
+    bundleContext,
 
     verdict, conviction,
     reason: parts || `${optionType.toUpperCase()} $${strike} exp ${expiry}`,
@@ -1269,6 +1478,7 @@ function buildErrorCheck(pos: any, msg: string): PositionCheck {
     savePathSummary: null, savePathProbabilityVerbal: null, savePathProbabilityNumeric: null,
     terminal: false, terminalReason: null,
     councilHistory: null,
+    bundleContext: null,
     verdict: 'HOLD', conviction: 'low', reason: msg, action: 'Retry later', flags: [msg],
   }
 }
@@ -1276,6 +1486,87 @@ function buildErrorCheck(pos: any, msg: string): PositionCheck {
 // ─────────────────────────────────────────────────────────────────────────────
 // AI enrichment — skipped entirely for TERMINAL positions (improvement #8)
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Render a BundleContext as snapshot lines for the LLM. Each line is conditional —
+ * we skip nulls so the LLM doesn't see a wall of "N/A" entries. The freshness
+ * header tells the LLM whether the data is recent enough to cite without caveat.
+ */
+function buildBundleSnapshotLines(bc: BundleContext): string[] {
+  const lines: string[] = []
+
+  // Freshness header — tells the LLM whether to caveat the indicators
+  let freshnessNote: string
+  if (bc.hoursSinceBundle <= 6) {
+    freshnessNote = `Council bundle from ${bc.hoursSinceBundle}h ago — fresh, cite freely`
+  } else if (bc.hoursSinceBundle <= 24) {
+    freshnessNote = `Council bundle from ${bc.hoursSinceBundle}h ago — recent, mostly fresh`
+  } else if (bc.hoursSinceBundle <= 72) {
+    freshnessNote = `Council bundle from ${Math.round(bc.hoursSinceBundle / 24)}d ago — caveat technicals as "as of last Council run"`
+  } else {
+    freshnessNote = `Council bundle from ${Math.round(bc.hoursSinceBundle / 24)}d ago — STALE, suggest user run a fresh Council`
+  }
+  lines.push(`  Council bundle context: ${freshnessNote}`)
+
+  // Technicals
+  const techParts: string[] = []
+  if (bc.rsi !== null) techParts.push(`RSI ${bc.rsi}`)
+  if (bc.macdHistogram !== null) techParts.push(`MACD ${bc.macdHistogram > 0 ? '+' : ''}${bc.macdHistogram.toFixed(2)}`)
+  if (bc.atr !== null) techParts.push(`ATR ${bc.atr.toFixed(2)}`)
+  if (bc.volumeVs20Day !== null) techParts.push(`vol ${bc.volumeVs20Day.toFixed(1)}x 20d avg`)
+  if (techParts.length > 0) {
+    lines.push(`    Technicals: ${techParts.join(' | ')}`)
+  }
+
+  // Trend / SMA position
+  const trendParts: string[] = []
+  if (bc.trendLabel) trendParts.push(`trend: ${bc.trendLabel.replace(/_/g, ' ')}`)
+  if (bc.sma50Position) trendParts.push(`${bc.sma50Position} SMA50`)
+  if (bc.sma200Position && bc.pctFromSma200 !== null) {
+    trendParts.push(`${bc.pctFromSma200 >= 0 ? '+' : ''}${bc.pctFromSma200}% vs SMA200`)
+  }
+  if (trendParts.length > 0) {
+    lines.push(`    Trend: ${trendParts.join(' | ')}`)
+  }
+
+  // Smart money
+  if (bc.insiderSummary) {
+    lines.push(`    Insiders: ${bc.insiderSummary}`)
+  } else if (bc.insiderSignal && bc.insiderSignal !== 'neutral') {
+    const signalLabel = bc.insiderSignal.replace(/_/g, ' ')
+    const valueNote = bc.insiderNetValue !== null
+      ? ` (net $${(bc.insiderNetValue / 1_000_000).toFixed(1)}M)`
+      : ''
+    lines.push(`    Insiders: ${signalLabel}${valueNote}`)
+  }
+
+  // Fundamentals
+  const fundParts: string[] = []
+  if (bc.forwardPE !== null) fundParts.push(`Fwd P/E ${bc.forwardPE.toFixed(1)}`)
+  if (bc.trailingPE !== null && bc.forwardPE === null) fundParts.push(`P/E ${bc.trailingPE.toFixed(1)}`)
+  if (bc.daysToEarnings !== null) {
+    if (bc.daysToEarnings > 0) {
+      fundParts.push(`earnings in ${bc.daysToEarnings}d`)
+    } else if (bc.daysToEarnings === 0) {
+      fundParts.push('earnings today')
+    } else {
+      fundParts.push(`earnings ${Math.abs(bc.daysToEarnings)}d ago`)
+    }
+  }
+  if (fundParts.length > 0) {
+    lines.push(`    Fundamentals: ${fundParts.join(' | ')}`)
+  }
+  if (bc.cashAndRunway) {
+    lines.push(`    Cash & runway: ${bc.cashAndRunway}`)
+  }
+
+  // Conviction (the quantitative engine's standalone signal)
+  if (bc.convictionDirection && bc.convergenceScore !== null) {
+    lines.push(`    Conviction engine: ${bc.convictionDirection} (qual+quant convergence ${(bc.convergenceScore * 100).toFixed(0)}%)`)
+  }
+
+  return lines
+}
 
 async function enrichWithAI(checks: PositionCheck[]): Promise<PositionCheck[]> {
   if (!checks.length) return checks
@@ -1288,10 +1579,19 @@ async function enrichWithAI(checks: PositionCheck[]): Promise<PositionCheck[]> {
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
     const snapshot = enrichable.map(c => {
+      // Build a "Council bundle indicators" line. Sourced from the most recent
+      // analyses.signal_bundle for this user/ticker. When present, this gives
+      // the LLM real RSI/MACD/SMA/ATR/volume/insider/PE/runway/conviction data
+      // instead of "N/A" values from a Finnhub-only fetch.
+      const bc = c.bundleContext
+      const bundleLines = bc
+        ? buildBundleSnapshotLines(bc)
+        : []
+
       if (c.position_type === 'option') {
         const lines = [
           `${c.ticker} ${c.optionType?.toUpperCase()} $${c.strike} exp ${c.expiry} (${c.contracts}x contracts)`,
-          `  Underlying: $${c.underlyingPrice} (${c.underlyingChange1D >= 0 ? '+' : ''}${c.underlyingChange1D}% today) | RSI ${c.underlyingRsi ?? 'N/A'}`,
+          `  Underlying: $${c.underlyingPrice} (${c.underlyingChange1D >= 0 ? '+' : ''}${c.underlyingChange1D}% today) | RSI ${c.underlyingRsi ?? bc?.rsi ?? 'N/A'}`,
           `  Entry premium: ${c.entryPremium ? `$${c.entryPremium}` : 'N/A'} | Current mid: ${c.currentPremium ? `$${c.currentPremium}` : 'N/A'} | P&L on premium: ${c.optionPnlPct !== null ? `${c.optionPnlPct >= 0 ? '+' : ''}${c.optionPnlPct}% ($${c.optionPnlDollar})` : 'N/A'}`,
           `  Bid/Ask: ${c.bid !== null ? `$${c.bid.toFixed(2)}/$${c.ask?.toFixed(2)}` : 'N/A'}${c.realisticProceedsNote ? ` | Realistic proceeds: $${c.realisticProceedsLow?.toFixed(0)}-$${c.realisticProceedsHigh?.toFixed(0)}` : ''}`,
           `  Greeks: Delta ${c.delta ?? 'N/A'} | Theta ${c.theta ?? 'N/A'}/day | IV ${c.impliedVolatility ? `${(c.impliedVolatility*100).toFixed(0)}%` : 'N/A'}`,
@@ -1300,6 +1600,7 @@ async function enrichWithAI(checks: PositionCheck[]): Promise<PositionCheck[]> {
           `  Directional exposure: ${c.directionalExposure !== null ? '$' + c.directionalExposure.toFixed(0) : 'N/A'} (${c.directionalExposure !== null && c.directionalExposure < 0 ? 'bearish' : c.directionalExposure !== null && c.directionalExposure > 0 ? 'bullish' : 'flat'} on underlying via ${c.optionType})`,
           c.savePathSummary ? `  Save path: ${c.savePathSummary}` : '',
           c.councilHistory ? `  Council history: ${c.councilHistory.alignmentNote}${c.councilHistory.personaDisagreement ? ' ' + c.councilHistory.personaDisagreement : ''}` : '',
+          ...bundleLines,
           c.flags.length ? `  Flags: ${c.flags.join(', ')}` : '',
         ]
         return lines.filter(Boolean).join('\n')
@@ -1307,11 +1608,12 @@ async function enrichWithAI(checks: PositionCheck[]): Promise<PositionCheck[]> {
         const lines = [
           `${c.ticker} stock (${c.shares} shares @ $${c.entryPrice ?? '?'})`,
           `  Price: $${c.underlyingPrice} (${c.underlyingChange1D >= 0 ? '+' : ''}${c.underlyingChange1D}% today) | P&L: ${c.pnlPct !== null ? `${c.pnlPct >= 0 ? '+' : ''}${c.pnlPct}%` : 'N/A'} ($${c.pnlDollar ?? 0})`,
-          `  RSI ${c.underlyingRsi ?? 'N/A'} | Volume ${c.underlyingVolumeRatio ?? 'N/A'}x avg`,
+          `  RSI ${c.underlyingRsi ?? bc?.rsi ?? 'N/A'} | Volume ${c.underlyingVolumeRatio ?? bc?.volumeVs20Day ?? 'N/A'}x avg`,
           `  Directional exposure: ${c.directionalExposure !== null ? '$' + c.directionalExposure.toFixed(0) : 'N/A'} (long stock)`,
           c.stopLoss ? `  Stop: $${c.stopLoss} (${c.pctFromStop?.toFixed(1)}% away)` : '  No stop set',
           c.takeProfit ? `  Target: $${c.takeProfit} (${c.pctFromTarget?.toFixed(1)}% away)` : '  No target set',
           c.councilHistory ? `  Council history: ${c.councilHistory.alignmentNote}${c.councilHistory.personaDisagreement ? ' ' + c.councilHistory.personaDisagreement : ''}` : '',
+          ...bundleLines,
           c.flags.length ? `  Flags: ${c.flags.join(', ')}` : '',
         ]
         return lines.filter(Boolean).join('\n')
@@ -1324,6 +1626,17 @@ async function enrichWithAI(checks: PositionCheck[]): Promise<PositionCheck[]> {
     const systemPrompt = `Today is ${today} (ISO: ${todayISO}). This is the actual current date from server time. Trust user-supplied dates (option expirations, transaction dates) without arguing — they have a calendar, you don't.
 
 You are a trading coach reviewing live positions. Be direct and specific — cite the actual numbers from the snapshot. No fluff. For options, consider delta (directional exposure), theta (daily decay cost), IV level, moneyness, and days to expiry together. A 0.25 delta OTM call with 5 days left and 60% IV is a very different situation than a 0.55 delta ITM call with 30 days.
+
+When the snapshot includes "Council bundle context," cite the SPECIFIC indicators provided — RSI value, MACD direction, SMA position, volume ratio, insider signal, P/E, conviction score. Do NOT say "no momentum data available" if the bundle has values for these — that's wrong. The bundle context comes from the most recent full Council analysis and contains real indicator data. The freshness note tells you whether to cite freely (recent), caveat as "as of last Council run" (24-72h old), or recommend a fresh Council run (>72h old).
+
+Specifically, for stock positions:
+  - Cite RSI level by number ("RSI 65 — momentum strong but approaching overbought territory")
+  - Cite SMA200 position ("trading 12% above the 200-day average — extended but in clear uptrend")
+  - Cite volume context if present ("today's volume is 2.3x the 20-day average — institutional participation confirmed")
+  - Cite insider signal if non-neutral ("insiders selling $4.2M concentrated in CFO — minor concern but not thesis-breaking")
+  - Use forward P/E to ground valuation comments ("Fwd P/E 19.6 reflects priced-in growth")
+
+Generic momentum language without citing the actual indicators is a failure. If the bundle has the data, USE it.
 
 When the snapshot includes "Council history," weave it into your reasoning. If the user's position contradicts the most recent Council direction, name the contradiction and explain what it means for the exit decision. If the Council outcome is confirmed (correct/incorrect), use that to weight the alignment note.
 
