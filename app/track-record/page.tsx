@@ -12,7 +12,7 @@
 // in user-facing language.
 // =============================================================
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   ArrowLeft, LogOut, RefreshCw, Trophy, Sparkles, Target, TrendingUp,
@@ -22,6 +22,7 @@ import {
   SYSTEM_VERSIONS, getCurrentVersion, getVersionsNewestFirst,
   type SystemVersion,
 } from '@/app/lib/system-versions'
+import { VerdictList } from '@/app/components/VerdictList'
 
 interface VersionStats {
   hitRate1w: number | null
@@ -41,6 +42,23 @@ export default function TrackRecordPage() {
   const [statsByVersion, setStatsByVersion] = useState<Map<number, VersionStats>>(new Map())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  // Verdict-list filter wiring: when user clicks a version card, lock the list filter
+  // to that version and scroll the list into view.
+  const [filteredVersion, setFilteredVersion] = useState<number | null>(null)
+  const verdictListRef = useRef<HTMLDivElement | null>(null)
+
+  const handleVersionClick = useCallback((versionNumber: number) => {
+    setFilteredVersion(versionNumber)
+    // Defer scroll so React commits the state change first
+    setTimeout(() => {
+      verdictListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 50)
+  }, [])
+
+  const handleClearFilter = useCallback(() => {
+    setFilteredVersion(null)
+  }, [])
 
   const loadAll = useCallback(async () => {
     setLoading(true)
@@ -156,8 +174,17 @@ export default function TrackRecordPage() {
             stats={statsByVersion.get(version.number) ?? null}
             isCurrent={version.number === currentVersion.number}
             isLast={idx === versions.length - 1}
+            onClick={() => handleVersionClick(version.number)}
           />
         ))}
+
+        {/* Recent verdicts — the receipts */}
+        <div ref={verdictListRef} className="pt-2">
+          <VerdictList
+            externalVersion={filteredVersion}
+            onClearExternalVersion={handleClearFilter}
+          />
+        </div>
 
         {/* Footer note */}
         <div className="pt-4 pb-8 text-center">
@@ -175,12 +202,13 @@ export default function TrackRecordPage() {
 // ─────────────────────────────────────────────────────────────
 
 function VersionCard({
-  version, stats, isCurrent, isLast,
+  version, stats, isCurrent, isLast, onClick,
 }: {
   version: SystemVersion
   stats: VersionStats | null
   isCurrent: boolean
   isLast: boolean
+  onClick: () => void
 }) {
   const dateLabel = formatVersionDate(version.releasedAt)
 
@@ -215,9 +243,11 @@ function VersionCard({
           </div>
         </div>
 
-        {/* Card */}
-        <div
-          className="flex-1 rounded-xl border p-5"
+        {/* Card — clickable to filter verdict list */}
+        <button
+          type="button"
+          onClick={onClick}
+          className="flex-1 rounded-xl border p-5 text-left hover:border-white/20 transition-colors group cursor-pointer"
           style={{
             background: 'var(--surface)',
             borderColor: isCurrent ? 'rgba(52,211,153,0.25)' : 'var(--border)',
@@ -294,7 +324,15 @@ function VersionCard({
               </ul>
             </div>
           )}
-        </div>
+
+          {/* Click affordance */}
+          <div
+            className="mt-4 pt-3 text-[10px] font-mono text-white/30 group-hover:text-white/55 transition-colors flex items-center gap-1"
+            style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}
+          >
+            See verdicts from this version →
+          </div>
+        </button>
       </div>
     </section>
   )
