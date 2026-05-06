@@ -1521,7 +1521,7 @@ What TWO questions should the News Scout research right now to help you respond?
 
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
-    max_tokens: 800,
+    max_tokens: 1500,
     system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research from TWO of your questions. Use both responses. Defend your position where data supports you, concede where the Devil's Advocate is correct. Intellectual honesty wins with the Judge --- a thoughtful concession beats a dishonest defense.`,
     messages: [{
       role: 'user',
@@ -1538,12 +1538,10 @@ ${researchBlock}
 
 Now respond directly to each challenge. Reference the fresh research where relevant. Concede valid points --- you are not required to defend every position. Defend positions backed by data. Update your price target if warranted. CRITICAL: If the research came back inconclusive ("data not available," "not disclosed in filings," or otherwise failed to confirm or deny what was asked), treat that as a null finding --- NOT as evidence for or against your thesis. Do not write "the lack of X confirms my view" or similar constructions. If research was inconclusive, say so plainly and rely on your other evidence. This applies to PARTIAL nulls too. If the research returned some content but didn't address one of your sub-questions (e.g., gave you company financials but no comment on insider behavior), do not flag the missing sub-question as a "red flag" or use phrases like "notably lacks explanation." Use what the research DID provide; ignore what it didn't.
 
-JSON ONLY:
+JSON ONLY (do NOT echo the research questions or answers — they are already known on the server):
 {
   "signal": "BULLISH|BEARISH|NEUTRAL",
   "confidence": <0-100>,
-  "researchQuestions": ${JSON.stringify(researchQuestions)},
-  "researchAnswers": ${JSON.stringify(researchAnswers)},
   "rebuttal": "3-4 sentences directly responding to the challenges, referencing the fresh research",
   "concedes": ["specific points you now agree the Devil's Advocate got right --- be honest, 1-3 items"],
   "maintains": ["specific points you stand firm on with data backing --- 2-4 items"],
@@ -1613,7 +1611,7 @@ CALIBRATION: Yield on a challenge ONLY if the Lead Analyst directly refuted it A
 
   const completion = await getOpenAI().chat.completions.create({
     model: 'gpt-4o',
-    max_tokens: 700,
+    max_tokens: 1200,
     messages: [
       { role: 'system', content: counterSystem },
       { role: 'user', content: `YOUR ORIGINAL CHALLENGES: ${gpt.challenges.join('; ')}
@@ -1629,10 +1627,8 @@ ${researchBlock}
 
 Now fire back. Acknowledge where their rebuttal was convincing --- yielding on weak challenges strengthens your remaining ones. Use the fresh research to press on unresolved weaknesses. What must the Judge not ignore?
 
-JSON ONLY:
+JSON ONLY (do NOT echo the research questions or answers — they are already known on the server):
 {
-  "researchQuestions": ${JSON.stringify(researchQuestions)},
-  "researchAnswers": ${JSON.stringify(researchAnswers)},
   "finalChallenge": "2-3 sentences --- your strongest remaining challenge, referencing fresh research where relevant",
   "yieldsOn": ["points where their rebuttal directly refuted your challenge AND fresh research confirms the refutation --- 0-2 items, leave empty array if no genuine refutations"],
   "pressesOn": ["points that remain unresolved and the Judge must weigh --- 2-3 items"],
