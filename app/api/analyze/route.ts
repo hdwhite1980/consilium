@@ -5,6 +5,7 @@ import { runPipeline } from '@/app/lib/pipeline'
 import { runSocialScout } from '@/app/lib/social-scout'
 import { createServerClient } from '@/app/lib/supabase'
 import { createClient as createAuthClient } from '@/app/lib/auth/server'
+import { CURRENT_VERSION_NUMBER } from '@/app/lib/system-versions'
 
 export const maxDuration = 300
 
@@ -69,7 +70,6 @@ function projectOptionsForDashboard(of: any) {
   if (!of) return null
   return {
     putCallRatio: of.putCallRatio ?? null,
-    putCallOIRatio: of.putCallOIRatio ?? null,
     putCallSignal: of.putCallSignal ?? null,
     shortInterestPct: of.shortInterestPct ?? null,
     shortSignal: of.shortSignal ?? null,
@@ -128,6 +128,7 @@ function buildDashboardPayloadFromCache(sb: any) {
   if (!sb) return {
     technicals: null, conviction: null, fundamentals: null,
     smartMoney: null, options: null, marketContext: null,
+    extendedHours: null,
   }
   return {
     technicals: sb.technicals ?? null,
@@ -136,6 +137,9 @@ function buildDashboardPayloadFromCache(sb: any) {
     smartMoney: projectSmartMoneyForDashboard(sb.smartMoney),
     options: projectOptionsForDashboard(sb.options),
     marketContext: projectMarketContextForDashboard(sb.marketContext),
+    // Bug 20 (May 2026): pass through extended-hours data on cache hit
+    // so the dashboard renders the same shape regardless of live vs cached.
+    extendedHours: sb.extendedHours ?? null,
   }
 }
 
@@ -398,11 +402,16 @@ export async function POST(req: NextRequest) {
             // an identical shape regardless of cache vs live.
             fundamentals: bundle.fundamentals,
             smartMoney: bundle.smartMoney,
-            // Same Bug 7 pattern applied to options. Persist FULL optionsFlow
-            // object — narrow projection drops putCallOIRatio, totalCallOI,
-            // totalPutOI, ivSkew, gex, gexSignal, gexNote, avgIVCall/Put,
-            // shortRatio. Cache-replay re-projects via projectOptionsForDashboard.
-            options: bundle.optionsFlow,
+            options: {
+              putCallRatio: bundle.optionsFlow.putCallRatio,
+              putCallSignal: bundle.optionsFlow.putCallSignal,
+              shortInterestPct: bundle.optionsFlow.shortInterestPct,
+              shortSignal: bundle.optionsFlow.shortSignal,
+              unusualCount: bundle.optionsFlow.unusualActivity.length,
+              unusualActivity: bundle.optionsFlow.unusualActivity.slice(0, 3),
+              ivSignal: bundle.optionsFlow.ivSignal,
+              maxPainStrike: bundle.optionsFlow.maxPainStrike,
+            },
             marketContext: {
               regime: bundle.marketContext.regime,
               spy: bundle.marketContext.spy,
@@ -410,6 +419,13 @@ export async function POST(req: NextRequest) {
               sectorETF: bundle.marketContext.sectorETF,
               competitors: bundle.marketContext.competitors,
             },
+            // Bug 20 (May 2026): persist extended-hours snapshot so the
+            // dashboard, cache replay, and future cross-run consumers can
+            // reference pre-market / after-hours pricing alongside regular-
+            // session data. Will be null/undefined when getExtendedHoursContext
+            // returns the empty stub (Alpaca auth failure, ticker not covered,
+            // or market closed during quiet weekend hours with no recent prints).
+            extendedHours: bundle.extendedHours ?? null,
           },
         }).select().single()
         if (savedErr) {
@@ -466,7 +482,8 @@ export async function POST(req: NextRequest) {
                 trader_wait_conditions: result.trader?.waitConditions ?? null,
                 trader_rationale: result.trader?.rationale ?? null,
                 trader_evaluated_at: result.trader?.evaluatedAt ?? null,
-                code_era: 'post-fix-may-4-2026',
+                version_number: CURRENT_VERSION_NUMBER,
+                code_era: `v${CURRENT_VERSION_NUMBER}`,
               })
               if (vlErr) {
                 dlog(`!! verdict_log INSERT FAILED: ${vlErr.message}`, { code: vlErr.code })

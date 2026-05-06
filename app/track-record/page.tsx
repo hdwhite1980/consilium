@@ -1,237 +1,336 @@
-// ════════════════════════════════════════════════════════════════
+'use client'
+
+// =============================================================
 // app/track-record/page.tsx
 //
-// Server component shell for the public track record page.
+// Track Record page — version timeline + improvements log +
+// per-version hit-rate / direction-accuracy breakdown.
 //
-// Reads the wali_track_record_unlocked cookie:
-//   - present  -> renders <BacktestDashboard /> (full interactive client island)
-//   - missing  -> renders preview tiles + 3 most recent verdicts + <TrackRecordGate />
-//
-// The cookie is set server-side by /api/subscribe (httpOnly), so the gate
-// is genuinely server-enforced. A curl without the cookie cannot pull the
-// full dashboard HTML — it gets the preview shell only.
-// ════════════════════════════════════════════════════════════════
+// This is the "we work on this every week" surface. It's the
+// honest version of the dashboard — shows the system getting
+// better over time, with each version's improvements documented
+// in user-facing language.
+// =============================================================
 
-import { cookies } from 'next/headers'
-import Link from 'next/link'
-import { createClient } from '@/app/lib/auth/server'
-import BacktestDashboard from '@/app/components/BacktestDashboard'
-import TrackRecordGate from '@/app/components/TrackRecordGate'
+import { useState, useEffect, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
+import {
+  ArrowLeft, LogOut, RefreshCw, Trophy, Sparkles, Target, TrendingUp,
+  CheckCircle2, AlertCircle, Clock,
+} from 'lucide-react'
+import {
+  SYSTEM_VERSIONS, getCurrentVersion, getVersionsNewestFirst,
+  type SystemVersion,
+} from '@/app/lib/system-versions'
 
-export const dynamic = 'force-dynamic'
-export const runtime = 'nodejs'
-
-const UNLOCK_COOKIE_NAME = 'wali_track_record_unlocked'
-
-interface PreviewVerdict {
-  ticker: string
-  signal: string
-  confidence: number | null
-  verdict_date: string
-  entry_price: number | null
-  outcome_strict: string
-  outcome_price: number | null
-}
-
-interface PreviewStats {
+interface VersionStats {
+  hitRate1w: number | null
+  directionAcc1w: number | null
   totalVerdicts: number
-  hitRatePct: string | null
-  directionPct: string | null
-  recent: PreviewVerdict[]
+  gradedVerdicts: number
+  sampleNote: string | null
+  versionLabel: string
 }
 
-async function fetchPreviewStats(): Promise<PreviewStats | null> {
-  const base = process.env.NEXT_PUBLIC_APP_URL ?? 'https://wali-os.com'
-  try {
-    const res = await fetch(`${base}/api/backtest/stats?scope=public&horizon=1w`, {
-      cache: 'no-store',
-      headers: { 'x-internal': '1' },
-    })
-    if (!res.ok) return null
-    const json = await res.json()
-    if (!json || json.ok !== true) return null
+export default function TrackRecordPage() {
+  const router = useRouter()
+  const versions = getVersionsNewestFirst()
+  const currentVersion = getCurrentVersion()
 
-    const hitRate = json.overall?.hitRate?.hitRate
-    const direction = json.overall?.direction?.accuracy
+  const [statsByVersion, setStatsByVersion] = useState<Map<number, VersionStats>>(new Map())
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
-    const recent: PreviewVerdict[] = Array.isArray(json.recent)
-      ? json.recent.slice(0, 3).map((r: PreviewVerdict) => ({
-          ticker: String(r.ticker ?? ''),
-          signal: String(r.signal ?? ''),
-          confidence: typeof r.confidence === 'number' ? r.confidence : null,
-          verdict_date: String(r.verdict_date ?? ''),
-          entry_price: typeof r.entry_price === 'number' ? r.entry_price : null,
-          outcome_strict: String(r.outcome_strict ?? 'pending'),
-          outcome_price: typeof r.outcome_price === 'number' ? r.outcome_price : null,
-        }))
-      : []
-
-    return {
-      totalVerdicts: typeof json.totalVerdicts === 'number' ? json.totalVerdicts : 0,
-      hitRatePct: typeof hitRate === 'number' ? (hitRate * 100).toFixed(1) + '%' : null,
-      directionPct: typeof direction === 'number' ? (direction * 100).toFixed(1) + '%' : null,
-      recent,
+  const loadAll = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const results = await Promise.all(
+        versions.map(async v => {
+          const res = await fetch(`/api/track-record/stats?version=${v.number}&source=track-record`)
+          if (!res.ok) throw new Error(`Failed to load ${v.label}`)
+          return [v.number, await res.json()] as [number, VersionStats]
+        }),
+      )
+      setStatsByVersion(new Map(results))
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setLoading(false)
     }
-  } catch (e) {
-    console.error('[track-record] preview fetch failed:', (e as Error).message)
-    return null
+  }, [versions])
+
+  useEffect(() => { loadAll() }, [loadAll])
+
+  const handleSignOut = async () => {
+    try { await fetch('/api/auth/session', { method: 'DELETE' }) } catch { /* ignore */ }
+    try {
+      Object.keys(localStorage).filter(k => k.startsWith('sb-')).forEach(k => localStorage.removeItem(k))
+      document.cookie.split(';').forEach(c => {
+        const name = c.split('=')[0].trim()
+        if (name.startsWith('sb-')) {
+          document.cookie = name + '=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+        }
+      })
+    } catch { /* ignore */ }
+    window.location.replace('/login')
   }
-}
-
-export default async function TrackRecordPage() {
-  const cookieStore = await cookies()
-  const unlocked = cookieStore.get(UNLOCK_COOKIE_NAME)?.value === '1'
-
-  // Logged-in users bypass the gate entirely — we already have their email
-  // from signup, so the lead-capture form is pointless. Wrap in try/catch
-  // because auth failures shouldn't break the page; worst case we fall
-  // through to the cookie-only check below.
-  let isAuthenticated = false
-  try {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    isAuthenticated = !!user
-  } catch {
-    isAuthenticated = false
-  }
-
-  if (unlocked || isAuthenticated) {
-    return <BacktestDashboard />
-  }
-
-  const stats = await fetchPreviewStats()
 
   return (
-    <div className="min-h-screen t-bg t-text">
-      <div className="max-w-6xl mx-auto px-4 py-8">
-        {/* Header */}
-        <div className="mb-8">
-          <Link href="/" className="text-blue-400 hover:text-blue-300 text-sm">{'\u2190'} Back</Link>
-          <h1 className="text-3xl font-bold mt-2 t-text">Wali-OS Verdict Track Record</h1>
-          <p className="t-text2 mt-2">
-            Transparent backtest of every non-neutral AI council verdict. Updated daily.
+    <div className="flex flex-col min-h-screen" style={{ background: 'var(--bg)', color: 'var(--text)' }}>
+
+      {/* Header */}
+      <header
+        className="flex flex-wrap items-center gap-2 px-3 py-3 border-b sticky top-0 z-10"
+        style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
+      >
+        <button onClick={() => router.push('/')} className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/70">
+          <ArrowLeft size={13} />
+          Back
+        </button>
+        <div className="w-px h-4" style={{ background: 'var(--border)' }} />
+        <div className="flex items-center gap-2">
+          <Trophy size={14} style={{ color: '#fbbf24' }} />
+          <span className="text-sm font-bold">Track Record</span>
+        </div>
+        <span className="text-[10px] font-mono text-white/25">how the system is improving</span>
+
+        <div className="ml-auto flex items-center gap-3">
+          <button
+            onClick={handleSignOut}
+            className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/70"
+          >
+            <LogOut size={13} />
+          </button>
+        </div>
+      </header>
+
+      <main className="flex-1 max-w-4xl mx-auto w-full px-3 py-5 space-y-6">
+
+        {/* Intro */}
+        <section
+          className="rounded-xl p-5 border"
+          style={{
+            background: 'linear-gradient(135deg, rgba(251,191,36,0.04) 0%, rgba(167,139,250,0.04) 100%)',
+            borderColor: 'rgba(251,191,36,0.18)',
+          }}
+        >
+          <div className="flex items-start gap-3">
+            <Sparkles size={20} style={{ color: '#fbbf24' }} className="mt-0.5 shrink-0" />
+            <div>
+              <h1 className="text-lg font-bold mb-1.5">A system that gets better with each version</h1>
+              <p className="text-sm text-white/65 leading-relaxed">
+                Wali-OS is actively developed. Each version brings refinements to how evidence is gathered,
+                how risk is evaluated, and how trade plans are constructed. This page tracks every release
+                with its measured outcomes — including the periods where the numbers were worse, because
+                that's how progress actually looks.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* Loading / error */}
+        {loading && (
+          <div className="flex items-center justify-center py-10">
+            <RefreshCw size={18} className="animate-spin text-white/30" />
+            <span className="ml-2 text-xs text-white/40">Loading versions…</span>
+          </div>
+        )}
+        {error && (
+          <div className="rounded-xl border p-4 flex items-start gap-2"
+            style={{ background: 'rgba(248,113,113,0.05)', borderColor: 'rgba(248,113,113,0.2)' }}>
+            <AlertCircle size={14} style={{ color: '#f87171' }} className="shrink-0 mt-0.5" />
+            <div>
+              <div className="text-xs font-semibold" style={{ color: '#f87171' }}>Failed to load</div>
+              <p className="text-[11px] text-white/55 mt-0.5">{error}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Version timeline */}
+        {!loading && !error && versions.map((version, idx) => (
+          <VersionCard
+            key={version.number}
+            version={version}
+            stats={statsByVersion.get(version.number) ?? null}
+            isCurrent={version.number === currentVersion.number}
+            isLast={idx === versions.length - 1}
+          />
+        ))}
+
+        {/* Footer note */}
+        <div className="pt-4 pb-8 text-center">
+          <p className="text-[10px] text-white/25 font-mono leading-relaxed">
+            Outcomes are computed from real market data once 5 trading days have elapsed since a verdict.
+            <br />
+            New versions need ~30 graded outcomes before their hit rate is statistically meaningful.
           </p>
         </div>
+      </main>
+    </div>
+  )
+}
 
-        {/* Headline tiles (preview) */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-          <div className="t-card rounded p-6">
-            <div className="t-text2 text-sm mb-1">Total Verdicts</div>
-            <div className="text-3xl font-bold t-text">
-              {stats?.totalVerdicts.toLocaleString() ?? '\u2014'}
-            </div>
-            <div className="text-xs t-text3 mt-1">non-neutral calls tracked</div>
-          </div>
-          <div className="t-card rounded p-6">
-            <div className="t-text2 text-sm mb-1">Hit Rate (1w)</div>
-            <div className="text-3xl font-bold text-green-400">
-              {stats?.hitRatePct ?? '\u2014'}
-            </div>
-            <div className="text-xs t-text3 mt-1">target hit vs stop hit</div>
-          </div>
-          <div className="t-card rounded p-6">
-            <div className="t-text2 text-sm mb-1">Direction Accuracy (1w)</div>
-            <div className="text-3xl font-bold text-blue-400">
-              {stats?.directionPct ?? '\u2014'}
-            </div>
-            <div className="text-xs t-text3 mt-1">price moved in right direction</div>
+// ─────────────────────────────────────────────────────────────
+
+function VersionCard({
+  version, stats, isCurrent, isLast,
+}: {
+  version: SystemVersion
+  stats: VersionStats | null
+  isCurrent: boolean
+  isLast: boolean
+}) {
+  const dateLabel = formatVersionDate(version.releasedAt)
+
+  // Color theme by maturity
+  const maturityColor =
+    version.maturity === 'preview' ? '#fbbf24' :
+    version.maturity === 'mature'  ? '#34d399' :
+    /* historical */                 '#94a3b8'
+
+  return (
+    <section className="relative">
+
+      {/* Vertical timeline line (continues to next version) */}
+      {!isLast && (
+        <div
+          className="absolute left-3 top-12 bottom-[-1.5rem] w-px"
+          style={{ background: 'rgba(255,255,255,0.08)' }}
+        />
+      )}
+
+      <div className="flex gap-4">
+        {/* Timeline dot */}
+        <div className="shrink-0 mt-3">
+          <div
+            className="w-6 h-6 rounded-full flex items-center justify-center"
+            style={{
+              background: isCurrent ? 'rgba(52,211,153,0.18)' : 'rgba(255,255,255,0.05)',
+              border: `2px solid ${isCurrent ? '#34d399' : 'rgba(255,255,255,0.15)'}`,
+            }}
+          >
+            {isCurrent && <CheckCircle2 size={12} style={{ color: '#34d399' }} />}
           </div>
         </div>
 
-        {/* Methodology callout */}
-        <div className="bg-blue-950/30 border border-blue-900/50 rounded p-5 mb-8">
-          <h2 className="font-semibold text-blue-300 mb-2">How we measure the track record</h2>
-          <p className="text-sm t-text2 leading-relaxed">
-            Every non-neutral AI council verdict is logged with its entry price, stop, and target.
-            Outcomes are resolved against real market data: a verdict is a <span className="text-green-400">win</span> if
-            price hits the target, a <span className="text-red-400">loss</span> if it hits the stop,
-            and <span className="t-text3">expired</span> otherwise. Hit rate excludes expired
-            verdicts. Direction accuracy measures whether price moved the predicted direction
-            regardless of stop/target. Updated daily at 4am ET. NEUTRAL verdicts are excluded.
-          </p>
-        </div>
+        {/* Card */}
+        <div
+          className="flex-1 rounded-xl border p-5"
+          style={{
+            background: 'var(--surface)',
+            borderColor: isCurrent ? 'rgba(52,211,153,0.25)' : 'var(--border)',
+          }}
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-base font-bold">{version.label}</h2>
+              {isCurrent && (
+                <span
+                  className="text-[9px] font-mono px-1.5 py-0.5 rounded uppercase tracking-widest"
+                  style={{ background: 'rgba(52,211,153,0.12)', color: '#34d399', border: '1px solid rgba(52,211,153,0.25)' }}
+                >
+                  current
+                </span>
+              )}
+              <span
+                className="text-[9px] font-mono px-1.5 py-0.5 rounded uppercase tracking-widest"
+                style={{ background: `${maturityColor}10`, color: maturityColor, border: `1px solid ${maturityColor}25` }}
+              >
+                {version.maturity}
+              </span>
+            </div>
+            <span className="text-[11px] font-mono text-white/35">{dateLabel}</span>
+          </div>
+          {version.subtitle && (
+            <p className="text-xs text-white/55 italic mb-3">{version.subtitle}</p>
+          )}
 
-        {/* Filter row (visible but disabled) */}
-        <div className="flex flex-wrap gap-3 mb-6 text-sm opacity-50 pointer-events-none select-none">
-          <div className="flex t-surface rounded overflow-hidden">
-            <button disabled className="px-4 py-2 bg-blue-600 text-white">All Users</button>
-            <button disabled className="px-4 py-2 t-text2">My Verdicts</button>
-          </div>
-          <div className="flex t-surface rounded overflow-hidden">
-            <button disabled className="px-4 py-2 t-text2">1 Day</button>
-            <button disabled className="px-4 py-2 bg-blue-600 text-white">1 Week</button>
-            <button disabled className="px-4 py-2 t-text2">1 Month</button>
-          </div>
-          <select disabled className="t-surface t-border t-text border rounded px-3 py-2">
-            <option>All personas</option>
-          </select>
-          <select disabled className="t-surface t-border t-text border rounded px-3 py-2">
-            <option>All timeframes</option>
-          </select>
-        </div>
+          {/* Summary */}
+          <p className="text-sm text-white/75 leading-relaxed mb-4">{version.summary}</p>
 
-        {/* 3 most recent verdicts */}
-        <div className="t-card rounded overflow-hidden mb-8">
-          <div className="px-4 py-3 border-b t-border">
-            <h2 className="font-semibold t-text">Most Recent Verdicts</h2>
-            <div className="text-xs t-text3 mt-1">Showing 3 of {stats?.totalVerdicts ?? 0} {'\u2014'} unlock to see all</div>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="t-surface3 t-text2 text-xs">
-                <tr>
-                  <th className="px-3 py-2 text-left">Date</th>
-                  <th className="px-3 py-2 text-left">Ticker</th>
-                  <th className="px-3 py-2 text-left">Signal</th>
-                  <th className="px-3 py-2 text-right">Confidence</th>
-                  <th className="px-3 py-2 text-right">Entry</th>
-                  <th className="px-3 py-2 text-right">Close@1w</th>
-                  <th className="px-3 py-2 text-left">Outcome</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(stats?.recent ?? []).map((v, i) => {
-                  const outcomeColor =
-                    v.outcome_strict === 'win' ? 'text-green-400' :
-                    v.outcome_strict === 'loss' ? 'text-red-400' :
-                    v.outcome_strict === 'expired' ? 't-text3' :
-                    'text-yellow-400'
-                  const outcomeLabel =
-                    v.outcome_strict === 'win' ? 'Win' :
-                    v.outcome_strict === 'loss' ? 'Loss' :
-                    v.outcome_strict === 'expired' ? 'Expired' :
-                    'Pending'
-                  return (
-                    <tr key={i} style={{ borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
-                      <td className="px-3 py-2 t-text2">{v.verdict_date}</td>
-                      <td className="px-3 py-2 font-mono font-semibold t-text">{v.ticker}</td>
-                      <td className={`px-3 py-2 font-semibold ${v.signal === 'BULLISH' ? 'text-green-400' : 'text-red-400'}`}>
-                        {v.signal}
-                      </td>
-                      <td className="px-3 py-2 text-right t-text">{v.confidence ?? '\u2014'}%</td>
-                      <td className="px-3 py-2 text-right font-mono t-text">{v.entry_price ? '$' + v.entry_price.toFixed(2) : '\u2014'}</td>
-                      <td className="px-3 py-2 text-right font-mono t-text">{v.outcome_price ? '$' + v.outcome_price.toFixed(2) : '\u2014'}</td>
-                      <td className={`px-3 py-2 ${outcomeColor}`}>{outcomeLabel}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-          {(!stats || stats.recent.length === 0) && (
-            <div className="p-8 text-center t-text3">
-              No verdicts to display yet.
+          {/* Stats strip */}
+          {stats && (
+            <div
+              className="rounded-lg p-3 mb-4"
+              style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}
+            >
+              {stats.sampleNote && (
+                <div
+                  className="px-2.5 py-1.5 rounded-md text-[10px] font-mono mb-2"
+                  style={{
+                    background: 'rgba(251,191,36,0.06)',
+                    color: '#fbbf24',
+                    border: '1px solid rgba(251,191,36,0.15)',
+                  }}
+                >
+                  <Clock size={10} className="inline mr-1" style={{ verticalAlign: 'middle' }} />
+                  {stats.sampleNote}
+                </div>
+              )}
+              <div className="grid grid-cols-3 gap-3">
+                <Stat label="Hit rate" value={stats.hitRate1w} suffix="%" accent="#34d399" icon={<Target size={11} />} />
+                <Stat label="Direction" value={stats.directionAcc1w} suffix="%" accent="#60a5fa" icon={<TrendingUp size={11} />} />
+                <Stat label="Verdicts" value={stats.totalVerdicts} suffix="" accent="rgba(255,255,255,0.65)" detail={`${stats.gradedVerdicts} graded`} />
+              </div>
+            </div>
+          )}
+
+          {/* Improvements list */}
+          {version.improvements.length > 0 && (
+            <div>
+              <div className="text-[10px] font-mono uppercase tracking-widest text-white/35 mb-2">
+                What improved
+              </div>
+              <ul className="space-y-1.5">
+                {version.improvements.map((imp, i) => (
+                  <li key={i} className="flex items-start gap-2 text-[13px] text-white/70 leading-relaxed">
+                    <CheckCircle2 size={11} style={{ color: '#34d399', marginTop: 4, flexShrink: 0 }} />
+                    <span>{imp}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
         </div>
-
-        {/* Email gate */}
-        <TrackRecordGate />
-
-        <div className="mt-8 text-xs t-text3 text-center">
-          Outcomes updated daily at 4am ET. NEUTRAL verdicts excluded from all stats.
-        </div>
       </div>
+    </section>
+  )
+}
+
+function Stat({
+  label, value, suffix, accent, icon, detail,
+}: {
+  label: string
+  value: number | null
+  suffix: string
+  accent: string
+  icon?: React.ReactNode
+  detail?: string
+}) {
+  const display = value === null ? '—'
+    : suffix === '%' ? `${value.toFixed(1)}${suffix}`
+    : `${value}${suffix}`
+  return (
+    <div>
+      <div className="flex items-center gap-1 text-[9px] font-mono uppercase tracking-widest text-white/35 mb-0.5">
+        {icon}
+        {label}
+      </div>
+      <div className="text-lg font-bold font-mono" style={{ color: value === null ? 'rgba(255,255,255,0.3)' : accent }}>
+        {display}
+      </div>
+      {detail && (
+        <div className="text-[9px] font-mono text-white/30 mt-0.5">{detail}</div>
+      )}
     </div>
   )
+}
+
+// ─────────────────────────────────────────────────────────────
+
+function formatVersionDate(iso: string): string {
+  const d = new Date(iso)
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
