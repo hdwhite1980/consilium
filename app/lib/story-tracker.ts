@@ -44,7 +44,7 @@ export const IDLE_RUN_THRESHOLD = 7
 export type Signal = 'BULLISH' | 'BEARISH' | 'NEUTRAL'
 export type Status = 'active' | 'playing_out' | 'resolved'
 export type SessionAnchor = 'today' | 'tomorrow' | 'weekend'
-export type AssetType = 'stock' | 'crypto'
+export type AssetType = 'stock' | 'crypto' | 'forex'
 export type Magnitude = 'high' | 'medium' | 'low'
 export type RiskLevel = 'high' | 'medium' | 'low'
 export type Timeframe = '1D' | '1W' | '1M' | '3M'
@@ -80,12 +80,16 @@ export interface TrackedStory {
   verified: boolean | null
   verificationSources: string[] | null
   verificationNote: string | null
+  /** Spot price when the story was first created (immutable audit trail). Null if lookup failed. */
+  entryPrice: number | null
+  /** ISO timestamp the entry price was captured (~= firstSeen). Null if entry_price is null. */
+  entryPriceAt: string | null
   resolvedAt: string | null
   resolutionReason: string | null
   resolvedBy: ResolvedBy | null
 }
 
-/** Shape that the LLM produces for a NEW story. */
+/** Shape that the LLM produces for a NEW story. Caller injects entryPrice after the price lookup. */
 export interface NewStoryInput {
   ticker: string
   companyName?: string
@@ -99,6 +103,10 @@ export interface NewStoryInput {
   reason?: string
   headline?: string
   riskLevel?: RiskLevel
+  /** Spot price at the moment of creation. Caller (cron route) fetches via fetchCurrentPrice() before passing. */
+  entryPrice?: number | null
+  /** ISO timestamp of the entry-price lookup. */
+  entryPriceAt?: string | null
 }
 
 /** Shape the LLM produces when updating an existing story. */
@@ -142,6 +150,15 @@ function getAdmin() {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function rowToStory(r: any): TrackedStory {
+  // Postgres NUMERIC columns may serialize as strings depending on driver — coerce defensively
+  const entryPriceRaw = r.entry_price
+  const entryPrice =
+    entryPriceRaw === null || entryPriceRaw === undefined
+      ? null
+      : typeof entryPriceRaw === 'number'
+        ? entryPriceRaw
+        : Number(entryPriceRaw)
+
   return {
     id: r.id,
     ticker: r.ticker,
@@ -164,6 +181,8 @@ function rowToStory(r: any): TrackedStory {
     verified: r.verified ?? null,
     verificationSources: r.verification_sources ?? null,
     verificationNote: r.verification_note ?? null,
+    entryPrice: Number.isFinite(entryPrice) ? entryPrice : null,
+    entryPriceAt: r.entry_price_at ?? null,
     resolvedAt: r.resolved_at ?? null,
     resolutionReason: r.resolution_reason ?? null,
     resolvedBy: r.resolved_by ?? null,
@@ -257,6 +276,8 @@ export async function insertStory(input: NewStoryInput, runId: number): Promise<
       risk_level: input.riskLevel ?? null,
       last_touched_run: runId,
       updates: [],
+      entry_price: input.entryPrice ?? null,
+      entry_price_at: input.entryPriceAt ?? null,
     })
     .select('id')
     .single()

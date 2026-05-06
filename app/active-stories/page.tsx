@@ -12,7 +12,7 @@ import { MoversHitRateWidget } from '@/app/components/MoversHitRateWidget'
 // ── Types ──────────────────────────────────────────────────────
 type Signal = 'BULLISH' | 'BEARISH' | 'NEUTRAL'
 type SessionAnchor = 'today' | 'tomorrow' | 'weekend'
-type AssetType = 'stock' | 'crypto'
+type AssetType = 'stock' | 'crypto' | 'forex'
 type Magnitude = 'high' | 'medium' | 'low'
 type RiskLevel = 'high' | 'medium' | 'low'
 type Timeframe = '1D' | '1W' | '1M' | '3M'
@@ -48,6 +48,12 @@ interface TrackedStory {
   verified: boolean | null
   verificationSources: string[] | null
   verificationNote: string | null
+  // Bug 23: entry price (from cron creation) + live current price + delta
+  entryPrice: number | null
+  entryPriceAt: string | null
+  currentPrice: number | null
+  currentPriceAt: string | null
+  pctChangeFromEntry: number | null
 }
 
 interface ActiveStoriesPayload {
@@ -161,6 +167,47 @@ function confidenceColor(c: number): { color: string; bg: string; border: string
   return { color: '#94a3b8', bg: 'rgba(148,163,184,0.10)', border: 'rgba(148,163,184,0.18)' }
 }
 
+/**
+ * Format a price with appropriate precision based on magnitude.
+ * Forex pairs (typically 0.5–250) and small-cap crypto need more decimals;
+ * stocks and large-cap crypto are fine with 2.
+ */
+function formatPrice(price: number, assetType: AssetType): string {
+  if (!Number.isFinite(price) || price <= 0) return '—'
+  if (assetType === 'forex') {
+    // JPY pairs hover around 100-200, others 0.6-1.5 — 4 decimals covers both
+    return price >= 50 ? price.toFixed(2) : price.toFixed(4)
+  }
+  if (assetType === 'crypto') {
+    if (price >= 100) return price.toFixed(2)
+    if (price >= 1) return price.toFixed(3)
+    if (price >= 0.01) return price.toFixed(4)
+    return price.toFixed(6)
+  }
+  return price.toFixed(2)
+}
+
+/**
+ * Determine delta color based on whether the price move is "in the
+ * direction of the signal" (thesis working) or against (thesis hurting).
+ *   - BULLISH + price up   → green (working)
+ *   - BULLISH + price down → red (against)
+ *   - BEARISH + price down → green (working)
+ *   - BEARISH + price up   → red (against)
+ *   - NEUTRAL              → grey (no thesis direction)
+ *   - |delta| < 0.5%        → grey (noise)
+ */
+function deltaColor(pct: number, signal: Signal): { color: string; label: string } {
+  if (Math.abs(pct) < 0.5) return { color: '#94a3b8', label: 'flat' }
+  const movedUp = pct > 0
+  if (signal === 'NEUTRAL') return { color: '#94a3b8', label: movedUp ? 'up' : 'down' }
+  const thesisWorking =
+    (signal === 'BULLISH' && movedUp) ||
+    (signal === 'BEARISH' && !movedUp)
+  if (thesisWorking) return { color: '#34d399', label: 'thesis working' }
+  return { color: '#f87171', label: 'against thesis' }
+}
+
 function urgencyColor(u: string): string {
   if (u === 'critical') return '#f87171'
   if (u === 'high') return '#fbbf24'
@@ -223,6 +270,10 @@ function StoryCard({ story, onAnalyze }: { story: TrackedStory; onAnalyze: (tick
                   <span className="text-[9px] px-1.5 py-0.5 rounded font-mono"
                     style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>CRYPTO</span>
                 )}
+                {story.assetType === 'forex' && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded font-mono"
+                    style={{ background: 'rgba(96,165,250,0.15)', color: '#60a5fa' }}>FOREX</span>
+                )}
               </div>
             </div>
           </div>
@@ -264,6 +315,40 @@ function StoryCard({ story, onAnalyze }: { story: TrackedStory; onAnalyze: (tick
             <span className="text-white/25 text-xs">{expanded ? '▲' : '▼'}</span>
           </div>
         </div>
+
+        {/* Price strip — Bug 23: entry price + live current price + delta */}
+        {(story.entryPrice !== null || story.currentPrice !== null) && (
+          <div className="flex items-center gap-2 mt-2.5 flex-wrap text-[11px] font-mono">
+            {story.entryPrice !== null && (
+              <span className="text-white/45">
+                <span className="text-[9px] text-white/25 uppercase tracking-wider mr-1">entry</span>
+                ${formatPrice(story.entryPrice, story.assetType)}
+              </span>
+            )}
+            {story.entryPrice !== null && story.currentPrice !== null && (
+              <span className="text-white/15">→</span>
+            )}
+            {story.currentPrice !== null && (
+              <span className="text-white/75 font-semibold">
+                <span className="text-[9px] text-white/25 uppercase tracking-wider mr-1">now</span>
+                ${formatPrice(story.currentPrice, story.assetType)}
+              </span>
+            )}
+            {story.pctChangeFromEntry !== null && (() => {
+              const d = deltaColor(story.pctChangeFromEntry, story.signal)
+              const sign = story.pctChangeFromEntry >= 0 ? '+' : ''
+              return (
+                <span
+                  className="px-1.5 py-0.5 rounded text-[10px] font-bold"
+                  style={{ background: `${d.color}15`, color: d.color, border: `1px solid ${d.color}30` }}
+                  title={d.label}
+                >
+                  {sign}{story.pctChangeFromEntry.toFixed(2)}%
+                </span>
+              )
+            })()}
+          </div>
+        )}
 
         <div className="flex items-center gap-2 mt-3 flex-wrap">
           {story.timeframes.map(tf => (

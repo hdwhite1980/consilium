@@ -19,11 +19,13 @@ import {
   type SessionAnchor,
   type Signal,
   type Timeframe,
+  type TrackedStory,
 } from '@/app/lib/story-tracker'
+import { fetchCurrentPricesMany } from '@/app/lib/data/current-price'
 import type { ActiveStoriesPayload } from '@/app/lib/types/active-stories'
 
 export const runtime = 'nodejs'
-export const maxDuration = 10
+export const maxDuration = 15  // bumped from 10 to accommodate price fetches
 
 const VALID_SESSIONS: SessionAnchor[] = ['today', 'tomorrow', 'weekend']
 
@@ -54,8 +56,12 @@ export async function GET(req: NextRequest) {
       admin.from('active_stories_meta').select('*').eq('id', 1).maybeSingle(),
     ])
 
+    // Bug 23: enrich with live current price (60s cache server-side, so repeated
+    // page loads within a minute don't re-hit external APIs)
+    const enrichedStories = await enrichWithCurrentPrice(stories)
+
     // Build counts breakdown
-    const counts = computeCounts(stories)
+    const counts = computeCounts(enrichedStories)
 
     // Assemble payload
     const meta = metaRes.data
@@ -65,13 +71,13 @@ export async function GET(req: NextRequest) {
       marketTheme: meta?.market_theme ?? '',
       marketStatus: meta?.market_status ?? '',
       summary: meta?.summary ?? '',
-      stories,
+      stories: enrichedStories,
       counts,
     }
 
     return NextResponse.json(payload, {
       headers: {
-        // Cache for 60s — cron runs every few hours, so a minute of staleness is fine
+        // Cache for 60s — matches the price-cache TTL
         'Cache-Control': 'private, max-age=60',
       },
     })
@@ -83,12 +89,73 @@ export async function GET(req: NextRequest) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Live price enrichment
+//
+// Stories are stored without current price — only entry price is
+// persisted. On every GET, we look up live prices for the displayed
+// set in parallel (60s in-memory cache deduplicates repeated loads).
+// ─────────────────────────────────────────────────────────────
+
+interface EnrichedTrackedStory extends TrackedStory {
+  currentPrice: number | null
+  currentPriceAt: string | null
+  /** % change from entryPrice → currentPrice. Null if either is missing. */
+  pctChangeFromEntry: number | null
+}
+
+async function enrichWithCurrentPrice(stories: TrackedStory[]): Promise<EnrichedTrackedStory[]> {
+  if (stories.length === 0) return []
+
+  // Dedupe by ticker (multiple stories on same ticker get one lookup)
+  const uniqueTickers = new Map<string, { ticker: string; assetType: string }>()
+  for (const s of stories) {
+    const key = `${s.ticker}:${s.assetType}`
+    if (!uniqueTickers.has(key)) {
+      uniqueTickers.set(key, { ticker: s.ticker, assetType: s.assetType })
+    }
+  }
+
+  let lookups: Awaited<ReturnType<typeof fetchCurrentPricesMany>>
+  try {
+    lookups = await fetchCurrentPricesMany(Array.from(uniqueTickers.values()))
+  } catch (e) {
+    // Lookup failure is non-fatal — we just return stories without current prices
+    console.warn('[active-stories GET] price enrichment failed, returning stories without current prices:', e instanceof Error ? e.message : e)
+    return stories.map(s => ({
+      ...s,
+      currentPrice: null,
+      currentPriceAt: null,
+      pctChangeFromEntry: null,
+    }))
+  }
+
+  return stories.map(s => {
+    const lookup = lookups.get(s.ticker.toUpperCase())
+    const currentPrice = lookup?.price ?? null
+    const currentPriceAt = lookup?.fetchedAt ?? null
+    let pctChangeFromEntry: number | null = null
+    if (
+      s.entryPrice !== null && s.entryPrice !== undefined && s.entryPrice > 0 &&
+      currentPrice !== null && currentPrice > 0
+    ) {
+      pctChangeFromEntry = ((currentPrice - s.entryPrice) / s.entryPrice) * 100
+    }
+    return {
+      ...s,
+      currentPrice,
+      currentPriceAt,
+      pctChangeFromEntry,
+    }
+  })
+}
+
+// ─────────────────────────────────────────────────────────────
 // Counts helper — gives the dashboard a quick breakdown for
 // rendering counts/badges by session/timeframe/signal.
 // ─────────────────────────────────────────────────────────────
 
 function computeCounts(
-  stories: Awaited<ReturnType<typeof loadStoriesBySession>>,
+  stories: TrackedStory[],
 ): ActiveStoriesPayload['counts'] {
   const bySession: Record<SessionAnchor, number> = { today: 0, tomorrow: 0, weekend: 0 }
   const byTimeframe: Record<Timeframe, number> = { '1D': 0, '1W': 0, '1M': 0, '3M': 0 }

@@ -30,6 +30,7 @@ import {
   type RunSummary,
 } from '@/app/lib/story-tracker'
 import { classifyActiveStories } from '@/app/lib/active-stories-classifier'
+import { fetchCurrentPricesMany } from '@/app/lib/data/current-price'
 
 // Vercel cron config — runs 6am/12pm/5pm/9pm ET (10/16/21/01 UTC during EDT)
 // Configure in vercel.json — this route is the target.
@@ -159,14 +160,31 @@ async function runCron(req: NextRequest) {
       }
     }
 
-    // ── Step 7: insert new stories ────────────────────────────
+    // ── Step 7: fetch entry prices then insert new stories ───
+    // Bug 23: capture spot price at the moment of creation (immutable
+    // audit trail). Lookups run in parallel; failures don't block insertion.
     let addedCount = 0
-    for (const n of classification.newStories) {
-      try {
-        await insertStory(n, runId)
-        addedCount++
-      } catch (e) {
-        console.warn(`[active-stories cron] runId=${runId} insertStory failed for ${n.ticker}:`, e instanceof Error ? e.message : e)
+    if (classification.newStories.length > 0) {
+      const priceLookups = await fetchCurrentPricesMany(
+        classification.newStories.map(n => ({ ticker: n.ticker, assetType: n.assetType })),
+      )
+      for (const n of classification.newStories) {
+        const lookup = priceLookups.get(n.ticker.toUpperCase())
+        const enriched = {
+          ...n,
+          // Apply auto-corrected asset type so the DB row is canonical
+          assetType: lookup?.assetType ?? n.assetType ?? 'stock',
+          entryPrice: lookup?.price ?? null,
+          entryPriceAt: lookup?.price !== null && lookup?.price !== undefined
+            ? lookup.fetchedAt
+            : null,
+        }
+        try {
+          await insertStory(enriched, runId)
+          addedCount++
+        } catch (e) {
+          console.warn(`[active-stories cron] runId=${runId} insertStory failed for ${n.ticker}:`, e instanceof Error ? e.message : e)
+        }
       }
     }
     summary.storiesAdded = addedCount

@@ -66,6 +66,19 @@ export interface LLMClassificationOutput {
 // ─────────────────────────────────────────────────────────────
 
 /**
+ * Story decorated with live current-price data for the dashboard.
+ * The cron persists entryPrice + entryPriceAt at insert time; the GET
+ * endpoint enriches with currentPrice + currentPriceAt fetched live
+ * (cached 60s server-side).
+ */
+export interface EnrichedTrackedStory extends TrackedStory {
+  currentPrice: number | null
+  currentPriceAt: string | null
+  /** % change from entryPrice → currentPrice. Null if either price is missing. */
+  pctChangeFromEntry: number | null
+}
+
+/**
  * Output of the GET endpoint that the unified Active Stories page reads.
  * Stories are returned as a flat list; the frontend filters by
  * sessionAnchor (toggle) and groups within each session by timeframe.
@@ -76,7 +89,7 @@ export interface ActiveStoriesPayload {
   marketTheme: string
   marketStatus: string
   summary: string
-  stories: TrackedStory[]        // active + playing_out, sorted by confidence desc
+  stories: EnrichedTrackedStory[]  // active + playing_out, sorted by confidence desc; enriched with live prices
   counts: {
     total: number
     bySession: Record<SessionAnchor, number>
