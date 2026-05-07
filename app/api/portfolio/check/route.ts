@@ -222,6 +222,26 @@ export interface BundleContext {
   convictionDirection: string | null
   /** 0-1 score: how well the qualitative + quantitative layers agree */
   convergenceScore: number | null
+
+  // ── Options flow (from bundle.optionsFlow) ──────────────────
+  // Surfaced for Health Check narrative — gives the LLM real options data
+  // to cite when assessing whether a position is held in supportive or
+  // contrary flow context. Not the full chain (Health Check isn't picking
+  // strikes), just the highest-signal aggregated data points.
+  /** Put/Call volume ratio (1.0 = balanced, >1.0 = more puts than calls trading) */
+  putCallRatio: number | null
+  /** Pre-computed signal label: 'bullish' | 'neutral' | 'bearish' (high P/C often = squeeze potential) */
+  putCallSignal: string | null
+  /** Implied-volatility signal: 'elevated' | 'normal' | 'compressed' relative to historical */
+  ivSignal: string | null
+  /** Gamma exposure direction: 'positive' (mean-reversion regime) | 'negative' (trending regime) */
+  gexSignal: string | null
+  /** Max pain strike — price gravitates here at expiry, useful pinning context */
+  maxPainStrike: number | null
+  /** Count of unusual sweeps detected, with the most notable summarized for narrative */
+  unusualSweepCount: number | null
+  /** Pre-computed summary of the most notable unusual sweep, e.g. "$140 put 1886 vol vs 384 OI" */
+  topUnusualSweep: string | null
 }
 
 interface OptionDataResult {
@@ -855,6 +875,38 @@ async function fetchBundleContext(
       : null
     const convergenceScore = numericOrNull(conv.convergenceScore ?? conv.convergence_score ?? null)
 
+    // ── Options flow ───────────────────────────────────────────
+    // Reads from bundle.optionsFlow (post Bug-24 persistence). Null-safe
+    // for older rows that predate the persistence fix — we just get nulls
+    // and the buildBundleSnapshotLines helper skips lines for null values.
+    const oflow = bundle.optionsFlow ?? null
+    const putCallRatio = numericOrNull(oflow?.putCallRatio ?? null)
+    const putCallSignal: string | null = typeof oflow?.putCallSignal === 'string' ? oflow.putCallSignal : null
+    const ivSignal: string | null = typeof oflow?.ivSignal === 'string' ? oflow.ivSignal : null
+    const gexSignal: string | null = typeof oflow?.gexSignal === 'string' ? oflow.gexSignal : null
+    const maxPainStrike = numericOrNull(oflow?.maxPainStrike ?? null)
+    const unusualSweeps = Array.isArray(oflow?.unusualActivity) ? oflow.unusualActivity : []
+    const unusualSweepCount = unusualSweeps.length
+    // Summarize the most notable unusual sweep for narrative use. Pick the one
+    // with the largest vol/OI ratio (the strongest signal of flagged activity).
+    let topUnusualSweep: string | null = null
+    if (unusualSweepCount > 0) {
+      const top = [...unusualSweeps]
+        .filter(u => u && typeof u === 'object')
+        .sort((a, b) => (numericOrNull(b.volOIRatio) ?? 0) - (numericOrNull(a.volOIRatio) ?? 0))[0]
+      if (top) {
+        const strikeStr = numericOrNull(top.strike) !== null ? `$${top.strike}` : '?'
+        const typeStr = top.type ?? '?'
+        const expStr = top.expiry ?? '?'
+        const volStr = numericOrNull(top.volume) !== null ? top.volume.toLocaleString() : '?'
+        const oiStr = numericOrNull(top.openInterest) !== null ? top.openInterest.toLocaleString() : '?'
+        const ratioStr = numericOrNull(top.volOIRatio) !== null
+          ? `${top.volOIRatio.toFixed(1)}× vol/OI`
+          : ''
+        topUnusualSweep = `${strikeStr} ${typeStr} ${expStr} — vol ${volStr} vs OI ${oiStr}${ratioStr ? ` (${ratioStr})` : ''}`
+      }
+    }
+
     return {
       bundleAt,
       hoursSinceBundle,
@@ -875,6 +927,13 @@ async function fetchBundleContext(
       cashAndRunway,
       convictionDirection,
       convergenceScore,
+      putCallRatio,
+      putCallSignal,
+      ivSignal,
+      gexSignal,
+      maxPainStrike,
+      unusualSweepCount,
+      topUnusualSweep,
     }
   } catch (e) {
     console.warn('[portfolio/check] bundleContext lookup failed:', (e as Error).message?.slice(0, 100))
@@ -1565,6 +1624,33 @@ function buildBundleSnapshotLines(bc: BundleContext): string[] {
     lines.push(`    Conviction engine: ${bc.convictionDirection} (qual+quant convergence ${(bc.convergenceScore * 100).toFixed(0)}%)`)
   }
 
+  // Options flow — surface the highest-signal aggregated data points.
+  // Only render lines when there's actually a non-neutral signal or notable
+  // activity, otherwise it's just noise ("P/C neutral, IV neutral, GEX neutral").
+  const optionsParts: string[] = []
+  if (bc.putCallRatio !== null && bc.putCallSignal && bc.putCallSignal !== 'neutral') {
+    optionsParts.push(`P/C ${bc.putCallRatio.toFixed(2)} (${bc.putCallSignal})`)
+  } else if (bc.putCallRatio !== null && bc.putCallRatio > 1.5) {
+    // Even neutral-labeled but elevated P/C is worth noting (squeeze potential)
+    optionsParts.push(`P/C ${bc.putCallRatio.toFixed(2)} (elevated)`)
+  }
+  if (bc.ivSignal && bc.ivSignal !== 'neutral' && bc.ivSignal !== 'normal') {
+    optionsParts.push(`IV ${bc.ivSignal}`)
+  }
+  if (bc.gexSignal && bc.gexSignal !== 'neutral') {
+    optionsParts.push(`GEX ${bc.gexSignal}`)
+  }
+  if (bc.maxPainStrike !== null) {
+    optionsParts.push(`max pain $${bc.maxPainStrike.toFixed(2)}`)
+  }
+  if (optionsParts.length > 0) {
+    lines.push(`    Options flow: ${optionsParts.join(' | ')}`)
+  }
+  // Unusual sweep gets its own line because it's narrative-rich
+  if (bc.unusualSweepCount !== null && bc.unusualSweepCount > 0 && bc.topUnusualSweep) {
+    lines.push(`    Unusual sweeps (${bc.unusualSweepCount}): ${bc.topUnusualSweep}`)
+  }
+
   return lines
 }
 
@@ -1635,6 +1721,10 @@ Specifically, for stock positions:
   - Cite volume context if present ("today's volume is 2.3x the 20-day average — institutional participation confirmed")
   - Cite insider signal if non-neutral ("insiders selling $4.2M concentrated in CFO — minor concern but not thesis-breaking")
   - Use forward P/E to ground valuation comments ("Fwd P/E 19.6 reflects priced-in growth")
+  - Cite options flow context if present — high P/C ratio = squeeze potential, max pain strike = pinning risk into expiry, unusual sweeps = follow-the-flow alignment or warning. Examples:
+    - "P/C 1.71 (elevated) — heavy put buying creates squeeze potential when fundamentals are improving, supportive of the long position"
+    - "Max pain at $48 below your entry $49.27 suggests pinning pressure at expiry; consider taking profits before monthly OPEX if held into that window"
+    - "Unusual sweep on $55 calls expiring next month aligns with your long position — flow is supportive"
 
 Generic momentum language without citing the actual indicators is a failure. If the bundle has the data, USE it.
 

@@ -130,12 +130,17 @@ function buildDashboardPayloadFromCache(sb: any) {
     smartMoney: null, options: null, marketContext: null,
     extendedHours: null,
   }
+  // Bug 24 fix: read from full 'optionsFlow' first (current persistence shape),
+  // fall back to legacy 'options' key for cache rows from before the rename.
+  // Cache TTLs are 20-60 min so the fallback only matters during the deploy
+  // transition window — after that all rows have 'optionsFlow'.
+  const optionsSource = sb.optionsFlow ?? sb.options ?? null
   return {
     technicals: sb.technicals ?? null,
     conviction: projectConvictionForDashboard(sb.conviction),
     fundamentals: projectFundamentalsForDashboard(sb.fundamentals),
     smartMoney: projectSmartMoneyForDashboard(sb.smartMoney),
-    options: projectOptionsForDashboard(sb.options),
+    options: projectOptionsForDashboard(optionsSource),
     marketContext: projectMarketContextForDashboard(sb.marketContext),
     // Bug 20 (May 2026): pass through extended-hours data on cache hit
     // so the dashboard renders the same shape regardless of live vs cached.
@@ -402,16 +407,18 @@ export async function POST(req: NextRequest) {
             // an identical shape regardless of cache vs live.
             fundamentals: bundle.fundamentals,
             smartMoney: bundle.smartMoney,
-            options: {
-              putCallRatio: bundle.optionsFlow.putCallRatio,
-              putCallSignal: bundle.optionsFlow.putCallSignal,
-              shortInterestPct: bundle.optionsFlow.shortInterestPct,
-              shortSignal: bundle.optionsFlow.shortSignal,
-              unusualCount: bundle.optionsFlow.unusualActivity.length,
-              unusualActivity: bundle.optionsFlow.unusualActivity.slice(0, 3),
-              ivSignal: bundle.optionsFlow.ivSignal,
-              maxPainStrike: bundle.optionsFlow.maxPainStrike,
-            },
+            // Bug 24 (May 2026): persist the FULL optionsFlow object under
+            // its canonical key 'optionsFlow' (matching the bundle shape).
+            // Previously persisted as a narrow 'options' projection that
+            // dropped putCallOIRatio, totalCallOI, totalPutOI, gex, gexSignal,
+            // gexNote, ivSkew, full unusualActivity array, and others.
+            // Same pattern as the fundamentals/smartMoney fix above:
+            //   - Live runs: dashboard gets narrow shape via SSE market_data event
+            //   - Cache hits: buildDashboardPayloadFromCache re-projects narrow
+            //     shape from this full object
+            //   - Health Check fetchBundleContext + Council Options View (Judge
+            //     prompt) now get the full options data as source-of-truth
+            optionsFlow: bundle.optionsFlow,
             marketContext: {
               regime: bundle.marketContext.regime,
               spy: bundle.marketContext.spy,
