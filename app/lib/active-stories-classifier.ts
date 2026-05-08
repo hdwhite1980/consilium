@@ -68,9 +68,10 @@ ${recentUpdates || '       (none)'}`
  * timeframe vs session distinction explicit.
  */
 function buildSystemPrompt(): string {
-  return `You are a financial analyst running an Active Stories tracking system. You see TWO inputs every run:
+  return `You are a financial analyst running an Active Stories tracking system. You see THREE inputs every run:
   (1) Stories already being tracked from prior runs (the "active stories" list)
   (2) Fresh news since the last run
+  (3) Scheduled catalysts for the next trading session (earnings calendar, economic events, after-hours moves)
 
 Your output has THREE parts:
   - storyUpdates: changes to existing stories (new info, signal/confidence changes, mark playing-out, mark resolved)
@@ -111,7 +112,19 @@ CORE PRINCIPLES:
 
 9. MAGNITUDE: high = expecting 5%+ move, medium = 2-5%, low = <2%.
 
-10. STRICT JSON OUTPUT. No markdown fences, no preamble, no explanatory text outside JSON. Use plain numbers (no $ signs, no commas).`
+10. STRICT JSON OUTPUT. No markdown fences, no preamble, no explanatory text outside JSON. Use plain numbers (no $ signs, no commas).
+
+11. SCHEDULED CATALYSTS DRIVE TOMORROW STORIES. The third input — "SCHEDULED CATALYSTS" — lists earnings reports, economic events (FOMC, CPI, NFP, jobs), and after-hours moves expected to be in focus the next trading session. When this input is non-empty, create stories anchored to sessionAnchor='tomorrow' (or 'weekend' if next trading day is Mon and we're currently Fri after-hours, Sat, or Sun) for the most notable scheduled events. Tomorrow stories must explicitly reference the SCHEDULED nature: "MSFT reports earnings tomorrow after close, options pricing ±3.8% move into the print" — NOT "MSFT had a strong day today."
+
+12. NOTABLE SCHEDULED CATALYSTS ONLY. Quality over volume. From the scheduled-catalysts list, only create tomorrow/weekend stories for:
+   - Earnings: large-cap names ($5B+ market cap typically), market-moving names with options interest, sector bellwethers, or names with notable EPS beat/miss potential vs. estimate
+   - Macro events: Fed decisions, CPI/PPI prints, NFP/jobs reports, major central-bank events — these create sector and macro plays (banks/rate-sensitives for FOMC, USD pairs for jobs, etc.)
+   - After-hours moves: large reactions (>3%) on today's reporters that imply continuation or reversal into next session
+   Skip small-cap earnings without analyst coverage, scheduled events with minor market impact, sub-1% after-hours moves. 5-10 tomorrow stories total is a healthy run; if the calendar is quiet, return zero — do NOT manufacture stories from thin air.
+
+13. WEEKEND DETECTION. If the "Now" timestamp in run context falls on a Saturday, Sunday, or Friday after 4pm ET, OR if the scheduled catalysts list shows the next event is on Monday, use sessionAnchor='weekend' for those scheduled-catalyst stories instead of 'tomorrow'. Active stories already tracking next-week catalysts should keep their existing sessionAnchor unless the catalyst moves.
+
+14. DO NOT DUPLICATE TOMORROW STORIES. If the scheduled catalysts list shows AAPL earnings tomorrow but an active story is already tracking AAPL with a tomorrow anchor for the same catalyst, that's an UPDATE (storyUpdates), not a new story. Continuity rule applies the same way.`
 }
 
 /**
@@ -123,11 +136,21 @@ function buildUserPrompt(params: {
   regime: MarketRegime
   activeStories: TrackedStory[]
   newsBlock: string
+  scheduledCatalysts: string | null
   now: Date
 }): string {
-  const { runId, triggerSource, regime, activeStories, newsBlock, now } = params
+  const { runId, triggerSource, regime, activeStories, newsBlock, scheduledCatalysts, now } = params
   const nowStr = now.toISOString()
   const day = nowStr.slice(0, 10)
+
+  // Build the scheduled-catalysts section. When empty, we render an explicit
+  // "no notable scheduled catalysts" line so the LLM doesn't manufacture
+  // tomorrow stories from thin air. The principle 11/12 in the system prompt
+  // expects this block; absent it, those rules don't fire.
+  const catalystsBlock = scheduledCatalysts && scheduledCatalysts.trim().length > 0
+    ? scheduledCatalysts
+    : '(No notable scheduled catalysts surfaced for the next session. Do NOT create tomorrow/weekend stories this run.)'
+
   return `RUN CONTEXT
   Run ID: ${runId}
   Triggered by: ${triggerSource}
@@ -143,6 +166,9 @@ ${formatActiveStoriesBlock(activeStories)}
 FRESH NEWS HEADLINES (deduped, since last run):
 ${newsBlock}
 
+SCHEDULED CATALYSTS (next trading session — earnings, economic events, after-hours moves):
+${catalystsBlock}
+
 Now produce your classification. Walk through these steps in order:
 
   STEP 1 — REVIEW EXISTING STORIES. For each active story above, decide:
@@ -152,13 +178,15 @@ Now produce your classification. Walk through these steps in order:
     - Has signal/confidence shifted? Update both fields and explain in the note.
     - If none of the above and the story is unchanged, simply omit it from storyUpdates (this counts as "leave alone").
 
-  STEP 2 — IDENTIFY NEW STORIES. From the fresh news, what catalysts AREN'T already covered by the active stories? Those become newStories. Each new story needs:
+  STEP 2 — IDENTIFY TODAY-ANCHORED NEW STORIES. From the fresh news, what catalysts AREN'T already covered by the active stories? Those become newStories with sessionAnchor='today'. Each new story needs:
     - A clear catalyst (not just mention)
     - Confidence ≥ 60
     - One or more timeframe tags
     - A session anchor
 
-  STEP 3 — PRODUCE METADATA. marketTheme is the single dominant theme this run. marketStatus is one sentence on overall mood. summary is 2-3 sentences on the most important takeaways.
+  STEP 3 — IDENTIFY TOMORROW/WEEKEND NEW STORIES from SCHEDULED CATALYSTS. If the scheduled-catalysts block contains notable events (large-cap earnings, FOMC/CPI/jobs data, significant after-hours moves), create stories anchored to sessionAnchor='tomorrow' — or 'weekend' if it's Friday after 4pm ET, Saturday, Sunday, or the next event is Monday. Apply principle 12 — quality over volume; skip small-cap earnings without coverage and trivial events. Tomorrow/weekend stories must explicitly reference the SCHEDULED nature in the catalyst and reason fields. If the scheduled-catalysts block says "(No notable scheduled catalysts...)" — return zero tomorrow/weekend stories.
+
+  STEP 4 — PRODUCE METADATA. marketTheme is the single dominant theme this run (today's news AND tomorrow's setup). marketStatus is one sentence on overall mood. summary is 2-3 sentences on the most important takeaways INCLUDING what's on the docket for next session.
 
 OUTPUT JSON ONLY (no preamble, no markdown):
 {
@@ -187,11 +215,25 @@ OUTPUT JSON ONLY (no preamble, no markdown):
       "reason": "Plain English explanation of why this matters at the tagged horizons",
       "headline": "the exact headline driving this",
       "riskLevel": "medium"
+    },
+    {
+      "ticker": "MSFT",
+      "companyName": "Microsoft Corp",
+      "assetType": "stock",
+      "signal": "BULLISH",
+      "confidence": 70,
+      "magnitude": "medium",
+      "timeframes": ["1D", "1W"],
+      "sessionAnchor": "tomorrow",
+      "catalyst": "Q1 earnings tomorrow after close — options pricing ±3.8% move; consensus Azure growth +30% YoY",
+      "reason": "Mega-cap earnings into a risk-on backdrop with cloud growth as the swing factor; bullish setup conditional on Azure beat, but options market is pricing a bigger move than historical avg suggesting elevated tension. Watch for guidance vs. estimates as the primary swing factor.",
+      "headline": "Microsoft to report Q1 earnings tomorrow AMC",
+      "riskLevel": "medium"
     }
   ],
-  "marketTheme": "single dominant theme this run",
+  "marketTheme": "single dominant theme this run (today AND what's on the docket for tomorrow)",
   "marketStatus": "one sentence on overall market mood given the regime",
-  "summary": "2-3 sentences on the most important takeaways from this run"
+  "summary": "2-3 sentences on the most important takeaways from this run, including next-session catalysts when notable"
 }`
 }
 
@@ -328,6 +370,12 @@ export interface ClassifyParams {
   regime: MarketRegime
   activeStories: TrackedStory[]
   newsBlock: string
+  /** Pre-formatted scheduled-catalysts block from forward-data.ts.
+   *  Pass `null` or empty string if the forward-data fetch failed or
+   *  the calendar is empty — the prompt will render an explicit
+   *  "no notable scheduled catalysts" line and the LLM will return
+   *  zero tomorrow/weekend stories. */
+  scheduledCatalysts?: string | null
   now?: Date
 }
 
@@ -352,6 +400,7 @@ export async function classifyActiveStories(
     regime: params.regime,
     activeStories: params.activeStories,
     newsBlock: params.newsBlock,
+    scheduledCatalysts: params.scheduledCatalysts ?? null,
     now: params.now ?? new Date(),
   })
 

@@ -31,6 +31,7 @@ import {
 } from '@/app/lib/story-tracker'
 import { classifyActiveStories } from '@/app/lib/active-stories-classifier'
 import { fetchCurrentPricesMany } from '@/app/lib/data/current-price'
+import { fetchForwardContext, formatForwardContextForPrompt } from '@/app/lib/forward-data'
 
 // Vercel cron config — runs 6am/12pm/5pm/9pm ET (10/16/21/01 UTC during EDT)
 // Configure in vercel.json — this route is the target.
@@ -93,14 +94,24 @@ async function runCron(req: NextRequest) {
     summary.storiesActiveBefore = activeBefore.length
     console.log(`[active-stories cron] runId=${runId} loaded ${activeBefore.length} active stories`)
 
-    // ── Step 2: fetch news + regime in parallel ───────────────
+    // ── Step 2: fetch news + regime + forward context in parallel ──
     const fetchStart = Date.now()
-    const [newsResult, regime] = await Promise.all([
+    const [newsResult, regime, forwardContext] = await Promise.all([
       fetchMultiSourceNews({ includeCrypto: true }),
       getMarketRegime(),
+      // Forward-context failures don't block the run — we just pass null
+      // to the classifier and it renders an explicit "no scheduled catalysts"
+      // line, returning zero tomorrow/weekend stories rather than manufacturing.
+      fetchForwardContext().catch(e => {
+        console.warn(`[active-stories cron] forward-context fetch failed:`, (e as Error).message?.slice(0, 100))
+        return null
+      }),
     ])
     const newsBlock = formatNewsForPrompt(newsResult.items, 60)
-    console.log(`[active-stories cron] runId=${runId} fetched ${newsResult.counts.afterDedupe} headlines + regime=${regime.regime} in ${Date.now() - fetchStart}ms`)
+    const scheduledCatalysts = forwardContext
+      ? formatForwardContextForPrompt(forwardContext)
+      : null
+    console.log(`[active-stories cron] runId=${runId} fetched ${newsResult.counts.afterDedupe} headlines + regime=${regime.regime} + forward=${forwardContext ? 'OK' : 'NULL'} in ${Date.now() - fetchStart}ms`)
 
     // ── Step 3: classify with Claude ──────────────────────────
     const classifyStart = Date.now()
@@ -110,6 +121,7 @@ async function runCron(req: NextRequest) {
       regime,
       activeStories: activeBefore,
       newsBlock,
+      scheduledCatalysts,
     })
     console.log(`[active-stories cron] runId=${runId} classified in ${Date.now() - classifyStart}ms (updates=${classification.storyUpdates.length} new=${classification.newStories.length})`)
 
