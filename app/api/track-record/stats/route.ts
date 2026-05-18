@@ -99,6 +99,12 @@ async function computeStats(version: SystemVersion | null): Promise<Stats> {
   const totalVerdicts = rows.length
 
   // Hit rate: target hit / (target hit + stop hit), excluding expired
+  // Direction accuracy: price moved in predicted direction at 1W mark.
+  //   Both columns use the same vocabulary: 'win' | 'loss' | 'pending' | 'expired'
+  //   - outcome_1w_strict: 'win' = target hit first, 'loss' = stop hit first, 'expired' = neither hit within 1W
+  //   - outcome_1w_directional: 'win' = price moved in predicted direction, 'loss' = opposite direction
+  //     (Naming is a bit confusing — the column is named "directional" but uses the same
+  //      win/loss vocabulary as the strict column, just with a looser definition of "win.")
   let wins = 0
   let losses = 0
   let directionCorrect = 0
@@ -108,8 +114,8 @@ async function computeStats(version: SystemVersion | null): Promise<Stats> {
     if (r.outcome_1w_strict === 'win') wins++
     else if (r.outcome_1w_strict === 'loss') losses++
 
-    if (r.outcome_1w_directional === 'correct') directionCorrect++
-    else if (r.outcome_1w_directional === 'incorrect') directionIncorrect++
+    if (r.outcome_1w_directional === 'win') directionCorrect++
+    else if (r.outcome_1w_directional === 'loss') directionIncorrect++
   }
 
   const gradedVerdicts = wins + losses
