@@ -1275,6 +1275,40 @@ export async function runTargetedResearch(
     ? `\nFRESH LIVE DATA (just fetched):\n${liveDataParts.join('\n\n')}`
     : ''
 
+  // ── Smart-money short-circuit (Bug 27, May 2026) ──────────────────
+  // When a question is PURELY about smart-money categories (insider,
+  // congressional, institutional) and NOT about other dimensions, we
+  // return the bundle data DIRECTLY without calling Gemini. This is
+  // the surgical fix for the LI Berkshire hallucination:
+  //
+  //   Lead R2 asked: "What are Berkshire's holdings in LI?"
+  //   Bundle correctly reported: "No 13F holder data available"
+  //   Gemini IGNORED the bundle's no-data statement and fabricated
+  //   "Berkshire initiated 39.81M share position valued at $2,646.53 billion"
+  //
+  // The bundle's smart-money data is EDGAR-sourced ground truth (Bug 5
+  // fix). When the question is purely about these EDGAR categories,
+  // there's no value in passing it through an LLM for "synthesis" —
+  // the LLM just hallucinates against the ground truth. Return the
+  // bundle data verbatim and trust the personas to read it correctly.
+  //
+  // Why only fire when smart-money is the EXCLUSIVE dimension:
+  // mixed questions like "what's Berkshire saying about EV demand"
+  // legitimately need news/sentiment context too. Pure questions like
+  // "what are institutional positions in LI" don't.
+  const isSmartMoneyOnly =
+    (needsInsider || needsCongress || needsInstitutional) &&
+    !needsNews && !needsFundamentals && !needsOptions &&
+    !needsTechnicals && !needsMacro && !needsSentiment
+
+  if (isSmartMoneyOnly && liveDataParts.length > 0) {
+    // Return the bundle data directly. Honest answer including
+    // "no data available" when that's the truth. No LLM call,
+    // no opportunity for hallucination.
+    const header = `[Smart-money data, EDGAR-sourced. The bundle is the source of truth — no specific institutional/insider/congressional claims should be made beyond what's shown here.]`
+    return (header + '\n\n' + liveDataParts.join('\n\n')).slice(0, 1500)
+  }
+
   const sections: string[] = []
   if (needsNews || !needsTechnicals) sections.push(bundle.aiContext.newsSection)
   if (needsTechnicals) sections.push(bundle.aiContext.technicalsSection)
@@ -1283,6 +1317,14 @@ export async function runTargetedResearch(
   if (needsMacro) sections.push(bundle.aiContext.marketSection)
   if (needsOptions || needsTechnicals) sections.push(bundle.aiContext.smartMoneySection)
   if (context && !sections.some(s => s === context)) sections.push(context)
+
+  // ── Gemini prompt hardening (Bug 27) ──────────────────────────────
+  // Even when we DO call Gemini (mixed-dimension questions), explicitly
+  // forbid fabricating smart-money specifics. The bundle's no-data
+  // statements should be respected, not "filled in" from training data.
+  const smartMoneyGuardrail = (needsInsider || needsCongress || needsInstitutional)
+    ? `\n\nCRITICAL: If the question touches institutional positions, insider transactions, congressional trades, 13F filings, or named fund holdings: ONLY cite specifics that appear in the LIVE DATA section. If LIVE DATA says "No X data available", report that fact — do NOT invent specific share counts, fund names, transaction values, or filing dates from outside the LIVE DATA. Pattern-matching plausible-sounding institutional claims from training data is FORBIDDEN. "I don't see institutional data in the bundle" is the correct answer when LIVE DATA shows no holdings.`
+    : ''
 
   const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro']
   for (const modelName of GEMINI_MODELS) {
@@ -1297,7 +1339,7 @@ ${liveData}
 SIGNAL DATA FROM BUNDLE:
 ${sections.join('\n\n')}
 
-Answer in 2-4 sentences using the freshest data available, prioritizing the LIVE DATA section if present. When FRESH HEADLINES are shown, cite at least one by timestamp if it's directly relevant. When LIVE X SENTIMENT is shown, reference it explicitly. Include specific numbers, dates, and percentages. Be direct and decisive --- this goes straight into the debate. If the data genuinely doesn't support the question, say so clearly.`)
+Answer in 2-4 sentences using the freshest data available, prioritizing the LIVE DATA section if present. When FRESH HEADLINES are shown, cite at least one by timestamp if it's directly relevant. When LIVE X SENTIMENT is shown, reference it explicitly. Include specific numbers, dates, and percentages. Be direct and decisive --- this goes straight into the debate. If the data genuinely doesn't support the question, say so clearly.${smartMoneyGuardrail}`)
       return result.response.text().trim().slice(0, 700)
     } catch (e) {
       const msg = (e as Error).message ?? ''
