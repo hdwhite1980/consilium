@@ -18,7 +18,6 @@
 // =============================================================
 
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/app/lib/auth/server'
 import { createClient as createAdmin } from '@supabase/supabase-js'
 import { getVersionByNumber } from '@/app/lib/system-versions'
 
@@ -67,12 +66,22 @@ function getAdmin() {
 
 export async function GET(req: NextRequest) {
   try {
-    // Auth
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    // NOTE: This endpoint is intentionally PUBLIC.
+    //
+    // Companion to the public /api/track-record/stats endpoint. The
+    // track-record page is a conversion surface — anonymous visitors must
+    // see both the aggregated stats AND the individual verdict receipts
+    // before deciding whether to sign up. Gating verdicts behind auth
+    // hides the proof that backs the stats numbers.
+    //
+    // The exposed data is per-verdict trade-plan metadata (entry/stop/target,
+    // signal, confidence, outcome) — this is marketing-grade transparency,
+    // analogous to what trading services publish in their track record
+    // pages. No PII, no user accounts, no sensitive system internals.
+    //
+    // The previous 401 broke the page's primary purpose. If email
+    // collection is ever wanted on this surface, it should be a softer
+    // mechanism (e.g., inline newsletter form) rather than a hard wall.
 
     const url = new URL(req.url)
     const versionParam = url.searchParams.get('version') ?? 'all'
@@ -171,7 +180,10 @@ export async function GET(req: NextRequest) {
     }
 
     return NextResponse.json(payload, {
-      headers: { 'Cache-Control': 'private, max-age=60' },
+      // Public cache: response is identical for all visitors. Short window
+      // (60s) because new verdicts can arrive any time and visitors expect
+      // recent data to appear quickly.
+      headers: { 'Cache-Control': 'public, max-age=60, s-maxage=60' },
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Unknown error'
