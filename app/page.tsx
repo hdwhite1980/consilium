@@ -388,6 +388,13 @@ function HomeInner() {
   const [err, setErr]           = useState<string | null>(null)
   const [cached, setCached]     = useState<{ at: string; ageMinutes: number } | null>(null)
 
+  // Judge Reviewer payload — shipped via the new judge_review_done SSE event.
+  // Null when reviewer didn't run (legacy pipeline) or hasn't completed yet.
+  // Shape mirrors the judge_review_pipeline JSONB column on analyses.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [judgeReview, setJudgeReview] = useState<any | null>(null)
+  const [reviewExpanded, setReviewExpanded] = useState(false)
+
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -534,7 +541,7 @@ function HomeInner() {
   const run = useCallback(async () => {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
-    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setSoc(null); setErr(null); setCached(null); setVerify(null); setTrader(null)
+    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setSoc(null); setErr(null); setCached(null); setVerify(null); setTrader(null); setJudgeReview(null); setReviewExpanded(false)
 
     try {
       const res = await fetch('/api/analyze', {
@@ -574,7 +581,8 @@ function HomeInner() {
             case 'counter_start':  setStage('counter' as Stage); scroll(); break
             case 'counter_done':   setCtr(data); scroll(); break
             case 'judge_start':  setStage('judge'); scroll(); break
-            case 'judge_done':   setJud(data); scroll(); break
+            case 'judge_done':        setJud(data); scroll(); break
+            case 'judge_review_done': setJudgeReview(data); break
             case 'verification_done': setVerify(data); scroll(); break
             case 'complete':     setStage('done'); if (data.cached) setCached({ at: data.cachedAt, ageMinutes: data.ageMinutes }); scroll(); break
             case 'error':        setStage('error'); setErr(data.message); break
@@ -591,7 +599,7 @@ function HomeInner() {
   const forceRun = useCallback(async () => {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
-    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setSoc(null); setErr(null); setCached(null); setVerify(null); setTrader(null)
+    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setSoc(null); setErr(null); setCached(null); setVerify(null); setTrader(null); setJudgeReview(null); setReviewExpanded(false)
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
@@ -628,7 +636,8 @@ function HomeInner() {
             case 'counter_start':  setStage('counter' as Stage); scroll(); break
             case 'counter_done':   setCtr(data); scroll(); break
             case 'judge_start':  setStage('judge'); scroll(); break
-            case 'judge_done':   setJud(data); scroll(); break
+            case 'judge_done':        setJud(data); scroll(); break
+            case 'judge_review_done': setJudgeReview(data); break
             case 'verification_done': setVerify(data); scroll(); break
             case 'complete':     setStage('done'); scroll(); break
             case 'error':        setStage('error'); setErr(data.message); break
@@ -1818,10 +1827,144 @@ function HomeInner() {
                       {verify.totalStripped > 0 && ` · ${verify.totalStripped} stripped`}
                     </span>
                   )}
+                  {/* Judge Reviewer: "Verdict revised after review" badge —
+                      shown only when retry fired (material_concerns triggered v2).
+                      Click to toggle expanded v1 → v2 diff below. */}
+                  {judgeReview?.retryFired && (
+                    <button
+                      type="button"
+                      onClick={() => setReviewExpanded(v => !v)}
+                      className="text-[10px] font-mono px-2 py-0.5 rounded-full inline-flex items-center gap-1 transition-colors"
+                      style={{
+                        background: 'rgba(168,85,247,0.12)',
+                        color: '#a855f7',
+                        border: '1px solid rgba(168,85,247,0.3)',
+                        cursor: 'pointer',
+                      }}
+                      title="The reviewer flagged material concerns with the draft verdict. The Judge revised it once before shipping. Click to see what changed.">
+                      <Scale size={10} />
+                      Verdict revised after review
+                      <span className="opacity-60">{reviewExpanded ? '▲' : '▼'}</span>
+                    </button>
+                  )}
                   <span className="ml-auto text-[10px] font-mono" style={{ color: 'var(--text3)' }}>Final</span>
                 </div>
 
                 <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{jud.summary}</p>
+
+                {/* Judge Reviewer: inline notes panel.
+                    Three render states:
+                    - clean (or no review): nothing rendered
+                    - minor_notes: small box with the surfaced flags (Rule 1, Rule 4, mild Rule 2)
+                    - material_concerns + retryFired + reviewExpanded: v1 → v2 diff panel
+                */}
+                {judgeReview && judgeReview.overallStatus !== 'clean' && (() => {
+                  const review = judgeReview.review
+                  const isMaterial = judgeReview.overallStatus === 'material_concerns'
+                  const showDiff = judgeReview.retryFired && reviewExpanded
+                  const accent = isMaterial ? '#a855f7' : '#64748b'
+
+                  // Collect all visible flags for the notes box
+                  const notes: { rule: string; text: string }[] = []
+                  if (Array.isArray(review?.reAnalysisFlags)) {
+                    for (const f of review.reAnalysisFlags) notes.push({ rule: 'Re-analysis', text: f })
+                  }
+                  if (Array.isArray(review?.optionsStrategyIssues)) {
+                    for (const f of review.optionsStrategyIssues) notes.push({ rule: 'Options format', text: f })
+                  }
+                  if (review?.adjustmentDirection && review.adjustmentDirection !== 'unchanged' && !isMaterial) {
+                    // For minor calibration moves only; material calibration shown in retry diff
+                    notes.push({
+                      rule: 'Calibration',
+                      text: `Confidence ${review.adjustmentDirection === 'up' ? 'raised' : 'lowered'} from ${review.draftConfidence}% to ${review.recommendedConfidence}% (${review.reasoning || 'no reason given'})`,
+                    })
+                  }
+
+                  if (notes.length === 0 && !showDiff) return null
+
+                  return (
+                    <div className="rounded-lg p-3 text-xs space-y-2"
+                      style={{
+                        background: `${accent}12`,
+                        border: `1px solid ${accent}30`,
+                      }}>
+                      {!showDiff && notes.length > 0 && (
+                        <>
+                          <div className="flex items-center gap-1.5 font-mono font-semibold"
+                            style={{ color: accent }}>
+                            <Scale size={11} />
+                            <span>{isMaterial ? 'Review concerns' : 'Review notes'}</span>
+                          </div>
+                          <ul className="space-y-1.5 pl-1">
+                            {notes.map((n, i) => (
+                              <li key={i} className="flex gap-2" style={{ color: 'var(--text2)' }}>
+                                <span className="font-mono uppercase text-[9px] mt-0.5 flex-shrink-0"
+                                  style={{ color: accent, opacity: 0.7 }}>
+                                  {n.rule}
+                                </span>
+                                <span className="leading-snug">{n.text}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </>
+                      )}
+
+                      {/* Material concerns + retry fired: show v1 → v2 diff */}
+                      {showDiff && (
+                        <>
+                          <div className="flex items-center gap-1.5 font-mono font-semibold"
+                            style={{ color: accent }}>
+                            <Scale size={11} />
+                            <span>What changed after review</span>
+                          </div>
+
+                          {/* Signal/confidence comparison */}
+                          {(judgeReview.draftSignal !== judgeReview.finalSignal ||
+                            judgeReview.draftConfidence !== judgeReview.finalConfidence) && (
+                            <div className="rounded p-2 font-mono text-[11px]"
+                              style={{ background: 'rgba(0,0,0,0.2)' }}>
+                              <div style={{ color: 'var(--text3)' }}>
+                                Draft: <span style={{ color: 'var(--text2)' }}>{judgeReview.draftSignal} @ {judgeReview.draftConfidence}%</span>
+                              </div>
+                              <div style={{ color: 'var(--text3)' }}>
+                                Final: <span style={{ color: 'var(--text)' }}>{judgeReview.finalSignal} @ {judgeReview.finalConfidence}%</span>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Material flags that triggered retry */}
+                          <div className="space-y-1.5">
+                            <div className="text-[10px] uppercase font-mono" style={{ color: accent, opacity: 0.8 }}>
+                              Why retry was triggered
+                            </div>
+                            {Array.isArray(review?.tradePlanIssues) && review.tradePlanIssues.length > 0 && (
+                              <div className="leading-snug" style={{ color: 'var(--text2)' }}>
+                                <span className="font-mono text-[9px] uppercase mr-1.5" style={{ color: accent, opacity: 0.7 }}>Trade plan</span>
+                                {review.tradePlanIssues.join('; ')}
+                              </div>
+                            )}
+                            {review?.signalMismatchConcern && (
+                              <div className="leading-snug" style={{ color: 'var(--text2)' }}>
+                                <span className="font-mono text-[9px] uppercase mr-1.5" style={{ color: accent, opacity: 0.7 }}>Signal</span>
+                                {review.signalMismatchConcern}
+                              </div>
+                            )}
+                            {review?.adjustmentDirection && review.adjustmentDirection !== 'unchanged' && Math.abs(review.adjustmentDelta) >= 15 && (
+                              <div className="leading-snug" style={{ color: 'var(--text2)' }}>
+                                <span className="font-mono text-[9px] uppercase mr-1.5" style={{ color: accent, opacity: 0.7 }}>Calibration</span>
+                                {review.reasoning}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="text-[10px] pt-1 leading-snug" style={{ color: 'var(--text3)' }}>
+                            The reviewer audits each Judge verdict against a 5-rule checklist. Material concerns trigger one re-run of the Judge with corrective context. This is what you&apos;re seeing — the verdict shipped above reflects the revised v2 reasoning.
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )
+                })()}
 
                 {/* ── EARNINGS COUNTDOWN ── shown above Trade Plan when earnings imminent */}
                 {md?.fundamentals?.earningsTimestamp && (() => {

@@ -139,7 +139,7 @@ export interface JudgeReviewResult {
   mutualConcessions: boolean
   unresolvedChallenge: string | null
 
-  // ── New: Rules 1, 3, 4, 5 ──
+  // ── New: Rules 1, 3, 4, 5, 6 ──
   /** Rule 1: did the Judge re-analyze instead of judging? */
   reAnalysisFlags: string[]
   /** Rule 3: trade plan math problems (entry/stop/target inconsistencies, missing prices, etc.) */
@@ -148,11 +148,15 @@ export interface JudgeReviewResult {
   optionsStrategyIssues: string[]
   /** Rule 5: does signal direction contradict where evidence landed? Single-string description or null when clean. */
   signalMismatchConcern: string | null
+  /** Rule 6: did the Judge's draft acknowledge that the debate built on fabricated,
+   *  hallucinated, or verification-failed sources? Each entry describes a specific
+   *  contaminated claim that influenced the draft. Empty when clean. */
+  sourceIntegrityIssues: string[]
 
   // ── Overall status determines retry behavior ──
   /** clean = no flags fired
    *  minor_notes = flags fired but only on rules 1, 4, or small Rule 2 — surface only
-   *  material_concerns = rules 3, 5, or high-severity Rule 2 fired — triggers Judge retry */
+   *  material_concerns = rules 3, 5, 6, or high-severity Rule 2 fired — triggers Judge retry */
   overallStatus: 'clean' | 'minor_notes' | 'material_concerns'
 
   // ── Metadata ──
@@ -445,6 +449,25 @@ PATTERNS: If the data includes a candle pattern, chart pattern, gap, or trend st
 }
 
 /**
+ * GROUNDING_RULE — defense against the hallucination pattern observed in
+ * LI/AI/NRG cases (May 2026). Both Lead and Devil were caught citing
+ * fabricated institutional positions (e.g. "Berkshire holds 39.81M LI
+ * shares"), 13F filings that don't exist, fake insider transactions, and
+ * fake congressional trades. The pattern: LLMs pattern-match from training
+ * data to produce plausible-sounding specifics for institutional holdings
+ * and regulatory filings — categories where the user/Council can't tell
+ * fact from fabrication without verification.
+ *
+ * The fix: when citing SPECIFIC named institutional/regulatory/insider
+ * facts, those facts must originate in the bundle data the persona was
+ * given. The bundle's smartMoney section has insider transactions and
+ * institutional ownership. The bundle's fundamentals section has analyst
+ * consensus. Anything not in the bundle should NOT be cited by name.
+ *
+ * Injected into Lead system prompts and Devil's baseCalibration. */
+const GROUNDING_RULE = `CRITICAL --- GROUNDING RULE FOR SPECIFIC CITATIONS: When citing specific named institutional positions (e.g., "Berkshire Hathaway holds X shares"), specific 13F or 13D/G filings, specific congressional trades (e.g., "Nancy Pelosi bought X"), specific named insider transactions, or specific named analyst price targets --- these MUST appear in the bundle data you were given. Look in the smartMoney section (insider transactions, institutional ownership, notable holders) and the fundamentals section (analyst consensus, price targets). If the specific claim is not in the bundle, do NOT cite it. You may say "I don't have specific institutional ownership data for this ticker" or "the bundle doesn't surface a named analyst target" --- both are fine. You may NOT invent, recall from training data, or pattern-match specific positions, filings, or holdings from outside the bundle. This applies to BOTH your initial analysis AND any Round 2 rebuttal. If the other side cites a specific institutional position you don't see in the bundle, do NOT validate it by repeating it as fact --- challenge it as unverified.`
+
+/**
  * Persona-specific system prompt for the Lead Analyst.
  * This is the WHO the Lead is --- their analytical identity.
  */
@@ -453,6 +476,8 @@ function buildLeadSystemPrompt(bundle: SignalBundle, lens: 'technical' | 'fundam
 
   if (isForexPair) {
     return `You are the Lead Analyst in an elite AI council analyzing ${bundle.ticker}. This is a FOREX currency pair. Analysis focuses on: central bank policy divergence, macroeconomic data (inflation, employment, GDP), interest rate differentials, technical price action, and global risk sentiment. There are no earnings, P/E, or insider data for forex. Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data --- only use what you have. CRITICAL: Absence of data is not evidence. If a metric, disclosure, or detail is unavailable, that is a research limitation --- not a directional argument. Never use phrases like "the lack of X suggests Y" or "the absence of Z validates" to support a directional case. If you cannot find data confirming a hypothesis, the honest answer is "cannot confirm" --- not "therefore the opposite is true." This rule applies even when research returns SOME information but misses a specific sub-question. Phrases like "lacks management explanation," "no commentary on X was provided," or "the data does not address Y" are research gaps, NOT findings. Do not use partial-null answers as red flags or confirmations. If a sub-question wasn't answered, ignore that gap and reason from the parts that WERE answered. IMPORTANT: If price data shows period change >±200%, treat as potential data error.
+
+${GROUNDING_RULE}
 
 CRITICAL --- POST-CATALYST AWARENESS: For forex, the catalysts are FOMC decisions, NFP releases, CPI prints, ECB/BOJ/BOE meetings, and major GDP/PMI data. If one of these occurred within the last 3 trading days AND the pair is still trading near or above the post-event high (for bullish moves) or near/below the post-event low (for bearish moves), you are writing a CONTINUATION thesis, not a fresh-setup thesis. State this distinction explicitly. Continuation trades have meaningfully lower hit rates (~55%) than pre-catalyst setups (~65-70%) because the original catalyst is already reflected in price. Calibrate confidence accordingly. If you maintain a directional call, your trade plan must require a pullback entry (BULLISH) or relief-bounce entry (BEARISH), not at-market chasing of an already-extended move.
 
@@ -469,6 +494,8 @@ ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsCo
 ${fundContext}
 
 Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data --- only use what you have. CRITICAL: Absence of data is not evidence. If a metric, disclosure, or detail is unavailable, that is a research limitation --- not a directional argument. Never use phrases like "the lack of X suggests Y" or "the absence of Z validates" to support a directional case. If you cannot find data confirming a hypothesis, the honest answer is "cannot confirm" --- not "therefore the opposite is true." This rule applies even when research returns SOME information but misses a specific sub-question. Phrases like "lacks management explanation," "no commentary on X was provided," or "the data does not address Y" are research gaps, NOT findings. Do not use partial-null answers as red flags or confirmations. If a sub-question wasn't answered, ignore that gap and reason from the parts that WERE answered. IMPORTANT: If price data shows period change >±200%, treat as potential data error.
+
+${GROUNDING_RULE}
 
 CRITICAL --- POST-CATALYST AWARENESS: For funds, the catalysts are FOMC decisions, sector rotation events, ETF rebalances, major macro data (CPI, NFP, PMI), and component-level news for thematic ETFs. If a catalyst occurred within the last 3 trading days AND the fund is still trading near or above the post-event high (for bullish moves) or near/below the post-event low (for bearish moves), you are writing a CONTINUATION thesis, not a fresh-setup thesis. State this distinction explicitly. Continuation trades on funds have meaningfully lower hit rates (~55%) than pre-catalyst setups (~65-70%) because the catalyst is already reflected in price. Calibrate confidence accordingly. If you maintain a directional call, your trade plan must require a pullback entry (BULLISH) or relief-bounce entry (BEARISH), not at-market chasing of an already-extended move.
 
@@ -488,6 +515,8 @@ ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsCo
   return `${personaIdentity}${overrideNote}
 
 Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data --- only use what you have. CRITICAL: Absence of data is not evidence. If a metric, disclosure, or detail is unavailable, that is a research limitation --- not a directional argument. Never use phrases like "the lack of X suggests Y" or "the absence of Z validates" to support a directional case. If you cannot find data confirming a hypothesis, the honest answer is "cannot confirm" --- not "therefore the opposite is true." This rule applies even when research returns SOME information but misses a specific sub-question. Phrases like "lacks management explanation," "no commentary on X was provided," or "the data does not address Y" are research gaps, NOT findings. Do not use partial-null answers as red flags or confirmations. If a sub-question wasn't answered, ignore that gap and reason from the parts that WERE answered. CRITICAL: Sub-threshold data is not evidence either. If the bundle text labels a metric with "DO NOT CITE" --- e.g., insider activity that is sub-threshold relative to market cap --- treat that metric as effectively zero and do NOT cite it as supporting any directional thesis. A $0.8M officer sale on a $30B-cap company is statistical noise, not a "fundamental headwind." Even if the sign is "selling" or "buying," sub-threshold magnitude means the operational signal does not exist. CRITICAL: For cash, runway, and burn rate claims --- use the "Cash & runway" line from the bundle's fundamentals section directly. The bundle reports a pre-computed runwayQuarters figure based on free cash flow (the correct measure of cash burn). Do NOT compute runway from net income. Net income is NOT cash burn --- it includes large non-cash items (stock-based compensation, depreciation, amortization) that particularly distort runway estimates for tech and software companies, often by an order of magnitude. If the bundle's runway field is null, the company is self-funding (positive FCF) or cash data is unavailable; either way, do not invent a runway figure. IMPORTANT: If the price data shows a period change exceeding ±200%, treat this as a potential data error and note it explicitly rather than building your analysis on it.
+
+${GROUNDING_RULE}
 
 CRITICAL --- POST-CATALYST AWARENESS: Before forming your thesis, identify whether the catalyst-driven move you're describing has ALREADY happened or is YET TO HAPPEN. If a major catalyst (earnings beat/miss, analyst upgrade/downgrade, M&A news, guidance raise/cut) occurred within the last 3 trading days AND the stock is still trading near or above its post-catalyst high (for bullish moves) or near/below its post-catalyst low (for bearish moves), then you are writing a CONTINUATION thesis, not a fresh-setup thesis. State this distinction explicitly in your reasoning --- do not describe an already-completed move as if it's still ahead. Continuation trades historically have meaningfully lower hit rates (~55%) than pre-catalyst setups (~65-70%) because the original catalyst is already reflected in price; the trade is now a momentum-extension bet, not a directional edge call. Calibrate confidence accordingly --- 80%+ confidence on pure continuation theses (no second independent catalyst) overstates the edge. If you maintain a directional call, your trade plan MUST require a pullback entry (for BULLISH) or a relief-bounce entry (for BEARISH) at a level meaningfully below/above current price --- never at-market chasing of an already-extended move.
 
@@ -539,6 +568,8 @@ CALIBRATION RULES --- follow these carefully:
 
 8. Post-catalyst framing check. If the Lead's thesis describes a move that has ALREADY happened (e.g., "fund rallied 5% on FOMC pivot, target X% higher" or "rotation into this sector confirmed"), this is a CONTINUATION thesis with historically lower hit rates than fresh setups. Press the Lead on whether the catalyst is already priced in. Their confidence should reflect that pure momentum-continuation on funds is closer to a coin flip than a high-conviction call. If they maintain a directional call at 80%+ confidence on pure continuation or write at-market entries on a fund already extended from a recent macro/sector catalyst, that is a meaningful weakness to surface. Do NOT manufacture this objection if the Lead has already acknowledged the framing.
 
+9. ${GROUNDING_RULE}
+
 ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
   }
 
@@ -558,7 +589,9 @@ ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsCo
 
 7. Quality over volume. The Judge weighs the STRENGTH of your challenges, not the count. Two rigorous data-backed challenges beat five weak ones.
 
-8. Post-catalyst framing check. If the Lead's thesis describes a move that has ALREADY happened (e.g., "earnings beat drove a 7% gap, target X% higher" or "pattern target achieved" or "neckline break confirmed targeting $X"), this is a CONTINUATION thesis with historically lower hit rates than fresh setups. Press the Lead on this distinction. Their confidence should reflect that the original catalyst is already priced in --- the trade is now a momentum-continuation bet, which is closer to a coin flip (~55%) than a high-conviction directional call (~65-70%). If they maintain BULLISH/BEARISH at 80%+ confidence on pure continuation (no second independent catalyst) or write at-market entries on a stock already extended from a recent catalyst, that is a meaningful weakness to surface. Do NOT manufacture this objection if the Lead has already acknowledged the framing and calibrated confidence appropriately --- this rule fires when the Lead is treating a continuation trade as a fresh setup.`
+8. Post-catalyst framing check. If the Lead's thesis describes a move that has ALREADY happened (e.g., "earnings beat drove a 7% gap, target X% higher" or "pattern target achieved" or "neckline break confirmed targeting $X"), this is a CONTINUATION thesis with historically lower hit rates than fresh setups. Press the Lead on this distinction. Their confidence should reflect that the original catalyst is already priced in --- the trade is now a momentum-continuation bet, which is closer to a coin flip (~55%) than a high-conviction directional call (~65-70%). If they maintain BULLISH/BEARISH at 80%+ confidence on pure continuation (no second independent catalyst) or write at-market entries on a stock already extended from a recent catalyst, that is a meaningful weakness to surface. Do NOT manufacture this objection if the Lead has already acknowledged the framing and calibrated confidence appropriately --- this rule fires when the Lead is treating a continuation trade as a fresh setup.
+
+9. ${GROUNDING_RULE}`
 
   if (lens === 'technical') {
     return `You are the Devil's Advocate in an elite AI stock council for ${bundle.ticker}. The Lead Analyst is running a TECHNICAL LENS --- they are anchored on chart signals, price action, and momentum. Your role is to CROSS-PRESSURE their thesis from the FUNDAMENTAL side --- the dimension they have structurally deprioritized.
@@ -572,9 +605,9 @@ Your job is to make the Lead DEFEND their technical thesis against the fundament
 
 ${baseCalibration}
 
-9. Cross-pressure discipline: Your challenges should primarily cite fundamental/earnings/analyst/valuation evidence, not re-argue the chart. Let the Lead have their chart --- attack on fundamentals.
-10. Earnings proximity: When earnings are within 7 days (see EARNINGS PROXIMITY context if present), pressure-test specifically how much earnings risk is being priced in. A bullish technical thesis 3 days before a print needs to address: (a) what's the implied move? (b) what's analyst revision trend? (c) is the entry level above or below the implied-move band? Don't let the Lead skip past binary catalyst risk.
-11. News recency: Weight news by freshness same as the Lead --- last 24h current, 24-72h recent, older background. Don't cite stale narrative as a reason to disagree.
+10. Cross-pressure discipline: Your challenges should primarily cite fundamental/earnings/analyst/valuation evidence, not re-argue the chart. Let the Lead have their chart --- attack on fundamentals.
+11. Earnings proximity: When earnings are within 7 days (see EARNINGS PROXIMITY context if present), pressure-test specifically how much earnings risk is being priced in. A bullish technical thesis 3 days before a print needs to address: (a) what's the implied move? (b) what's analyst revision trend? (c) is the entry level above or below the implied-move band? Don't let the Lead skip past binary catalyst risk.
+12. News recency: Weight news by freshness same as the Lead --- last 24h current, 24-72h recent, older background. Don't cite stale narrative as a reason to disagree.
 
 ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
   }
@@ -591,7 +624,7 @@ Your job is to make the Lead DEFEND their fundamental thesis against the technic
 
 ${baseCalibration}
 
-9. Cross-pressure discipline: Your challenges should primarily cite chart patterns, price action, technical indicators, and flow evidence --- not re-argue the fundamentals. Let the Lead have their fundamental thesis --- attack on technicals.
+10. Cross-pressure discipline: Your challenges should primarily cite chart patterns, price action, technical indicators, and flow evidence --- not re-argue the fundamentals. Let the Lead have their fundamental thesis --- attack on technicals.
 
 ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
   }
@@ -2040,15 +2073,33 @@ This is rare. Most of the time the Judge directionally aligns with the winning a
 Rule 5 flags are MATERIAL — they trigger retry.
 
 ═════════════════════════════════════════════════════════════════════
+RULE 6 — Source integrity (debate contaminated by fabricated/hallucinated material)
+═════════════════════════════════════════════════════════════════════
+Did the Judge's draft narrative explicitly acknowledge that the debate built on fabricated, hallucinated, or verification-failed sources?
+
+This rule fires when phrases like the following appear in the draft's summary, winningArgument, or dissent fields:
+  - "fabricated", "hallucinated", "made-up", "invented"
+  - "proven factually incorrect", "proven false", "could not verify"
+  - "verification stripped", "failed verification"
+  - "no such filing exists", "claim does not stand"
+  - "fictitious", "spurious", references to false specifics
+
+This is a real failure mode: when the Lead or Devil cites a specific institutional position, 13F filing, congressional trade, insider transaction, or analyst target that does not exist in the bundle data, they have HALLUCINATED. The Judge may catch it (good — defense in depth working) but allowing those phrases into the user-facing verdict prose is unprofessional and breaks trust. A retry forces the Judge to re-derive the verdict using only verified evidence so the prose is clean.
+
+Flag SPECIFIC instances. Each entry in sourceIntegrityIssues should describe ONE contaminated claim that influenced the draft (e.g., "Lead R2 cited fabricated Berkshire Hathaway 39.81M LI share position" or "Devil R1 invented institutional ownership claim").
+
+Rule 6 flags are MATERIAL — they trigger retry with explicit instruction to re-derive without the contaminated framing.
+
+═════════════════════════════════════════════════════════════════════
 
 OUTPUT contract:
 
-You return strict JSON. The schema includes all 5 rules' findings PLUS overall status. Material concerns trigger a one-shot Judge retry; minor notes only get surfaced. Cleanness is the default — only flag when the rule actually fires.
+You return strict JSON. The schema includes all 6 rules' findings PLUS overall status. Material concerns trigger a one-shot Judge retry; minor notes only get surfaced. Cleanness is the default — only flag when the rule actually fires.
 
 overallStatus computation:
 - "clean" = no flags on any rule
 - "minor_notes" = flags only on rules 1 or 4, AND rule 2 adjustment if any is <15 points
-- "material_concerns" = rules 3 or 5 fired, OR rule 2 adjustment is >=15 points
+- "material_concerns" = rules 3, 5, or 6 fired, OR rule 2 adjustment is >=15 points
 
 ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
 }
@@ -2141,7 +2192,8 @@ JSON ONLY:
   "reAnalysisFlags": ["specific examples of the draft Judge re-analyzing instead of judging (Rule 1), 0-3 items. Empty array if clean."],
   "tradePlanIssues": ["specific structural problems with entry/stop/target (Rule 3), 0-3 items. Empty array if clean. Examples: 'BULLISH but stop ($52) above entry ($48)', 'Target is unparseable: above breakout', 'Stop within 0.15× ATR — inside noise band'"],
   "optionsStrategyIssues": ["specific missing components in optionsStrategy (Rule 4), 0-6 items. Empty array if clean or N/A. Examples: 'No expiry window specified', 'No IV regime context', 'Generic recommend calls without strikes'"],
-  "signalMismatchConcern": "single string describing how signal contradicts debate weight (Rule 5), or null if signal aligns with evidence."
+  "signalMismatchConcern": "single string describing how signal contradicts debate weight (Rule 5), or null if signal aligns with evidence.",
+  "sourceIntegrityIssues": ["specific instances where the draft acknowledged contaminated sources (Rule 6), 0-5 items. Empty array if clean. Examples: 'Lead R2 cited fabricated Berkshire Hathaway 13F position', 'Devil R2 invented institutional ownership claim that failed verification'. Scan summary/winningArgument/dissent for words like fabricated/hallucinated/proven false/could not verify."]
 }`
 
   try {
@@ -2166,12 +2218,14 @@ JSON ONLY:
     const tradePlanIssues = Array.isArray(raw.tradePlanIssues) ? raw.tradePlanIssues.slice(0, 5) : []
     const optionsStrategyIssues = Array.isArray(raw.optionsStrategyIssues) ? raw.optionsStrategyIssues.slice(0, 6) : []
     const signalMismatchConcern = typeof raw.signalMismatchConcern === 'string' && raw.signalMismatchConcern.trim() ? raw.signalMismatchConcern : null
+    const sourceIntegrityIssues = Array.isArray(raw.sourceIntegrityIssues) ? raw.sourceIntegrityIssues.slice(0, 5) : []
 
     // ── Compute overallStatus deterministically based on which rules fired ──
-    // material if rule 3 or rule 5 fired, OR if rule 2 delta >= 15 (severe miscalibration)
+    // material if rule 3, 5, or 6 fired, OR if rule 2 delta >= 15 (severe miscalibration)
     const materialRuleNumbers: number[] = []
     if (tradePlanIssues.length > 0) materialRuleNumbers.push(3)
     if (signalMismatchConcern) materialRuleNumbers.push(5)
+    if (sourceIntegrityIssues.length > 0) materialRuleNumbers.push(6)
     if (Math.abs(delta) >= 15) materialRuleNumbers.push(2)
 
     // minor if any flag fired but no material ones
@@ -2202,6 +2256,7 @@ JSON ONLY:
       tradePlanIssues,
       optionsStrategyIssues,
       signalMismatchConcern,
+      sourceIntegrityIssues,
       overallStatus,
       materialRuleNumbers,
       calibratorModel: 'claude-opus-4-7',
@@ -2226,6 +2281,7 @@ JSON ONLY:
       tradePlanIssues: [],
       optionsStrategyIssues: [],
       signalMismatchConcern: null,
+      sourceIntegrityIssues: [],
       overallStatus: 'clean',
       materialRuleNumbers: [],
       calibratorModel: 'reviewer-failed',
@@ -2449,14 +2505,19 @@ SIGNAL DIRECTION (Rule 5) — REVIEW:
   The reviewer flagged: "${calibration.signalMismatchConcern}"
   Re-examine your verdict's direction against where the evidence actually landed. If both sides conceded the bull case was stronger, the verdict should not be BEARISH. If the Lead's case was demolished, a high-confidence BULLISH verdict is incorrect. Consider whether the signal should change — or, if you believe the signal is right, strengthen winningArgument with the specific evidence that justifies it despite the apparent contradiction.` : ''
 
+  const sourceIntegrityBlock = calibration.sourceIntegrityIssues.length > 0 ? `
+SOURCE INTEGRITY (Rule 6) — MUST FIX:
+${calibration.sourceIntegrityIssues.map(issue => `  - ${issue}`).join('\n')}
+  Your draft's narrative explicitly acknowledged that the debate built on fabricated, hallucinated, or verification-failed sources. This is unacceptable in a user-facing verdict. Re-derive the verdict using ONLY verified evidence from the bundle and the surviving parts of the debate. Do NOT allow the discarded claim to influence framing, confidence, or trade plan. Do NOT mention "fabricated", "hallucinated", "proven false", "could not verify" or similar language in your revised summary, winningArgument, or dissent — those phrases should not appear in the user-facing verdict. If the discarded source was a meaningful part of the original reasoning, your revised confidence should reflect the weaker remaining evidence (typically lower than the draft).` : ''
+
   const calibrationGuidance = `
 
 ━━━ INDEPENDENT REVIEWER FEEDBACK ON YOUR DRAFT ━━━
 
 Your DRAFT verdict was ${draft.signal} @ ${draft.confidence}% confidence with entry ${draft.entryPrice ?? '(none)'} / stop ${draft.stopLoss ?? '(none)'} / target ${draft.takeProfit ?? '(none)'}.
 
-An independent reviewer (Claude Opus) audited your draft against a 5-rule procedural checklist. The following concerns were flagged as material and need to be addressed in your final verdict:
-${calibrationBlock}${tradePlanBlock}${optionsBlock}${signalBlock}
+An independent reviewer (Claude Opus) audited your draft against a 6-rule procedural checklist. The following concerns were flagged as material and need to be addressed in your final verdict:
+${calibrationBlock}${tradePlanBlock}${optionsBlock}${signalBlock}${sourceIntegrityBlock}
 
 The reviewer did NOT re-analyze the directional thesis — only audit your draft for procedural and structural quality. You are NOT required to follow every recommendation blindly, but address each flagged concern explicitly. If you disagree with a flag, your final verdict should make the case for why your draft was correct on that dimension.
 
@@ -2778,6 +2839,25 @@ export async function runPipeline(
   const trader = await evaluateTrade(judge, bundle, bundle.timeframe)
   onProgress('trader_done', trader)
   onProgress('judge_done', judge)
+
+  // Emit the Judge Reviewer audit payload so the UI can render review notes
+  // and "verdict revised" badges. Same shape that gets persisted to the
+  // judge_review_pipeline JSONB column on the analyses row. Null-safe: if
+  // calibration is undefined (legacy path), no event is emitted and the
+  // page renders the verdict normally.
+  if (calibration) {
+    onProgress('judge_review_done', {
+      version: 1,
+      retryFired: (calibration.materialRuleNumbers?.length ?? 0) > 0,
+      draftSignal: calibration.draftSignal,
+      draftConfidence: calibration.draftConfidence,
+      review: calibration,
+      finalSignal: judge.signal,
+      finalConfidence: judge.confidence,
+      overallStatus: calibration.overallStatus,
+      materialRuleNumbers: calibration.materialRuleNumbers ?? [],
+    })
+  }
 
   return { gemini, claude, gpt, rebuttal, counter, judge, calibration, verifications, transcript, social, aggregator, trader }
 }

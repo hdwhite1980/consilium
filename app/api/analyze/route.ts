@@ -324,6 +324,14 @@ export async function POST(req: NextRequest) {
             await new Promise(r => setTimeout(r, 300))
             send('judge_done', cached.judge_verdict)
 
+            // Replay the persisted judge_review_pipeline if this cached row
+            // has one. Pre-reviewer rows (persisted before the migration)
+            // have null in this column and we skip the emission silently.
+            if (cached.judge_review_pipeline) {
+              await new Promise(r => setTimeout(r, 100))
+              send('judge_review_done', cached.judge_review_pipeline)
+            }
+
             send('complete', {
               analysisId: cached.id,
               cached: true,
