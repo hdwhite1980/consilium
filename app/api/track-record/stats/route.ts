@@ -11,7 +11,6 @@
 // =============================================================
 
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/app/lib/auth/server'
 import { createClient as createAdmin } from '@supabase/supabase-js'
 import {
   getCurrentVersion,
@@ -41,12 +40,22 @@ function getAdmin() {
 
 export async function GET(req: NextRequest) {
   try {
-    // Auth check
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    // NOTE: This endpoint is intentionally PUBLIC.
+    //
+    // The track-record page is a conversion surface — anonymous visitors must be
+    // able to see the version timeline and aggregated stats (hit rate, direction
+    // accuracy, sample sizes) before they sign up. Gating it behind auth means
+    // potential customers leave before seeing the trust story (version-honest
+    // dashboard with preview badges, multi-version comparison).
+    //
+    // The exposed data is intentionally aggregated marketing content — no PII,
+    // no individual user data, no sensitive trade-plan specifics. The verdict
+    // list (which contains per-verdict entry/stop/target prices) is handled
+    // separately by VerdictList and may apply its own gating policy.
+    //
+    // Previously this returned 401 for anonymous requests, which broke the
+    // page's primary purpose. Email collection, if needed, happens via a
+    // softer inline mechanism on the page itself rather than a hard auth wall.
 
     const url = new URL(req.url)
     const versionParam = url.searchParams.get('version') ?? 'current'
@@ -70,7 +79,10 @@ export async function GET(req: NextRequest) {
 
     const stats = await computeStats(version)
     return NextResponse.json(stats, {
-      headers: { 'Cache-Control': 'private, max-age=300' },
+      // Public, short-lived cache: response is identical for all visitors,
+      // graded outcomes don't change minute-to-minute (cron grades 1x daily).
+      // s-maxage applies at CDN/edge; max-age in the browser. Both 5 min.
+      headers: { 'Cache-Control': 'public, max-age=300, s-maxage=300' },
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Unknown error'
