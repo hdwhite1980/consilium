@@ -123,38 +123,142 @@ async function fetchInsiderTransactions(ticker: string): Promise<InsiderTransact
   }
 }
 
-// ── Finnhub institutional ownership (13F data) ─────────────────
+// ── EDGAR-sourced institutional ownership (13F, via institutional_holdings table) ──
+// Replaces the previous Finnhub /stock/institutional-ownership path which
+// silently returned [] for most tickers (either Finnhub free-tier doesn't
+// include the endpoint, or the call was failing without visible logs).
+//
+// Reads from the institutional_holdings table populated by EDGAR 13F-HR
+// ingestion. Same Bug-5 lesson: when both Finnhub and EDGAR cover the same
+// data category, EDGAR is the source of truth (real filings with accession
+// numbers; Finnhub's institutional endpoint requires paid tier and has
+// been returning empty in production).
+//
+// Data freshness note: 13F filings are inherently quarterly. Latest data
+// available anywhere right now is Q1 2026 (filings due May 15, 2026).
+// Our ingestion ran 2026-04-18, so we capture most early/on-time filers
+// but may be missing late filers from April 19 – May 15. This is still
+// dramatically better than empty arrays leading to LLM hallucination.
 async function fetchInstitutionalHoldings(ticker: string): Promise<InstitutionalHolder[]> {
-  const key = process.env.FINNHUB_API_KEY
-  if (!key) return []
   try {
-    const res = await fetch(
-      `https://finnhub.io/api/v1/stock/institutional-ownership?symbol=${ticker}&token=${key}`,
-      { next: { revalidate: 86400 } }
-    )
-    if (!res.ok) return []
-    const data = await res.json()
-    const holders: Array<Record<string, unknown>> = data?.ownership ?? []
-    // Take top 5 by share count
-    return holders
-      .sort((a, b) => Number(b.share ?? 0) - Number(a.share ?? 0))
-      .slice(0, 5)
-      .map(h => {
-        const change = Number(h.change ?? 0)
+    const { createClient } = await import('@supabase/supabase-js')
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+    if (!url || !key) {
+      console.warn(`[institutional ${ticker}] Supabase env not set — returning empty`)
+      return []
+    }
+    const supabase = createClient(url, key)
+
+    // Find the most recent quarter we have data for THIS ticker.
+    // We do this in two steps because Supabase JS doesn't have a clean
+    // "select where quarter = (select max(quarter) ...)" shape.
+    const { data: latestRow, error: maxErr } = await supabase
+      .from('institutional_holdings')
+      .select('quarter')
+      .eq('ticker', ticker)
+      .order('quarter', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (maxErr) {
+      console.warn(`[institutional ${ticker}] quarter probe failed: ${maxErr.message}`)
+      return []
+    }
+    if (!latestRow?.quarter) {
+      // No 13F data for this ticker — common for small caps, ETFs,
+      // foreign tickers. Returning empty is the honest answer.
+      return []
+    }
+
+    // Pull the top holders for that quarter, ordered by share count desc.
+    // 10 is generous — the bundle's notableHolders/summary use top 3-5.
+    const { data: rows, error: rowsErr } = await supabase
+      .from('institutional_holdings')
+      .select('institution, shares_held, change_shares, pct_of_portfolio, action, quarter, filing_date')
+      .eq('ticker', ticker)
+      .eq('quarter', latestRow.quarter)
+      .order('shares_held', { ascending: false })
+      .limit(10)
+
+    if (rowsErr || !rows) {
+      console.warn(`[institutional ${ticker}] holders query failed: ${rowsErr?.message ?? 'no rows'}`)
+      return []
+    }
+
+    return rows
+      .map(r => {
+        const action = String(r.action ?? '').toLowerCase()
+        const sharesHeld = Number(r.shares_held) || 0
+
+        // change_shares is often null in our ingestion. For 'new' positions,
+        // the entire holding is the change (went from 0 to sharesHeld).
+        // For other actions where the delta isn't recorded, fall back to 0
+        // — better to show "unchanged" than a misleading number.
+        let changeInShares = Number(r.change_shares) || 0
+        if (changeInShares === 0 && action === 'new') {
+          changeInShares = sharesHeld
+        }
+
+        // Map action enum to changeType. Tolerate unexpected values.
         const changeType: InstitutionalHolder['changeType'] =
-          change > 0 ? 'added' : change < 0 ? 'reduced' : 'unchanged'
+          action === 'new' ? 'new' :
+          action === 'added' ? 'added' :
+          action === 'reduced' ? 'reduced' :
+          action === 'sold' ? 'sold' :
+          'unchanged'
+
         return {
-          name:           String(h.name ?? 'Institution'),
-          sharesHeld:     Number(h.share ?? 0),
-          changeInShares: change,
+          name:           String(r.institution ?? 'Institution'),
+          sharesHeld,
+          changeInShares,
           changeType,
-          pctOfPortfolio: 0,
+          pctOfPortfolio: Number(r.pct_of_portfolio) || 0,
         }
       })
-  } catch {
+      .filter(h => h.sharesHeld > 0)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.warn(`[institutional ${ticker}] unexpected error: ${msg.slice(0, 200)}`)
     return []
   }
 }
+
+// ── DEPRECATED: Finnhub institutional ownership (kept for rollback reference)
+// Switched to EDGAR-table read above (May 2026, Bug 28). Finnhub's
+// /stock/institutional-ownership endpoint is paid-tier and was returning
+// empty silently. To re-enable: rename this function to remove _DEPRECATED
+// suffix and remove the EDGAR-table version above.
+// async function fetchInstitutionalHoldings_DEPRECATED(ticker: string): Promise<InstitutionalHolder[]> {
+//   const key = process.env.FINNHUB_API_KEY
+//   if (!key) return []
+//   try {
+//     const res = await fetch(
+//       `https://finnhub.io/api/v1/stock/institutional-ownership?symbol=${ticker}&token=${key}`,
+//       { next: { revalidate: 86400 } }
+//     )
+//     if (!res.ok) return []
+//     const data = await res.json()
+//     const holders: Array<Record<string, unknown>> = data?.ownership ?? []
+//     return holders
+//       .sort((a, b) => Number(b.share ?? 0) - Number(a.share ?? 0))
+//       .slice(0, 5)
+//       .map(h => {
+//         const change = Number(h.change ?? 0)
+//         const changeType: InstitutionalHolder['changeType'] =
+//           change > 0 ? 'added' : change < 0 ? 'reduced' : 'unchanged'
+//         return {
+//           name:           String(h.name ?? 'Institution'),
+//           sharesHeld:     Number(h.share ?? 0),
+//           changeInShares: change,
+//           changeType,
+//           pctOfPortfolio: 0,
+//         }
+//       })
+//   } catch {
+//     return []
+//   }
+// }
 
 // ── Notable fund tracker (Dataroma-style, public data) ────────
 const NOTABLE_FUNDS: Record<string, string[]> = {
@@ -172,8 +276,42 @@ export async function fetchSmartMoney(ticker: string): Promise<SmartMoneySignals
     fetchInstitutionalHoldings(ticker),
   ])
 
-  const totalInstitutionalPct = 0
-  // Build notable holders from Finnhub data — top 3 largest by shares held
+  // ── Institutional aggregates (Bug 28, May 2026) ───────────────────
+  // Previously these were hardcoded to 0 and 'stable' because Finnhub
+  // wasn't returning data. Now that we have real EDGAR 13F data we
+  // compute them from actual holdings:
+  //
+  // totalInstitutionalPct: sum of pct_of_portfolio across top holders.
+  //   Note: pct_of_portfolio is often null in our ingestion — when it is,
+  //   we can't compute this and leave it at 0. When the ingestion script
+  //   gets fixed to populate pct_of_portfolio, this will start working.
+  //
+  // institutionalNetChange: aggregate direction of share-count changes.
+  //   We sum changeInShares across all top holders. Positive net = funds
+  //   are net adding; negative = net reducing; near-zero = stable.
+  //   Threshold for "stable" is ±5% of average holding size to avoid
+  //   classifying tiny rebalances as a directional signal.
+  const totalInstitutionalPct = institutionalOwnership.reduce(
+    (sum, h) => sum + (h.pctOfPortfolio || 0), 0
+  )
+
+  const totalNetChange = institutionalOwnership.reduce(
+    (sum, h) => sum + (h.changeInShares || 0), 0
+  )
+  const avgHoldingSize = institutionalOwnership.length > 0
+    ? institutionalOwnership.reduce((s, h) => s + h.sharesHeld, 0) / institutionalOwnership.length
+    : 0
+  const stableThreshold = avgHoldingSize * 0.05
+  const institutionalNetChange: SmartMoneySignals['institutionalNetChange'] =
+    institutionalOwnership.length === 0 ? 'stable' :
+    totalNetChange > stableThreshold  ? 'increasing' :
+    totalNetChange < -stableThreshold ? 'decreasing' :
+    'stable'
+
+  // Notable holders: top 3 by share count with directional marker.
+  // Surfacing real holders from EDGAR 13F data instead of the hardcoded
+  // NOTABLE_FUNDS dict (kept above as reference). This means smaller
+  // tickers without 13F data get an empty list — which is honest.
   const notableHolders = institutionalOwnership
     .slice(0, 3)
     .map(h => {
@@ -219,18 +357,19 @@ export async function fetchSmartMoney(ticker: string): Promise<SmartMoneySignals
   const lines = [
     `=== SMART MONEY SIGNALS ===`,
     ``,
-    `Institutional ownership:`,
+    `Institutional ownership (latest 13F, EDGAR-sourced):`,
     institutionalOwnership.length > 0
       ? [
-          `  Top holders (13F data):`,
-          ...institutionalOwnership.slice(0, 3).map(h => {
-            const dir = h.changeInShares > 0 ? `added ${h.changeInShares.toLocaleString()} shares` :
-                        h.changeInShares < 0 ? `reduced by ${Math.abs(h.changeInShares).toLocaleString()} shares` :
-                        'unchanged'
+          `  Top holders by share count:`,
+          ...institutionalOwnership.slice(0, 5).map(h => {
+            const dir = h.changeInShares > 0 ? `added ${h.changeInShares.toLocaleString()} shares this quarter` :
+                        h.changeInShares < 0 ? `reduced by ${Math.abs(h.changeInShares).toLocaleString()} shares this quarter` :
+                        'position unchanged'
             return `  • ${h.name}: ${h.sharesHeld.toLocaleString()} shares held, ${dir}`
-          })
+          }),
+          `  Aggregate direction: institutions are ${institutionalNetChange.toUpperCase()} positions`,
         ].join('\n')
-      : `  No institutional 13F holder data available`,
+      : `  No 13F holder data available for this ticker (small-cap, ETF, foreign listing, or no recent filings).`,
     ``,
     `Congressional trading (180d):`,
     congressTrades.length > 0
@@ -251,7 +390,7 @@ export async function fetchSmartMoney(ticker: string): Promise<SmartMoneySignals
     insiderHighlight,
     institutionalOwnership,
     totalInstitutionalPct,
-    institutionalNetChange: 'stable',
+    institutionalNetChange,
     notableHolders,
     congressionalTrades: congressTrades,
     congressSignal,
