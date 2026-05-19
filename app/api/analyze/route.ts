@@ -364,6 +364,33 @@ export async function POST(req: NextRequest) {
 
         // Save to Supabase — store full dashboard data in signal_bundle for cache restore
         dlog(`starting analyses insert`)
+        // Build judge_review_pipeline payload. Captures the full audit trail:
+        // - draft (v1): what the Judge first produced, before reviewer
+        // - review: JudgeReviewResult with all 5 rules' findings
+        // - final (v2 or v1): what shipped to the user — same as v1 unless retry fired
+        // - retryFired: true if material_concerns triggered a Judge re-run
+        //
+        // Single JSONB column instead of separate columns for v1/review/v2 because:
+        //   1. Schema migration is one column add, not three
+        //   2. Future schema changes to review shape don't require new migrations
+        //   3. UI/track-record consumers always read the whole pipeline together
+        //
+        // Null-safe: if calibration is undefined (e.g., pipeline ran in legacy
+        // single-Judge mode), we persist null and downstream consumers skip the
+        // review UI. This keeps the system resilient during the deploy transition.
+        const judgeReviewPipeline = result.calibration ? {
+          version: 1,
+          retryFired: (result.calibration.materialRuleNumbers?.length ?? 0) > 0,
+          draftSignal: result.calibration.draftSignal,
+          draftConfidence: result.calibration.draftConfidence,
+          review: result.calibration,
+          finalSignal: result.judge.signal,
+          finalConfidence: result.judge.confidence,
+          // Convenience flags for fast SQL filtering without parsing JSONB:
+          overallStatus: result.calibration.overallStatus,
+          materialRuleNumbers: result.calibration.materialRuleNumbers ?? [],
+        } : null
+
         const { data: saved, error: savedErr } = await supabase.from('analyses').insert({
           ticker: symbol,
           timeframe: tf,
@@ -374,6 +401,7 @@ export async function POST(req: NextRequest) {
           gpt_validation: result.gpt,
           social_sentiment: result.social,
           judge_verdict: result.judge,
+          judge_review_pipeline: judgeReviewPipeline,  // NEW: 5-rule reviewer audit
           final_signal: result.judge.signal,
           final_confidence: result.judge.confidence,
           final_target: result.judge.target,

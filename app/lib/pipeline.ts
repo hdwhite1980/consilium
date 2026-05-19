@@ -106,23 +106,65 @@ export interface CounterResult {
   closingArgument: string
 }
 
-export interface CalibrationResult {
-  // The draft confidence produced by the first Judge call (pre-calibration)
+/**
+ * Output of the Judge Reviewer stage — the procedural safety net that runs
+ * AFTER the draft Judge and BEFORE the final Judge re-run. Evaluates the
+ * draft against a 5-rule checklist:
+ *
+ *   Rule 1: Re-analysis instead of judging (procedural)
+ *   Rule 2: Confidence calibration mismatch (calibration)  ← legacy CalibrationResult covered only this
+ *   Rule 3: Trade plan structural issues (math broken)
+ *   Rule 4: Options strategy format violations
+ *   Rule 5: Verdict signal contradicts debate weight
+ *
+ * Rules 3 and 5 are MATERIAL — they trigger a one-shot retry of the Judge
+ * with corrective context. Rule 2 is material only when severe (delta >=15).
+ * Rules 1 and 4 are SURFACED to the user as inline notes but never trigger
+ * retry — the verdict is usable, just imperfect.
+ *
+ * Retain CalibrationResult fields verbatim so existing callers continue to
+ * work without code changes (it's a strict superset).
+ */
+export interface JudgeReviewResult {
+  // ── Rule 2: Calibration (legacy CalibrationResult fields) ──
   draftConfidence: number
   draftSignal: Signal
-  // Calibrator's recommended adjustment
   recommendedConfidence: number
-  adjustmentDelta: number              // recommended - draft (can be negative)
+  adjustmentDelta: number
   adjustmentDirection: 'up' | 'down' | 'unchanged'
   confidenceBand: { low: number; high: number }
-  // Rationale
   reasoning: string
-  overconfidenceFlags: string[]        // signs the draft was too confident
-  underconfidenceFlags: string[]       // signs the draft was too cautious
-  mutualConcessions: boolean           // did BOTH sides concede meaningful points?
-  unresolvedChallenge: string | null   // the strongest still-open Devil point
+  overconfidenceFlags: string[]
+  underconfidenceFlags: string[]
+  mutualConcessions: boolean
+  unresolvedChallenge: string | null
+
+  // ── New: Rules 1, 3, 4, 5 ──
+  /** Rule 1: did the Judge re-analyze instead of judging? */
+  reAnalysisFlags: string[]
+  /** Rule 3: trade plan math problems (entry/stop/target inconsistencies, missing prices, etc.) */
+  tradePlanIssues: string[]
+  /** Rule 4: options strategy missing required components (per Bug 25 format requirements) */
+  optionsStrategyIssues: string[]
+  /** Rule 5: does signal direction contradict where evidence landed? Single-string description or null when clean. */
+  signalMismatchConcern: string | null
+
+  // ── Overall status determines retry behavior ──
+  /** clean = no flags fired
+   *  minor_notes = flags fired but only on rules 1, 4, or small Rule 2 — surface only
+   *  material_concerns = rules 3, 5, or high-severity Rule 2 fired — triggers Judge retry */
+  overallStatus: 'clean' | 'minor_notes' | 'material_concerns'
+
+  // ── Metadata ──
+  /** Which rules triggered the material_concerns status, if any */
+  materialRuleNumbers: number[]
   calibratorModel: string
 }
+
+/** Backwards-compat alias. CalibrationResult was the previous name; we kept
+ *  the legacy field shape in JudgeReviewResult so all existing readers
+ *  continue to work without modification. */
+export type CalibrationResult = JudgeReviewResult
 
 export interface JudgeResult {
   signal: Signal
@@ -1677,6 +1719,44 @@ PROCEDURAL RULES:
 - Never cite missing or unavailable data as a reason for lower conviction. If a metric is unavailable, ignore it entirely rather than mentioning its absence.
 - Refer to council members by their role names only.
 
+═════════════════════════════════════════════════════════════════════
+OPTIONS STRATEGY GUIDANCE — for the optionsStrategy field
+═════════════════════════════════════════════════════════════════════
+
+The optionsStrategy field is a real strategic recommendation, not a generic "consider calls if bullish" paragraph. Translate the available options data (in BUNDLE OPTIONS ANALYSIS and any LIVE TRADIER CHAIN sections) into specific strike/expiry/structure recommendations. Apply these principles:
+
+1. DELTA IS DIRECTIONAL EXPOSURE, NOT PROBABILITY. A 0.30 delta call behaves like 30 shares of the underlying per contract. The 0.30 figure is also approximately the probability of finishing ITM at expiry, but only as a side effect — what matters for strategy is the directional exposure. Match delta to conviction: high conviction + directional thesis → 0.50-0.70 delta (closer to ITM, more directional, less leverage). Low/medium conviction or wanting cheap optionality → 0.20-0.35 delta (further OTM, more leverage, lower hit rate).
+
+2. IV CONTEXT MATTERS MORE THAN ABSOLUTE IV. 50% IV is high for SPY but low for ARKK or biotech. When the bundle reports IV skew, IV signal, or earnings implied move vs historical, USE that comparison. If implied move is meaningfully larger than historical (e.g., ±2.6% implied vs ±0.6% historical), IV is elevated and long premium is expensive — favor spreads over naked long. If implied move is at or below historical, long premium is cheap — naked long calls/puts make sense.
+
+3. EXPIRY MATCHES THESIS HORIZON, WITH BUFFER. For 1D timeframe verdicts: 0-7 day expiries (weekly options). For 1W: 14-30 day expiries (you want time for the move to develop AND time to exit before final-week theta acceleration). For 1M: 30-60 day expiries. For 3M: 60-120 day expiries. NEVER recommend an expiry that ends before the catalyst the thesis depends on (e.g., don't recommend a Friday-expiring call when the thesis hinges on next Tuesday's earnings).
+
+4. STRUCTURE FOLLOWS IV REGIME AND CONVICTION:
+   - High conviction + LOW IV: long calls/puts (ATM or slightly ITM, ~0.55-0.65 delta) — premium is cheap, you want max directional exposure
+   - High conviction + HIGH IV: vertical debit spreads (buy ATM, sell OTM) — you reduce premium cost and IV crush risk; max profit at short strike
+   - Medium conviction + any IV: vertical debit spreads — defines risk, lower cost, accepts capped profit
+   - Low conviction or "directional but uncertain timing": calendar spreads or diagonals — short-dated short strike captures decay, long-dated long strike provides directional exposure if thesis plays out
+   - Pre-earnings IV crush risk: avoid naked long premium, prefer iron condor or vertical spread to neutralize vega
+   - High GEX (positive, dealers long gamma): mean-reversion environment — favor selling premium near pinned levels, fade extremes
+   - Negative GEX (dealers short gamma): trending environment — favor directional long premium, breakouts have momentum
+
+5. CITE THE BUNDLE'S OPTIONS DATA SPECIFICALLY. The BUNDLE OPTIONS ANALYSIS section provides P/C ratio, max pain, IV skew, GEX, short interest, and unusual sweep activity. Reference these in your reasoning. Examples:
+   - "P/C volume of 1.71 reflects elevated put buying which often precedes a squeeze higher when fundamentals are improving — supports the bullish bias for short-dated calls"
+   - "Max pain at $48 suggests pinning risk — favor a vertical spread with short strike at or above $50 to avoid expiring at max pain"
+   - "Unusual sweep on $55 calls expiring in 3 weeks (1886 vol vs 384 OI) provides a follow-the-flow target for long call exposure"
+
+6. OUTPUT REQUIREMENTS for optionsStrategy:
+   - Specify structure (long call/put, vertical spread, calendar, etc.)
+   - Specify strike(s) — anchor to current price + delta target (e.g., "ATM ~$48 calls" or "buy $48/sell $55 vertical")
+   - Specify expiry — anchor to thesis horizon (e.g., "30-45 DTE" or "weekly expiring next Friday")
+   - State the IV context (high/normal/low relative to historical or earnings move)
+   - State the dollar risk per contract (or per spread)
+   - One sentence explaining WHY this beats just buying the stock (leverage, defined risk, IV monetization, etc.)
+
+DO NOT write generic "consider buying calls" recommendations. If the verdict is BULLISH but conviction is low, recommend a vertical debit spread rather than naked long calls — that's a real strategic differentiator. If the verdict is NEUTRAL, recommend an iron condor or short straddle rather than nothing — neutral verdicts have valid premium-selling strategies. If the bundle data is insufficient (no live chain, no IV), state that and recommend simplest structure (e.g., "with limited live chain data, default to a 30-DTE vertical debit spread at the verdict's entry price ± ATR").
+
+═════════════════════════════════════════════════════════════════════
+
 ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
 }
 
@@ -1810,7 +1890,7 @@ JSON ONLY --- include ALL fields below:
   "fundamentalsExplained": "Explain what the fundamental signals mean in plain English. Analyst ratings, earnings implications, insider activity, implied move if applicable. 3-4 sentences.",
   "smartMoneyExplained": "Explain smart money signals in plain English. Insider buying/selling, congressional trades, options flow, GEX, short interest. 3-4 sentences.",
   "actionPlan": "Clear, specific, step-by-step action plan. Reference ATR-derived stop and target. 4-5 sentences.",
-  "optionsStrategy": "Single best options approach given verdict + IV + GEX + earnings proximity. One paragraph for someone who knows options basics."
+  "optionsStrategy": "REQUIRED FORMAT: One detailed paragraph (4-6 sentences) following the OPTIONS STRATEGY GUIDANCE in the system prompt. MUST include: (a) specific structure (long call/put, vertical spread, calendar, iron condor — not just 'options'), (b) specific strike(s) anchored to current price + target delta, (c) specific expiry window anchored to thesis horizon, (d) IV regime context (elevated/normal/compressed vs historical or earnings implied move), (e) approximate dollar risk per contract or spread, (f) one sentence on why this structure beats simply trading the stock. Cite the bundle's options data (P/C ratio, max pain, GEX, IV skew, unusual sweeps) by specific values where relevant. Do NOT write generic 'consider buying calls' recommendations — that fails the format requirement."
 }`
 }
 
@@ -1885,34 +1965,102 @@ async function runJudgeGemini(
  * Build the calibration system prompt. Independent of lens/persona
  * because calibration is about confidence math, not analytical framing.
  */
-function buildCalibratorSystemPrompt(bundle: SignalBundle): string {
-  return `You are the Confidence Calibrator in an elite AI stock council for ${bundle.ticker}. The Judge has just produced a DRAFT verdict. Your job --- your ONLY job --- is to review the debate and recommend whether the Judge's confidence number should move up, down, or stay.
+function buildJudgeReviewerSystemPrompt(bundle: SignalBundle): string {
+  return `You are the Judge Reviewer in an elite AI stock council for ${bundle.ticker}. The Judge has produced a DRAFT verdict. Your job is to audit the draft against a 5-rule checklist BEFORE the verdict ships to the user.
 
-You are NOT re-arguing the case. You are NOT second-guessing the direction (BULLISH/BEARISH/NEUTRAL). You are auditing the CONFIDENCE NUMBER.
+You are NOT re-arguing the directional case. You are NOT proposing alternative verdicts. You ONLY check for specific procedural and structural issues per these 5 rules:
+
+═════════════════════════════════════════════════════════════════════
+RULE 1 — Re-analysis instead of judging (procedural)
+═════════════════════════════════════════════════════════════════════
+Did the Judge's reasoning cite raw indicators (e.g. "RSI at 65", "price 27% above SMA200", "earnings beat by $0.07") as if making the case itself, rather than evaluating which side cited those indicators more effectively? The Judge's job is to weigh which side built the stronger argument --- not to redo the analysis. Re-analysis sentences typically start with "the RSI is..." or "the price is X% above...". Judging sentences typically start with "the Lead correctly identified..." or "the Devil's R2 research materially weakened..."
+
+Flag specific examples if found. If clean, return an empty array.
+
+═════════════════════════════════════════════════════════════════════
+RULE 2 — Confidence calibration (calibration)
+═════════════════════════════════════════════════════════════════════
+Does the Judge's confidence number match what the debate actually shows?
 
 CALIBRATION PRINCIPLES:
-
 1. LLMs systematically overconfidence predictions. The base rate bias is toward numbers that are too high. When in doubt, lean toward lowering.
-
-2. Mutual concessions indicate real uncertainty. If BOTH Lead and Devil conceded meaningful points in Round 2, confidence should reflect that this was a genuinely ambiguous setup --- regardless of how strong the winning argument sounded. A 78% confidence on a debate where both sides honestly conceded is almost certainly overcalibrated.
-
+2. Mutual concessions indicate real uncertainty. If BOTH Lead and Devil conceded meaningful points in Round 2, confidence should reflect genuine ambiguity --- regardless of how strong the winning argument sounded. A 78% confidence on a debate where both sides honestly conceded is almost certainly overcalibrated.
 3. Asymmetric thresholds:
-   - PUSH DOWN when you see: mutual concessions, unresolved challenge from the losing side, research answers that partially supported the other side, surface-level argument quality, reflexivity concerns (late cycle, all-time highs, extreme positioning)
-   - PUSH UP requires: strong mutual convergence from both sides, losing side explicitly yielded on multiple points, overwhelming data convergence, clear catalyst alignment
-
-4. Timeframe honesty. A 3-month thesis with 80% confidence is often more justified than a 1-day call with 80% confidence --- short timeframes have more noise. Factor this in.
-
+   - PUSH DOWN when you see: mutual concessions, unresolved challenge from the losing side, research answers that partially supported the other side, surface-level argument quality, reflexivity concerns (late cycle, all-time highs, extreme positioning), post-catalyst continuation theses
+   - PUSH UP requires: strong mutual convergence, losing side explicitly yielded on multiple points, overwhelming data convergence, clear catalyst alignment
+4. Timeframe honesty. A 3-month thesis with 80% confidence is often more justified than a 1-day call with 80% confidence. Short timeframes have more noise.
 5. Signal-specific calibration:
    - NEUTRAL can warrant HIGH confidence (70-80%+) when data is genuinely ambiguous
-   - BULLISH/BEARISH above 75% should be rare and only justified by overwhelming convergence
+   - BULLISH/BEARISH above 75% should be RARE and only justified by overwhelming convergence
    - Most real-world calls belong in the 55-72% range
 
-6. Your recommendation is ADVISORY. The Judge will still produce the final verdict. But a well-reasoned recommendation should rarely be ignored.
+Material severity: a calibration miss of 15+ points (e.g., draft is 80% but evidence supports 60-65%) is MATERIAL and triggers retry. Smaller misses (5-10 points) are surface-only.
+
+═════════════════════════════════════════════════════════════════════
+RULE 3 — Trade plan structural issues (math/format)
+═════════════════════════════════════════════════════════════════════
+Does the entry/stop/target add up consistently?
+
+For BULLISH verdicts: target MUST be > entry, AND entry MUST be > stop (price rises through entry, climbs to target, falls through stop). If the math is inverted, FLAG.
+
+For BEARISH verdicts: target MUST be < entry, AND entry MUST be < stop (price falls through entry, drops to target, rises through stop). If the math is inverted, FLAG.
+
+For NEUTRAL verdicts: prices may be null or vague --- no flag needed.
+
+Also flag: prices that are not parseable as dollar values (e.g., entry says "above breakout" with no number), risk/reward ratio implied by the levels seems wildly off from the stated R:R, or stop is closer than 0.3x ATR to entry (inside noise).
+
+Rule 3 flags are MATERIAL — they trigger retry.
+
+═════════════════════════════════════════════════════════════════════
+RULE 4 — Options strategy format violations (per Bug 25 contract)
+═════════════════════════════════════════════════════════════════════
+If the verdict includes an optionsStrategy field, does it include all 6 required components?
+
+  (a) Specific structure (long call/put, vertical spread, calendar, iron condor — NOT just "options" or "calls")
+  (b) Specific strike(s) anchored to current price + target delta
+  (c) Specific expiry window anchored to thesis horizon
+  (d) IV regime context (elevated/normal/compressed vs historical or earnings implied move)
+  (e) Approximate dollar risk per contract or spread
+  (f) One sentence on why this beats simply trading the stock
+
+Flag SPECIFIC missing components (e.g., "no expiry window specified" or "no IV context"). Rule 4 flags are SURFACE-ONLY (do not trigger retry) — the verdict still ships, the user sees the note.
+
+═════════════════════════════════════════════════════════════════════
+RULE 5 — Verdict signal contradicts debate weight
+═════════════════════════════════════════════════════════════════════
+Does the signal match where the evidence landed?
+
+Examples of contradiction:
+- Both sides conceded the bull case was materially stronger, but verdict is BEARISH
+- Lead's case was demolished by Devil's R2 research, but verdict is high-confidence BULLISH
+- The signal is the opposite of what the winning argument's direction was
+
+This is rare. Most of the time the Judge directionally aligns with the winning argument. But when it doesn't, that's a serious procedural failure that requires retry.
+
+Rule 5 flags are MATERIAL — they trigger retry.
+
+═════════════════════════════════════════════════════════════════════
+
+OUTPUT contract:
+
+You return strict JSON. The schema includes all 5 rules' findings PLUS overall status. Material concerns trigger a one-shot Judge retry; minor notes only get surfaced. Cleanness is the default — only flag when the rule actually fires.
+
+overallStatus computation:
+- "clean" = no flags on any rule
+- "minor_notes" = flags only on rules 1 or 4, AND rule 2 adjustment if any is <15 points
+- "material_concerns" = rules 3 or 5 fired, OR rule 2 adjustment is >=15 points
 
 ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
 }
 
-async function runCalibrator(
+/** Backwards-compat: previous code references buildCalibratorSystemPrompt.
+ *  The renamed buildJudgeReviewerSystemPrompt is the canonical name now,
+ *  but this alias keeps existing call sites working without modification. */
+function buildCalibratorSystemPrompt(bundle: SignalBundle): string {
+  return buildJudgeReviewerSystemPrompt(bundle)
+}
+
+async function runJudgeReviewer(
   bundle: SignalBundle,
   draftJudge: JudgeResult,
   gemini: GeminiResult,
@@ -1920,9 +2068,9 @@ async function runCalibrator(
   gpt: GptResult,
   rebuttal: RebuttalResult | undefined,
   counter: CounterResult | undefined,
-): Promise<CalibrationResult> {
+): Promise<JudgeReviewResult> {
 
-  const systemPrompt = buildCalibratorSystemPrompt(bundle)
+  const systemPrompt = buildJudgeReviewerSystemPrompt(bundle)
 
   const concedesCount = rebuttal?.concedes?.length ?? 0
   const yieldsCount = counter?.yieldsOn?.length ?? 0
@@ -1930,7 +2078,7 @@ async function runCalibrator(
 
   const userPrompt = `TICKER: ${bundle.ticker} | TIMEFRAME: ${bundle.timeframe} | PRICE: $${bundle.currentPrice.toFixed(2)}
 
-━━━ DRAFT VERDICT (what you're calibrating) ━━━
+━━━ DRAFT VERDICT (what you're reviewing) ━━━
 Judge model:     ${draftJudge.judgeModel ?? 'unknown'}
 Draft signal:    ${draftJudge.signal}
 Draft confidence: ${draftJudge.confidence}%
@@ -1938,7 +2086,16 @@ Draft summary:   ${draftJudge.summary}
 Winning argument: ${draftJudge.winningArgument}
 Dissenting view:  ${draftJudge.dissent}
 
-━━━ DEBATE EVIDENCE (what you use to calibrate) ━━━
+━━━ DRAFT TRADE PLAN (for Rule 3 check) ━━━
+Entry:  ${draftJudge.entryPrice ?? '(none)'}
+Stop:   ${draftJudge.stopLoss ?? '(none)'}
+Target: ${draftJudge.takeProfit ?? '(none)'}
+Time horizon: ${draftJudge.timeHorizon ?? '(none)'}
+
+━━━ DRAFT OPTIONS STRATEGY (for Rule 4 check) ━━━
+${draftJudge.optionsStrategy ?? '(no options strategy provided — Rule 4 is N/A)'}
+
+━━━ DEBATE EVIDENCE (what you use to evaluate) ━━━
 
 LEAD ANALYST (${claude.signal} @ ${claude.confidence}% initially):
   Reasoning: ${claude.reasoning}
@@ -1957,59 +2114,102 @@ DEVIL'S ADVOCATE (${gpt.signal} @ ${gpt.confidence}% initially):
 
 NEWS SCOUT: ${gemini.summary}
 
-━━━ CALIBRATION OBSERVATIONS ━━━
-- Both sides conceded meaningful points: ${bothConceded ? 'YES --- this is a strong signal of genuine ambiguity; confidence should be moderate' : 'NO --- one or both sides did not concede, check if this was intellectual honesty or stubbornness'}
-- Rebuttal research contradicted Lead's initial thesis: inspect rebuttal.researchAnswer vs Lead reasoning
-- Counter research strengthened or weakened Devil's case: inspect counter.researchAnswer
+━━━ OBSERVATIONS ━━━
+- Both sides conceded meaningful points: ${bothConceded ? 'YES --- this is a strong signal of genuine ambiguity; confidence should be moderate' : 'NO --- one or both sides did not concede'}
 
 ━━━ YOUR TASK ━━━
 
-Output a calibration recommendation. Your recommendation should move the confidence number if the evidence supports it, and leave it unchanged if the draft is genuinely well-calibrated.
+Audit the draft against the 5-rule checklist. Output strict JSON with findings for each rule. Be MECHANICAL — only flag when a rule actually fires; don't manufacture issues to look thorough.
 
-Do NOT change the signal direction. Only calibrate confidence.
+If the trade plan is missing (entry/stop/target all null on a directional verdict), that itself is a Rule 3 flag.
+
+If draft.optionsStrategy is null or "(no options strategy provided)", Rule 4 is N/A and optionsStrategyIssues should be empty.
 
 JSON ONLY:
 {
   "draftConfidence": ${draftJudge.confidence},
   "draftSignal": "${draftJudge.signal}",
-  "recommendedConfidence": <0-100 integer --- your calibrated recommendation>,
+  "recommendedConfidence": <0-100 integer — your calibrated recommendation (Rule 2)>,
   "adjustmentDelta": <recommendedConfidence - draftConfidence, can be negative>,
   "adjustmentDirection": "up|down|unchanged",
   "confidenceBand": { "low": <integer>, "high": <integer> },
-  "reasoning": "2-3 sentences explaining why confidence should move (or stay). Cite specific concessions, unresolved challenges, or convergence evidence.",
+  "reasoning": "2-3 sentences explaining the calibration call. Cite specific concessions, unresolved challenges, or convergence evidence.",
   "overconfidenceFlags": ["specific signs the draft was too confident, 0-3 items"],
   "underconfidenceFlags": ["specific signs the draft was too cautious, 0-3 items"],
   "mutualConcessions": ${bothConceded},
-  "unresolvedChallenge": "the single strongest still-open challenge from the losing side, or null if thesis cleanly won"
+  "unresolvedChallenge": "the single strongest still-open challenge from the losing side, or null if thesis cleanly won",
+  "reAnalysisFlags": ["specific examples of the draft Judge re-analyzing instead of judging (Rule 1), 0-3 items. Empty array if clean."],
+  "tradePlanIssues": ["specific structural problems with entry/stop/target (Rule 3), 0-3 items. Empty array if clean. Examples: 'BULLISH but stop ($52) above entry ($48)', 'Target is unparseable: above breakout', 'Stop within 0.15× ATR — inside noise band'"],
+  "optionsStrategyIssues": ["specific missing components in optionsStrategy (Rule 4), 0-6 items. Empty array if clean or N/A. Examples: 'No expiry window specified', 'No IV regime context', 'Generic recommend calls without strikes'"],
+  "signalMismatchConcern": "single string describing how signal contradicts debate weight (Rule 5), or null if signal aligns with evidence."
 }`
 
   try {
     const msg = await getAnthropic().messages.create({
       model: 'claude-opus-4-7',
-      max_tokens: 1200,
+      max_tokens: 2000,  // increased from 1200 — extra rules need more room
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }]
     })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const raw = parseJSON<Omit<CalibrationResult, 'calibratorModel'>>(extractText(msg.content as any[]))
+    const raw = parseJSON<Omit<JudgeReviewResult, 'calibratorModel' | 'overallStatus' | 'materialRuleNumbers'>>(extractText(msg.content as any[]))
+
     // Clamp recommendedConfidence to 0-100 and recompute delta/direction defensively
     const clampedRec = Math.max(0, Math.min(100, Math.round(raw.recommendedConfidence)))
     const delta = clampedRec - draftJudge.confidence
     const direction: 'up' | 'down' | 'unchanged' =
       Math.abs(delta) < 2 ? 'unchanged' : delta > 0 ? 'up' : 'down'
 
+    // Defensive normalization of array fields — model may return null/undefined
+    // for any field; coerce to empty arrays.
+    const reAnalysisFlags = Array.isArray(raw.reAnalysisFlags) ? raw.reAnalysisFlags.slice(0, 5) : []
+    const tradePlanIssues = Array.isArray(raw.tradePlanIssues) ? raw.tradePlanIssues.slice(0, 5) : []
+    const optionsStrategyIssues = Array.isArray(raw.optionsStrategyIssues) ? raw.optionsStrategyIssues.slice(0, 6) : []
+    const signalMismatchConcern = typeof raw.signalMismatchConcern === 'string' && raw.signalMismatchConcern.trim() ? raw.signalMismatchConcern : null
+
+    // ── Compute overallStatus deterministically based on which rules fired ──
+    // material if rule 3 or rule 5 fired, OR if rule 2 delta >= 15 (severe miscalibration)
+    const materialRuleNumbers: number[] = []
+    if (tradePlanIssues.length > 0) materialRuleNumbers.push(3)
+    if (signalMismatchConcern) materialRuleNumbers.push(5)
+    if (Math.abs(delta) >= 15) materialRuleNumbers.push(2)
+
+    // minor if any flag fired but no material ones
+    const anyFlagFired =
+      reAnalysisFlags.length > 0 ||
+      optionsStrategyIssues.length > 0 ||
+      direction !== 'unchanged' ||
+      materialRuleNumbers.length > 0
+
+    const overallStatus: JudgeReviewResult['overallStatus'] =
+      materialRuleNumbers.length > 0 ? 'material_concerns'
+      : anyFlagFired ? 'minor_notes'
+      : 'clean'
+
     return {
-      ...raw,
       draftConfidence: draftJudge.confidence,
       draftSignal: draftJudge.signal,
       recommendedConfidence: clampedRec,
       adjustmentDelta: delta,
       adjustmentDirection: direction,
+      confidenceBand: raw.confidenceBand ?? { low: clampedRec, high: clampedRec },
+      reasoning: raw.reasoning ?? '',
+      overconfidenceFlags: Array.isArray(raw.overconfidenceFlags) ? raw.overconfidenceFlags.slice(0, 3) : [],
+      underconfidenceFlags: Array.isArray(raw.underconfidenceFlags) ? raw.underconfidenceFlags.slice(0, 3) : [],
+      mutualConcessions: !!raw.mutualConcessions,
+      unresolvedChallenge: typeof raw.unresolvedChallenge === 'string' ? raw.unresolvedChallenge : null,
+      reAnalysisFlags,
+      tradePlanIssues,
+      optionsStrategyIssues,
+      signalMismatchConcern,
+      overallStatus,
+      materialRuleNumbers,
       calibratorModel: 'claude-opus-4-7',
     }
   } catch (err) {
-    // If calibrator fails, return a no-op calibration so pipeline doesn't crash
-    console.warn('[calibrator] failed, returning no-op:', (err as Error).message?.slice(0, 200))
+    // If reviewer fails, return a no-op review so pipeline doesn't crash.
+    // The Judge's draft will ship as-is.
+    console.warn('[judge-reviewer] failed, returning no-op:', (err as Error).message?.slice(0, 200))
     return {
       draftConfidence: draftJudge.confidence,
       draftSignal: draftJudge.signal,
@@ -2017,14 +2217,34 @@ JSON ONLY:
       adjustmentDelta: 0,
       adjustmentDirection: 'unchanged',
       confidenceBand: { low: draftJudge.confidence, high: draftJudge.confidence },
-      reasoning: 'Calibrator unavailable --- draft confidence preserved unchanged.',
+      reasoning: 'Reviewer unavailable --- draft verdict preserved unchanged.',
       overconfidenceFlags: [],
       underconfidenceFlags: [],
       mutualConcessions: bothConceded,
       unresolvedChallenge: null,
-      calibratorModel: 'calibrator-failed',
+      reAnalysisFlags: [],
+      tradePlanIssues: [],
+      optionsStrategyIssues: [],
+      signalMismatchConcern: null,
+      overallStatus: 'clean',
+      materialRuleNumbers: [],
+      calibratorModel: 'reviewer-failed',
     }
   }
+}
+
+/** Backwards-compat alias. Renamed runCalibrator → runJudgeReviewer to
+ *  reflect expanded responsibility (5 rules, not just Rule 2 calibration). */
+async function runCalibrator(
+  bundle: SignalBundle,
+  draftJudge: JudgeResult,
+  gemini: GeminiResult,
+  claude: ClaudeResult,
+  gpt: GptResult,
+  rebuttal: RebuttalResult | undefined,
+  counter: CounterResult | undefined,
+): Promise<CalibrationResult> {
+  return runJudgeReviewer(bundle, draftJudge, gemini, claude, gpt, rebuttal, counter)
 }
 
 /**
@@ -2127,17 +2347,27 @@ export async function runJudgeWithCalibration(
   }
 
   // ── Step 2: Calibrator reviews the draft confidence ──
+  // ── Step 2: Judge Reviewer audits the draft against 5-rule checklist ──
+  // (Replaces the old single-purpose "calibrator" which only handled Rule 2.)
+  // The variable name 'calibration' is retained for backwards-compat with
+  // the function signatures and the calibration_log table — the review
+  // is a strict superset of the old calibration data.
   const calibration = await runCalibrator(bundle, draft, gemini, claude, gpt, rebuttal, counter)
 
-  // ── Step 3: If calibrator recommended an adjustment, re-run the Judge
-  //    with the calibration as explicit guidance. Otherwise skip and save cost.
+  // ── Step 3: Decide whether to retry the Judge ──
+  // Material concerns (Rules 3, 5, or severe Rule 2) → one-shot retry with corrective context
+  // Minor notes (Rules 1, 4, or mild Rule 2) → ship draft as-is; flags surface to user
+  // Clean → ship draft as-is, no flags
+  //
+  // The retry is ONE-SHOT — Judge v2 ships regardless of whether the reviewer would
+  // have new concerns. This prevents infinite loops if the reviewer is over-eager.
   let finalJudge: JudgeResult
 
-  if (calibration.adjustmentDirection === 'unchanged') {
-    // Draft was well-calibrated --- no second Judge call needed
-    finalJudge = sanitizeJudgeResult(draft, bundle)
-  } else {
-    // Re-run Judge with calibration input
+  if (calibration.overallStatus === 'material_concerns') {
+    // Re-run Judge with corrective context covering BOTH calibration AND
+    // structural concerns. The reviewer's flags (trade plan issues, signal
+    // mismatch concern, severe calibration delta) are injected into the
+    // Judge prompt as explicit guidance.
     try {
       finalJudge = await runJudgeWithCalibrationInput(
         bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator,
@@ -2145,14 +2375,21 @@ export async function runJudgeWithCalibration(
       )
       finalJudge = sanitizeJudgeResult(finalJudge, bundle)
     } catch (err) {
-      // If the final call fails, fall back to draft with the calibrator's
-      // recommended confidence applied directly. Better than losing the debate.
-      console.warn('[judge-final] re-run failed, applying calibration to draft:', (err as Error).message?.slice(0, 200))
+      // Retry failed — fall back to draft with the reviewer's confidence applied.
+      // Trade plan / signal issues will remain in the v1 verdict surfaced to user
+      // via the review flags. Better than losing the debate entirely.
+      console.warn('[judge-final] retry failed, applying calibration to draft:', (err as Error).message?.slice(0, 200))
       finalJudge = sanitizeJudgeResult({
         ...draft,
         confidence: calibration.recommendedConfidence,
       }, bundle)
     }
+  } else {
+    // overallStatus is 'clean' or 'minor_notes' — ship the draft directly.
+    // If minor_notes fired (Rule 1 re-analysis, Rule 4 options format, or
+    // mild Rule 2 calibration), the reviewer's flags will be surfaced to
+    // the user via the persisted judge_review_pipeline JSONB column.
+    finalJudge = sanitizeJudgeResult(draft, bundle)
   }
 
   // ── Fire-and-forget: log calibration for backtest analysis ──
@@ -2182,23 +2419,48 @@ async function runJudgeWithCalibrationInput(
   verifications: VerificationsByStage | undefined,
 ): Promise<JudgeResult> {
 
+  // Build per-rule corrective guidance blocks. Only include sections where
+  // the rule actually fired — keeps the prompt focused on what needs to change.
+  const calibrationBlock = calibration.adjustmentDirection !== 'unchanged' ? `
+CALIBRATION (Rule 2):
+  - Adjust confidence ${calibration.adjustmentDirection.toUpperCase()} to approximately ${calibration.recommendedConfidence}% (delta: ${calibration.adjustmentDelta >= 0 ? '+' : ''}${calibration.adjustmentDelta})
+  - Reasonable band: ${calibration.confidenceBand.low}%–${calibration.confidenceBand.high}%
+  - Reasoning: ${calibration.reasoning}
+  ${calibration.overconfidenceFlags.length > 0 ? `- Overconfidence signs: ${calibration.overconfidenceFlags.join('; ')}` : ''}
+  ${calibration.underconfidenceFlags.length > 0 ? `- Underconfidence signs: ${calibration.underconfidenceFlags.join('; ')}` : ''}
+  ${calibration.unresolvedChallenge ? `- Strongest unresolved challenge: "${calibration.unresolvedChallenge}"` : ''}` : ''
+
+  const tradePlanBlock = calibration.tradePlanIssues.length > 0 ? `
+TRADE PLAN STRUCTURE (Rule 3) — MUST FIX:
+${calibration.tradePlanIssues.map(issue => `  - ${issue}`).join('\n')}
+  Re-derive entry/stop/target so the math is internally consistent:
+    - BULLISH: target > entry > stop, all as parseable dollar values
+    - BEARISH: stop > entry > target, all as parseable dollar values
+    - Risk/reward implied by the levels should match your stated thesis horizon
+    - Stop should be at least 0.3× ATR away from entry (outside noise band)` : ''
+
+  const optionsBlock = calibration.optionsStrategyIssues.length > 0 ? `
+OPTIONS STRATEGY FORMAT (Rule 4) — MUST FIX:
+${calibration.optionsStrategyIssues.map(issue => `  - ${issue}`).join('\n')}
+  Re-write optionsStrategy to include all 6 required components: specific structure (long call/put/vertical spread/calendar/condor), specific strike(s), specific expiry, IV regime context, dollar risk per contract, why-this-beats-stock sentence.` : ''
+
+  const signalBlock = calibration.signalMismatchConcern ? `
+SIGNAL DIRECTION (Rule 5) — REVIEW:
+  The reviewer flagged: "${calibration.signalMismatchConcern}"
+  Re-examine your verdict's direction against where the evidence actually landed. If both sides conceded the bull case was stronger, the verdict should not be BEARISH. If the Lead's case was demolished, a high-confidence BULLISH verdict is incorrect. Consider whether the signal should change — or, if you believe the signal is right, strengthen winningArgument with the specific evidence that justifies it despite the apparent contradiction.` : ''
+
   const calibrationGuidance = `
 
-━━━ CALIBRATION GUIDANCE FROM INDEPENDENT REVIEWER ━━━
+━━━ INDEPENDENT REVIEWER FEEDBACK ON YOUR DRAFT ━━━
 
-Your DRAFT verdict was ${draft.signal} @ ${draft.confidence}% confidence.
+Your DRAFT verdict was ${draft.signal} @ ${draft.confidence}% confidence with entry ${draft.entryPrice ?? '(none)'} / stop ${draft.stopLoss ?? '(none)'} / target ${draft.takeProfit ?? '(none)'}.
 
-An independent calibrator (Claude Opus) reviewed the full debate and the draft, and recommends:
-  - Adjust confidence ${calibration.adjustmentDirection.toUpperCase()} to approximately ${calibration.recommendedConfidence}%
-  - Reasonable confidence band: ${calibration.confidenceBand.low}%–${calibration.confidenceBand.high}%
-  - Reasoning: ${calibration.reasoning}
-  ${calibration.overconfidenceFlags.length > 0 ? `- Overconfidence flags raised: ${calibration.overconfidenceFlags.join('; ')}` : ''}
-  ${calibration.underconfidenceFlags.length > 0 ? `- Underconfidence flags raised: ${calibration.underconfidenceFlags.join('; ')}` : ''}
-  ${calibration.unresolvedChallenge ? `- Strongest unresolved challenge: "${calibration.unresolvedChallenge}"` : ''}
+An independent reviewer (Claude Opus) audited your draft against a 5-rule procedural checklist. The following concerns were flagged as material and need to be addressed in your final verdict:
+${calibrationBlock}${tradePlanBlock}${optionsBlock}${signalBlock}
 
-This calibrator did not form an opinion on direction (BULLISH/BEARISH/NEUTRAL) --- only on how certain you should be. You are NOT required to follow this recommendation blindly, but well-reasoned calibration advice should rarely be ignored. Use the recommended confidence as your baseline and only deviate if you have a specific reason.
+The reviewer did NOT re-analyze the directional thesis — only audit your draft for procedural and structural quality. You are NOT required to follow every recommendation blindly, but address each flagged concern explicitly. If you disagree with a flag, your final verdict should make the case for why your draft was correct on that dimension.
 
-Keep your verdict structure identical to the draft. Primarily update the confidence number and, if needed, soften or strengthen the summary/winningArgument/dissent to match the new calibrated confidence level.`
+Keep your verdict structure identical to the draft. Update only what's needed to address the flags. Do NOT introduce new analytical content not already supported by the debate.`
 
   // Build a user prompt that re-uses the main Judge logic but appends calibration guidance
   if (useGemini) {
@@ -2208,13 +2470,13 @@ Keep your verdict structure identical to the draft. Primarily update the confide
 
     const { text, modelUsed } = await generateWithFallback({
       prompt: fullPrompt,
-      caller: 'judge:calibrated-rerun',
+      caller: 'judge:reviewed-rerun',
       temperature: 0.2,
       maxOutputTokens: 8192,
       responseMimeType: 'application/json',
     })
     const raw = parseJSON<JudgeResult>(text)
-    return { ...raw, judgeModel: `-calibrated` }
+    return { ...raw, judgeModel: `-reviewed` }
   } else {
     const systemPrompt = buildJudgeSystemPrompt(bundle)
     const userPrompt = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator, verifications) + calibrationGuidance
@@ -2229,7 +2491,7 @@ Keep your verdict structure identical to the draft. Primarily update the confide
     const textBlock = msg.content.find((b: any) => b.type === 'text') as { type: 'text'; text: string } | undefined
     if (!textBlock) throw new Error('No text content in calibrated Judge response')
     const raw = parseJSON<JudgeResult>(textBlock.text)
-    return { ...raw, judgeModel: 'claude-opus-4-7-calibrated' }
+    return { ...raw, judgeModel: 'claude-opus-4-7-reviewed' }
   }
 }
 
