@@ -414,6 +414,13 @@ export async function POST(req: NextRequest) {
           final_confidence: result.judge.confidence,
           final_target: result.judge.target,
           final_risk: result.judge.risk,
+          // Bug 26 (May 2026): top-level columns for the target realism
+          // adjustment. The full JudgeResult lives in judge_verdict JSONB,
+          // but these convenience columns let dashboards/queries filter
+          // for adjusted verdicts without JSONB lookups. NULL when no
+          // adjustment fired.
+          take_profit_judge_original: result.judge.takeProfitJudgeOriginal ?? null,
+          take_profit_adjustment_note: result.judge.takeProfitAdjustmentNote ?? null,
           rounds_taken: result.judge.rounds,
           transcript: result.transcript,
           signal_bundle: {

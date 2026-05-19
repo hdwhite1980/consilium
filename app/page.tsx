@@ -205,6 +205,9 @@ interface JudgeResult {
   entryPrice: string; stopLoss: string; takeProfit: string; timeHorizon: string
   plainEnglish: string; technicalsExplained: string
   fundamentalsExplained: string; smartMoneyExplained: string; actionPlan: string; optionsStrategy?: string
+  // Bug 26: target realism adjustment metadata (optional, undefined when no adjustment fired)
+  takeProfitJudgeOriginal?: string
+  takeProfitAdjustmentNote?: string
 }
 
 const SIG_COLOR: Record<Signal, string> = { BULLISH: '#34d399', BEARISH: '#f87171', NEUTRAL: '#fbbf24' }
@@ -394,6 +397,8 @@ function HomeInner() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [judgeReview, setJudgeReview] = useState<any | null>(null)
   const [reviewExpanded, setReviewExpanded] = useState(false)
+  // Bug 26: target realism adjustment expansion state
+  const [targetAdjustmentExpanded, setTargetAdjustmentExpanded] = useState(false)
 
   const router = useRouter()
   const pathname = usePathname()
@@ -541,7 +546,7 @@ function HomeInner() {
   const run = useCallback(async () => {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
-    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setSoc(null); setErr(null); setCached(null); setVerify(null); setTrader(null); setJudgeReview(null); setReviewExpanded(false)
+    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setSoc(null); setErr(null); setCached(null); setVerify(null); setTrader(null); setJudgeReview(null); setReviewExpanded(false); setTargetAdjustmentExpanded(false)
 
     try {
       const res = await fetch('/api/analyze', {
@@ -599,7 +604,7 @@ function HomeInner() {
   const forceRun = useCallback(async () => {
     abortRef.current?.abort()
     abortRef.current = new AbortController()
-    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setSoc(null); setErr(null); setCached(null); setVerify(null); setTrader(null); setJudgeReview(null); setReviewExpanded(false)
+    setStage('building'); setStatus(''); setMd(null); setGem(null); setCla(null); setGpt(null); setReb(null); setCtr(null); setJud(null); setSoc(null); setErr(null); setCached(null); setVerify(null); setTrader(null); setJudgeReview(null); setReviewExpanded(false); setTargetAdjustmentExpanded(false)
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
@@ -1847,10 +1852,63 @@ function HomeInner() {
                       <span className="opacity-60">{reviewExpanded ? '▲' : '▼'}</span>
                     </button>
                   )}
+                  {/* Bug 26: Target Realism Adjustment badge —
+                      shown when enforceTargetRealism() capped the Judge's target.
+                      Click to toggle expanded explanation. */}
+                  {jud.takeProfitJudgeOriginal && jud.takeProfitAdjustmentNote && (
+                    <button
+                      type="button"
+                      onClick={() => setTargetAdjustmentExpanded(v => !v)}
+                      className="text-[10px] font-mono px-2 py-0.5 rounded-full inline-flex items-center gap-1 transition-colors"
+                      style={{
+                        background: 'rgba(56,189,248,0.12)',
+                        color: '#38bdf8',
+                        border: '1px solid rgba(56,189,248,0.3)',
+                        cursor: 'pointer',
+                      }}
+                      title="The Judge's original target was too far for this timeframe. It has been adjusted to a realistic distance based on the trade plan's stop-distance and the timeframe's typical price range.">
+                      <Target size={10} />
+                      Target adjusted for timeframe
+                      <span className="opacity-60">{targetAdjustmentExpanded ? '▲' : '▼'}</span>
+                    </button>
+                  )}
                   <span className="ml-auto text-[10px] font-mono" style={{ color: 'var(--text3)' }}>Final</span>
                 </div>
 
                 <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>{jud.summary}</p>
+
+                {/* Bug 26: Target Realism Adjustment expanded panel.
+                    Shows the original Judge target, the adjusted shipped target,
+                    and the human-readable explanation of why the adjustment
+                    fired. Only renders when the user has clicked the badge. */}
+                {jud.takeProfitJudgeOriginal && jud.takeProfitAdjustmentNote && targetAdjustmentExpanded && (
+                  <div className="rounded-lg p-3 text-xs space-y-2"
+                    style={{
+                      background: 'rgba(56,189,248,0.06)',
+                      border: '1px solid rgba(56,189,248,0.25)',
+                    }}>
+                    <div className="flex items-center gap-1.5 font-mono font-semibold"
+                      style={{ color: '#38bdf8' }}>
+                      <Target size={11} />
+                      <span>Target adjusted to realistic timeframe</span>
+                    </div>
+                    <div className="rounded p-2 font-mono text-[11px]"
+                      style={{ background: 'rgba(0,0,0,0.2)' }}>
+                      <div style={{ color: 'var(--text3)' }}>
+                        Original Judge target: <span style={{ color: 'var(--text2)' }}>{jud.takeProfitJudgeOriginal}</span>
+                      </div>
+                      <div style={{ color: 'var(--text3)' }}>
+                        Adjusted target shipped: <span style={{ color: 'var(--text)' }}>{jud.takeProfit}</span>
+                      </div>
+                    </div>
+                    <div className="leading-snug" style={{ color: 'var(--text2)' }}>
+                      {jud.takeProfitAdjustmentNote}
+                    </div>
+                    <div className="text-[10px] leading-snug" style={{ color: 'var(--text3)' }}>
+                      Targets that exceed typical timeframe price action lead to verdicts that expire without resolving. The system caps target distance at the timeframe's realistic R:R cap, anchored to the stop distance, so the trade plan resolves cleanly within its time horizon.
+                    </div>
+                  </div>
+                )}
 
                 {/* Judge Reviewer: inline notes panel.
                     Three render states:

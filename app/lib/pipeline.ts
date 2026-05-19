@@ -192,6 +192,22 @@ export interface JudgeResult {
   actionPlan: string
   optionsStrategy?: string
   judgeModel?: string
+
+  // ── Target realism adjustment (Bug 26, May 2026) ──
+  // When enforceTargetRealism() finds the Judge's target is too far for the
+  // timeframe's ATR/range, it adjusts the target inward to a realistic level
+  // and records the original here. UI surfaces the adjustment as a small note;
+  // grading and Trader evaluation use the adjusted (shipped) takeProfit.
+  //
+  // Optional fields preserve backwards compat — pre-Bug-26 verdicts have
+  // these undefined and downstream consumers treat that as "no adjustment".
+  /** The original target price the Judge wrote, before realism adjustment.
+   *  Undefined when no adjustment fired. */
+  takeProfitJudgeOriginal?: string
+  /** Human-readable description of the adjustment for UI display.
+   *  E.g., "Adjusted from $55.00 to $52.10 — Judge target was 3.2× ATR but typical 1W moves are 2× ATR".
+   *  Undefined when no adjustment fired. */
+  takeProfitAdjustmentNote?: string
 }
 
 export interface PipelineResult {
@@ -2600,6 +2616,196 @@ function extractPrice(s: string): number | null {
   return m ? parseFloat(m[1]) : null
 }
 
+/**
+ * Target Realism Enforcement (Bug 26, May 2026)
+ * ─────────────────────────────────────────────
+ *
+ * Problem the data showed:
+ *   Many v3 expired verdicts had direction=win — the Council picked direction
+ *   correctly but the Judge wrote chart-level targets (Fibonacci extensions,
+ *   prior swing highs) that were unreachable in the verdict's timeframe.
+ *   Examples:
+ *     DD 1W:  asked +13.7%, got +8.9%  → expired-but-direction-right
+ *     GOOG 1W: asked +7.9%, got +1.5% → expired-but-direction-right
+ *     AI 1W:  asked +9.3%, got +2.2%  → expired-but-direction-right
+ *
+ *   The Judge's prompt ALREADY says "1.5–2× ATR for 1W" but the rule is
+ *   advisory — the LLM ignores it when a chart level is "too compelling."
+ *
+ * What this function does:
+ *   Deterministically caps the target distance using TWO independent caps;
+ *   the tighter of the two wins:
+ *
+ *   (a) R:R-anchored cap: target_distance ≤ stop_distance × maxRr_for_timeframe
+ *       Catches "Judge picked a target with overly aggressive R:R."
+ *       Preserves the Judge's R:R intent within the envelope.
+ *
+ *   (b) ATR-anchored cap: target_distance ≤ ATR × maxAtrMult_for_timeframe
+ *       Catches "Judge picked a wide stop AND a wide target — absolute
+ *       distance is unrealistic for the timeframe regardless of R:R."
+ *
+ *   The initial Bug 26 build had only (a). Data showed v3 cases like GOOG
+ *   (R:R 2.34 — under the R:R cap) and AI (R:R 0.83 — well under) still had
+ *   unrealistic ABSOLUTE target distances. (b) catches these.
+ *
+ * Per-timeframe caps:
+ *           maxRr  maxAtrMult
+ *   1D:     2.0    1.5
+ *   1W:     2.5    3.0
+ *   1M:     3.5    5.0
+ *   3M:     5.0    8.0
+ *
+ * When the function does NOT adjust:
+ *   • Non-directional signals (NEUTRAL)
+ *   • Unparseable entry/stop/target (no math possible)
+ *   • Math already inverted (Bug 18 territory, sanitizeJudgeResult handles)
+ *   • Target already within both caps' envelopes
+ *
+ * Returns either the original JudgeResult unchanged, or a copy with
+ * adjusted takeProfit + takeProfitJudgeOriginal + takeProfitAdjustmentNote
+ * fields populated for UI/audit.
+ */
+function enforceTargetRealism(judge: JudgeResult, bundle: SignalBundle, timeframe: string): JudgeResult {
+  // Skip non-directional
+  if (judge.signal !== 'BULLISH' && judge.signal !== 'BEARISH') return judge
+
+  const entry = extractPrice(judge.entryPrice)
+  const stop = extractPrice(judge.stopLoss)
+  const target = extractPrice(judge.takeProfit)
+
+  // Need all three numbers to do the math
+  if (entry === null || stop === null || target === null) return judge
+
+  // Two caps applied jointly:
+  //
+  // (a) R:R-anchored cap: target_distance ≤ stop_distance × maxRr
+  //     Catches "Judge picked a target with overly aggressive R:R relative
+  //     to the stop they chose." Preserves the Judge's R:R intent within
+  //     the timeframe-appropriate envelope.
+  //
+  // (b) ATR-anchored cap: target_distance ≤ ATR × maxAtrMultiple
+  //     Catches "Judge picked a wide stop AND a wide target — both distances
+  //     are unrealistic for the timeframe regardless of their R:R ratio."
+  //     This was missing from the initial Bug 26 build; observed in v3
+  //     GOOG/AI/DD cases where R:R was reasonable (2-2.6×) but ABSOLUTE
+  //     target distance asked for 8-14% moves in 1W.
+  //
+  // We compute both caps and apply the TIGHTER one (= closer to entry).
+  // The note explains which cap fired.
+
+  // Per-timeframe max R:R (target_distance / stop_distance)
+  const maxRrByTimeframe: Record<string, number> = {
+    '1D': 2.0,
+    '1W': 2.5,
+    '1M': 3.5,
+    '3M': 5.0,
+  }
+  const maxRr = maxRrByTimeframe[timeframe] ?? 2.5
+
+  // Per-timeframe max ATR multiple for target distance.
+  // Tuned from observed v3 data — typical price action for the timeframe.
+  //   1D: tight — intraday moves usually within 1× daily ATR
+  //   1W: 3× ATR — generous enough for momentum continuation, tight enough
+  //                to convert the obvious overreaches (GOOG +8% in 1W,
+  //                AI +9% in 1W, DD +13% in 1W)
+  //   1M: 5× ATR — pattern targets allowed, capped before truly fantasy levels
+  //   3M: 8× ATR — wide chart-level targets reasonable on quarterly horizon
+  const maxAtrMultByTimeframe: Record<string, number> = {
+    '1D': 1.5,
+    '1W': 3.0,
+    '1M': 5.0,
+    '3M': 8.0,
+  }
+  const maxAtrMult = maxAtrMultByTimeframe[timeframe] ?? 3.0
+
+  // Compute current state
+  const stopDistance = Math.abs(entry - stop)
+  const targetDistance = Math.abs(entry - target)
+
+  // Defensive: stop distance must be positive
+  if (stopDistance <= 0) return judge
+
+  const currentRr = targetDistance / stopDistance
+  const atr = bundle.technicals?.atr14 ?? 0
+
+  // Cap (a): R:R-anchored
+  const capRrDistance = stopDistance * maxRr
+
+  // Cap (b): ATR-anchored (only if ATR is available)
+  const capAtrDistance = atr > 0 ? atr * maxAtrMult : Infinity
+
+  // The realistic target distance is the TIGHTER (smaller) of the two caps
+  const realisticTargetDistance = Math.min(capRrDistance, capAtrDistance)
+
+  // If the Judge's target is already within the realistic envelope,
+  // no adjustment needed.
+  if (targetDistance <= realisticTargetDistance) return judge
+
+  // Determine which cap fired (for the human-readable note)
+  const rrCapFired = capRrDistance < capAtrDistance
+  const atrCapFired = capAtrDistance < capRrDistance && atr > 0
+  // (Both caps could theoretically fire if equal; rrCapFired wins on tie
+  // by the strict less-than above.)
+
+  // Compute new target preserving signal direction
+  let newTarget: number
+  if (judge.signal === 'BULLISH') {
+    newTarget = entry + realisticTargetDistance
+  } else {
+    newTarget = entry - realisticTargetDistance
+  }
+
+  // Defensive: ensure direction not flipped (should never happen with stop > 0)
+  if (judge.signal === 'BULLISH' && newTarget <= entry) return judge
+  if (judge.signal === 'BEARISH' && newTarget >= entry) return judge
+
+  // Round to 2 decimal places
+  newTarget = Math.round(newTarget * 100) / 100
+
+  // Build human-readable note that explains which cap fired and why
+  const targetAtrMultiple = atr > 0 ? (targetDistance / atr).toFixed(1) : '?'
+  const targetMovePct = ((targetDistance / entry) * 100).toFixed(1)
+  const newTargetMovePct = ((realisticTargetDistance / entry) * 100).toFixed(1)
+
+  let capExplanation: string
+  if (atrCapFired) {
+    capExplanation =
+      `Judge target asked for a ${targetMovePct}% move (${targetAtrMultiple}× ATR), ` +
+      `which exceeds the typical ${timeframe} price range. Capped at ${maxAtrMult}× ATR ` +
+      `(~${newTargetMovePct}% move) so the trade plan can resolve within its timeframe.`
+  } else if (rrCapFired) {
+    capExplanation =
+      `Judge target was ${currentRr.toFixed(1)}:1 R:R relative to the stop, which exceeds the ${timeframe} cap of ${maxRr}:1. ` +
+      `Adjusted to preserve the Judge's R:R intent within a realistic envelope.`
+  } else {
+    capExplanation =
+      `Target capped at ${newTargetMovePct}% move (${maxAtrMult}× ATR / ${maxRr}:1 R:R), ` +
+      `the realism limit for ${timeframe} timeframe.`
+  }
+
+  const adjustmentNote = `Adjusted from $${target.toFixed(2)} to $${newTarget.toFixed(2)}. ${capExplanation}`
+
+  // Update takeProfit string. Preserve any qualifier text the Judge wrote
+  // (e.g., "$55.00 — first target, 1.5:1 R:R") but replace the dollar value.
+  const adjustedTakeProfit = judge.takeProfit.replace(
+    /\$\d{1,6}(?:\.\d{1,2})?/,
+    `$${newTarget.toFixed(2)}`,
+  )
+
+  console.warn(
+    `[target-realism] ${bundle.ticker} ${timeframe} ${judge.signal}: ` +
+    `target $${target.toFixed(2)} (${targetMovePct}%, ${currentRr.toFixed(1)}:1 R:R, ${targetAtrMultiple}× ATR) ` +
+    `→ $${newTarget.toFixed(2)} (${newTargetMovePct}%, cap: ${atrCapFired ? 'ATR' : 'RR'})`,
+  )
+
+  return {
+    ...judge,
+    takeProfit: adjustedTakeProfit,
+    takeProfitJudgeOriginal: judge.takeProfit,
+    takeProfitAdjustmentNote: adjustmentNote,
+  }
+}
+
 function sanitizeJudgeResult(judge: JudgeResult, bundle: SignalBundle): JudgeResult {
   const currentPrice = bundle.technicals?.currentPrice ?? 0
   if (!currentPrice) return judge
@@ -2828,7 +3034,27 @@ export async function runPipeline(
   })
 
   onProgress('judge_start', {})
-  const { judge, calibration } = await runJudgeWithCalibration(bundle, gemini, claude, gpt, rebuttal, counter, 1, social, aggregator, verifications)
+  const { judge: rawJudge, calibration } = await runJudgeWithCalibration(bundle, gemini, claude, gpt, rebuttal, counter, 1, social, aggregator, verifications)
+
+  // ── Target Realism Enforcement (Bug 26) ────────────────────
+  // After the Judge produces its final verdict (post-Reviewer retry if any),
+  // deterministically cap the target distance at a timeframe-appropriate
+  // R:R multiple anchored to the Judge's chosen stop. This catches the
+  // "Judge writes a chart-level target unreachable in the timeframe" pattern
+  // observed in v3 expired-direction-win cases.
+  //
+  // Why this runs AFTER calibration: the Reviewer might retry the Judge for
+  // signal/calibration/source issues. If we adjusted the target before the
+  // retry, the corrective context would have stale numbers. By running this
+  // after the Judge pipeline is complete, we adjust whichever verdict
+  // actually shipped.
+  //
+  // Why this runs BEFORE the Trader: the Trader evaluates R:R, confidence,
+  // and trade-plan viability against the takeProfit field. We want it to
+  // evaluate the REALISTIC target (the one the verdict will be graded
+  // against), not the over-ambitious Judge draft.
+  const judge = enforceTargetRealism(rawJudge, bundle, bundle.timeframe)
+
   transcript.push({ role: 'judge', stage: 'arbitrator', content: judge.summary, signal: judge.signal, confidence: judge.confidence, timestamp: ts() })
 
   // ── Trader Filter ─────────────────────────────────────────
