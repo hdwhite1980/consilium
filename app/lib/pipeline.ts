@@ -1027,7 +1027,46 @@ export async function runTargetedResearch(
   // whole time. Now we surface that data directly.
   const needsInsider       = q.includes('insider') || q.includes('10b5-1') || q.includes('form 4') || q.includes('executive sold') || q.includes('executive bought') || q.includes('officer sold') || q.includes('officer bought') || q.includes('director sold') || q.includes('director bought') || q.includes('who sold') || q.includes('who bought')
   const needsCongress      = q.includes('congress') || q.includes('senator') || q.includes('representative') || q.includes('house member') || q.includes('pelosi') || q.includes('political')
-  const needsInstitutional = q.includes('institutional') || q.includes('hedge fund') || q.includes('13f') || q.includes('13-f') || q.includes('fund holding') || q.includes('big holder') || q.includes('top holder')
+
+  // Bug 27 follow-up (May 2026): institutional detection was too narrow.
+  // The Lead asked "What is the exact size of Berkshire Hathaway's position
+  // in LI" — which bypassed all keywords (no "institutional", "13F", or
+  // "hedge fund") and went to Gemini ungrounded, which fabricated 39.81M
+  // shares from training data.
+  //
+  // Two-part expansion:
+  //   (1) Known-institution name list — Berkshire, Vanguard, BlackRock,
+  //       State Street, Fidelity, Pimco, etc. — these are case-insensitive
+  //       proper noun matches. If the question mentions any of these,
+  //       it's an institutional question regardless of phrasing.
+  //   (2) Generic ownership/holdings keywords — 'position', 'stake',
+  //       'holdings', 'ownership', 'shareholders', 'owns'. These often
+  //       indicate institutional questions in finance context.
+  //
+  // The router has to be aggressive about catching these — the safety
+  // mechanisms (short-circuit + guardrail) only fire when the routing
+  // correctly identifies the question category.
+  const knownInstitutionalNames = [
+    'berkshire', 'hathaway', 'buffett',
+    'vanguard', 'blackrock', 'state street', 'fidelity',
+    'pimco', 'bridgewater', 'citadel', 'renaissance', 'two sigma',
+    'jpmorgan', 'jp morgan', 'morgan stanley', 'goldman',
+    'soros', 'icahn', 'ackman', 'einhorn', 'tepper',
+    'ark invest', 'ark innovation', 'cathie wood',
+    'wellington', 'capital group', 'invesco', 'schwab',
+  ]
+  const mentionsKnownInstitution = knownInstitutionalNames.some(n => q.includes(n))
+  const mentionsGenericOwnership =
+    q.includes('position') || q.includes('stake') || q.includes('holdings') ||
+    q.includes('ownership') || q.includes('shareholders') || q.includes(' owns ') ||
+    q.includes('initiated') || q.includes('shares outstanding') || q.includes('float')
+
+  const needsInstitutional =
+    q.includes('institutional') || q.includes('hedge fund') ||
+    q.includes('13f') || q.includes('13-f') ||
+    q.includes('fund holding') || q.includes('big holder') || q.includes('top holder') ||
+    mentionsKnownInstitution ||
+    mentionsGenericOwnership
 
   const liveDataParts: string[] = []
 
