@@ -32,6 +32,8 @@ import {
 import { classifyActiveStories } from '@/app/lib/active-stories-classifier'
 import { fetchCurrentPricesMany } from '@/app/lib/data/current-price'
 import { fetchForwardContext, formatForwardContextForPrompt } from '@/app/lib/forward-data'
+import { getMonitorAlerts } from '@/app/lib/market-monitor'
+import { getLatestSocialContext } from '@/app/lib/social-signals'
 
 // Vercel cron config — runs 6am/12pm/5pm/9pm ET (10/16/21/01 UTC during EDT)
 // Configure in vercel.json — this route is the target.
@@ -94,9 +96,9 @@ async function runCron(req: NextRequest) {
     summary.storiesActiveBefore = activeBefore.length
     console.log(`[active-stories cron] runId=${runId} loaded ${activeBefore.length} active stories`)
 
-    // ── Step 2: fetch news + regime + forward context in parallel ──
+    // ── Step 2: fetch news + regime + forward context + discovery signals in parallel ──
     const fetchStart = Date.now()
-    const [newsResult, regime, forwardContext] = await Promise.all([
+    const [newsResult, regime, forwardContext, monitorAlerts, socialSignals] = await Promise.all([
       fetchMultiSourceNews({ includeCrypto: true }),
       getMarketRegime(),
       // Forward-context failures don't block the run — we just pass null
@@ -106,12 +108,25 @@ async function runCron(req: NextRequest) {
         console.warn(`[active-stories cron] forward-context fetch failed:`, (e as Error).message?.slice(0, 100))
         return null
       }),
+      // Discovery sources (May 2026). Both are display-only elsewhere; here
+      // they feed the classifier as candidate-ticker sources. Wider 180min
+      // window than the monitor's own 120min default because this cron runs
+      // every few hours, not every 3 minutes. Failures → empty string →
+      // classifier renders "no signals" line (no manufactured stories).
+      getMonitorAlerts(undefined, 180).catch(e => {
+        console.warn(`[active-stories cron] monitor-alerts fetch failed:`, (e as Error).message?.slice(0, 100))
+        return ''
+      }),
+      getLatestSocialContext().catch(e => {
+        console.warn(`[active-stories cron] social-signals fetch failed:`, (e as Error).message?.slice(0, 100))
+        return ''
+      }),
     ])
     const newsBlock = formatNewsForPrompt(newsResult.items, 60)
     const scheduledCatalysts = forwardContext
       ? formatForwardContextForPrompt(forwardContext)
       : null
-    console.log(`[active-stories cron] runId=${runId} fetched ${newsResult.counts.afterDedupe} headlines + regime=${regime.regime} + forward=${forwardContext ? 'OK' : 'NULL'} in ${Date.now() - fetchStart}ms`)
+    console.log(`[active-stories cron] runId=${runId} fetched ${newsResult.counts.afterDedupe} headlines + regime=${regime.regime} + forward=${forwardContext ? 'OK' : 'NULL'} + alerts=${monitorAlerts ? 'Y' : 'N'} + social=${socialSignals ? 'Y' : 'N'} in ${Date.now() - fetchStart}ms`)
 
     // ── Step 3: classify with Claude ──────────────────────────
     const classifyStart = Date.now()
@@ -122,6 +137,8 @@ async function runCron(req: NextRequest) {
       activeStories: activeBefore,
       newsBlock,
       scheduledCatalysts,
+      monitorAlerts,
+      socialSignals,
     })
     console.log(`[active-stories cron] runId=${runId} classified in ${Date.now() - classifyStart}ms (updates=${classification.storyUpdates.length} new=${classification.newStories.length})`)
 

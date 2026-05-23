@@ -137,9 +137,11 @@ function buildUserPrompt(params: {
   activeStories: TrackedStory[]
   newsBlock: string
   scheduledCatalysts: string | null
+  monitorAlerts: string | null
+  socialSignals: string | null
   now: Date
 }): string {
-  const { runId, triggerSource, regime, activeStories, newsBlock, scheduledCatalysts, now } = params
+  const { runId, triggerSource, regime, activeStories, newsBlock, scheduledCatalysts, monitorAlerts, socialSignals, now } = params
   const nowStr = now.toISOString()
   const day = nowStr.slice(0, 10)
 
@@ -150,6 +152,18 @@ function buildUserPrompt(params: {
   const catalystsBlock = scheduledCatalysts && scheduledCatalysts.trim().length > 0
     ? scheduledCatalysts
     : '(No notable scheduled catalysts surfaced for the next session. Do NOT create tomorrow/weekend stories this run.)'
+
+  // Discovery-source blocks (May 2026). These are NOISIER than curated news —
+  // breaking alerts and social-figure posts. They surface candidate tickers
+  // but the prompt instructs skepticism so we don't manufacture a story for
+  // every alert or tweet. Empty → explicit "none" line so the LLM doesn't
+  // hallucinate signals that weren't there.
+  const alertsBlock = monitorAlerts && monitorAlerts.trim().length > 0
+    ? monitorAlerts
+    : '(No breaking market alerts in the recent window.)'
+  const socialBlock = socialSignals && socialSignals.trim().length > 0
+    ? socialSignals
+    : '(No high-impact social/political signals in the recent window.)'
 
   return `RUN CONTEXT
   Run ID: ${runId}
@@ -169,6 +183,12 @@ ${newsBlock}
 SCHEDULED CATALYSTS (next trading session — earnings, economic events, after-hours moves):
 ${catalystsBlock}
 
+BREAKING MARKET ALERTS (real-time monitor — unusual volume, fast-moving headlines):
+${alertsBlock}
+
+SOCIAL & POLITICAL SIGNALS (monitored figures — Trump/Musk/Buffett/Powell/Pelosi/Burry, with affected tickers):
+${socialBlock}
+
 Now produce your classification. Walk through these steps in order:
 
   STEP 1 — REVIEW EXISTING STORIES. For each active story above, decide:
@@ -183,6 +203,12 @@ Now produce your classification. Walk through these steps in order:
     - Confidence ≥ 60
     - One or more timeframe tags
     - A session anchor
+
+  STEP 2.5 — DISCOVERY FROM ALERTS & SOCIAL SIGNALS. Review the BREAKING MARKET ALERTS and SOCIAL & POLITICAL SIGNALS blocks. These are real-time discovery sources — they may surface tickers that the curated news didn't. For each alert/signal:
+    - Is there a SPECIFIC, tradeable ticker with a CLEAR catalyst? (Not just "Trump mentioned tariffs" — that's a sector vibe, not a story. But "Trump announced 25% tariff on auto imports → F, GM, TSLA" IS a catalyst.)
+    - Is it ALREADY covered by an active story or a today-story you just created? If yes, skip it (don't duplicate).
+    - Does it clear the same bar as Step 2 (confidence ≥ 60, clear catalyst, tradeable)?
+    BE SKEPTICAL. These sources are noisier than curated news. A vague social post, a low-conviction alert, or a signal without a specific ticker should NOT become a story. Only promote signals that genuinely meet the story bar. It is correct and expected to create ZERO stories from these blocks on most runs. Quality over volume — manufacturing a story from a weak signal is worse than skipping it. When you DO create a story from one of these sources, reference the source in the catalyst field (e.g. "Breaking: unusual call volume flagged by monitor" or "Trump Truth Social post on tariffs").
 
   STEP 3 — IDENTIFY TOMORROW/WEEKEND NEW STORIES from SCHEDULED CATALYSTS. If the scheduled-catalysts block contains notable events (large-cap earnings, FOMC/CPI/jobs data, significant after-hours moves), create stories anchored to sessionAnchor='tomorrow' — or 'weekend' if it's Friday after 4pm ET, Saturday, Sunday, or the next event is Monday. Apply principle 12 — quality over volume; skip small-cap earnings without coverage and trivial events. Tomorrow/weekend stories must explicitly reference the SCHEDULED nature in the catalyst and reason fields. If the scheduled-catalysts block says "(No notable scheduled catalysts...)" — return zero tomorrow/weekend stories.
 
@@ -376,6 +402,18 @@ export interface ClassifyParams {
    *  "no notable scheduled catalysts" line and the LLM will return
    *  zero tomorrow/weekend stories. */
   scheduledCatalysts?: string | null
+  /** Pre-formatted breaking-alerts block from market-monitor.ts
+   *  getMonitorAlerts(). Real-time alerts (unusual volume, breaking
+   *  headlines) that may surface tickers worth tracking. Pass null/empty
+   *  when no recent alerts — the prompt renders an explicit "no alerts" line.
+   *  (Discovery source, added May 2026.) */
+  monitorAlerts?: string | null
+  /** Pre-formatted social-signals block from social-signals.ts
+   *  getLatestSocialContext(). High/medium-impact signals from monitored
+   *  figures (Trump/Musk/Buffett/Powell/Pelosi/Burry) with affected_tickers.
+   *  Pass null/empty when no recent signals.
+   *  (Discovery source, added May 2026.) */
+  socialSignals?: string | null
   now?: Date
 }
 
@@ -401,6 +439,8 @@ export async function classifyActiveStories(
     activeStories: params.activeStories,
     newsBlock: params.newsBlock,
     scheduledCatalysts: params.scheduledCatalysts ?? null,
+    monitorAlerts: params.monitorAlerts ?? null,
+    socialSignals: params.socialSignals ?? null,
     now: params.now ?? new Date(),
   })
 
