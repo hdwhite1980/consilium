@@ -256,9 +256,43 @@ export async function findActiveStoryForTicker(
  * Insert a new story.
  * Returns the inserted row's id.
  * Does NOT enforce hard cap — caller (cron) does that explicitly via enforceHardCap.
+ *
+ * DEDUP GUARD (May 2026): Before inserting, checks for an existing active or
+ * playing_out story for the same ticker. If one exists, SKIPS the insert and
+ * returns the existing story's id instead. This is a deterministic, database-
+ * layer guarantee against duplicates — previously the only thing preventing
+ * duplicates was the LLM noticing the ticker in the active-stories list, which
+ * was unreliable (observed: 3 identical PDD stories created across 3 cron runs
+ * for the same Monday-BMO earnings catalyst). The LLM should still update the
+ * existing story via storyUpdates; this guard catches the cases where it
+ * instead emits a duplicate newStory.
+ *
+ * Note: dedup is per-TICKER, not per-ticker+anchor. A ticker can only have one
+ * active story at a time regardless of session anchor. If a ticker legitimately
+ * has both a "today" and "tomorrow" angle, the existing story's updates array
+ * captures the evolution rather than spawning a parallel row. This is the
+ * intended behavior — one ticker, one tracked story, evolving over time.
  */
 export async function insertStory(input: NewStoryInput, runId: number): Promise<string> {
   const admin = getAdmin()
+
+  // Dedup guard: is this ticker already tracked?
+  const existing = await findActiveStoryForTicker(input.ticker).catch(() => null)
+  if (existing) {
+    console.log(
+      `[story-tracker] insertStory dedup: ${input.ticker.toUpperCase()} already active ` +
+      `(story ${existing.id}, status tracked). Skipping duplicate insert.`,
+    )
+    // Touch the existing story's last_touched_run so decay/idle logic knows
+    // it's still relevant this run, even though we didn't change its content.
+    await admin
+      .from('tracked_stories')
+      .update({ last_touched_run: runId })
+      .eq('id', existing.id)
+      .then(undefined, () => { /* non-fatal */ })
+    return existing.id
+  }
+
   const { data, error } = await admin
     .from('tracked_stories')
     .insert({
