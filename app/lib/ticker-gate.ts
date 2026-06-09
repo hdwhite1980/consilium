@@ -66,15 +66,14 @@ interface CommodityRedirect {
 }
 
 const COMMODITY_REDIRECTS: Record<string, CommodityRedirect> = {
-  // Spot metals (forex-notation)
-  XAUUSD: { suggested: 'GLD', description: 'Spot gold (XAU/USD)',     rationale: 'SPDR Gold Trust tracks spot gold prices closely' },
-  XAGUSD: { suggested: 'SLV', description: 'Spot silver (XAG/USD)',   rationale: 'iShares Silver Trust tracks spot silver' },
-  XPTUSD: { suggested: 'PPLT', description: 'Spot platinum (XPT/USD)', rationale: 'Aberdeen Standard Platinum ETF tracks spot platinum' },
-  XPDUSD: { suggested: 'PALL', description: 'Spot palladium (XPD/USD)', rationale: 'Aberdeen Standard Palladium ETF tracks spot palladium' },
+  // Spot metals (forex-notation) — XAU/XAG/XPT/XPD removed in Jun 2026
+  // when TwelveData spot-metals integration shipped. These are now
+  // analyzed directly via data/spot-metals.ts. Re-add to this table
+  // if the integration is ever rolled back.
 
-  // CME metals futures
-  GC:   { suggested: 'GLD', description: 'Gold futures (GC)',     rationale: 'GLD tracks gold prices without futures-contract complexity (rolls, contango)' },
-  SI:   { suggested: 'SLV', description: 'Silver futures (SI)',   rationale: 'SLV tracks silver prices without futures-contract complexity' },
+  // CME metals futures — still redirected (futures contracts ≠ spot)
+  GC:   { suggested: 'GLD', description: 'Gold futures (GC)',     rationale: 'GLD tracks gold prices without futures-contract complexity (rolls, contango). Also try XAUUSD for spot gold directly.' },
+  SI:   { suggested: 'SLV', description: 'Silver futures (SI)',   rationale: 'SLV tracks silver prices without futures-contract complexity. Also try XAGUSD for spot silver directly.' },
   HG:   { suggested: 'CPER', description: 'Copper futures (HG)',  rationale: 'United States Copper Index Fund tracks copper futures' },
 
   // CME energy futures

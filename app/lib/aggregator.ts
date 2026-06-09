@@ -9,6 +9,7 @@ import { getExtendedHoursContext, type ExtendedHoursContext } from './data/exten
 import { getSectorContext, type SectorContext } from './data/sector-context'
 import { fetchCryptoBars, fetchCryptoPrice, fetchCryptoMetadata, isCryptoTicker } from './data/crypto'
 import { fetchForexBars, fetchForexRate, fetchForexMetadata, isForexTicker, getForexInfo } from './data/forex'
+import { fetchSpotMetalBars, fetchSpotMetalPrice, fetchSpotMetalMetadata, isSpotMetalTicker, getSpotMetalInfo } from './data/spot-metals'
 import { calculateTechnicals } from './signals/technicals'
 import { buildMarketContext } from './signals/market-context'
 import { fetchFundamentals } from './signals/fundamentals'
@@ -84,8 +85,9 @@ export async function buildSignalBundle(
   const sym = ticker.toUpperCase()
   const isCrypto = isForexTicker(sym) ? false : isCryptoTicker(sym)
   const isForex = isForexTicker(sym)
+  const isSpotMetal = isSpotMetalTicker(sym)
 
-  onProgress?.(`Fetching ${isForex ? 'forex' : isCrypto ? 'crypto' : 'price'} data and news...`)
+  onProgress?.(`Fetching ${isSpotMetal ? 'spot metal' : isForex ? 'forex' : isCrypto ? 'crypto' : 'price'} data and news...`)
 
   // ── Crypto path: CoinGecko bars + Alpaca news ──────────────
   if (isCrypto) {
@@ -231,6 +233,143 @@ Focus on technical signals, volume trends, and market structure for directional 
       technicals, marketContext,
       fundamentals: cryptoFundamentals,
       smartMoney: cryptoSmartMoney,
+      optionsFlow, conviction,
+      aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: '', socialContext: '', monitorAlerts: '', fullBundle },
+    }
+  }
+
+  // ── Spot Metals path (TwelveData) ──────────────────────────
+  // XAUUSD (gold), XAGUSD (silver), XPTUSD (platinum), XPDUSD (palladium).
+  // Placed BEFORE forex so these symbols don't fall through to Frankfurter
+  // (which is fiat-only and has no metals data).
+  if (isSpotMetal) {
+    const metalInfo = getSpotMetalInfo(sym)!
+    const [bars, news, metalMeta] = await Promise.all([
+      fetchSpotMetalBars(sym, timeframe),
+      fetchNews(`${metalInfo.base} ${metalInfo.quote} spot ${metalInfo.name}`, 10),
+      fetchSpotMetalMetadata(sym),
+    ])
+
+    let currentPrice = bars.length ? bars[bars.length - 1].c : 0
+    const liveRate = await fetchSpotMetalPrice(sym)
+    if (liveRate > 0) currentPrice = liveRate
+
+    // Sanity-check bars against live rate (TwelveData generally reliable
+    // but cheap insurance — same pattern as forex/crypto branches)
+    if (bars.length > 0 && liveRate > 0) {
+      const ratio = liveRate / bars[bars.length - 1].c
+      if (ratio > 2 || ratio < 0.5) {
+        console.warn(`[spot-metal] ${sym}: bar/live ratio ${ratio.toFixed(2)} suspect — scaling bars to match live`)
+        const scale = liveRate / bars[bars.length - 1].c
+        bars.forEach(b => { b.o *= scale; b.h *= scale; b.l *= scale; b.c *= scale })
+      }
+    }
+
+    onProgress?.('Computing technical indicators...')
+    // For intraday metals timeframes, use daily bars for accurate indicators.
+    // Same pattern as forex — RSI/MACD/SMA need daily resolution to be meaningful.
+    let metalIndicatorBars = bars
+    if ((timeframe === '1D' || timeframe === '1W') && bars.length > 0) {
+      try {
+        const dailyMetal = await fetchSpotMetalBars(sym, '1M')
+        if (dailyMetal.length >= 50) metalIndicatorBars = dailyMetal
+      } catch { /* keep original bars */ }
+    }
+    const technicals = calculateTechnicals(metalIndicatorBars)
+
+    onProgress?.('Fetching market context...')
+    const [marketContext, optionsFlow] = await Promise.all([
+      // Macro regime via SPY (DXY would be more direct but SPY is what marketContext supports)
+      buildMarketContext('SPY', timeframe),
+      // Options on the spot metal don't exist — this returns empty stub
+      fetchOptionsFlow(sym, currentPrice),
+    ])
+
+    // Spot-metal-specific fundamentals stub.
+    // Metals have no P/E, earnings, analysts, or insiders. The summary
+    // EXPLICITLY tells the Council what fields don't apply, so it doesn't
+    // fabricate institutional positions (the bug we fixed for futures).
+    const dp = (n: number | null) => n != null ? n.toFixed(2) : 'N/A'
+    const metalFundamentals = {
+      summary: `=== SPOT METAL FUNDAMENTALS ===
+Asset: ${metalMeta.name} (${sym})
+Spot Rate: $${dp(currentPrice)}
+24h Change: ${metalMeta.change24hPct != null ? (metalMeta.change24hPct >= 0 ? '+' : '') + metalMeta.change24hPct.toFixed(2) + '%' : 'N/A'}
+5-Day High: $${dp(metalMeta.weekHigh)} | 5-Day Low: $${dp(metalMeta.weekLow)}
+Background: ${metalMeta.description}
+
+CRITICAL: This is a SPOT METAL, not an equity. The following data fields DO NOT EXIST for this asset:
+  • P/E ratio, earnings, EPS, revenue
+  • Analyst ratings or price targets
+  • Insider transactions (no insiders — no company)
+  • 13F institutional holdings (no equity = no Form 13F filings)
+  • Options chain (this feed has no metals options)
+
+DO NOT invent or cite institutional positions, insider activity, or options flow for ${sym}.
+Analysis should focus on: technical structure, macro regime (USD direction, real yields, risk sentiment),
+geopolitical events (safe-haven flows), and central bank activity.`,
+      peRatio: null, forwardPE: null, pbRatio: null, psRatio: null, evEbitda: null, debtToEquity: null,
+      revenueGrowthYoY: null, epsGrowthYoY: null, grossMargin: null, operatingMargin: null,
+      netMargin: null, freeCashFlowYield: null, roe: null,
+      cashBalance: null, freeCashFlowTTM: null, quarterlyBurn: null, runwayQuarters: null,
+      nextEarningsDate: null, daysToEarnings: null, earningsRisk: 'none' as const,
+      earningsHour: null, earningsTimestamp: null, hoursUntilEarnings: null,
+      epsEstimate: null, epsActual: null, revenueEstimate: null, revenueActual: null,
+      epsSurprises: [], avgSurprisePct: null, consistentBeater: false,
+      analystBuy: 0, analystHold: 0, analystSell: 0, analystTargetPrice: null,
+      analystConsensus: 'unknown' as const, analystUpside: null,
+      recentUpgrades: [], recentDowngrades: [],
+      insiderBuyValue: 0, insiderSellValue: 0, insiderNetValue: 0, insiderSignal: 'neutral' as const,
+      earningsImpliedMove: null, earningsHistoricalMove: null, earningsEdge: null,
+    }
+
+    const metalSmartMoney = {
+      summary: `=== SMART MONEY (SPOT METAL) ===
+Institutional positioning data (COT reports, central bank reserves, ETF flows) is not currently
+integrated into the bundle. Council should NOT cite specific 13F filings, insider activity, or
+specific institutional positions for ${sym} — none of these data sources apply.
+
+For directional bias, focus on:
+  • Macro regime (risk-on vs risk-off, equity correlation)
+  • USD direction (DXY proxy via inverse SPY/dollar moves)
+  • Real yields trend (gold strongly inverse to TIPS yields)
+  • Geopolitical flow drivers (safe-haven demand spikes)
+  • Technical structure and key levels`,
+      insiderTransactions: [],
+      insiderNetValue: 0,
+      insiderSignal: 'neutral' as const,
+      insiderHighlight: '',
+      institutionalOwnership: [],
+      totalInstitutionalPct: 0,
+      institutionalNetChange: 'stable' as const,
+      notableHolders: [],
+      congressionalTrades: [],
+      congressSignal: 'none' as const,
+    }
+
+    onProgress?.('Running conviction engine...')
+    const conviction = buildConvictionOutput(
+      sym, currentPrice,
+      technicals, metalFundamentals, metalSmartMoney, optionsFlow, marketContext,
+      timeframe
+    )
+
+    const newsSection = `=== NEWS & METAL-MARKET EVENTS ===\n${formatNewsForAI(news)}`
+    const priceSection = `=== PRICE ACTION ===\n${formatBarsForAI(bars, timeframe)}`
+    const technicalsSection = technicals.summary
+    const marketSection = marketContext.summary
+    const fundamentalsSection = metalFundamentals.summary
+    const smartMoneySection = metalSmartMoney.summary
+    const optionsSection = optionsFlow.summary
+    const convictionSection = conviction.summary
+    const fullBundle = [newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection].join('\n\n')
+
+    return {
+      ticker: sym, timeframe, timestamp: new Date().toISOString(),
+      bars, news, currentPrice,
+      technicals, marketContext,
+      fundamentals: metalFundamentals,
+      smartMoney: metalSmartMoney,
       optionsFlow, conviction,
       aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: '', socialContext: '', monitorAlerts: '', fullBundle },
     }
