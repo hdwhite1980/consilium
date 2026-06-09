@@ -6,6 +6,7 @@ import { runSocialScout } from '@/app/lib/social-scout'
 import { createServerClient } from '@/app/lib/supabase'
 import { createClient as createAuthClient } from '@/app/lib/auth/server'
 import { CURRENT_VERSION_NUMBER } from '@/app/lib/system-versions'
+import { evaluateTickerGate, evaluateBundleIntegrity } from '@/app/lib/ticker-gate'
 
 export const maxDuration = 300
 
@@ -169,6 +170,24 @@ export async function POST(req: NextRequest) {
   const symbol = ticker.toUpperCase().trim()
   const tf = timeframe || '1W'
   const encoder = new TextEncoder()
+
+  // ── Pre-bundle ticker gate (May 2026, Bug 29) ──────────────────
+  // Refuse known-unsupported tickers BEFORE opening the stream or
+  // spending compute on a bundle build. Catches futures (GC, ES, NQ),
+  // spot metals (XAUUSD, XAGUSD), and malformed input. Returns a
+  // structured 400 with a suggested equity equivalent the UI can
+  // render as a clickable link.
+  const preGate = evaluateTickerGate(symbol)
+  if (!preGate.ok) {
+    console.warn(`[analyze] pre-bundle gate blocked ${symbol}: ${preGate.title}`)
+    return Response.json({
+      error: preGate.title,
+      detail: preGate.detail,
+      suggested: preGate.suggested ?? null,
+      suggestedRationale: preGate.suggestedRationale ?? null,
+      stage: preGate.stage,
+    }, { status: 400 })
+  }
 
   // --- DIAG: per-request id for tracing through Railway logs ---
   const reqId = Math.random().toString(36).slice(2, 10)
@@ -358,6 +377,34 @@ export async function POST(req: NextRequest) {
         )
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ;(bundle as any).persona = persona ?? 'balanced'
+
+        // ── Post-bundle integrity gate (May 2026, Bug 29) ──────────
+        // If the bundle came back empty (price = 0 AND no bars), the
+        // data layer found nothing. This catches typos, delisted
+        // tickers, foreign listings without data, and ambiguous
+        // symbols (ZS as Zscaler vs ZS as soybean futures) where
+        // the equity lookup turned out empty. We refuse to run the
+        // Council on garbage data — previously the pipeline ran
+        // anyway and produced fictional analyses (e.g. XAUUSD verdict
+        // citing Vanguard's nonexistent gold-pair position).
+        const postGate = evaluateBundleIntegrity(bundle)
+        if (!postGate.ok) {
+          console.warn(`[analyze:${reqId}] post-bundle gate blocked ${symbol}: ${postGate.title}`)
+          send('error', {
+            message: postGate.title,
+            detail: postGate.detail,
+            suggested: postGate.suggested ?? null,
+            suggestedRationale: postGate.suggestedRationale ?? null,
+            stage: postGate.stage,
+          })
+          dlog(`DONE via post-bundle gate (${postGate.title})`)
+          if (!controllerClosed) {
+            try { controller.close() } catch { /* already closed */ }
+            controllerClosed = true
+          }
+          clearInterval(heartbeat)
+          return
+        }
 
         send('market_data', {
           bars: bundle.bars,
