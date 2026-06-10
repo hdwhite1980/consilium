@@ -42,23 +42,29 @@ async function runMonitor(req: NextRequest) {
   const feedCountParam = req.nextUrl.searchParams.get('feedCount')
   const feedCount = feedCountParam ? Math.min(parseInt(feedCountParam, 10) || 40, 100) : 40
 
-  const [form4Result, dgResult, k8Result] = await Promise.all([
-    fetchRecentForm4s(feedCount).catch((e: Error) => ({
-      error: e.message,
-      scanned: 0, parsed: 0, transactionsSeen: 0, inserted: 0,
-      belowThreshold: 0, nonPS: 0, duplicates: 0, errors: 1,
-    })),
-    fetchRecent13DG(feedCount).catch((e: Error) => ({
-      error: e.message,
-      scanned13D: 0, scanned13G: 0, parsed: 0, metadataOnly: 0, inserted: 0,
-      passiveFiltered: 0, duplicates: 0, errors: 1,
-    })),
-    fetchRecent8Ks(feedCount).catch((e: Error) => ({
-      error: e.message,
-      scanned: 0, itemsParsed: 0, inserted: 0,
-      noMatchingItems: 0, duplicates: 0, errors: 1,
-    })),
-  ])
+  // Run filing-type fetchers sequentially rather than in parallel.
+  // Each type makes 30-100 EDGAR requests; parallel execution combined
+  // to ~15 req/sec which exceeded EDGAR's 10 req/sec per-IP limit and
+  // caused throttling failures (observed 12 errors out of 30 Form 4
+  // filings in the first parallel run). Sequential is slower (~30s
+  // total) but well under Railway's 5-min HTTP cap.
+  const form4Result = await fetchRecentForm4s(feedCount).catch((e: Error) => ({
+    error: e.message,
+    scanned: 0, parsed: 0, transactionsSeen: 0, inserted: 0,
+    belowThreshold: 0, nonPS: 0, duplicates: 0, errors: 1,
+  }))
+
+  const dgResult = await fetchRecent13DG(feedCount).catch((e: Error) => ({
+    error: e.message,
+    scanned13D: 0, scanned13G: 0, parsed: 0, metadataOnly: 0, inserted: 0,
+    passiveFiltered: 0, duplicates: 0, errors: 1,
+  }))
+
+  const k8Result = await fetchRecent8Ks(feedCount).catch((e: Error) => ({
+    error: e.message,
+    scanned: 0, itemsParsed: 0, inserted: 0,
+    noMatchingItems: 0, duplicates: 0, errors: 1,
+  }))
 
   const totalDuration = Date.now() - tStart
   console.log(`[sec-monitor] cron run complete in ${totalDuration}ms`)

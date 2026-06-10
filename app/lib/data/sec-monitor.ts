@@ -589,7 +589,7 @@ export async function fetchRecentForm4s(feedCount = 40): Promise<Form4IngestResu
     }
 
     // Polite EDGAR pacing — ~100ms between filings = 10/sec max
-    await new Promise(r => setTimeout(r, 100))
+    await new Promise(r => setTimeout(r, 250))  // polite EDGAR pacing
   }
 
   console.log(
@@ -942,7 +942,7 @@ async function processScheduleDGEntries(
       result.errors++
     }
 
-    await new Promise(r => setTimeout(r, 100))  // polite pacing
+    await new Promise(r => setTimeout(r, 250))  // polite EDGAR pacing — 10 req/sec limit shared across all types
   }
 }
 
@@ -1033,6 +1033,10 @@ const EIGHT_K_ITEM_MAP: Record<string, { eventType: string; label: string }> = {
 
 const HIGH_SIGNAL_ITEMS = new Set(Object.keys(EIGHT_K_ITEM_MAP))
 
+// Diagnostic counter — limits 8-K HTML sample logging to first few
+// filings per Node process to avoid log spam.
+let eightKDiagLogged = 0
+
 // ─────────────────────────────────────────────────────────────
 // 8-K item extraction from filing index page
 // ─────────────────────────────────────────────────────────────
@@ -1056,6 +1060,15 @@ async function fetchEightKItems(indexUrl: string): Promise<EightKItems | null> {
     if (idxRes.ok) {
       const html = await idxRes.text()
 
+      // Diagnostic (first few filings only): log sample HTML so we can
+      // see how items are actually formatted. We use module-scope
+      // counter to avoid spamming the logs.
+      eightKDiagLogged++
+      if (eightKDiagLogged <= 2) {
+        const stripped = html.replace(/\s+/g, ' ').slice(0, 800)
+        console.log(`[sec-monitor] 8-K diag #${eightKDiagLogged} ${baseUrl.split('/').pop()}: ${stripped}`)
+      }
+
       // Pattern 1: explicit "Items:" label followed by comma-separated codes
       // Pattern 2: standalone item codes in the page (more permissive)
       const itemPattern = /(\d\.\d{1,2})/g
@@ -1075,6 +1088,11 @@ async function fetchEightKItems(indexUrl: string): Promise<EightKItems | null> {
       // Filter to high-signal items only
       const matchingItems = items.filter(i => HIGH_SIGNAL_ITEMS.has(i))
       const eventTypes = [...new Set(matchingItems.map(i => EIGHT_K_ITEM_MAP[i].eventType))]
+
+      // Diagnostic: log items found vs items matching for first few
+      if (eightKDiagLogged <= 5 && (items.length === 0 || matchingItems.length === 0)) {
+        console.log(`[sec-monitor] 8-K ${baseUrl.split('/').pop()}: items=[${items.join(',')}] matching=[${matchingItems.join(',')}]`)
+      }
 
       return { items, matchingItems, eventTypes }
     }
@@ -1201,7 +1219,7 @@ export async function fetchRecent8Ks(feedCount = 40): Promise<EightKIngestResult
       result.errors++
     }
 
-    await new Promise(r => setTimeout(r, 100))  // polite pacing
+    await new Promise(r => setTimeout(r, 250))  // polite EDGAR pacing — 10 req/sec limit shared across all types
   }
 
   console.log(
