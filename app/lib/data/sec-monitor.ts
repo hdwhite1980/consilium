@@ -1326,7 +1326,7 @@ export async function getFilingAlerts(
       console.warn(`[sec-monitor] getFilingAlerts query error for ${ticker}: ${error.message}`)
       return ''
     }
-    const rows = (data ?? []) as FilingAlertRow[]
+    const rows = (data ?? []) as unknown as FilingAlertRow[]
     if (rows.length === 0) return ''
 
     const lines: string[] = ['=== SEC FILINGS (last 48h) ===']
@@ -1421,7 +1421,7 @@ export async function findRecentEarningsRelease(
       console.warn(`[sec-monitor] findRecentEarningsRelease error for ${ticker}: ${error.message}`)
       return null
     }
-    return (data as FilingAlertRow) ?? null
+    return (data as unknown as FilingAlertRow) ?? null
   } catch (e) {
     console.warn(`[sec-monitor] findRecentEarningsRelease error for ${ticker}: ${(e as Error).message}`)
     return null
