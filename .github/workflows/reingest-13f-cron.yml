@@ -5,28 +5,34 @@
 # which iterates TICKER_CUSIPS, re-fetches each institution's 13F,
 # and writes clean CUSIP-matched rows to institutional_holdings.
 #
+# Triggered by GitHub Actions cron (quarterly, ~1 week after each
+# 13F filing deadline), or manually via workflow_dispatch.
+#
+# CHUNKING (Jun 2026):
+# Railway's HTTP request timeout is ~5 minutes regardless of what
+# the function's maxDuration declares. A full ticker rebuild takes
+# 8-15 minutes total (10 EDGAR fetches per ticker + 2s pacing × 50
+# tickers), so the original single-call workflow timed out with 502.
+#
+# Fix: split tickers into 5 chunks of ~12 tickers each. Each chunk
+# call takes ~2 minutes — well under the 5-minute Railway HTTP cap.
+# Steps run sequentially so failures in one chunk don't prevent
+# others from running (continue-on-error: true).
+#
 # Schedule logic:
 #   - 13F filings are due 45 days after quarter end
-#   - Q4 (Dec 31) → filings due Feb 14
-#   - Q1 (Mar 31) → filings due May 15
-#   - Q2 (Jun 30) → filings due Aug 14
-#   - Q3 (Sep 30) → filings due Nov 14
-#   - We run 1 week after each deadline to give late filers time
+#   - We run ~1 week after each deadline (21st of Feb/May/Aug/Nov)
 # =============================================================
 name: 13F Re-ingestion
 
 on:
   schedule:
-    # Run quarterly at 09:00 UTC on the 21st of Feb/May/Aug/Nov
-    # (~1 week after each 13F filing deadline)
     - cron: '0 9 21 2,5,8,11 *'
 
-  # Allow manual trigger from the Actions UI (Run workflow button).
-  # Useful right after deploying a fix to rebuild the table immediately.
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Ingestion mode'
+        description: 'Ingestion mode (full = wipe & rebuild, incremental = skip already-fresh tickers)'
         required: true
         default: 'incremental'
         type: choice
@@ -34,7 +40,7 @@ on:
           - incremental
           - full
       only:
-        description: 'Comma-separated ticker list (leave blank for all)'
+        description: 'Comma-separated tickers to run (overrides default chunking)'
         required: false
         default: ''
         type: string
@@ -42,40 +48,127 @@ on:
 jobs:
   reingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
-      - name: Trigger Railway batch endpoint
+      # ── Targeted manual run ───────────────────────────────────
+      # If a user provided 'only' via workflow_dispatch, run just
+      # those tickers as a single call (assumes the user picked a
+      # small enough set to fit in the 5-min HTTP timeout).
+      - name: Targeted run
+        if: ${{ inputs.only != '' }}
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          # Inputs default to scheduled values when triggered by cron
           MODE: ${{ inputs.mode || 'incremental' }}
-          ONLY: ${{ inputs.only || '' }}
+          ONLY: ${{ inputs.only }}
         run: |
           set -e
-
-          # Build URL with optional only= filter
-          URL="https://wali-os.com/api/cron/reingest-13f-batch?mode=$MODE"
-          if [ -n "$ONLY" ]; then
-            URL="${URL}&only=${ONLY}"
-          fi
-
-          echo "Calling: $URL"
-
-          # POST with auth, capture response with status code separately
-          HTTP_RESPONSE=$(curl --silent --max-time 1800 \
-            --write-out "HTTPSTATUS:%{http_code}" \
+          URL="https://wali-os.com/api/cron/reingest-13f-batch?mode=$MODE&only=$ONLY"
+          echo "Targeted call: $URL"
+          curl --silent --show-error --max-time 300 --fail-with-body \
             -X POST "$URL" \
             -H "Authorization: Bearer $CRON_SECRET" \
-            -H "Content-Type: application/json")
+            -H "Content-Type: application/json" \
+            | head -c 5000
+          echo ""
 
-          HTTP_STATUS=$(echo "$HTTP_RESPONSE" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
-          HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed -e 's/HTTPSTATUS\:.*//g')
+      # ── CHUNKED RUN ────────────────────────────────────────────
+      # Each chunk = ~12 tickers, ~2 min wall time. Sequential.
+      # continue-on-error: true means a 502/timeout on one chunk
+      # doesn't prevent the next chunks from running.
 
-          echo "HTTP $HTTP_STATUS"
-          echo "Response body:"
-          echo "$HTTP_BODY" | head -c 5000
+      - name: Chunk 1 — Mega-cap tech
+        if: ${{ inputs.only == '' }}
+        continue-on-error: true
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          MODE: ${{ inputs.mode || 'incremental' }}
+        run: |
+          set -e
+          TICKERS="MSFT,AAPL,GOOGL,GOOG,AMZN,META,NVDA,TSLA,NFLX,BRK_A,BRK_B"
+          echo "Chunk: $TICKERS"
+          curl --silent --show-error --max-time 300 --fail-with-body \
+            -X POST "https://wali-os.com/api/cron/reingest-13f-batch?mode=$MODE&only=$TICKERS" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "Content-Type: application/json" \
+            | head -c 5000
+          echo ""
 
-          if [ "$HTTP_STATUS" -ne 200 ]; then
-            echo "::error::Batch endpoint returned HTTP $HTTP_STATUS"
-            exit 1
-          fi
+      - name: Chunk 2 — Large-cap US equities
+        if: ${{ inputs.only == '' }}
+        continue-on-error: true
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          MODE: ${{ inputs.mode || 'incremental' }}
+        run: |
+          set -e
+          TICKERS="JPM,LLY,AVGO,V,MA,UNH,XOM,WMT,PG,HD,JNJ"
+          echo "Chunk: $TICKERS"
+          curl --silent --show-error --max-time 300 --fail-with-body \
+            -X POST "https://wali-os.com/api/cron/reingest-13f-batch?mode=$MODE&only=$TICKERS" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "Content-Type: application/json" \
+            | head -c 5000
+          echo ""
+
+      - name: Chunk 3 — Semis / AI infra + Chinese ADRs
+        if: ${{ inputs.only == '' }}
+        continue-on-error: true
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          MODE: ${{ inputs.mode || 'incremental' }}
+        run: |
+          set -e
+          TICKERS="AMD,INTC,MU,MRVL,ARM,TSM,ASML,SMCI,PLTR,LI,XPEV,NIO,BABA,JD,PDD,BIDU,IQ"
+          echo "Chunk: $TICKERS"
+          curl --silent --show-error --max-time 300 --fail-with-body \
+            -X POST "https://wali-os.com/api/cron/reingest-13f-batch?mode=$MODE&only=$TICKERS" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "Content-Type: application/json" \
+            | head -c 5000
+          echo ""
+
+      - name: Chunk 4 — Software / fintech / commonly-analyzed
+        if: ${{ inputs.only == '' }}
+        continue-on-error: true
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          MODE: ${{ inputs.mode || 'incremental' }}
+        run: |
+          set -e
+          TICKERS="COIN,HOOD,SHOP,UBER,ABNB,SNOW,CRWD,DDOG,NET,ZS,DELL,AZO,CAVA,LMND,RAMP,CZR,EDIT"
+          echo "Chunk: $TICKERS"
+          curl --silent --show-error --max-time 300 --fail-with-body \
+            -X POST "https://wali-os.com/api/cron/reingest-13f-batch?mode=$MODE&only=$TICKERS" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "Content-Type: application/json" \
+            | head -c 5000
+          echo ""
+
+      - name: Chunk 5 — ETFs + News-Scout regulars
+        if: ${{ inputs.only == '' }}
+        continue-on-error: true
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          MODE: ${{ inputs.mode || 'incremental' }}
+        run: |
+          set -e
+          TICKERS="USO,GLD,SLV,SPY,QQQ,IWM,DIA,TLT,IEF,CPER,PPLT,PALL,KO,PEP,MCD,NKE,DIS"
+          echo "Chunk: $TICKERS"
+          curl --silent --show-error --max-time 300 --fail-with-body \
+            -X POST "https://wali-os.com/api/cron/reingest-13f-batch?mode=$MODE&only=$TICKERS" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "Content-Type: application/json" \
+            | head -c 5000
+          echo ""
+
+      # ── Summary ───────────────────────────────────────────────
+      - name: Summary
+        if: always()
+        run: |
+          echo "All chunks attempted. To verify in Supabase:"
+          echo ""
+          echo "  SELECT COUNT(DISTINCT ticker) AS tickers, COUNT(*) AS rows,"
+          echo "         COUNT(*) FILTER (WHERE data_quality = 'verified') AS verified"
+          echo "  FROM institutional_holdings;"
+          echo ""
+          echo "Individual chunks may have failed; check the per-step logs above."
