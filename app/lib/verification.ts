@@ -24,6 +24,15 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 import { generateWithFallback, generateJSON } from './gemini-helper'
 import { createClient } from '@supabase/supabase-js'
 import type { SignalBundle } from './aggregator'
+import { findRecentEarningsRelease } from './data/sec-monitor'
+
+// Lightweight row shape from sec-monitor's findRecentEarningsRelease.
+// Avoids a type import dependency cycle if sec-monitor evolves.
+interface RecentEarningsK {
+  filed_at: string
+  filing_url: string | null
+  transaction_data: Record<string, unknown> | null
+}
 
 const getGenAI = () => new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
 
@@ -563,6 +572,7 @@ interface BundleCheckResult {
   matched: boolean              // true = bundle has authoritative answer; false = silent
   verified?: boolean            // when matched: true=confirms, false=contradicts
   sourceOutlet?: string
+  sourceUrl?: string | null     // optional direct link (e.g., EDGAR URL for SEC-sourced verification)
   reasoning?: string
 }
 
@@ -599,7 +609,17 @@ function withinTolerance(claimed: number, actual: number, tolerancePct: number):
 }
 
 // Main pre-check. Returns matched=false to let Google Search handle the claim.
-function tryVerifyAgainstBundle(claim: string, bundle: SignalBundle | undefined): BundleCheckResult {
+//
+// recentEarningsK is the most recent SEC 8-K Item 2.02 earnings release
+// for this ticker (within ~7 days), pre-fetched once per batch upstream
+// to keep this function synchronous. When present, it's the authoritative
+// source-of-truth for earnings-event existence claims like "company beat
+// earnings yesterday" or "earnings results released this morning".
+function tryVerifyAgainstBundle(
+  claim: string,
+  bundle: SignalBundle | undefined,
+  recentEarningsK: RecentEarningsK | null = null,
+): BundleCheckResult {
   if (!bundle) return { matched: false }
   const c = claim.toLowerCase()
 
@@ -979,6 +999,65 @@ function tryVerifyAgainstBundle(claim: string, bundle: SignalBundle | undefined)
     }
   }
 
+  // ── Earnings release existence claims (added Jun 2026, Step 5) ────
+  // Match claims that an earnings event has ALREADY occurred recently:
+  //   "company reported earnings yesterday"
+  //   "earnings released this morning"
+  //   "Q1 results announced today"
+  //   "earnings beat reported [recent date/time-marker]"
+  // The most reliable source-of-truth is the company's own 8-K Item 2.02
+  // filed with the SEC (pre-fetched into recentEarningsK by the batch
+  // wrapper upstream). If the claim says an earnings event happened
+  // recently AND we have a recent 8-K Item 2.02 in filing_alerts, we
+  // verify positively against EDGAR. If the claim says it happened
+  // recently AND no recent 8-K exists, we let Google Search handle it
+  // (the news might be from the company directly without EDGAR yet,
+  // or it might be a fabrication — Google will tell us).
+  const isEarningsEventClaim =
+    /\b(earnings|results)\b/i.test(c) &&
+    /\b(report(?:ed)?|released|announced|disclosed|posted)\b/i.test(c) &&
+    /\b(today|yesterday|this\s+(?:morning|afternoon|week)|recent(?:ly)?|just\s+(?:now|reported))\b/i.test(c)
+
+  if (isEarningsEventClaim && recentEarningsK) {
+    const hoursAgo = (Date.now() - new Date(recentEarningsK.filed_at).getTime()) / 3.6e6
+    // Match the claim's time-marker to the 8-K's age. "Today" = <24h,
+    // "yesterday" = 24-48h, "this morning" / "just" = <12h, etc.
+    const saysToday      = /\btoday\b/i.test(c)
+    const saysYesterday  = /\byesterday\b/i.test(c)
+    const saysMorning    = /\bthis\s+morning\b/i.test(c) || /\bjust\s+(?:now|reported)\b/i.test(c)
+    const saysThisWeek   = /\bthis\s+week\b/i.test(c) || /\brecent(?:ly)?\b/i.test(c)
+
+    const tolerantMatch =
+      (saysToday      && hoursAgo <= 24) ||
+      (saysYesterday  && hoursAgo > 12 && hoursAgo <= 60) ||
+      (saysMorning    && hoursAgo <= 12) ||
+      (saysThisWeek   && hoursAgo <= 168) ||
+      // No explicit time marker matched, but the claim says "recently" or
+      // the test was generic — accept any 8-K in the lookup window.
+      (!saysToday && !saysYesterday && !saysMorning && !saysThisWeek)
+
+    if (tolerantMatch) {
+      const ageStr = hoursAgo < 1
+        ? `${Math.round(hoursAgo * 60)}m ago`
+        : hoursAgo < 24
+        ? `${hoursAgo.toFixed(1)}h ago`
+        : `${Math.round(hoursAgo / 24)}d ago`
+      return {
+        matched: true,
+        verified: true,
+        sourceOutlet: 'SEC 8-K Item 2.02 (EDGAR)',
+        sourceUrl: recentEarningsK.filing_url ?? null,
+        reasoning: `SEC confirms: 8-K Item 2.02 earnings release filed ${ageStr} (filed_at=${recentEarningsK.filed_at}).`,
+      }
+    }
+  } else if (isEarningsEventClaim && !recentEarningsK) {
+    // Claim says earnings released recently, but no 8-K Item 2.02 found
+    // in the lookup window. Don't strip here — the press release may
+    // exist independently of the EDGAR 8-K (companies sometimes issue
+    // PR first, file 8-K hours later). Fall through to Google Search.
+    return { matched: false }
+  }
+
   // ── EPS surprise claims (added Jun 2026) ──────────────────
   // Match: "EPS surprise of -147%", "average EPS surprise -147.4%",
   //        "missed by 49.7%", "beat by 12%".
@@ -1129,15 +1208,23 @@ export async function verifyFactualClaims(
     // Step 2a: bundle pre-check (Bug 11 fix) — settle claims the bundle
     // can speak to authoritatively, BEFORE burning a Gemini search call.
     // Claims the bundle can't speak to fall through to Step 2b.
+    //
+    // Step 5 addition (Jun 2026): also fetch the most recent earnings
+    // 8-K Item 2.02 for this ticker (within 7 days), pre-fetched ONCE
+    // per batch, so the per-claim sync check can verify earnings-event
+    // existence claims against EDGAR source-of-truth.
+    const recentEarningsK: RecentEarningsK | null = await findRecentEarningsRelease(ticker)
+      .catch(() => null)
+
     const bundleSettled: ClaimVerification[] = []
     const remainingClaims: string[] = []
     for (const claim of claims) {
-      const r = tryVerifyAgainstBundle(claim, bundle)
+      const r = tryVerifyAgainstBundle(claim, bundle, recentEarningsK)
       if (r.matched) {
         bundleSettled.push({
           claim,
           verified: r.verified ?? false,
-          sourceUrl: null,
+          sourceUrl: r.sourceUrl ?? null,
           sourceOutlet: r.sourceOutlet ?? null,
           reasoning: r.reasoning ?? '',
         })
