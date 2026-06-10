@@ -145,10 +145,11 @@ export async function resolveTicker(rawCik: string): Promise<{
 
 interface AtomEntry {
   accessionNo: string
-  filerCik: string
+  filerCik: string         // the CIK from the title — meaning depends on entryRole
   filerName: string
   indexUrl: string
-  filedAt: string  // ISO timestamp from <updated>
+  filedAt: string          // ISO timestamp from <updated>
+  entryRole: string        // 'Reporting', 'Issuer', 'Filer', 'Subject', 'Reporting,Issuer', etc.
 }
 
 async function fetchAtomFeed(type: '4' | '13D' | '13G' | '8-K', count: number): Promise<AtomEntry[]> {
@@ -225,11 +226,12 @@ async function fetchAtomFeed(type: '4' | '13D' | '13G' | '8-K', count: number): 
       // Title CIK is in bare-digits parens: "Foo Inc (0001234567) (Filer)"
       // The 4-12 digit constraint catches 7-10-digit CIKs without
       // grabbing accession numbers (18 digits) that may appear elsewhere.
-      const cikMatch = title.match(/\((\d{4,12})\)\s*\([A-Za-z]/i)
+      const cikMatch = title.match(/\((\d{4,12})\)\s*\(([A-Za-z][\w,\s]*)\)/i)
       if (!cikMatch) {
         skippedNoCik++
         continue
       }
+      const entryRole = cikMatch[2].trim()
 
       // Strip the form prefix and trailing (cik) (role) to get filer name
       const filerName = title
@@ -249,6 +251,7 @@ async function fetchAtomFeed(type: '4' | '13D' | '13G' | '8-K', count: number): 
         filerName,
         indexUrl: linkMatch[1],
         filedAt: updatedMatch[1],
+        entryRole,
       })
     }
 
@@ -657,33 +660,73 @@ interface ScheduleDGParsed {
   amendmentNo: number      // 0 for initial filing, >0 for amendments
 }
 
-async function fetchScheduleDGXml(indexUrl: string): Promise<string | null> {
-  // 13D/G filings primarily exist as text/HTML on EDGAR, but the
-  // structured XML form (primary_doc.xml) was introduced and is now
-  // standard for modern filings. We try that path first.
+async function fetchScheduleDGXml(indexUrl: string, accessionNo: string): Promise<string | null> {
+  // 13D/G filings have varying XML filenames. We try the index-scrape
+  // path first (most reliable — tells us exactly what files exist),
+  // then fall back to known filenames.
   const baseUrl = indexUrl.replace(/\/[^/]+$/, '')
 
+  // PRIMARY: scrape the index for any XML link and try each.
+  // 13D/G XML can have any of these characteristic tags depending on
+  // the filer's schema version: <edgarSubmission>, <schedule13>,
+  // <schedule13Submission>, <ownershipDocument>, etc.
+  try {
+    const idxRes = await fetch(`${baseUrl}/`, { headers: EDGAR_HEADERS })
+    if (idxRes.ok) {
+      const html = await idxRes.text()
+      const xmlLinks = [...html.matchAll(/href="([^"]*\.xml)"/gi)].map(m => m[1])
+      // Skip stylesheets — they're never the data file
+      const candidates = xmlLinks.filter(l => !/xsl/i.test(l))
+
+      for (const link of candidates) {
+        const fullUrl = link.startsWith('http') ? link : `${EDGAR_BASE}${link}`
+        const xmlRes = await fetch(fullUrl, { headers: EDGAR_HEADERS })
+        if (!xmlRes.ok) continue
+        const text = await xmlRes.text()
+        // Schedule 13D/G XML schemas vary. Accept any document containing
+        // common 13D/G structural tags.
+        if (
+          text.includes('<edgarSubmission>') ||
+          text.includes('schedule13') ||
+          text.includes('<reportingPerson') ||
+          text.includes('<subjectCompany') ||
+          text.includes('<filer>')
+        ) {
+          return text
+        }
+      }
+      // If we got the index but no XML had the expected tags, log
+      // what XML files we found for diagnosis.
+      if (candidates.length > 0) {
+        console.log(
+          `[sec-monitor] 13D/G ${accessionNo}: index had ${candidates.length} XML files but none parsed as schedule XML. Files: ${candidates.slice(0, 5).join(', ')}`,
+        )
+      } else {
+        console.log(
+          `[sec-monitor] 13D/G ${accessionNo}: index had no XML files`,
+        )
+      }
+    } else {
+      console.log(`[sec-monitor] 13D/G ${accessionNo}: index fetch failed HTTP ${idxRes.status}`)
+    }
+  } catch (e) {
+    console.warn(`[sec-monitor] 13D/G ${accessionNo}: index scrape error: ${(e as Error).message}`)
+  }
+
+  // FALLBACK: try primary_doc.xml directly (modern schema convention)
   try {
     const res = await fetch(`${baseUrl}/primary_doc.xml`, { headers: EDGAR_HEADERS })
     if (res.ok) {
       const text = await res.text()
-      if (text.includes('edgarSubmission') || text.includes('schedule13')) return text
-    }
-  } catch { /* fall through */ }
-
-  // Fallback: scrape the index page for any XML link
-  try {
-    const idxRes = await fetch(`${baseUrl}/`, { headers: EDGAR_HEADERS })
-    if (!idxRes.ok) return null
-    const html = await idxRes.text()
-    const xmlLinks = [...html.matchAll(/href="([^"]*\.xml)"/gi)].map(m => m[1])
-    for (const link of xmlLinks) {
-      if (/xsl/i.test(link)) continue  // stylesheets, not data
-      const fullUrl = link.startsWith('http') ? link : `${EDGAR_BASE}${link}`
-      const xmlRes = await fetch(fullUrl, { headers: EDGAR_HEADERS })
-      if (!xmlRes.ok) continue
-      const text = await xmlRes.text()
-      if (text.includes('edgarSubmission') || text.includes('schedule13')) return text
+      if (
+        text.includes('<edgarSubmission>') ||
+        text.includes('schedule13') ||
+        text.includes('<reportingPerson') ||
+        text.includes('<subjectCompany') ||
+        text.includes('<filer>')
+      ) {
+        return text
+      }
     }
   } catch { /* fall through */ }
 
@@ -770,7 +813,7 @@ async function processScheduleDGEntries(
         continue
       }
 
-      const xml = await fetchScheduleDGXml(entry.indexUrl)
+      const xml = await fetchScheduleDGXml(entry.indexUrl, entry.accessionNo)
       if (!xml) {
         result.errors++
         continue
