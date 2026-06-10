@@ -1030,7 +1030,16 @@ export async function runTargetedResearch(
   const needsFundamentals  = q.includes('earnings') || q.includes('revenue') || q.includes('pe ') || q.includes('p/e') || q.includes('margin') || q.includes('eps') || q.includes('guidance') || q.includes('analyst') || q.includes('upgrade') || q.includes('downgrade') || q.includes('target')
   const needsOptions       = q.includes('option') || q.includes('put') || q.includes('call') || q.includes('iv ') || q.includes('implied vol') || q.includes('short interest') || q.includes('unusual')
   const needsTechnicals    = q.includes('support') || q.includes('resistance') || q.includes('rsi') || q.includes('macd') || q.includes('volume') || q.includes('moving average') || q.includes('trend') || q.includes('vwap') || q.includes('breakout') || q.includes('breakdown')
-  const needsMacro         = q.includes('vix') || q.includes('fed') || q.includes('rate') || q.includes('market') || q.includes('sector') || q.includes('spy') || q.includes('inflation') || q.includes('macro')
+  const needsMacro         = q.includes('vix') || q.includes('fed') || q.includes('rate') || q.includes('market') || q.includes('sector') || q.includes('spy') || q.includes('inflation') || q.includes('macro') ||
+                             // Phase 3: cover non-Fed central banks for forex
+                             q.includes('ecb') || q.includes('boe') || q.includes('bank of england') ||
+                             q.includes('boj') || q.includes('bank of japan') ||
+                             q.includes('boc') || q.includes('bank of canada') ||
+                             q.includes('rba') || q.includes('reserve bank') ||
+                             q.includes('central bank') || q.includes('dovish') || q.includes('hawkish') ||
+                             q.includes('nfp') || q.includes('non-farm') || q.includes('payroll') ||
+                             q.includes('cpi') || q.includes('ppi') || q.includes('gdp') ||
+                             q.includes('cot') || q.includes('commitments of traders') || q.includes('positioning')
   const needsSentiment     = q.includes('sentiment') || q.includes('narrative') || q.includes('saying') || q.includes('buzz') || q.includes('reaction') ||
                              q.includes('twitter') || q.includes('x post') || q.includes('crowd') || q.includes('retail') ||
                              q.includes('fomo') || q.includes('bearish talk') || q.includes('bullish talk') ||
@@ -1704,6 +1713,61 @@ async function getCachedResearchQuestions(
 }
 
 /**
+ * Forex-specific guidance for R2 question generation.
+ *
+ * Returns an instruction block to append to the Lead/Devil R2 ask system
+ * prompts when the ticker is a currency pair. For non-forex tickers,
+ * returns an empty string (no behavior change).
+ *
+ * Why: yesterday's EURUSD R2 asked equity-shaped questions ("13F holder
+ * data", "institutional positioning changes") that returned empty because
+ * those data sources don't exist for currency futures. The Council
+ * effectively asked a question with no possible useful answer. This
+ * guidance steers the question generator toward forex-relevant topics
+ * (central bank guidance, CFTC COT positioning, scheduled macro events).
+ *
+ * Also scans the bundle's econCalendar for imminent (<=48h) HIGH-impact
+ * events and explicitly suggests asking about them by name. Yesterday's
+ * EURUSD verdict had the ECB meeting tomorrow but the Lead's Q1 asked
+ * a generic "policy signals" question rather than "what's the consensus
+ * for tomorrow's ECB decision specifically."
+ */
+function buildForexQuestionGuidance(bundle: SignalBundle): string {
+  if (!isForexTicker(bundle.ticker)) return ''
+
+  // Scan econCalendar for any HIGH-impact event within 48 hours.
+  // The bundle stores it as a formatted text block, so we pattern-match
+  // for "TODAY" or "TOMORROW" markers in the [HIGH] lines.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const econ = ((bundle.aiContext as any).econCalendar || '') as string
+  const imminentLines = econ.split('\n').filter(line =>
+    line.includes('[HIGH]') && (line.includes('TODAY') || line.includes('TOMORROW'))
+  )
+  const imminentBlock = imminentLines.length > 0
+    ? `\n\nIMMINENT HIGH-IMPACT EVENTS (within 48h, from the bundle's economic calendar):\n${imminentLines.join('\n')}\nAT LEAST ONE of your two questions should target consensus expectations / market positioning / risk-management framing for the most imminent event above. A 1D directional thesis that ignores a HIGH-impact event within 48h is asking to be wrong by accident — the question is whether the consensus is hawkish/dovish, what's already priced in, and what the post-event invalidation level looks like.`
+    : ''
+
+  return `
+
+━━━ FOREX-SPECIFIC GUIDANCE FOR QUESTIONS (${bundle.ticker} is a currency pair) ━━━
+Currency pairs do NOT have:
+  • 13F institutional filings, insider Form 4 transactions, or congressional trades
+  • Earnings dates, EPS estimates, analyst price targets, or company news
+  • Insider buy/sell aggregates, hedge fund holdings, or ETF flow data
+
+DO NOT ask the News Scout about any of those — the answer will be empty.
+
+DO ask about:
+  • Central bank policy: rate decisions, forward guidance, dovish/hawkish positioning, dot plot expectations
+  • Macroeconomic data: NFP/CPI/PPI/GDP surprise potential, employment trends, inflation trajectory
+  • CFTC Commitments of Traders (COT) positioning: non-commercial net long/short, weekly positioning shifts, extreme positioning as contrarian indicator
+  • Interest rate differentials, terms-of-trade shifts, energy/commodity price linkages (where relevant to the specific pair)
+  • Risk-on / risk-off regime, DXY behavior, safe-haven flows
+  • Key technical levels and historical reaction zones at significant price points${imminentBlock}`
+}
+
+
+/**
  * Format cached research as a prompt block for the Lead/Devil to see what's
  * already been asked. Empty string when no cached entries.
  */
@@ -1730,11 +1794,12 @@ export async function runRebuttal(
   // Bug 19: pull cached prior research for this ticker so we don't re-ask
   const cachedResearch = await getCachedResearchQuestions(bundle.ticker, 'claude')
   const cacheBlock = formatCachedResearchBlock(cachedResearch)
+  const forexGuidance = buildForexQuestionGuidance(bundle)
 
   const researchAsk = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 250,
-    system: `You are the Lead Analyst in a stock debate about ${bundle.ticker}. You can send TWO research questions to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before you respond to the Devil's Advocate. Choose two questions that target the most important data points to resolve the Devil's strongest challenges. The two questions should explore DIFFERENT angles --- do not ask variations of the same thing. Return them as a numbered list, ONE QUESTION PER LINE: "1. <question>\\n2. <question>". Nothing else.`,
+    system: `You are the Lead Analyst in a stock debate about ${bundle.ticker}. You can send TWO research questions to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before you respond to the Devil's Advocate. Choose two questions that target the most important data points to resolve the Devil's strongest challenges. The two questions should explore DIFFERENT angles --- do not ask variations of the same thing. Return them as a numbered list, ONE QUESTION PER LINE: "1. <question>\\n2. <question>". Nothing else.${forexGuidance}`,
     messages: [{
       role: 'user',
       content: `YOUR ORIGINAL CALL: ${claude.signal} at $${bundle.currentPrice.toFixed(2)}, target ${claude.target}
@@ -1814,6 +1879,7 @@ export async function runCounter(
   // Bug 19: pull cached prior research for this ticker (Devil's prior questions)
   const cachedResearch = await getCachedResearchQuestions(bundle.ticker, 'gpt')
   const cacheBlock = formatCachedResearchBlock(cachedResearch)
+  const forexGuidance = buildForexQuestionGuidance(bundle)
 
   // Format the Lead's R2 research (now array shape) into a string for prompt context
   const leadResearchSummary = (rebuttal.researchQuestions ?? []).map((q, i) =>
@@ -1824,7 +1890,7 @@ export async function runCounter(
     model: 'gpt-4o',
     max_tokens: 250,
     messages: [
-      { role: 'system', content: `You are the Devil's Advocate in a stock debate about ${bundle.ticker}. You can send TWO research questions to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before firing back at the Lead Analyst. Choose two questions that strengthen your challenges from DIFFERENT angles --- do not ask variations of the same thing. Return them as a numbered list, ONE QUESTION PER LINE: "1. <question>\\n2. <question>". Nothing else.` },
+      { role: 'system', content: `You are the Devil's Advocate in a stock debate about ${bundle.ticker}. You can send TWO research questions to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before firing back at the Lead Analyst. Choose two questions that strengthen your challenges from DIFFERENT angles --- do not ask variations of the same thing. Return them as a numbered list, ONE QUESTION PER LINE: "1. <question>\\n2. <question>". Nothing else.${forexGuidance}` },
       { role: 'user', content: `LEAD ANALYST'S REBUTTAL: ${rebuttal.rebuttal}
 THEY CONCEDE: ${rebuttal.concedes.join('; ')}
 THEY MAINTAIN: ${rebuttal.maintains.join('; ')}
