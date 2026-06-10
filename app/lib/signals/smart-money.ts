@@ -124,21 +124,28 @@ async function fetchInsiderTransactions(ticker: string): Promise<InsiderTransact
 }
 
 // ── EDGAR-sourced institutional ownership (13F, via institutional_holdings table) ──
-// Replaces the previous Finnhub /stock/institutional-ownership path which
-// silently returned [] for most tickers (either Finnhub free-tier doesn't
-// include the endpoint, or the call was failing without visible logs).
 //
 // Reads from the institutional_holdings table populated by EDGAR 13F-HR
-// ingestion. Same Bug-5 lesson: when both Finnhub and EDGAR cover the same
-// data category, EDGAR is the source of truth (real filings with accession
-// numbers; Finnhub's institutional endpoint requires paid tier and has
-// been returning empty in production).
+// filings. This was Bug 28 (May 2026) — switched from Finnhub paid endpoint
+// (silently empty) to EDGAR table read.
 //
-// Data freshness note: 13F filings are inherently quarterly. Latest data
-// available anywhere right now is Q1 2026 (filings due May 15, 2026).
-// Our ingestion ran 2026-04-18, so we capture most early/on-time filers
-// but may be missing late filers from April 19 – May 15. This is still
-// dramatically better than empty arrays leading to LLM hallucination.
+// QUARANTINE STATE (Jun 2026): The table contains DATA QUALITY ISSUES from
+// the EDGAR ingestion. Discovered while investigating why LI verdicts kept
+// hallucinating "Berkshire Hathaway owns 39.81M shares of LI" — turned out
+// the database literally had that row, with share counts inflated ~1000x
+// from real 13F filings (e.g. Vanguard listed at 347M shares of LI, which
+// would be ~33% ownership — not plausible).
+//
+// Until the ingestion is fixed and rows are re-verified, this function
+// filters by data_quality='verified'. Since the migration ships with all
+// existing rows marked 'unverified', the function returns empty arrays —
+// the Council then correctly reports "institutional data unavailable"
+// instead of citing fabricated positions.
+//
+// To restore institutional data for a verified holder, update the row:
+//   UPDATE institutional_holdings
+//   SET data_quality = 'verified'
+//   WHERE ticker = 'X' AND institution = 'Y' AND quarter = 'Z';
 async function fetchInstitutionalHoldings(ticker: string): Promise<InstitutionalHolder[]> {
   try {
     const { createClient } = await import('@supabase/supabase-js')
@@ -150,13 +157,14 @@ async function fetchInstitutionalHoldings(ticker: string): Promise<Institutional
     }
     const supabase = createClient(url, key)
 
-    // Find the most recent quarter we have data for THIS ticker.
+    // Find the most recent quarter we have VERIFIED data for THIS ticker.
     // We do this in two steps because Supabase JS doesn't have a clean
     // "select where quarter = (select max(quarter) ...)" shape.
     const { data: latestRow, error: maxErr } = await supabase
       .from('institutional_holdings')
       .select('quarter')
       .eq('ticker', ticker)
+      .eq('data_quality', 'verified')  // quarantine guard (Jun 2026)
       .order('quarter', { ascending: false })
       .limit(1)
       .maybeSingle()
@@ -166,8 +174,10 @@ async function fetchInstitutionalHoldings(ticker: string): Promise<Institutional
       return []
     }
     if (!latestRow?.quarter) {
-      // No 13F data for this ticker — common for small caps, ETFs,
-      // foreign tickers. Returning empty is the honest answer.
+      // No verified 13F data for this ticker. This is the expected state
+      // for ALL tickers until the ingestion bug is fixed and rows are
+      // manually re-verified. The Council will report institutional data
+      // as unavailable — the honest answer.
       return []
     }
 
@@ -178,6 +188,7 @@ async function fetchInstitutionalHoldings(ticker: string): Promise<Institutional
       .select('institution, shares_held, change_shares, pct_of_portfolio, action, quarter, filing_date')
       .eq('ticker', ticker)
       .eq('quarter', latestRow.quarter)
+      .eq('data_quality', 'verified')  // quarantine guard (Jun 2026)
       .order('shares_held', { ascending: false })
       .limit(10)
 
