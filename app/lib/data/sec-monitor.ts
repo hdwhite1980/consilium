@@ -791,8 +791,9 @@ function parseScheduleDGXml(xml: string, accessionNo: string): ScheduleDGParsed 
 export interface ScheduleDGIngestResult {
   scanned13D: number
   scanned13G: number
-  parsed: number
-  inserted: number
+  parsed: number            // full XML parse succeeded
+  metadataOnly: number      // XML unavailable — wrote metadata-only row
+  inserted: number          // total rows written (parsed + metadataOnly)
   passiveFiltered: number   // 13G from passive giants — filtered out
   duplicates: number
   errors: number
@@ -814,53 +815,86 @@ async function processScheduleDGEntries(
       }
 
       const xml = await fetchScheduleDGXml(entry.indexUrl, entry.accessionNo)
-      if (!xml) {
-        result.errors++
-        continue
+      let parsed: ScheduleDGParsed | null = null
+
+      if (xml) {
+        parsed = parseScheduleDGXml(xml, entry.accessionNo)
       }
 
-      const parsed = parseScheduleDGXml(xml, entry.accessionNo)
-      if (!parsed) {
-        result.errors++
-        continue
+      // METADATA-ONLY PATH: if we couldn't fetch XML or couldn't parse
+      // what we got, fall back to recording what the atom feed told us.
+      // 13D/G is high-signal enough that the alert itself ("X filed Y
+      // about company Z") is worth surfacing even without structured
+      // percentage data. This handles the common case of older filings
+      // that don't include structured XML.
+      let metadataOnly = false
+      let ticker: string | null = null
+      let issuerName: string | null = null
+      let subjectCik: string
+
+      if (parsed) {
+        result.parsed++
+        subjectCik = parsed.subjectCik
+        const resolved = await resolveTicker(subjectCik)
+        ticker = resolved.ticker
+        issuerName = parsed.subjectName || resolved.name
+      } else {
+        metadataOnly = true
+        result.metadataOnly++
+        // entryRole tells us whether the title's CIK is the subject
+        // (the company) or the filer (the holder). For 13D/G, the
+        // entry's CIK is the SUBJECT when role is 'Subject', and the
+        // FILER when role is 'Filer'.
+        if (/Subject/i.test(entry.entryRole)) {
+          subjectCik = entry.filerCik
+          const resolved = await resolveTicker(subjectCik)
+          ticker = resolved.ticker
+          issuerName = resolved.name ?? entry.filerName
+        } else {
+          // Entry CIK is the filer — we don't know the subject without XML.
+          // Record the filing with NULL ticker/subject and let the alert
+          // surface based on filer alone. Better than dropping entirely.
+          subjectCik = '0000000000'  // sentinel — means "unknown subject"
+          ticker = null
+          issuerName = null
+        }
       }
-      result.parsed++
 
-      // Resolve the subject (the company) CIK to ticker
-      const resolved = await resolveTicker(parsed.subjectCik)
-      const ticker = resolved.ticker
-      const issuerName = parsed.subjectName || resolved.name
-
-      // Event type discriminates initial vs amendment, and 13D vs 13G.
-      // Amendments often signal status change (passive → activist, or
-      // significant position increase) so we tag them distinctly.
+      const amendmentNo = parsed?.amendmentNo ?? 0
       const eventType =
         filingType === '13D'
-          ? (parsed.amendmentNo > 0 ? 'activist_position_amended' : 'activist_position')
-          : (parsed.amendmentNo > 0 ? 'large_passive_position_amended' : 'large_passive_position')
+          ? (amendmentNo > 0 ? 'activist_position_amended' : 'activist_position')
+          : (amendmentNo > 0 ? 'large_passive_position_amended' : 'large_passive_position')
+
+      // Filer name: prefer the parsed XML version, fall back to the atom
+      // entry version (which has the filer name when role=Filer, or the
+      // subject company name when role=Subject — second-best for naming).
+      const filerName = parsed?.filerName || entry.filerName
 
       const { data: upsertData, error: upsertErr } = await admin.from('filing_alerts').upsert(
         {
           filing_type: filingType,
           ticker,
-          issuer_cik: parsed.subjectCik,
+          issuer_cik: subjectCik,
           issuer_name: issuerName,
-          filer_name: parsed.filerName || entry.filerName,
-          filer_cik: parsed.filerCik || entry.filerCik,
+          filer_name: filerName,
+          filer_cik: parsed?.filerCik || entry.filerCik,
           filer_role: filingType === '13D' ? 'activist' : 'large_passive_holder',
           accession_no: entry.accessionNo,
           filed_at: entry.filedAt,
           filing_url: entry.indexUrl,
           event_type: eventType,
           dollar_value: null,           // 13D/G doesn't disclose dollar value directly
-          shares: parsed.sharesOwned,
-          percent_owned: parsed.percentOwned,
+          shares: parsed?.sharesOwned ?? null,
+          percent_owned: parsed?.percentOwned ?? null,
           transaction_code: null,
           transaction_data: {
-            cusip: parsed.subjectCusip,
-            amendment_no: parsed.amendmentNo,
-            shares_owned: parsed.sharesOwned,
-            percent_owned: parsed.percentOwned,
+            cusip: parsed?.subjectCusip ?? null,
+            amendment_no: amendmentNo,
+            shares_owned: parsed?.sharesOwned ?? null,
+            percent_owned: parsed?.percentOwned ?? null,
+            metadata_only: metadataOnly,
+            atom_role: entry.entryRole,
           },
         },
         { onConflict: 'accession_no', ignoreDuplicates: true },
@@ -873,11 +907,11 @@ async function processScheduleDGEntries(
         result.duplicates++
       } else {
         result.inserted++
+        const percentStr = parsed ? `${parsed.percentOwned.toFixed(2)}% (${parsed.sharesOwned.toLocaleString()} shares)` : '[metadata-only]'
         console.log(
-          `[sec-monitor] ${filingType}: ${parsed.filerName || entry.filerName} ` +
-          `${eventType} ${parsed.percentOwned.toFixed(2)}% (${parsed.sharesOwned.toLocaleString()} shares) ` +
-          `of ${ticker ?? parsed.subjectCik}` +
-          (parsed.amendmentNo > 0 ? ` [Amendment ${parsed.amendmentNo}]` : ''),
+          `[sec-monitor] ${filingType}: ${filerName} ${eventType} ${percentStr} ` +
+          `of ${ticker ?? subjectCik}` +
+          (amendmentNo > 0 ? ` [Amendment ${amendmentNo}]` : ''),
         )
       }
     } catch (e) {
@@ -901,13 +935,13 @@ export async function fetchRecent13DG(feedCount = 40): Promise<ScheduleDGIngestR
   const admin = getAdmin()
   if (!admin) {
     return {
-      scanned13D: 0, scanned13G: 0, parsed: 0, inserted: 0,
+      scanned13D: 0, scanned13G: 0, parsed: 0, metadataOnly: 0, inserted: 0,
       passiveFiltered: 0, duplicates: 0, errors: 0,
     }
   }
 
   const result: ScheduleDGIngestResult = {
-    scanned13D: 0, scanned13G: 0, parsed: 0, inserted: 0,
+    scanned13D: 0, scanned13G: 0, parsed: 0, metadataOnly: 0, inserted: 0,
     passiveFiltered: 0, duplicates: 0, errors: 0,
   }
 
@@ -926,8 +960,8 @@ export async function fetchRecent13DG(feedCount = 40): Promise<ScheduleDGIngestR
 
   console.log(
     `[sec-monitor] 13D/G run complete: scanned 13D=${result.scanned13D} 13G=${result.scanned13G} ` +
-    `parsed=${result.parsed} inserted=${result.inserted} ` +
-    `(${result.passiveFiltered} passive-filtered, ${result.duplicates} duplicates, ${result.errors} errors)`,
+    `inserted=${result.inserted} (${result.parsed} XML-parsed, ${result.metadataOnly} metadata-only, ` +
+    `${result.passiveFiltered} passive-filtered, ${result.duplicates} duplicates, ${result.errors} errors)`,
   )
 
   return result

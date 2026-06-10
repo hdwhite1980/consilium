@@ -50,7 +50,7 @@ async function runMonitor(req: NextRequest) {
     })),
     fetchRecent13DG(feedCount).catch((e: Error) => ({
       error: e.message,
-      scanned13D: 0, scanned13G: 0, parsed: 0, inserted: 0,
+      scanned13D: 0, scanned13G: 0, parsed: 0, metadataOnly: 0, inserted: 0,
       passiveFiltered: 0, duplicates: 0, errors: 1,
     })),
   ])
