@@ -29,6 +29,7 @@ import { generateWithFallback } from './gemini-helper'
 import { buildMacroIntelligenceContext } from './macro-intelligence'
 import type { SignalBundle } from './aggregator'
 import { isFundTicker, getFundInfo, buildFundContext } from './data/fund-detection'
+import { isForexTicker } from './data/forex'
 import { runSocialScout, formatSocialSentimentForPrompt, type SocialSentiment } from './social-scout'
 import { runAggregatorScout, formatAggregatorForPrompt, type AggregatorScoutResult } from './news-aggregator-scout'
 import { evaluateTrade, type TraderVerdict } from './trader'
@@ -1086,15 +1087,36 @@ export async function runTargetedResearch(
 
   const liveDataParts: string[] = []
 
+  // ── Forex short-circuit for smart-money questions (Phase 2) ───────
+  // When the ticker is a currency pair and the question touches insider /
+  // institutional / congressional / generic-ownership, the equity-shaped
+  // branches below would all return empty ("No 13F holder data available")
+  // which is technically correct but useless — and trains the model to
+  // treat the absence as evidence. Instead, surface the bundle's COT-derived
+  // smart-money section directly. This is the authoritative forex
+  // positioning source. The equity branches below are gated off by the
+  // !isForexQuestion checks so they don't add "no data" noise on top.
+  const isForexQuestion = isForexTicker(bundle.ticker) &&
+    (needsInsider || needsCongress || needsInstitutional)
+  if (isForexQuestion) {
+    const cotSection = bundle.aiContext?.smartMoneySection ?? ''
+    if (cotSection.trim().length > 0) {
+      liveDataParts.push(cotSection)
+    } else {
+      liveDataParts.push(`FOREX SMART-MONEY DATA: Not available for ${bundle.ticker}. CFTC COT positioning data was either not fetched or this pair has no tracked currency-futures contract. DO NOT cite 13F filings, insider transactions, or stock-style institutional ownership — those don't exist for currency futures.`)
+    }
+  }
+
   // ── Bundle-sourced smart-money data (no external calls) ───────────
   // The bundle already carries detailed insider transactions, congressional
   // trades, and institutional holdings. Surface them here so personas
   // doing fresh research get authoritative data instead of a "not
   // available" fallback. EDGAR-sourced (Form 4 + 13F) and Finnhub
   // congressional — these are the source-of-truth numbers the council
-  // should anchor on.
+  // should anchor on. For forex tickers, these branches are gated off
+  // by the isForexQuestion check above.
 
-  if (needsInsider) {
+  if (needsInsider && !isForexQuestion) {
     const txns = bundle.smartMoney?.insiderTransactions ?? []
     const buyValue = txns.filter(t => t.type === 'buy').reduce((s, t) => s + (t.totalValue ?? 0), 0)
     const sellValue = txns.filter(t => t.type === 'sell').reduce((s, t) => s + (t.totalValue ?? 0), 0)
@@ -1115,7 +1137,7 @@ export async function runTargetedResearch(
     }
   }
 
-  if (needsCongress) {
+  if (needsCongress && !isForexQuestion) {
     const trades = bundle.smartMoney?.congressionalTrades ?? []
     if (trades.length > 0) {
       const buys = trades.filter(t => t.type === 'purchase').length
@@ -1134,7 +1156,7 @@ export async function runTargetedResearch(
     }
   }
 
-  if (needsInstitutional) {
+  if (needsInstitutional && !isForexQuestion) {
     const holders = bundle.smartMoney?.institutionalOwnership ?? []
     const notable = bundle.smartMoney?.notableHolders ?? []
     if (holders.length > 0) {
@@ -1377,8 +1399,14 @@ export async function runTargetedResearch(
   // Even when we DO call Gemini (mixed-dimension questions), explicitly
   // forbid fabricating smart-money specifics. The bundle's no-data
   // statements should be respected, not "filled in" from training data.
+  // Forex pairs get a different rule: cite COT data if shown, but
+  // DO NOT invent 13F/insider/congressional data — those don't exist
+  // for currency futures.
+  const isForexBundle = isForexTicker(bundle.ticker)
   const smartMoneyGuardrail = (needsInsider || needsCongress || needsInstitutional)
-    ? `\n\nCRITICAL: If the question touches institutional positions, insider transactions, congressional trades, 13F filings, or named fund holdings: ONLY cite specifics that appear in the LIVE DATA section. If LIVE DATA says "No X data available", report that fact — do NOT invent specific share counts, fund names, transaction values, or filing dates from outside the LIVE DATA. Pattern-matching plausible-sounding institutional claims from training data is FORBIDDEN. "I don't see institutional data in the bundle" is the correct answer when LIVE DATA shows no holdings.`
+    ? (isForexBundle
+        ? `\n\nCRITICAL (FOREX): Currency pairs have NO 13F filings, NO insider Form 4 transactions, and NO congressional trade disclosures — those mechanisms only apply to equities. The only "smart money" positioning data for forex is the CFTC Commitments of Traders (COT) report, shown in the LIVE DATA section as "SMART MONEY (FOREX) — CFTC COT POSITIONING" when available. Cite COT positioning (non-commercial net long/short, week-over-week shifts, % of open interest) if it appears in LIVE DATA. If LIVE DATA reports COT is unavailable, say so honestly — do NOT invent institutional position sizes, hedge fund names, or 13F-style holdings. Pattern-matching plausible equity-style positioning claims for a currency pair is FORBIDDEN.`
+        : `\n\nCRITICAL: If the question touches institutional positions, insider transactions, congressional trades, 13F filings, or named fund holdings: ONLY cite specifics that appear in the LIVE DATA section. If LIVE DATA says "No X data available", report that fact — do NOT invent specific share counts, fund names, transaction values, or filing dates from outside the LIVE DATA. Pattern-matching plausible-sounding institutional claims from training data is FORBIDDEN. "I don't see institutional data in the bundle" is the correct answer when LIVE DATA shows no holdings.`)
     : ''
 
   const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro']

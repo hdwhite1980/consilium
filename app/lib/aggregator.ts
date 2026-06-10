@@ -9,6 +9,7 @@ import { getExtendedHoursContext, type ExtendedHoursContext } from './data/exten
 import { getSectorContext, type SectorContext } from './data/sector-context'
 import { fetchCryptoBars, fetchCryptoPrice, fetchCryptoMetadata, isCryptoTicker } from './data/crypto'
 import { fetchForexBars, fetchForexRate, fetchForexMetadata, isForexTicker, getForexInfo } from './data/forex'
+import { buildForexSmartMoneyContext } from './data/forex-cot'
 import { fetchSpotMetalBars, fetchSpotMetalPrice, fetchSpotMetalMetadata, isSpotMetalTicker, getSpotMetalInfo } from './data/spot-metals'
 import { calculateTechnicals } from './signals/technicals'
 import { buildMarketContext } from './signals/market-context'
@@ -426,9 +427,10 @@ For directional bias, focus on:
     const technicals = calculateTechnicals(forexIndicatorBars)
 
     onProgress?.('Fetching market context...')
-    const [marketContext, optionsFlow] = await Promise.all([
+    const [marketContext, optionsFlow, forexSmartMoneySummary] = await Promise.all([
       buildMarketContext('SPY', timeframe), // macro context via SPY
       fetchOptionsFlow(sym, currentPrice),  // usually empty for forex
+      buildForexSmartMoneyContext(sym).catch(() => ''),  // CFTC COT positioning
     ])
 
     // Forex-specific fundamentals stub
@@ -461,9 +463,13 @@ Note: Forex has no P/E ratio, earnings, or insider data. Analysis focuses on tec
     }
 
     const forexSmartMoney = {
-      summary: `=== SMART MONEY (FOREX) ===
-Institutional positioning data (COT reports) not available via current data sources.
+      // Summary comes from CFTC COT positioning if available, else honest empty
+      summary: forexSmartMoneySummary || `=== SMART MONEY (FOREX) ===
+CFTC COT positioning data not available for this pair.
 Focus on central bank policy signals, economic data releases, and technical structure.`,
+      // Equity-shaped fields stay empty — forex has no 13F filings, insider
+      // transactions, or congressional trades. The summary above is the
+      // authoritative source. DO NOT cite the empty arrays as evidence.
       insiderTransactions: [],
       insiderNetValue: 0,
       insiderSignal: 'neutral' as const,
