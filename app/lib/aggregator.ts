@@ -23,6 +23,7 @@ import { getLatestDigestContext } from './market-digest'
 import { getLatestSocialContext } from './social-signals'
 import { getMonitorAlerts } from './market-monitor'
 import { getFilingAlerts } from './data/sec-monitor'
+import { getEconomicCalendarContext } from './forward-data'
 
 
 
@@ -75,6 +76,7 @@ export type SignalBundle = {
     socialContext: string   // social/political signal context
     monitorAlerts: string   // breaking market alerts (last 2 hours)
     filingAlerts: string    // SEC filings: Form 4, 13D/G, 8-K (last 48 hours)
+    econCalendar: string    // Upcoming central bank meetings + econ releases (asset-class aware)
     fullBundle: string  // everything combined
   }
 }
@@ -88,6 +90,17 @@ export async function buildSignalBundle(
   const isCrypto = isForexTicker(sym) ? false : isCryptoTicker(sym)
   const isForex = isForexTicker(sym)
   const isSpotMetal = isSpotMetalTicker(sym)
+
+  // Asset-class classification for downstream context helpers (Phase 1b).
+  // Forex pairs get both currencies' central banks; equities/crypto/commodities
+  // get FOMC + US data releases. See getEconomicCalendarContext().
+  const assetClass: 'equity' | 'forex' | 'crypto' | 'commodity' =
+    isForex ? 'forex' : isCrypto ? 'crypto' : isSpotMetal ? 'commodity' : 'equity'
+
+  // Kick off economic calendar fetch in parallel — used by every path below.
+  // Returns empty string if no relevant events in the window.
+  const econCalendarPromise = getEconomicCalendarContext(sym, assetClass, timeframe)
+    .catch(() => '')
 
   onProgress?.(`Fetching ${isSpotMetal ? 'spot metal' : isForex ? 'forex' : isCrypto ? 'crypto' : 'price'} data and news...`)
 
@@ -227,7 +240,8 @@ Focus on technical signals, volume trends, and market structure for directional 
     const smartMoneySection = cryptoSmartMoney.summary
     const optionsSection = optionsFlow.summary
     const convictionSection = conviction.summary
-    const fullBundle = [newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection].join('\n\n')
+    const econCalendar = await econCalendarPromise
+    const fullBundle = [newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, econCalendar].filter(Boolean).join('\n\n')
 
     return {
       ticker: sym, timeframe, timestamp: new Date().toISOString(),
@@ -236,7 +250,7 @@ Focus on technical signals, volume trends, and market structure for directional 
       fundamentals: cryptoFundamentals,
       smartMoney: cryptoSmartMoney,
       optionsFlow, conviction,
-      aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: '', socialContext: '', monitorAlerts: '', filingAlerts: '', fullBundle },
+      aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: '', socialContext: '', monitorAlerts: '', filingAlerts: '', econCalendar, fullBundle },
     }
   }
 
@@ -364,7 +378,8 @@ For directional bias, focus on:
     const smartMoneySection = metalSmartMoney.summary
     const optionsSection = optionsFlow.summary
     const convictionSection = conviction.summary
-    const fullBundle = [newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection].join('\n\n')
+    const econCalendar = await econCalendarPromise
+    const fullBundle = [newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, econCalendar].filter(Boolean).join('\n\n')
 
     return {
       ticker: sym, timeframe, timestamp: new Date().toISOString(),
@@ -373,7 +388,7 @@ For directional bias, focus on:
       fundamentals: metalFundamentals,
       smartMoney: metalSmartMoney,
       optionsFlow, conviction,
-      aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: '', socialContext: '', monitorAlerts: '', filingAlerts: '', fullBundle },
+      aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: '', socialContext: '', monitorAlerts: '', filingAlerts: '', econCalendar, fullBundle },
     }
   }
 
@@ -476,7 +491,8 @@ Focus on central bank policy signals, economic data releases, and technical stru
     const smartMoneySection = forexSmartMoney.summary
     const optionsSection = optionsFlow.summary
     const convictionSection = conviction.summary
-    const fullBundle = [newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection].join('\n\n')
+    const econCalendar = await econCalendarPromise
+    const fullBundle = [newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, econCalendar].filter(Boolean).join('\n\n')
 
     return {
       ticker: sym, timeframe, timestamp: new Date().toISOString(),
@@ -485,7 +501,7 @@ Focus on central bank policy signals, economic data releases, and technical stru
       fundamentals: forexFundamentals,
       smartMoney: forexSmartMoney,
       optionsFlow, conviction,
-      aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: '', socialContext: '', monitorAlerts: '', filingAlerts: '', fullBundle },
+      aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: '', socialContext: '', monitorAlerts: '', filingAlerts: '', econCalendar, fullBundle },
     }
   }
 
@@ -546,7 +562,7 @@ Focus on central bank policy signals, economic data releases, and technical stru
   // Congressional trades: 4s max (House XML or QuiverQuant)
   // fetchAllFilingsForTicker (13-F, Form 4 XML) is intentionally excluded from hot path
   // — it makes 15+ HTTP calls and is seeded via /api/sec-filings cron instead
-  const [secFilingsContext, legislativeContext, digestContext, socialContext, monitorAlerts, filingAlerts] = await Promise.all([
+  const [secFilingsContext, legislativeContext, digestContext, socialContext, monitorAlerts, filingAlerts, econCalendar] = await Promise.all([
     Promise.race([
       (async () => {
         // Check cache first — only fetch if no data exists for this ticker
@@ -576,6 +592,7 @@ Focus on central bank policy signals, economic data releases, and technical stru
     socialContextPromise,
     monitorAlertsPromise,
     filingAlertsPromise,
+    econCalendarPromise,
   ])
 
   // Compute relative strength vs sector now that we have both
@@ -621,6 +638,7 @@ Focus on central bank policy signals, economic data releases, and technical stru
   const fullBundle = [
     monitorAlerts || null,  // breaking alerts first — most time-sensitive
     filingAlerts || null,   // SEC filings (Form 4, 13D/G, 8-K) — material events
+    econCalendar || null,   // upcoming central bank meetings + econ releases
     digestContext || null,  // market regime context — sets the stage
     socialContext || null,  // social/political signals — Trump posts, Elon, Fed, etc.
     newsSection, priceSection, technicalsSection, marketSection,
@@ -633,6 +651,6 @@ Focus on central bank policy signals, economic data releases, and technical stru
     technicals, marketContext, fundamentals, smartMoney, optionsFlow, conviction,
     extendedHours,
     sectorContext,
-    aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: digestContext || '', socialContext: socialContext || '', monitorAlerts: monitorAlerts || '', filingAlerts: filingAlerts || '', fullBundle },
+    aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: digestContext || '', socialContext: socialContext || '', monitorAlerts: monitorAlerts || '', filingAlerts: filingAlerts || '', econCalendar: econCalendar || '', fullBundle },
   }
 }

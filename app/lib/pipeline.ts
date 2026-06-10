@@ -378,6 +378,12 @@ function buildLeadEvidenceBlock(
   // alongside news/fundamentals/smart-money as primary catalyst evidence.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const filingAlerts = (ctx as any).filingAlerts as string | undefined
+  // Economic calendar — upcoming central bank meetings + macro releases.
+  // Always primary (relevant to all lenses): a Fed meeting is a macro
+  // event that should affect technical sizing, fundamental valuation,
+  // and balanced takes alike.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const econCalendar = (ctx as any).econCalendar as string | undefined
 
   // Balanced lens: full data, no filtering
   if (lens === 'balanced') {
@@ -386,6 +392,7 @@ function buildLeadEvidenceBlock(
       ctx.fundamentalsSection,
       ctx.smartMoneySection,
       filingAlerts,
+      econCalendar,
       ctx.optionsSection,
       ctx.convictionSection,
     ].filter(Boolean).join('\n\n')
@@ -397,6 +404,7 @@ function buildLeadEvidenceBlock(
       ctx.technicalsSection,
       ctx.optionsSection,
       ctx.convictionSection,
+      econCalendar,   // macro matters even for chart-anchored lens
     ].filter(Boolean).join('\n\n')
 
     // Opposite section: full if override, truncated background otherwise
@@ -426,6 +434,7 @@ ${(ctx.smartMoneySection || '').slice(0, 400)}${filingAlerts ? '\n\n' + filingAl
       ctx.fundamentalsSection,
       ctx.smartMoneySection,
       filingAlerts,
+      econCalendar,
       ctx.convictionSection,
     ].filter(Boolean).join('\n\n')
 
@@ -450,7 +459,7 @@ ${(ctx.optionsSection || '').slice(0, 400)}`
   }
 
   // Fallback
-  return [ctx.technicalsSection, ctx.fundamentalsSection, ctx.smartMoneySection, filingAlerts, ctx.optionsSection, ctx.convictionSection].filter(Boolean).join('\n\n')
+  return [ctx.technicalsSection, ctx.fundamentalsSection, ctx.smartMoneySection, filingAlerts, econCalendar, ctx.optionsSection, ctx.convictionSection].filter(Boolean).join('\n\n')
 }
 
 /**
@@ -1414,6 +1423,10 @@ export async function runGemini(bundle: SignalBundle): Promise<GeminiResult> {
       // — treat as primary catalysts equal in weight to news headlines.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const filingInput = ((bundle.aiContext as any).filingAlerts || '').slice(0, 2000)
+      // Economic calendar — upcoming central bank meetings and macro releases.
+      // Critical for forex; relevant for stocks around Fed weeks.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const econInput = ((bundle.aiContext as any).econCalendar || '').slice(0, 2000)
 
       const result = await model.generateContent(`You are the News Scout and Macro Analyst for an elite AI stock council.
 
@@ -1422,7 +1435,7 @@ TIMEFRAME: ${bundle.timeframe} --- ${tfFocus[bundle.timeframe] ?? ''}
 
 ${newsInput}
 
-${marketInput}${filingInput ? '\n\n' + filingInput + '\n\nNOTE: The SEC FILINGS section above lists official EDGAR-sourced disclosures (Form 4 insider trades, 13D activist positions, 8-K material events). These are NOT rumors or analyst opinions — they are filed disclosures with regulatory weight. Cite specific filings in your headlines and keyEvents when they bear on the ${bundle.timeframe} thesis (e.g. "8-K Item 5.02 executive change disclosed yesterday", "Form 4: CEO bought $X.XM"). Weight these EQUALLY with news headlines.' : ''}
+${marketInput}${filingInput ? '\n\n' + filingInput + '\n\nNOTE: The SEC FILINGS section above lists official EDGAR-sourced disclosures (Form 4 insider trades, 13D activist positions, 8-K material events). These are NOT rumors or analyst opinions — they are filed disclosures with regulatory weight. Cite specific filings in your headlines and keyEvents when they bear on the ${bundle.timeframe} thesis (e.g. "8-K Item 5.02 executive change disclosed yesterday", "Form 4: CEO bought $X.XM"). Weight these EQUALLY with news headlines.' : ''}${econInput ? '\n\n' + econInput + '\n\nNOTE: The ECONOMIC CALENDAR section above lists upcoming central bank meetings and macro releases. Events within 24-48 hours are BINARY CATALYSTS — directional positions held through them carry binary risk regardless of how strong the technical/fundamental thesis appears. Cite the most imminent event in keyEvents when relevant (e.g. "FOMC tomorrow", "ECB Thursday"). If a HIGH-impact event falls inside the ${bundle.timeframe} timeframe, factor it into confidence and regimeAssessment.' : ''}
 
 Respond JSON ONLY (no fences):
 {"summary":"3 sentence overview","headlines":["top 4-5 headlines"],"sentiment":"positive|negative|neutral|mixed","confidence":<0-100>,"keyEvents":["2-4 near-term catalysts relevant to the ${bundle.timeframe} timeframe"],"macroFactors":["2-3 macro conditions"],"regimeAssessment":"1 sentence on regime impact"}`)
@@ -1497,8 +1510,12 @@ export async function runGPT(bundle: SignalBundle, gemini: GeminiResult, claude:
   // with emphasis on the opposite-dimension data for cross-pressure.
   // SEC filings (Form 4, 13D, 8-K) are always included — insider sells,
   // executive departures, and contested filings are powerful cross-pressure.
+  // Econ calendar always included — pending Fed/ECB/macro releases are
+  // powerful cross-pressure ("your thesis ignores FOMC tomorrow").
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const filingAlerts = (bundle.aiContext as any).filingAlerts as string | undefined
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const econCalendar = (bundle.aiContext as any).econCalendar as string | undefined
   let devilEvidence = ''
   if (lens === 'technical') {
     devilEvidence = `━━━ CROSS-PRESSURE TARGETS (use these to attack the technical Lead) ━━━
@@ -1506,7 +1523,7 @@ export async function runGPT(bundle: SignalBundle, gemini: GeminiResult, claude:
 FUNDAMENTALS (the Lead deprioritized these --- you should exploit them):
 ${bundle.aiContext.fundamentalsSection}
 
-${bundle.aiContext.smartMoneySection}${filingAlerts ? '\n\n' + filingAlerts : ''}
+${bundle.aiContext.smartMoneySection}${filingAlerts ? '\n\n' + filingAlerts : ''}${econCalendar ? '\n\n' + econCalendar : ''}
 
 ━━━ Technical context the Lead anchored on (for reference only) ━━━
 ${bundle.aiContext.technicalsSection}
@@ -1525,14 +1542,14 @@ ${bundle.aiContext.optionsSection}
 ━━━ Fundamental context the Lead anchored on (for reference only) ━━━
 ${bundle.aiContext.fundamentalsSection}
 
-${bundle.aiContext.smartMoneySection}${filingAlerts ? '\n\n' + filingAlerts : ''}
+${bundle.aiContext.smartMoneySection}${filingAlerts ? '\n\n' + filingAlerts : ''}${econCalendar ? '\n\n' + econCalendar : ''}
 
 ${bundle.aiContext.convictionSection}`
   } else {
     // balanced --- Devil sees everything equally
     devilEvidence = `${bundle.aiContext.technicalsSection}
 ${bundle.aiContext.fundamentalsSection}
-${bundle.aiContext.optionsSection}${filingAlerts ? '\n\n' + filingAlerts : ''}
+${bundle.aiContext.optionsSection}${filingAlerts ? '\n\n' + filingAlerts : ''}${econCalendar ? '\n\n' + econCalendar : ''}
 ${bundle.aiContext.convictionSection}`
   }
 
@@ -1707,7 +1724,7 @@ What TWO questions should the News Scout research right now to help you respond?
   const researchAskText = extractText(researchAsk.content as any[]).trim()
   const researchQuestions = parseNumberedQuestions(researchAskText, 2)
 
-  const researchContext = `${bundle.aiContext.technicalsSection}\n${bundle.aiContext.fundamentalsSection}\n${bundle.aiContext.smartMoneySection}\n${bundle.aiContext.optionsSection}\n${bundle.aiContext.marketSection}${(bundle.aiContext as any).filingAlerts ? '\n' + (bundle.aiContext as any).filingAlerts : ''}`
+  const researchContext = `${bundle.aiContext.technicalsSection}\n${bundle.aiContext.fundamentalsSection}\n${bundle.aiContext.smartMoneySection}\n${bundle.aiContext.optionsSection}\n${bundle.aiContext.marketSection}${(bundle.aiContext as any).filingAlerts ? '\n' + (bundle.aiContext as any).filingAlerts : ''}${(bundle.aiContext as any).econCalendar ? '\n' + (bundle.aiContext as any).econCalendar : ''}`
   // Run both research calls in parallel — News Scout is independent per question
   const researchAnswers = await Promise.all(
     researchQuestions.map(q => runTargetedResearch(bundle, q, researchContext))
@@ -1793,7 +1810,7 @@ What TWO questions should the News Scout research right now to help you counter?
   const researchAskText = researchAsk.choices[0].message.content?.trim() ?? ''
   const researchQuestions = parseNumberedQuestions(researchAskText, 2)
 
-  const researchContext = `${bundle.aiContext.technicalsSection}\n${bundle.aiContext.fundamentalsSection}\n${bundle.aiContext.smartMoneySection}\n${bundle.aiContext.optionsSection}\n${bundle.aiContext.marketSection}${(bundle.aiContext as any).filingAlerts ? '\n' + (bundle.aiContext as any).filingAlerts : ''}`
+  const researchContext = `${bundle.aiContext.technicalsSection}\n${bundle.aiContext.fundamentalsSection}\n${bundle.aiContext.smartMoneySection}\n${bundle.aiContext.optionsSection}\n${bundle.aiContext.marketSection}${(bundle.aiContext as any).filingAlerts ? '\n' + (bundle.aiContext as any).filingAlerts : ''}${(bundle.aiContext as any).econCalendar ? '\n' + (bundle.aiContext as any).econCalendar : ''}`
   // Run both research calls in parallel
   const researchAnswers = await Promise.all(
     researchQuestions.map(q => runTargetedResearch(bundle, q, researchContext))

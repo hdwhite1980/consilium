@@ -244,47 +244,179 @@ export async function fetchTodayEarnings(): Promise<EarningsEvent[]> {
 }
 
 // ─────────────────────────────────────────────────────────────
-// 4. Economic calendar (Finnhub has it too)
+// 4. Economic calendar
 // ─────────────────────────────────────────────────────────────
-export async function fetchEconomicCalendar(): Promise<EconomicEvent[]> {
-  const key = process.env.FINNHUB_API_KEY
-  if (!key) return []
+//
+// PRIMARY SOURCE: hardcoded central bank meeting calendar.
+//   - FOMC, ECB, BoE, BoJ, BoC, RBA dates are public and scheduled
+//     in advance, rarely change, and are the dominant catalysts
+//     for currency pairs AND a major factor for equity/bond moves
+//     in the days before/around the meeting.
+//   - Hardcoding ~50 dates per year is trivial and avoids the
+//     dependency on a paid tier of Finnhub's calendar endpoint.
+//
+// SECONDARY SOURCE: Finnhub /calendar/economic.
+//   - Layers on top when it returns data (NFP, CPI, retail sales).
+//   - Silently returns empty on free/Basic tier, which is fine —
+//     the central bank calendar covers the highest-impact events.
+//
+// Window: 14 days forward — enough to catch the next FOMC for stocks,
+// next ECB for EUR pairs, etc., without flooding the bundle.
 
-  const from = todayStr()
-  const toDate = new Date(from + 'T00:00:00Z')
-  toDate.setUTCDate(toDate.getUTCDate() + 3)
-  const to = toDate.toISOString().split('T')[0]
+interface CentralBankMeeting {
+  bank: 'FOMC' | 'ECB' | 'BoE' | 'BoJ' | 'BoC' | 'RBA'
+  date: string         // YYYY-MM-DD (decision day)
+  hasPressConf: boolean
+  hasSEP?: boolean     // FOMC Summary of Economic Projections
+}
 
-  try {
-    const res = await fetchWithTimeout(
-      `${FINNHUB_BASE}/calendar/economic?from=${from}&to=${to}&token=${key}`,
-      {}, 8000
-    )
-    if (!res || !res.ok) return []
-    const data = await res.json()
-    if (!Array.isArray(data?.economicCalendar)) return []
+// 2026 central bank meeting calendar (decision/press-conference days).
+// Sources: federalreserve.gov, ecb.europa.eu, bankofengland.co.uk,
+// boj.or.jp, bankofcanada.ca, rba.gov.au.
+// Update this list at year-end when 2027 calendars publish.
+const CENTRAL_BANK_CALENDAR_2026: CentralBankMeeting[] = [
+  // FOMC (Federal Reserve) — 8 meetings/year
+  { bank: 'FOMC', date: '2026-01-28', hasPressConf: true },
+  { bank: 'FOMC', date: '2026-03-18', hasPressConf: true, hasSEP: true },
+  { bank: 'FOMC', date: '2026-04-29', hasPressConf: true },
+  { bank: 'FOMC', date: '2026-06-17', hasPressConf: true, hasSEP: true },
+  { bank: 'FOMC', date: '2026-07-29', hasPressConf: true },
+  { bank: 'FOMC', date: '2026-09-16', hasPressConf: true, hasSEP: true },
+  { bank: 'FOMC', date: '2026-10-28', hasPressConf: true },
+  { bank: 'FOMC', date: '2026-12-09', hasPressConf: true, hasSEP: true },
 
-    return (data.economicCalendar as Array<Record<string, unknown>>)
-      .filter(e => {
-        // Only US events, medium+ impact
-        const country = typeof e.country === 'string' ? e.country : ''
-        const impact = typeof e.impact === 'string' ? e.impact.toLowerCase() : ''
-        return country === 'US' && (impact === 'high' || impact === 'medium')
-      })
-      .map(e => ({
-        name: String(e.event ?? ''),
-        date: String(e.time ?? '').split(' ')[0] || from,
-        time: String(e.time ?? '').split(' ')[1] ?? undefined,
-        impact: (String(e.impact ?? 'medium').toLowerCase() as 'high' | 'medium' | 'low'),
-        actual: e.actual as string | number | undefined,
-        forecast: e.estimate as string | number | undefined,
-        previous: e.prev as string | number | undefined,
-      }))
-      .filter(e => e.name.length > 0)
-      .slice(0, 20)
-  } catch {
-    return []
+  // ECB Governing Council — monetary policy decisions (Day 2 of each meeting)
+  { bank: 'ECB', date: '2026-01-22', hasPressConf: true },
+  { bank: 'ECB', date: '2026-03-12', hasPressConf: true },
+  { bank: 'ECB', date: '2026-04-30', hasPressConf: true },
+  { bank: 'ECB', date: '2026-06-11', hasPressConf: true },
+  { bank: 'ECB', date: '2026-07-23', hasPressConf: true },
+  { bank: 'ECB', date: '2026-09-10', hasPressConf: true },
+  { bank: 'ECB', date: '2026-10-29', hasPressConf: true },
+  { bank: 'ECB', date: '2026-12-17', hasPressConf: true },
+
+  // BoE (Bank of England) — MPC announcements (Thursdays, 12:00 UK)
+  { bank: 'BoE', date: '2026-02-05', hasPressConf: true },
+  { bank: 'BoE', date: '2026-03-19', hasPressConf: false },
+  { bank: 'BoE', date: '2026-05-07', hasPressConf: true },
+  { bank: 'BoE', date: '2026-06-18', hasPressConf: false },
+  { bank: 'BoE', date: '2026-08-06', hasPressConf: true },
+  { bank: 'BoE', date: '2026-09-17', hasPressConf: false },
+  { bank: 'BoE', date: '2026-11-05', hasPressConf: true },
+  { bank: 'BoE', date: '2026-12-17', hasPressConf: false },
+
+  // BoJ (Bank of Japan) — 8 meetings/year, decision typically Friday
+  { bank: 'BoJ', date: '2026-01-23', hasPressConf: true },
+  { bank: 'BoJ', date: '2026-03-19', hasPressConf: true },
+  { bank: 'BoJ', date: '2026-04-30', hasPressConf: true },
+  { bank: 'BoJ', date: '2026-06-19', hasPressConf: true },
+  { bank: 'BoJ', date: '2026-07-31', hasPressConf: true },
+  { bank: 'BoJ', date: '2026-09-18', hasPressConf: true },
+  { bank: 'BoJ', date: '2026-10-30', hasPressConf: true },
+  { bank: 'BoJ', date: '2026-12-18', hasPressConf: true },
+
+  // BoC (Bank of Canada) — 8 fixed announcement dates
+  { bank: 'BoC', date: '2026-01-21', hasPressConf: true },
+  { bank: 'BoC', date: '2026-03-11', hasPressConf: false },
+  { bank: 'BoC', date: '2026-04-15', hasPressConf: true },
+  { bank: 'BoC', date: '2026-06-03', hasPressConf: false },
+  { bank: 'BoC', date: '2026-07-29', hasPressConf: true },
+  { bank: 'BoC', date: '2026-09-09', hasPressConf: false },
+  { bank: 'BoC', date: '2026-10-28', hasPressConf: true },
+  { bank: 'BoC', date: '2026-12-09', hasPressConf: false },
+
+  // RBA (Reserve Bank of Australia) — first Tuesday of most months
+  { bank: 'RBA', date: '2026-02-03', hasPressConf: true },
+  { bank: 'RBA', date: '2026-03-03', hasPressConf: false },
+  { bank: 'RBA', date: '2026-04-07', hasPressConf: false },
+  { bank: 'RBA', date: '2026-05-05', hasPressConf: true },
+  { bank: 'RBA', date: '2026-06-02', hasPressConf: false },
+  { bank: 'RBA', date: '2026-07-07', hasPressConf: false },
+  { bank: 'RBA', date: '2026-08-04', hasPressConf: true },
+  { bank: 'RBA', date: '2026-09-22', hasPressConf: false },
+  { bank: 'RBA', date: '2026-11-03', hasPressConf: true },
+  { bank: 'RBA', date: '2026-12-08', hasPressConf: false },
+]
+
+function buildCentralBankEvents(daysAhead: number): EconomicEvent[] {
+  const today = todayStr()
+  const horizon = new Date(today + 'T00:00:00Z')
+  horizon.setUTCDate(horizon.getUTCDate() + daysAhead)
+  const horizonStr = horizon.toISOString().split('T')[0]
+
+  const events: EconomicEvent[] = []
+  for (const m of CENTRAL_BANK_CALENDAR_2026) {
+    if (m.date < today || m.date > horizonStr) continue
+    // Format: "FOMC Meeting (rate decision + SEP)" etc.
+    const detail = m.bank === 'FOMC' && m.hasSEP
+      ? ' (rate decision + SEP/dot plot + press conference)'
+      : m.hasPressConf
+      ? ' (rate decision + press conference)'
+      : ' (rate decision)'
+    events.push({
+      name: `${m.bank} Meeting${detail}`,
+      date: m.date,
+      impact: 'high',
+    })
   }
+  return events
+}
+
+export async function fetchEconomicCalendar(): Promise<EconomicEvent[]> {
+  // 1. Hardcoded central bank calendar (always available)
+  const cbEvents = buildCentralBankEvents(14)
+
+  // 2. Finnhub layered fallback (NFP, CPI, retail sales, etc.)
+  //    Often empty on free/Basic tier — that's fine, we have central
+  //    bank coverage above. When Finnhub does return data, it layers.
+  const key = process.env.FINNHUB_API_KEY
+  const finnhubEvents: EconomicEvent[] = []
+  if (key) {
+    const from = todayStr()
+    const toDate = new Date(from + 'T00:00:00Z')
+    toDate.setUTCDate(toDate.getUTCDate() + 14)
+    const to = toDate.toISOString().split('T')[0]
+    try {
+      const res = await fetchWithTimeout(
+        `${FINNHUB_BASE}/calendar/economic?from=${from}&to=${to}&token=${key}`,
+        {}, 8000
+      )
+      if (res && res.ok) {
+        const data = await res.json()
+        if (Array.isArray(data?.economicCalendar)) {
+          for (const e of data.economicCalendar as Array<Record<string, unknown>>) {
+            const country = typeof e.country === 'string' ? e.country : ''
+            const impact = typeof e.impact === 'string' ? e.impact.toLowerCase() : ''
+            if (country !== 'US' || (impact !== 'high' && impact !== 'medium')) continue
+            const name = String(e.event ?? '')
+            if (!name) continue
+            // Skip if it duplicates a central bank meeting we already have
+            // (Finnhub sometimes labels FOMC as "Fed Interest Rate Decision")
+            const date = String(e.time ?? '').split(' ')[0] || from
+            const isFomcDup = /fomc|fed.*rate.*decision|interest.*rate.*decision/i.test(name) &&
+              cbEvents.some(c => c.date === date && c.name.startsWith('FOMC'))
+            if (isFomcDup) continue
+            finnhubEvents.push({
+              name,
+              date,
+              time: String(e.time ?? '').split(' ')[1] ?? undefined,
+              impact: (impact as 'high' | 'medium' | 'low'),
+              actual: e.actual as string | number | undefined,
+              forecast: e.estimate as string | number | undefined,
+              previous: e.prev as string | number | undefined,
+            })
+          }
+        }
+      }
+    } catch {
+      // Finnhub failed — that's fine, central bank events still cover us
+    }
+  }
+
+  // Combine and sort by date
+  const combined = [...cbEvents, ...finnhubEvents]
+  combined.sort((a, b) => a.date.localeCompare(b.date))
+  return combined.slice(0, 30)
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -391,4 +523,116 @@ export function formatForwardContextForPrompt(ctx: ForwardContext): string {
   }
 
   return parts.join('\n\n')
+}
+
+// ─────────────────────────────────────────────────────────────
+// Per-ticker economic events context (Phase 1b)
+// ─────────────────────────────────────────────────────────────
+//
+// Returns a compact text block of upcoming economic events relevant
+// to the ticker being analyzed. Used by aggregator.ts to add an
+// "ECONOMIC CALENDAR" section to the per-ticker bundle so Council
+// stages know about upcoming high-impact events.
+//
+// Relevance rules:
+//   - Forex pairs: include the central banks for BOTH currencies in
+//     the pair, plus all high-impact US releases (since USD is in
+//     most pairs).
+//   - Equities/ETFs/crypto: include FOMC + high-impact US releases.
+//     Foreign central banks generally don't move US equities meaningfully
+//     intraday, so we skip ECB/BoJ/etc. for stocks to keep noise down.
+//
+// The window matches the analysis timeframe:
+//   - 1D timeframe → next 5 days
+//   - 1W timeframe → next 14 days
+//   - 1M / 3M timeframes → next 14 days (we already cap at 14)
+
+type AssetClass = 'equity' | 'forex' | 'crypto' | 'commodity' | 'unknown'
+
+// Map forex ticker (e.g. "EURUSD") to the central banks that matter.
+function centralBanksForForexPair(ticker: string): Set<CentralBankMeeting['bank']> {
+  const t = ticker.toUpperCase().replace(/[^A-Z]/g, '')
+  const banks = new Set<CentralBankMeeting['bank']>()
+  // FOMC is relevant whenever USD is in the pair (almost always)
+  if (t.includes('USD')) banks.add('FOMC')
+  if (t.includes('EUR')) banks.add('ECB')
+  if (t.includes('GBP')) banks.add('BoE')
+  if (t.includes('JPY')) banks.add('BoJ')
+  if (t.includes('CAD')) banks.add('BoC')
+  if (t.includes('AUD')) banks.add('RBA')
+  return banks
+}
+
+/**
+ * Build a per-ticker economic calendar text block for the bundle.
+ *
+ * @param ticker        ticker symbol (e.g. "AAPL", "EURUSD", "BTCUSD")
+ * @param assetClass    detected asset class
+ * @param timeframe     analysis timeframe ('1D' | '1W' | '1M' | '3M')
+ *                      controls how far forward to look
+ * @returns formatted text block, or empty string if no relevant events
+ */
+export async function getEconomicCalendarContext(
+  ticker: string,
+  assetClass: AssetClass,
+  timeframe: string = '1D',
+): Promise<string> {
+  const daysAhead = timeframe === '1D' ? 5 : 14
+  const cbAll = buildCentralBankEvents(daysAhead)
+
+  // Filter central bank events by asset class
+  let cbFiltered: EconomicEvent[]
+  if (assetClass === 'forex') {
+    const relevantBanks = centralBanksForForexPair(ticker)
+    cbFiltered = cbAll.filter(e => {
+      // Event name format: "FOMC Meeting (...)"
+      const bank = e.name.split(' ')[0] as CentralBankMeeting['bank']
+      return relevantBanks.has(bank)
+    })
+  } else {
+    // Equities/crypto/commodities: FOMC only (foreign central banks
+    // typically don't move US assets enough to clutter the bundle)
+    cbFiltered = cbAll.filter(e => e.name.startsWith('FOMC'))
+  }
+
+  // Also pull Finnhub-side US events (NFP, CPI, retail sales, etc.)
+  // for everything. These matter for stocks/forex/crypto alike.
+  const allEvents = await fetchEconomicCalendar()
+  const cbInCombined = new Set(cbFiltered.map(e => `${e.name}|${e.date}`))
+  const otherUsEvents = allEvents.filter(e => {
+    // Skip central bank events (we filter those separately above)
+    if (/^(FOMC|ECB|BoE|BoJ|BoC|RBA)\s/i.test(e.name)) return false
+    // Limit non-CB events to high+medium impact and within window
+    const eventDate = new Date(e.date + 'T00:00:00Z')
+    const horizon = new Date(todayStr() + 'T00:00:00Z')
+    horizon.setUTCDate(horizon.getUTCDate() + daysAhead)
+    return eventDate <= horizon
+  })
+
+  const finalEvents = [...cbFiltered, ...otherUsEvents]
+    .filter(e => !cbInCombined.has(`${e.name}|${e.date}`) || cbFiltered.includes(e))
+  if (finalEvents.length === 0) return ''
+
+  // Sort by date and format
+  finalEvents.sort((a, b) => a.date.localeCompare(b.date))
+
+  // Compute days-until for each event (helps the Council weight imminence)
+  const today = new Date(todayStr() + 'T00:00:00Z')
+  const lines: string[] = [
+    '=== ECONOMIC CALENDAR — UPCOMING HIGH-IMPACT EVENTS ===',
+    'Central bank decisions and major data releases that may affect this asset within the timeframe.',
+    'Events within 24-48h are BINARY CATALYSTS — size and confidence should reflect that.',
+    '',
+  ]
+  for (const e of finalEvents.slice(0, 15)) {
+    const eventDate = new Date(e.date + 'T00:00:00Z')
+    const daysUntil = Math.round((eventDate.getTime() - today.getTime()) / 86_400_000)
+    const dayLabel = daysUntil === 0 ? 'TODAY' : daysUntil === 1 ? 'TOMORROW' : `in ${daysUntil}d`
+    const impactTag = e.impact === 'high' ? '[HIGH]' : e.impact === 'medium' ? '[MED]' : '[LOW]'
+    const fc = e.forecast !== undefined ? ` forecast ${e.forecast}` : ''
+    const pr = e.previous !== undefined ? ` prior ${e.previous}` : ''
+    lines.push(`  • ${impactTag} ${e.date} (${dayLabel}): ${e.name}${fc}${pr}`)
+  }
+
+  return lines.join('\n')
 }
