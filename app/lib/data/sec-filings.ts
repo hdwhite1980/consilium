@@ -435,286 +435,390 @@ function normalizeCusip(raw: string | null | undefined): string {
   return String(raw ?? '').replace(/[^A-Z0-9]/gi, '').toUpperCase()
 }
 
+// ─────────────────────────────────────────────────────────────
+// FILING-LEVEL CACHE (June 2026)
+//
+// The previous architecture fetched each institution's 13F filing
+// once per ticker — for 50 tickers × 10 institutions × up to 6
+// filename guesses each, that meant 3,000+ EDGAR requests per batch
+// run. EDGAR rate-limited the requests, returned empty/failed pages,
+// and the table ended up empty.
+//
+// New architecture: fetch each institution's most recent 13F ONCE
+// per batch run, parse all positions, cache in module scope. Then
+// per-ticker lookups become cache reads, not network calls.
+//
+// Numbers after fix:
+//   - 10 institutions × ~1 XML fetch each = ~30 EDGAR requests total
+//     for an entire 50-ticker batch
+//   - Cache persists for the lifetime of the Node process — typically
+//     one batch run from the cron, then process restarts
+//
+// To force a fresh fetch (e.g. between batch runs), call
+// clearInstitutionFilingCache() at the start of each batch.
+// ─────────────────────────────────────────────────────────────
+
+export interface ParsedPosition {
+  cusip: string
+  nameOfIssuer: string
+  shares: number
+  valueDollars: number  // already converted from filing's thousands-of-dollars
+}
+
+interface InstitutionFiling {
+  accessionNo: string
+  filingDate: string
+  quarter: string
+  positions: ParsedPosition[]
+}
+
+// CIK → cached filing positions. null = we tried and failed; don't retry.
+const institutionFilingCache = new Map<string, InstitutionFiling | null>()
+
+/**
+ * Clear the institution filing cache. Call at the start of a batch run
+ * to ensure fresh fetches (especially after a known mode=full request,
+ * where stale cache data would defeat the purpose of the rebuild).
+ */
+export function clearInstitutionFilingCache(): void {
+  institutionFilingCache.clear()
+}
+
+/**
+ * Fetch and parse one institution's most recent 13F-HR filing.
+ * Returns the parsed positions, or null if the filing can't be located.
+ * Subsequent calls for the same instCik return the cached result.
+ */
+async function getInstitutionFilingPositions(
+  instCik: string,
+  instName: string,
+): Promise<InstitutionFiling | null> {
+  if (institutionFilingCache.has(instCik)) {
+    return institutionFilingCache.get(instCik) ?? null
+  }
+
+  try {
+    // Step 1: Locate the institution's most recent 13F-HR via submissions API.
+    const cikPadded = `CIK${instCik.replace('0x', '').padStart(10, '0')}`
+    const subRes = await fetch(`${EDGAR_BASE}/submissions/${cikPadded}.json`, {
+      headers: EDGAR_HEADERS,
+    })
+    if (!subRes.ok) {
+      console.warn(`[13-F cache] ${instName}: submissions fetch failed (${subRes.status})`)
+      institutionFilingCache.set(instCik, null)
+      return null
+    }
+    const subData = await subRes.json()
+    const recent = subData.filings?.recent
+    if (!recent?.form || !recent?.accessionNumber || !recent?.filingDate) {
+      console.warn(`[13-F cache] ${instName}: submissions response malformed`)
+      institutionFilingCache.set(instCik, null)
+      return null
+    }
+
+    const forms: string[] = recent.form
+    const dates: string[] = recent.filingDate
+    const accs: string[] = recent.accessionNumber
+
+    let accessionNo = ''
+    let filingDate = ''
+    for (let i = 0; i < forms.length; i++) {
+      if (forms[i] === '13F-HR') {
+        accessionNo = accs[i]
+        filingDate = dates[i]
+        break
+      }
+    }
+    if (!accessionNo) {
+      console.warn(`[13-F cache] ${instName}: no 13F-HR found in recent filings`)
+      institutionFilingCache.set(instCik, null)
+      return null
+    }
+
+    // Step 2: Locate the information table XML inside that filing.
+    // Strategy: scrape the filing index FIRST (it reliably tells us what
+    // files exist), then fall back to known filename guesses if scraping
+    // fails. The old approach was the reverse — 5 filename guesses, then
+    // index scrape as last resort — which burned 5 wasted HTTP requests
+    // on filings that used non-standard filenames (the majority).
+    const cikNum = instCik.replace(/^0+/, '')
+    const accNoClean = accessionNo.replace(/-/g, '')
+    const baseUrl = `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accNoClean}`
+
+    let xml = ''
+    let usedFilename = ''
+
+    // PRIMARY: scrape the filing index for any XML link, fetch each
+    // candidate until we find one containing an information table.
+    try {
+      const idxRes = await fetch(`${baseUrl}/`, { headers: EDGAR_HEADERS })
+      if (idxRes.ok) {
+        const html = await idxRes.text()
+        const xmlLinks = [...html.matchAll(/href="([^"]*\.xml)"/gi)].map(m => m[1])
+        // Prioritize links whose filename hints at being the info table
+        const ranked = xmlLinks.sort((a, b) => {
+          const ai = /info|primary_doc/i.test(a) ? 0 : 1
+          const bi = /info|primary_doc/i.test(b) ? 0 : 1
+          return ai - bi
+        })
+        for (const link of ranked) {
+          const fullUrl = link.startsWith('http') ? link : `https://www.sec.gov${link}`
+          const xmlRes = await fetch(fullUrl, { headers: EDGAR_HEADERS })
+          if (!xmlRes.ok) continue
+          const text = await xmlRes.text()
+          if (
+            text.includes('<infoTable>') ||
+            text.includes('<InfoTable>') ||
+            text.includes('<informationTable>')
+          ) {
+            xml = text
+            usedFilename = link
+            break
+          }
+        }
+      }
+    } catch (e) {
+      // Index scrape failed — fall through to filename guesses
+      console.warn(`[13-F cache] ${instName}: index scrape failed: ${(e as Error).message}`)
+    }
+
+    // FALLBACK: try a handful of common filenames if scrape didn't find one.
+    if (!xml) {
+      const xmlFilenames = [
+        'infotable.xml',
+        'informationtable.xml',
+        'form13fInfoTable.xml',
+        'primary_doc.xml',
+        'form13f.xml',
+        `${accessionNo}.xml`,
+        `${accNoClean}.xml`,
+      ]
+      for (const fname of xmlFilenames) {
+        const xmlUrl = `${baseUrl}/${fname}`
+        const xmlRes = await fetch(xmlUrl, { headers: EDGAR_HEADERS })
+        if (!xmlRes.ok) continue
+        const text = await xmlRes.text()
+        if (
+          text.includes('<infoTable>') ||
+          text.includes('<InfoTable>') ||
+          text.includes('<informationTable>')
+        ) {
+          xml = text
+          usedFilename = fname
+          break
+        }
+      }
+    }
+
+    if (!xml) {
+      console.warn(`[13-F cache] ${instName}: could not locate information table XML`)
+      institutionFilingCache.set(instCik, null)
+      return null
+    }
+
+    // Step 3: Parse all positions in the XML.
+    // Each <infoTable> block has nameOfIssuer, cusip, value (thousands),
+    // sshPrnamt (shares). We pull all four into ParsedPosition entries.
+    const infoBlocks = xml.match(/<infoTable>[\s\S]*?<\/infoTable>/g) || []
+    const positions: ParsedPosition[] = []
+    for (const block of infoBlocks) {
+      const cusipRaw = block.match(/<cusip>(.*?)<\/cusip>/i)?.[1]
+      const nameOfIssuerRaw = block.match(/<nameOfIssuer>(.*?)<\/nameOfIssuer>/i)?.[1]
+      const sharesRaw = block.match(/<sshPrnamt>(.*?)<\/sshPrnamt>/i)?.[1]
+      const valueRaw = block.match(/<value>(.*?)<\/value>/i)?.[1]
+      const cusip = normalizeCusip(cusipRaw)
+      const shares = parseInt(sharesRaw || '0', 10)
+      const valueThousands = parseInt(valueRaw || '0', 10)
+      if (!cusip || !shares || shares <= 0) continue
+      positions.push({
+        cusip,
+        nameOfIssuer: (nameOfIssuerRaw ?? '').toUpperCase().trim(),
+        shares,
+        valueDollars: valueThousands * 1000,
+      })
+    }
+
+    const quarter = quarterFromFilingDate(filingDate)
+    const filing: InstitutionFiling = { accessionNo, filingDate, quarter, positions }
+    console.log(
+      `[13-F cache] ${instName}: cached ${positions.length} positions from ` +
+      `${usedFilename} (filed ${filingDate}, ${quarter})`,
+    )
+    institutionFilingCache.set(instCik, filing)
+    return filing
+  } catch (e) {
+    console.warn(`[13-F cache] ${instName}: unexpected error: ${(e as Error).message}`)
+    institutionFilingCache.set(instCik, null)
+    return null
+  }
+}
+
+/**
+ * Derive the quarter label (e.g. "2026-Q1") from a 13F filing date.
+ * 13F-HR filings are filed within 45 days of quarter end, so the
+ * filing's quarter is roughly (filingDate - 45 days), but for our
+ * purposes we use the standard convention: the quarter the positions
+ * are AS OF, which is the calendar quarter ending just before the
+ * filing date.
+ */
+function quarterFromFilingDate(filingDate: string): string {
+  const d = new Date(filingDate)
+  // The filing reports positions as-of the end of the previous quarter.
+  // Subtract 45 days to land in the reporting quarter.
+  const reportingDate = new Date(d.getTime() - 45 * 86400000)
+  const y = reportingDate.getUTCFullYear()
+  const m = reportingDate.getUTCMonth() + 1
+  const q = Math.ceil(m / 3)
+  return `${y}-Q${q}`
+}
 
 export async function fetch13FForTicker(ticker: string): Promise<void> {
   const admin = getAdmin()
+  const tickerUpper = ticker.toUpperCase()
 
-  // Search for 13-F filings mentioning this ticker via EDGAR full-text search
   try {
-    const quarter = getCurrentQuarter()
-    const lastQ = getPriorQuarter(quarter)
+    const expectedCusip = TICKER_CUSIPS[tickerUpper]
 
-    // Check if we already have recent data
-    const { data: existing } = await admin
-      .from('institutional_holdings')
-      .select('id')
-      .eq('ticker', ticker.toUpperCase())
-      .eq('quarter', lastQ)
-      .limit(1)
-      .maybeSingle()
+    // Build name variants for the fallback path (only used when ticker
+    // has no CUSIP entry). These are EXACT-name matches, not substring —
+    // the substring matching is what created the LI bug originally.
+    const nameVariants: Record<string, string[]> = {
+      NVDA:  ['NVIDIA CORP', 'NVIDIA CORPORATION'],
+      AAPL:  ['APPLE INC'],
+      MSFT:  ['MICROSOFT CORP', 'MICROSOFT CORPORATION'],
+      GOOGL: ['ALPHABET INC CL A', 'ALPHABET INC CLASS A'],
+      GOOG:  ['ALPHABET INC CL C', 'ALPHABET INC CLASS C'],
+      META:  ['META PLATFORMS INC', 'META PLATFORMS INC CLASS A'],
+      AMZN:  ['AMAZON COM INC', 'AMAZON.COM INC'],
+      TSLA:  ['TESLA INC'],
+      NFLX:  ['NETFLIX INC'],
+      JPM:   ['JPMORGAN CHASE & CO', 'JP MORGAN CHASE & CO'],
+      LI:    ['LI AUTO INC', 'LI AUTO INC ADR', 'LI AUTO INC SPONSORED ADR'],
+    }
+    const variants = nameVariants[tickerUpper] ?? []
 
-    if (existing) return // already have this quarter's data
+    if (!expectedCusip && variants.length === 0) {
+      console.warn(
+        `[13-F] ${tickerUpper}: no CUSIP mapped and no name variants — ` +
+        `add to TICKER_CUSIPS to enable ingestion`,
+      )
+      return
+    }
 
-    // Fetch 13-F from major institutions — run in parallel batches of 3
-    console.log(`[13-F] Starting fetch for ${ticker}, checking ${Object.keys(MAJOR_INSTITUTIONS).length} institutions`)
-    const instEntries = Object.entries(MAJOR_INSTITUTIONS)
-    const batchSize = 3
-    for (let b = 0; b < instEntries.length; b += batchSize) {
-      const batch = instEntries.slice(b, b + batchSize)
-      await Promise.all(batch.map(async ([instCik, instName]) => {
-      try {
-        const cikPadded = `CIK${instCik.replace('0x', '').padStart(10, '0')}`
-        const res = await fetch(`${EDGAR_BASE}/submissions/${cikPadded}.json`, { headers: EDGAR_HEADERS })
-        if (!res.ok) { console.log(`[13-F] ${instName} submissions fetch failed: ${res.status}`); return }
+    console.log(`[13-F] Starting fetch for ${tickerUpper} (CUSIP: ${expectedCusip ?? 'none, using name fallback'})`)
 
-        const data = await res.json()
-        const filings = data.filings?.recent
-        if (!filings) return
+    // Iterate institutions. Each call to getInstitutionFilingPositions
+    // is a cache lookup after the first call — so the per-institution
+    // EDGAR fetches happen ONCE per batch, not once per ticker.
+    for (const [instCik, instName] of Object.entries(MAJOR_INSTITUTIONS)) {
+      const filing = await getInstitutionFilingPositions(instCik, instName)
+      if (!filing) continue  // cache miss already logged inside
 
-        // Find most recent 13-F
-        const forms: string[] = filings.form || []
-        const dates: string[] = filings.filingDate || []
-        const accessions: string[] = filings.accessionNumber || []
+      // Find this ticker's position in the cached parsed positions.
+      // CUSIP equality is primary; exact-name match is fallback for
+      // tickers without a CUSIP entry. NO substring matching.
+      let matchedPosition: ParsedPosition | null = null
+      let matchedBy: 'cusip' | 'exact-name' | null = null
 
-        for (let i = 0; i < forms.length; i++) {
-          if (forms[i] !== '13F-HR') continue
-
-          const accNo = accessions[i]
-          const filingDate = dates[i]
-          if (!accNo) break
-
-          // Fetch the 13-F filing — try multiple known filename conventions
-          const cikNum = instCik.replace(/^0+/, '')
-          const accNoClean = accNo.replace(/-/g, '')
-          const baseUrl = `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accNoClean}`
-
-          try {
-            // EDGAR 13-F XML files have inconsistent naming across filers
-            // Try the most common patterns in order
-            const xmlFilenames = [
-              'informationtable.xml',
-              'form13fInfoTable.xml',
-              'form13f.xml',
-              `${accNo}.xml`,
-              `${accNoClean}.xml`,
-            ]
-
-            let xml = ''
-            let usedFilename = ''
-            for (const fname of xmlFilenames) {
-              const xmlUrl = `${baseUrl}/${fname}`
-              const xmlRes = await fetch(xmlUrl, { headers: EDGAR_HEADERS })
-              if (xmlRes.ok) {
-                const text = await xmlRes.text()
-                // Verify it actually looks like an information table
-                if (text.includes('<informationTable>') || text.includes('<InfoTable>') || text.includes('<infoTable>')) {
-                  xml = text
-                  usedFilename = fname
-                  break
-                }
-              }
-            }
-
-            if (!xml) {
-              // Last resort: fetch the filing index HTML and scrape XML links
-              const idxRes = await fetch(`${baseUrl}/`, { headers: EDGAR_HEADERS })
-              if (idxRes.ok) {
-                const html = await idxRes.text()
-                const xmlLinks = [...html.matchAll(/href="([^"]*\.xml)"/gi)].map(m => m[1])
-                for (const link of xmlLinks) {
-                  const fullUrl = link.startsWith('http') ? link : `https://www.sec.gov${link}`
-                  const xmlRes = await fetch(fullUrl, { headers: EDGAR_HEADERS })
-                  if (xmlRes.ok) {
-                    const text = await xmlRes.text()
-                    if (text.includes('infoTable') || text.includes('informationTable')) {
-                      xml = text; usedFilename = link; break
-                    }
-                  }
-                }
-              }
-            }
-
-            if (!xml) { console.log(`[13-F] ${instName}: could not find information table XML`); break }
-            console.log(`[13-F] ${instName}: found XML using ${usedFilename} (${xml.length} bytes)`)
-
-            // Find ticker in the XML
-            const infoBlocks = xml.match(/<infoTable>[\s\S]*?<\/infoTable>/g) || []
-
-            // ─────────────────────────────────────────────────────
-            // CUSIP-FIRST MATCHING (fixed June 2026)
-            //
-            // The previous implementation matched by name substring
-            // (issuerUpper.includes(tickerUpper)) which catastrophically
-            // misattributed positions for short tickers — e.g. 'LI' matched
-            // ELI LILLY, LINDE, ALIBABA, LIVE NATION, LIBERTY MEDIA, etc.
-            // This is why the table had Berkshire "owning 39.81M shares of LI"
-            // (it was actually Berkshire's Linde or similar position) and
-            // Vanguard "owning 347M shares of LI" (Vanguard's actual LI
-            // position is ~few million; the 347M was Vanguard's largest
-            // LI-substring holding, probably Eli Lilly).
-            //
-            // CUSIP is the canonical unambiguous identifier in 13F filings.
-            // We match by CUSIP equality first. If the ticker isn't in the
-            // CUSIP map, we fall back to exact name matching with a warning.
-            // We deliberately do NOT fall back to substring matching — that
-            // path is what created the bug, so silent name-substring matches
-            // are now blocked.
-            // ─────────────────────────────────────────────────────
-            const tickerUpper = ticker.toUpperCase()
-            const expectedCusip = TICKER_CUSIPS[tickerUpper]
-
-            // Build name variants for the fallback path (used only when
-            // ticker has no CUSIP entry). These are EXACT-name matches,
-            // not substring — the substring matching is what was broken.
-            const nameVariants: Record<string, string[]> = {
-              NVDA:  ['NVIDIA CORP', 'NVIDIA CORPORATION'],
-              AAPL:  ['APPLE INC'],
-              MSFT:  ['MICROSOFT CORP', 'MICROSOFT CORPORATION'],
-              GOOGL: ['ALPHABET INC CL A', 'ALPHABET INC CLASS A'],
-              GOOG:  ['ALPHABET INC CL C', 'ALPHABET INC CLASS C'],
-              META:  ['META PLATFORMS INC', 'META PLATFORMS INC CLASS A'],
-              AMZN:  ['AMAZON COM INC', 'AMAZON.COM INC'],
-              TSLA:  ['TESLA INC'],
-              NFLX:  ['NETFLIX INC'],
-              JPM:   ['JPMORGAN CHASE & CO', 'JP MORGAN CHASE & CO'],
-              LI:    ['LI AUTO INC', 'LI AUTO INC ADR', 'LI AUTO INC SPONSORED ADR'],
-            }
-            const variants = nameVariants[tickerUpper] ?? []
-
-            // Track diagnostic stats per institution
-            let matchedBy: 'cusip' | 'exact-name' | null = null
-            let bestBlock: string | null = null
-            let bestShares = 0
-
-            for (const block of infoBlocks) {
-              const blockCusipRaw = block.match(/<cusip>(.*?)<\/cusip>/i)?.[1]
-              const blockCusip = normalizeCusip(blockCusipRaw)
-              const nameMatchInBlock = block.match(/<nameOfIssuer>(.*?)<\/nameOfIssuer>/i)
-              if (!nameMatchInBlock) continue
-              const issuerUpper = nameMatchInBlock[1].toUpperCase().trim()
-
-              // PRIMARY MATCH: CUSIP equality. CUSIPs are 9-character
-              // unique identifiers — no false-positive risk.
-              if (expectedCusip && blockCusip === expectedCusip) {
-                const shares = parseInt(block.match(/<sshPrnamt>(.*?)<\/sshPrnamt>/)?.[1] || '0')
-                if (shares > bestShares) {
-                  bestShares = shares
-                  bestBlock = block
-                  matchedBy = 'cusip'
-                }
-                continue
-              }
-
-              // FALLBACK (ONLY when ticker has no CUSIP entry): exact
-              // name match against known variants. This is risky for
-              // unknown tickers — they get NO match rather than a wrong
-              // match. That's the right tradeoff: empty > fabricated.
-              if (!expectedCusip && variants.length > 0) {
-                const exactMatch = variants.some(v => issuerUpper === v)
-                if (exactMatch) {
-                  const shares = parseInt(block.match(/<sshPrnamt>(.*?)<\/sshPrnamt>/)?.[1] || '0')
-                  if (shares > bestShares) {
-                    bestShares = shares
-                    bestBlock = block
-                    matchedBy = 'exact-name'
-                  }
-                }
-              }
-            }
-
-            // Log misses loudly — they indicate a ticker that should be
-            // added to TICKER_CUSIPS, not a hallucination. Helps catch
-            // future coverage gaps before they show up as user complaints.
-            if (!bestBlock) {
-              if (!expectedCusip) {
-                console.warn(
-                  `[13-F] ${instName}: no match for ${ticker} ` +
-                  `(no CUSIP mapped, exact-name fallback found nothing). ` +
-                  `Add CUSIP to TICKER_CUSIPS to enable ingestion.`,
-                )
-              }
-              // else: institution simply doesn't hold this ticker — silent
-            }
-
-            if (!bestBlock || bestShares === 0) continue
-            console.log(`[13-F] ${instName}: matched ${ticker} by ${matchedBy} (${bestShares.toLocaleString()} shares)`)
-
-            {
-              const block = bestBlock
-              const nameMatch = block.match(/<nameOfIssuer>(.*?)<\/nameOfIssuer>/i)
-              const shares = bestShares
-              // 13-F value is in thousands of dollars
-              const valueThousands = parseInt(block.match(/<value>(.*?)<\/value>/)?.[1] || '0')
-              const value = valueThousands * 1000 // convert to dollars
-              console.log(`[13-F] ${instName}: MATCH — ${nameMatch?.[1]}, ${shares.toLocaleString()} shares, $${(value/1e9).toFixed(2)}B`)
-
-              if (shares === 0) continue
-
-              // Get prior quarter for comparison
-              const { data: prior } = await admin
-                .from('institutional_holdings')
-                .select('shares_held')
-                .eq('ticker', ticker.toUpperCase())
-                .eq('institution_cik', instCik)
-                .eq('quarter', getPriorQuarter(lastQ))
-                .maybeSingle()
-
-              const priorShares = prior?.shares_held || 0
-              const changeShares = shares - priorShares
-              const changePct = priorShares > 0 ? parseFloat(((changeShares / priorShares) * 100).toFixed(1)) : null
-              const action = priorShares === 0 ? 'new' :
-                changeShares > priorShares * 0.05 ? 'increased' :
-                changeShares < -priorShares * 0.05 ? 'decreased' :
-                shares === 0 ? 'sold_out' : 'maintained'
-
-              await admin.from('institutional_holdings').upsert({
-                ticker: ticker.toUpperCase(),
-                institution: instName,
-                institution_cik: instCik,
-                quarter: lastQ,
-                shares_held: shares,
-                market_value: value,
-                change_shares: changeShares,
-                change_pct: changePct,
-                action,
-                filing_date: filingDate,
-                accession_no: accNo,
-                // CUSIP-matched rows are verified by construction —
-                // matching by CUSIP equality is unambiguous. Exact-name
-                // matches are written as 'unverified' since they're a
-                // fallback path and warrant spot-checking before the
-                // Council reads them. See TICKER_CUSIPS comment above.
-                data_quality: matchedBy === 'cusip' ? 'verified' : 'unverified',
-              }, { onConflict: 'ticker,institution_cik,quarter' })
-
-              // Log significant changes to sec_filings
-              if (action === 'new' || (Math.abs(changePct || 0) > 20 && Math.abs(value) > 1000000)) {
-                await admin.from('sec_filings').upsert({
-                  ticker: ticker.toUpperCase(),
-                  cik: `CIK${instCik}`,
-                  form_type: '13-F',
-                  filed_at: new Date(filingDate).toISOString(),
-                  accession_no: `${accNo}-${instCik}`,
-                  title: `${instName} ${action === 'new' ? 'Initiated' : action === 'increased' ? 'Increased' : 'Reduced'} Position`,
-                  summary: `${instName} ${action === 'new' ? `initiated a new position of ${(shares / 1e6).toFixed(2)}M shares ($${(value / 1e9).toFixed(2)}B) in ${ticker}` :
-                    `${action === 'increased' ? 'increased' : 'decreased'} their ${ticker} holding by ${changePct}% to ${(shares / 1e6).toFixed(2)}M shares`}.`,
-                  significance: Math.abs(value) > 100000000 ? 'high' : 'medium',
-                  sentiment: action === 'new' || action === 'increased' ? 'bullish' : 'bearish',
-                  data: { institution: instName, shares, value, change_pct: changePct, action },
-                }, { onConflict: 'accession_no' })
-              }
-            }
-          } catch { /* skip */ }
-
-          break // only process most recent 13-F per institution
+      if (expectedCusip) {
+        const found = filing.positions.find(p => p.cusip === expectedCusip)
+        if (found) {
+          matchedPosition = found
+          matchedBy = 'cusip'
         }
+      } else if (variants.length > 0) {
+        const found = filing.positions.find(p => variants.includes(p.nameOfIssuer))
+        if (found) {
+          matchedPosition = found
+          matchedBy = 'exact-name'
+        }
+      }
 
-      } catch { /* skip this institution */ }
-      })) // end Promise.all batch
-      await new Promise(r => setTimeout(r, 200)) // brief pause between batches
+      if (!matchedPosition) continue  // institution doesn't hold this ticker
+
+      console.log(
+        `[13-F] ${instName}: matched ${tickerUpper} by ${matchedBy} ` +
+        `(${matchedPosition.shares.toLocaleString()} shares, ` +
+        `$${(matchedPosition.valueDollars / 1e9).toFixed(2)}B)`,
+      )
+
+      // Look up prior quarter's holding to compute change
+      const priorQuarter = getPriorQuarter(filing.quarter)
+      const { data: prior } = await admin
+        .from('institutional_holdings')
+        .select('shares_held')
+        .eq('ticker', tickerUpper)
+        .eq('institution_cik', instCik)
+        .eq('quarter', priorQuarter)
+        .maybeSingle()
+
+      const priorShares = (prior as { shares_held?: number } | null)?.shares_held ?? 0
+      const changeShares = matchedPosition.shares - priorShares
+      const changePct = priorShares > 0
+        ? parseFloat(((changeShares / priorShares) * 100).toFixed(1))
+        : null
+      const action = priorShares === 0
+        ? 'new'
+        : changeShares > priorShares * 0.05
+          ? 'increased'
+          : changeShares < -priorShares * 0.05
+            ? 'decreased'
+            : 'maintained'
+
+      await admin.from('institutional_holdings').upsert(
+        {
+          ticker: tickerUpper,
+          institution: instName,
+          institution_cik: instCik,
+          quarter: filing.quarter,
+          shares_held: matchedPosition.shares,
+          market_value: matchedPosition.valueDollars,
+          change_shares: changeShares,
+          change_pct: changePct,
+          action,
+          filing_date: filing.filingDate,
+          accession_no: filing.accessionNo,
+          // CUSIP-matched rows are verified by construction. Exact-name
+          // matches go in as 'unverified' since they're the fallback path
+          // and warrant spot-checking before the Council reads them.
+          data_quality: matchedBy === 'cusip' ? 'verified' : 'unverified',
+        },
+        { onConflict: 'ticker,institution_cik,quarter' },
+      )
+
+      // Log significant changes to sec_filings for downstream signal use
+      if (
+        action === 'new' ||
+        (Math.abs(changePct ?? 0) > 20 && matchedPosition.valueDollars > 1_000_000)
+      ) {
+        await admin.from('sec_filings').upsert(
+          {
+            ticker: tickerUpper,
+            cik: `CIK${instCik}`,
+            form_type: '13-F',
+            filed_at: new Date(filing.filingDate).toISOString(),
+            accession_no: `${filing.accessionNo}-${instCik}`,
+            title: `${instName} ${action === 'new' ? 'Initiated' : action === 'increased' ? 'Increased' : 'Reduced'} Position`,
+            summary:
+              action === 'new'
+                ? `${instName} initiated a new position of ${(matchedPosition.shares / 1e6).toFixed(2)}M shares ($${(matchedPosition.valueDollars / 1e9).toFixed(2)}B) in ${tickerUpper}.`
+                : `${instName} ${action === 'increased' ? 'increased' : 'decreased'} their ${tickerUpper} holding by ${changePct}% to ${(matchedPosition.shares / 1e6).toFixed(2)}M shares.`,
+            significance: matchedPosition.valueDollars > 100_000_000 ? 'high' : 'medium',
+            sentiment: action === 'new' || action === 'increased' ? 'bullish' : 'bearish',
+            data: {
+              institution: instName,
+              shares: matchedPosition.shares,
+              value: matchedPosition.valueDollars,
+              change_pct: changePct,
+              action,
+            },
+          },
+          { onConflict: 'accession_no' },
+        )
+      }
     }
   } catch (e) {
-    console.error('[sec-filings] 13-F error:', e)
+    console.error(`[sec-filings] 13-F error for ${ticker}:`, e instanceof Error ? e.message : e)
   }
 }
 

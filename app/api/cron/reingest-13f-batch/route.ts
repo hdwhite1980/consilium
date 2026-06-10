@@ -24,7 +24,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { fetch13FForTicker, TICKER_CUSIPS } from '@/app/lib/data/sec-filings'
+import { fetch13FForTicker, TICKER_CUSIPS, clearInstitutionFilingCache } from '@/app/lib/data/sec-filings'
 
 export const runtime = 'nodejs'
 export const maxDuration = 1800  // 30 min — large enough for ~100 tickers
@@ -145,6 +145,12 @@ async function runBatch(req: NextRequest) {
 
   const overallStart = Date.now()
   console.log(`[reingest-13f-batch] mode=${mode} tickers=${tickers.length} starting`)
+
+  // Clear the in-memory filing cache so this batch starts with a fresh
+  // fetch from EDGAR. Without this, a previous run in the same Node
+  // process (which is common on Railway) would serve stale positions
+  // and the "full" rebuild would silently use yesterday's data.
+  clearInstitutionFilingCache()
 
   const results: TickerResult[] = []
   let successCount = 0
