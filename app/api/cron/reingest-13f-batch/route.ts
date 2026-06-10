@@ -47,7 +47,13 @@ interface TickerResult {
 }
 
 async function processTicker(
-  supabase: ReturnType<typeof createClient>,
+  // Supabase JS's SupabaseClient generic differs between where the client
+  // is created (createClient(url, key) — inferred) and where it's used
+  // in a function parameter — strict generic matching fails with
+  // "Type 'public' is not assignable to type 'never'". Using `any` here
+  // bypasses the generic mismatch without changing runtime behavior.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
   ticker: string,
   mode: 'full' | 'incremental',
 ): Promise<TickerResult> {
