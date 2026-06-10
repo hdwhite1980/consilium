@@ -510,7 +510,7 @@ export async function fetchRecentForm4s(feedCount = 40): Promise<Form4IngestResu
         // distinguish them with a suffix on accession_no.
         const dedupKey = `${entry.accessionNo}-${tx.code}-${tx.date}`
 
-        const { error: upsertErr } = await admin.from('filing_alerts').upsert(
+        const { data: upsertData, error: upsertErr } = await admin.from('filing_alerts').upsert(
           {
             filing_type: '4',
             ticker,
@@ -540,14 +540,18 @@ export async function fetchRecentForm4s(feedCount = 40): Promise<Form4IngestResu
             },
           },
           { onConflict: 'accession_no', ignoreDuplicates: true },
-        )
+        ).select('id')
 
         if (upsertErr) {
-          // Most expected error: unique violation on accession_no for
-          // re-polled filings. That's fine. Other errors warrant a log.
-          if (!/duplicate|unique/i.test(upsertErr.message)) {
-            console.warn(`[sec-monitor] Form 4 upsert error: ${upsertErr.message}`)
-          }
+          // ignoreDuplicates means we shouldn't see unique-violation errors,
+          // but log other errors (RLS, schema mismatch, etc.).
+          console.warn(`[sec-monitor] Form 4 upsert error: ${upsertErr.message}`)
+          result.errors++
+        } else if (!upsertData || (upsertData as unknown[]).length === 0) {
+          // ignoreDuplicates returned an empty result — row already existed.
+          // This is the expected path for re-polled filings AND for the
+          // intra-run duplicate case (same accession appears twice in the
+          // feed under different roles like Filer vs 10%-owner).
           result.duplicates++
         } else {
           result.inserted++
