@@ -799,6 +799,16 @@ export interface ScheduleDGIngestResult {
   errors: number
 }
 
+function decodeHtmlEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+}
+
 async function processScheduleDGEntries(
   entries: AtomEntry[],
   filingType: '13D' | '13G',
@@ -831,32 +841,40 @@ async function processScheduleDGEntries(
       let ticker: string | null = null
       let issuerName: string | null = null
       let subjectCik: string
+      let resolvedFilerName: string | null = null
 
       if (parsed) {
         result.parsed++
         subjectCik = parsed.subjectCik
         const resolved = await resolveTicker(subjectCik)
         ticker = resolved.ticker
-        issuerName = parsed.subjectName || resolved.name
+        issuerName = decodeHtmlEntities(parsed.subjectName || resolved.name || '')
+        resolvedFilerName = decodeHtmlEntities(parsed.filerName || '')
       } else {
         metadataOnly = true
         result.metadataOnly++
         // entryRole tells us whether the title's CIK is the subject
-        // (the company) or the filer (the holder). For 13D/G, the
-        // entry's CIK is the SUBJECT when role is 'Subject', and the
-        // FILER when role is 'Filer'.
+        // (the company) or the filer (the holder). For 13D/G:
+        //   - "Subject" → CIK is the company being disclosed about
+        //   - "Filer"   → CIK is the holder making the disclosure
         if (/Subject/i.test(entry.entryRole)) {
           subjectCik = entry.filerCik
           const resolved = await resolveTicker(subjectCik)
           ticker = resolved.ticker
-          issuerName = resolved.name ?? entry.filerName
+          // The atom entry's "name" is the subject company's name —
+          // we don't know the filer (holder) without XML. Leave filer
+          // null rather than misleadingly setting it to the company.
+          issuerName = decodeHtmlEntities(resolved.name ?? entry.filerName)
+          resolvedFilerName = null
         } else {
-          // Entry CIK is the filer — we don't know the subject without XML.
-          // Record the filing with NULL ticker/subject and let the alert
-          // surface based on filer alone. Better than dropping entirely.
+          // Entry CIK is the filer (or combined "Filer,Subject") —
+          // we have the filer name from the atom title but don't know
+          // the subject. Record with NULL ticker; alert surfaces by
+          // filer alone.
           subjectCik = '0000000000'  // sentinel — means "unknown subject"
           ticker = null
           issuerName = null
+          resolvedFilerName = decodeHtmlEntities(entry.filerName)
         }
       }
 
@@ -866,19 +884,14 @@ async function processScheduleDGEntries(
           ? (amendmentNo > 0 ? 'activist_position_amended' : 'activist_position')
           : (amendmentNo > 0 ? 'large_passive_position_amended' : 'large_passive_position')
 
-      // Filer name: prefer the parsed XML version, fall back to the atom
-      // entry version (which has the filer name when role=Filer, or the
-      // subject company name when role=Subject — second-best for naming).
-      const filerName = parsed?.filerName || entry.filerName
-
       const { data: upsertData, error: upsertErr } = await admin.from('filing_alerts').upsert(
         {
           filing_type: filingType,
           ticker,
           issuer_cik: subjectCik,
           issuer_name: issuerName,
-          filer_name: filerName,
-          filer_cik: parsed?.filerCik || entry.filerCik,
+          filer_name: resolvedFilerName,
+          filer_cik: parsed?.filerCik || (parsed ? null : (/Subject/i.test(entry.entryRole) ? null : entry.filerCik)),
           filer_role: filingType === '13D' ? 'activist' : 'large_passive_holder',
           accession_no: entry.accessionNo,
           filed_at: entry.filedAt,
@@ -895,6 +908,10 @@ async function processScheduleDGEntries(
             percent_owned: parsed?.percentOwned ?? null,
             metadata_only: metadataOnly,
             atom_role: entry.entryRole,
+            // When metadata-only with Subject-role entry, we don't know
+            // the filer. Record that explicitly so consumers can show
+            // "Filer unknown" instead of confusing blanks.
+            filer_known: !metadataOnly || !/Subject/i.test(entry.entryRole),
           },
         },
         { onConflict: 'accession_no', ignoreDuplicates: true },
@@ -907,10 +924,16 @@ async function processScheduleDGEntries(
         result.duplicates++
       } else {
         result.inserted++
-        const percentStr = parsed ? `${parsed.percentOwned.toFixed(2)}% (${parsed.sharesOwned.toLocaleString()} shares)` : '[metadata-only]'
+        // Log differently for the metadata-only Subject case since we
+        // don't have a filer name to lead with.
+        const detail = parsed
+          ? `${parsed.percentOwned.toFixed(2)}% (${parsed.sharesOwned.toLocaleString()} shares)`
+          : '[metadata-only]'
+        const subject = ticker ?? subjectCik
+        const filerLabel = resolvedFilerName || '[filer unknown]'
         console.log(
-          `[sec-monitor] ${filingType}: ${filerName} ${eventType} ${percentStr} ` +
-          `of ${ticker ?? subjectCik}` +
+          `[sec-monitor] ${filingType}: ${filerLabel} ${eventType} ${detail} ` +
+          `re ${subject}` +
           (amendmentNo > 0 ? ` [Amendment ${amendmentNo}]` : ''),
         )
       }
