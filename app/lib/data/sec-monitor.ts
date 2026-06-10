@@ -172,10 +172,9 @@ async function fetchAtomFeed(type: '4' | '13D' | '13G' | '8-K', count: number): 
   // Client-side filter prefix to match in title. Title format is:
   //   "{form-type} - {filer name} ({cik}) ({role})"
   // where role is "(Filer)", "(Subject)", or "(Filer, Subject)".
-  // For 13D/G, the same filing may appear twice in the feed — once
-  // for the filer (the holder) and once for the subject (the company
-  // being disclosed about). We want the (Filer) row since that's
-  // where the holder identity lives.
+  // For 13D/G the feed sometimes contains only the (Subject) entry,
+  // sometimes only the (Filer) entry, sometimes both. We accept all
+  // and rely on the dedup key + XML parsing to handle relationships.
   const titlePrefix =
     type === '4'   ? /^4\s*-\s+/ :
     type === '13D' ? /^SC\s+13D(?:\/A)?\s*-\s+/ :
@@ -191,14 +190,20 @@ async function fetchAtomFeed(type: '4' | '13D' | '13G' | '8-K', count: number): 
     const xml = await res.text()
     console.log(`[sec-monitor] atom feed type=${type}: response ${xml.length} bytes`)
 
+    // Diagnostic: when the response is suspiciously small, log a sample
+    // so we can see whether it's a real "no entries" feed or an error.
+    if (xml.length < 2000) {
+      console.log(`[sec-monitor] atom feed type=${type} small body: ${xml.slice(0, 500).replace(/\s+/g, ' ')}`)
+    }
+
     const entryBlocks = xml.match(/<entry>[\s\S]*?<\/entry>/g) ?? []
     console.log(`[sec-monitor] atom feed type=${type}: total ${entryBlocks.length} entries (will filter to type ${type})`)
 
     const parsed: AtomEntry[] = []
     let matchedTypeCount = 0
-    let skippedRole = 0
     let skippedNoCik = 0
     let skippedNoAccession = 0
+    const sampleTitles: string[] = []
 
     for (const entry of entryBlocks) {
       const titleMatch = entry.match(/<title>([^<]+)<\/title>/)
@@ -209,13 +214,8 @@ async function fetchAtomFeed(type: '4' | '13D' | '13G' | '8-K', count: number): 
       if (!titlePrefix.test(title)) continue
       matchedTypeCount++
 
-      // For 13D/G, prefer the (Filer) role. The (Subject) row is the
-      // same filing viewed from the issuer's perspective and would
-      // produce a duplicate accession_no upsert.
-      if ((type === '13D' || type === '13G') && /\(Subject\)/i.test(title) && !/\(Filer\)/i.test(title)) {
-        skippedRole++
-        continue
-      }
+      // Keep a sample of titles for diagnostic logging
+      if (sampleTitles.length < 3) sampleTitles.push(title.slice(0, 150))
 
       const linkMatch = entry.match(/<link[^>]*href="([^"]+)"/)
       const updatedMatch = entry.match(/<updated>([^<]+)<\/updated>/)
@@ -253,12 +253,30 @@ async function fetchAtomFeed(type: '4' | '13D' | '13G' | '8-K', count: number): 
     }
 
     console.log(
-      `[sec-monitor] atom feed type=${type}: filtered to ${parsed.length} parseable entries ` +
-      `(${matchedTypeCount} matched type, ${skippedRole} skipped role, ` +
+      `[sec-monitor] atom feed type=${type}: parsed ${parsed.length} entries ` +
+      `(${matchedTypeCount} matched type, ` +
       `${skippedNoCik} skipped no-cik, ${skippedNoAccession} skipped no-accession)`,
     )
+    if (sampleTitles.length > 0) {
+      console.log(`[sec-monitor] atom feed type=${type} sample titles: ${sampleTitles.map(t => `"${t}"`).join(' | ')}`)
+    }
 
-    return parsed
+    // Deduplicate by accession_no within this feed pull (some filings
+    // show up multiple times with different roles — Filer + Subject
+    // + Filer/Subject combined). The DB layer also dedups via the
+    // UNIQUE constraint, but de-duping here saves redundant XML fetches.
+    const seen = new Set<string>()
+    const deduped: AtomEntry[] = []
+    for (const e of parsed) {
+      if (seen.has(e.accessionNo)) continue
+      seen.add(e.accessionNo)
+      deduped.push(e)
+    }
+    if (deduped.length < parsed.length) {
+      console.log(`[sec-monitor] atom feed type=${type}: deduped to ${deduped.length} unique accessions`)
+    }
+
+    return deduped
   } catch (e) {
     console.warn(`[sec-monitor] atom feed parse error for type=${type}: ${(e as Error).message}`)
     return []
