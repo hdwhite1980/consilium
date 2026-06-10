@@ -1,0 +1,60 @@
+# =============================================================
+# .github/workflows/sec-monitor-cron.yml
+#
+# Polls the SEC monitor endpoint every 10 minutes. The endpoint
+# checks EDGAR atom feeds for new Form 4 / 13D / 13G / 8-K filings,
+# parses them, filters for signal, and writes matches to filing_alerts.
+#
+# Manual triggers (workflow_dispatch) are useful for:
+#   - Right after a deploy, to verify the pipeline works
+#   - Catch-up runs if the cron was paused
+#   - Targeted runs with custom feedCount values
+# =============================================================
+name: SEC Monitor
+
+on:
+  schedule:
+    # Every 10 minutes during NYSE/Nasdaq market hours and adjacent
+    # windows. Form 4 / 8-K can be filed outside RTH so we keep
+    # polling 24/7 to avoid missing pre-market or evening filings.
+    - cron: '*/10 * * * *'
+
+  workflow_dispatch:
+    inputs:
+      feedCount:
+        description: 'Number of recent filings to pull from atom feed (default 40, max 100)'
+        required: false
+        default: '40'
+        type: string
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Call SEC monitor endpoint
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          FEED_COUNT: ${{ inputs.feedCount || '40' }}
+        run: |
+          set -e
+          URL="https://wali-os.com/api/cron/sec-monitor?feedCount=$FEED_COUNT"
+          echo "Calling: $URL"
+
+          HTTP_RESPONSE=$(curl --silent --max-time 300 \
+            --write-out "HTTPSTATUS:%{http_code}" \
+            -X POST "$URL" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "Content-Type: application/json")
+
+          HTTP_STATUS=$(echo "$HTTP_RESPONSE" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
+          HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed -e 's/HTTPSTATUS\:.*//g')
+
+          echo "HTTP $HTTP_STATUS"
+          echo "Response body:"
+          echo "$HTTP_BODY" | head -c 5000
+
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "::error::SEC monitor endpoint returned HTTP $HTTP_STATUS"
+            exit 1
+          fi
