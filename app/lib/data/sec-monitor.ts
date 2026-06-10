@@ -580,3 +580,294 @@ export async function fetchRecentForm4s(feedCount = 40): Promise<Form4IngestResu
 
   return result
 }
+
+// =============================================================
+// Step 2: 13D + 13G monitoring
+// =============================================================
+//
+// Schedule 13D and 13G filings disclose when an entity crosses 5%
+// ownership of a public company. Key differences from Form 4:
+//
+//   - The FILER is the holder (activist fund, institution).
+//   - The SUBJECT is the company being disclosed about.
+//   - These are filed within 10 days of crossing 5% (13D) or
+//     during specific reporting windows (13G).
+//
+// 13D = activist intent. Filer plans to influence the company (board
+//       seats, restructuring, M&A pressure). HIGH SIGNAL. Take every
+//       13D filing — they're rare and meaningful.
+//
+// 13G = passive. Filer crossed 5% but isn't activist. MOSTLY NOISE.
+//       Index funds (Vanguard, BlackRock, State Street) file 13Gs
+//       constantly as their AUM grows. We filter those out and keep
+//       only the long-only mutual funds and similar real-conviction
+//       passive filers.
+
+// Index-fund/passive-giant CIKs to exclude from 13G alerts.
+// These file 13Gs mechanically as their indexed AUM grows;
+// the signal is noise. Any other 13G filer is more interesting.
+const PASSIVE_GIANT_CIKS = new Set<string>([
+  '0000102909',  // Vanguard Group
+  '0001364742',  // Bridgewater (paradox: also files 13F so listed, but rarely files 13G)
+  '0000880285',  // BlackRock
+  '0000093751',  // State Street
+  '0000315066',  // Fidelity (FMR LLC)
+  '0001037389',  // Renaissance Technologies (kept — quant, less noisy)
+  '0000038777',  // Geode Capital
+  '0000026172',  // Capital Group (one of several CIKs)
+  '0000915191',  // T. Rowe Price
+  '0001067639',  // Northern Trust
+  '0001067983',  // Berkshire Hathaway (kept — very rare 13G filer; we want to know)
+])
+
+// Note: Renaissance and Berkshire are intentionally kept (commented).
+// If they ever file a 13G, that IS news. Vanguard/BlackRock/etc filing
+// 13Gs is purely mechanical and we exclude.
+
+// ─────────────────────────────────────────────────────────────
+// 13D/G XML fetching and parsing
+// ─────────────────────────────────────────────────────────────
+
+interface ScheduleDGParsed {
+  subjectCik: string       // the company being disclosed about
+  subjectName: string
+  subjectCusip: string
+  filerName: string
+  filerCik: string
+  percentOwned: number
+  sharesOwned: number
+  amendmentNo: number      // 0 for initial filing, >0 for amendments
+}
+
+async function fetchScheduleDGXml(indexUrl: string): Promise<string | null> {
+  // 13D/G filings primarily exist as text/HTML on EDGAR, but the
+  // structured XML form (primary_doc.xml) was introduced and is now
+  // standard for modern filings. We try that path first.
+  const baseUrl = indexUrl.replace(/\/[^/]+$/, '')
+
+  try {
+    const res = await fetch(`${baseUrl}/primary_doc.xml`, { headers: EDGAR_HEADERS })
+    if (res.ok) {
+      const text = await res.text()
+      if (text.includes('edgarSubmission') || text.includes('schedule13')) return text
+    }
+  } catch { /* fall through */ }
+
+  // Fallback: scrape the index page for any XML link
+  try {
+    const idxRes = await fetch(`${baseUrl}/`, { headers: EDGAR_HEADERS })
+    if (!idxRes.ok) return null
+    const html = await idxRes.text()
+    const xmlLinks = [...html.matchAll(/href="([^"]*\.xml)"/gi)].map(m => m[1])
+    for (const link of xmlLinks) {
+      if (/xsl/i.test(link)) continue  // stylesheets, not data
+      const fullUrl = link.startsWith('http') ? link : `${EDGAR_BASE}${link}`
+      const xmlRes = await fetch(fullUrl, { headers: EDGAR_HEADERS })
+      if (!xmlRes.ok) continue
+      const text = await xmlRes.text()
+      if (text.includes('edgarSubmission') || text.includes('schedule13')) return text
+    }
+  } catch { /* fall through */ }
+
+  return null
+}
+
+function parseScheduleDGXml(xml: string, accessionNo: string): ScheduleDGParsed | null {
+  try {
+    // Subject (the company being disclosed about)
+    // Schedule 13D/G XML uses <subjectCompanyInfo> or older <subjectCompany>
+    const subjectBlock =
+      xml.match(/<subjectCompanyInfo>[\s\S]*?<\/subjectCompanyInfo>/)?.[0] ??
+      xml.match(/<subjectCompany>[\s\S]*?<\/subjectCompany>/)?.[0] ?? ''
+    const subjectCik = subjectBlock.match(/<cik>(\d+)<\/cik>/i)?.[1] ?? ''
+    const subjectName = subjectBlock.match(/<(?:companyName|name)>([^<]+)<\/(?:companyName|name)>/i)?.[1]?.trim() ?? ''
+    const subjectCusip = xml.match(/<cusip>([^<]+)<\/cusip>/i)?.[1]?.trim() ?? ''
+
+    // Filer (the holder)
+    const filerBlock =
+      xml.match(/<filer>[\s\S]*?<\/filer>/)?.[0] ?? ''
+    const filerName = filerBlock.match(/<(?:companyName|name)>([^<]+)<\/(?:companyName|name)>/i)?.[1]?.trim() ?? ''
+    const filerCik = filerBlock.match(/<cik>(\d+)<\/cik>/i)?.[1] ?? ''
+
+    // Percentage and share count — these live in <reportingPersonInfo> or
+    // similar nested blocks. The exact tag names vary across SEC's
+    // schema versions.
+    const percentMatch = xml.match(/<(?:percentOfClass|percentClassOutstanding|aggregatePercent)>([^<]+)<\/(?:percentOfClass|percentClassOutstanding|aggregatePercent)>/i)
+    const sharesMatch = xml.match(/<(?:aggregateAmountBeneficiallyOwned|amountBeneficiallyOwned|sharesBeneficiallyOwned)>([^<]+)<\/(?:aggregateAmountBeneficiallyOwned|amountBeneficiallyOwned|sharesBeneficiallyOwned)>/i)
+
+    const percentOwned = percentMatch ? parseFloat(percentMatch[1].replace(/[,%]/g, '')) || 0 : 0
+    const sharesOwned = sharesMatch ? parseInt(sharesMatch[1].replace(/[,\s]/g, ''), 10) || 0 : 0
+
+    // Amendment detection — 13D/A and 13G/A have "Amendment No." somewhere
+    const amendmentMatch = xml.match(/<(?:amendmentNumber|amendmentNo)>(\d+)<\/(?:amendmentNumber|amendmentNo)>/i)
+    const amendmentNo = amendmentMatch ? parseInt(amendmentMatch[1], 10) : 0
+
+    if (!subjectCik) {
+      console.warn(`[sec-monitor] 13D/G ${accessionNo}: no subject CIK in XML`)
+      return null
+    }
+
+    return {
+      subjectCik: subjectCik.padStart(10, '0'),
+      subjectName,
+      subjectCusip: subjectCusip.toUpperCase(),
+      filerName,
+      filerCik: filerCik.padStart(10, '0'),
+      percentOwned,
+      sharesOwned,
+      amendmentNo,
+    }
+  } catch (e) {
+    console.warn(`[sec-monitor] 13D/G parse error for ${accessionNo}: ${(e as Error).message}`)
+    return null
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Public: fetch recent 13D + 13G filings
+// ─────────────────────────────────────────────────────────────
+
+export interface ScheduleDGIngestResult {
+  scanned13D: number
+  scanned13G: number
+  parsed: number
+  inserted: number
+  passiveFiltered: number   // 13G from passive giants — filtered out
+  duplicates: number
+  errors: number
+}
+
+async function processScheduleDGEntries(
+  entries: AtomEntry[],
+  filingType: '13D' | '13G',
+  result: ScheduleDGIngestResult,
+  admin: SupabaseClient,
+): Promise<void> {
+  for (const entry of entries) {
+    try {
+      // For 13G, filter out passive index-fund giants — their filings
+      // are mechanical AUM-driven disclosures with no real signal.
+      if (filingType === '13G' && PASSIVE_GIANT_CIKS.has(entry.filerCik)) {
+        result.passiveFiltered++
+        continue
+      }
+
+      const xml = await fetchScheduleDGXml(entry.indexUrl)
+      if (!xml) {
+        result.errors++
+        continue
+      }
+
+      const parsed = parseScheduleDGXml(xml, entry.accessionNo)
+      if (!parsed) {
+        result.errors++
+        continue
+      }
+      result.parsed++
+
+      // Resolve the subject (the company) CIK to ticker
+      const resolved = await resolveTicker(parsed.subjectCik)
+      const ticker = resolved.ticker
+      const issuerName = parsed.subjectName || resolved.name
+
+      // Event type discriminates initial vs amendment, and 13D vs 13G.
+      // Amendments often signal status change (passive → activist, or
+      // significant position increase) so we tag them distinctly.
+      const eventType =
+        filingType === '13D'
+          ? (parsed.amendmentNo > 0 ? 'activist_position_amended' : 'activist_position')
+          : (parsed.amendmentNo > 0 ? 'large_passive_position_amended' : 'large_passive_position')
+
+      const { data: upsertData, error: upsertErr } = await admin.from('filing_alerts').upsert(
+        {
+          filing_type: filingType,
+          ticker,
+          issuer_cik: parsed.subjectCik,
+          issuer_name: issuerName,
+          filer_name: parsed.filerName || entry.filerName,
+          filer_cik: parsed.filerCik || entry.filerCik,
+          filer_role: filingType === '13D' ? 'activist' : 'large_passive_holder',
+          accession_no: entry.accessionNo,
+          filed_at: entry.filedAt,
+          filing_url: entry.indexUrl,
+          event_type: eventType,
+          dollar_value: null,           // 13D/G doesn't disclose dollar value directly
+          shares: parsed.sharesOwned,
+          percent_owned: parsed.percentOwned,
+          transaction_code: null,
+          transaction_data: {
+            cusip: parsed.subjectCusip,
+            amendment_no: parsed.amendmentNo,
+            shares_owned: parsed.sharesOwned,
+            percent_owned: parsed.percentOwned,
+          },
+        },
+        { onConflict: 'accession_no', ignoreDuplicates: true },
+      ).select('id')
+
+      if (upsertErr) {
+        console.warn(`[sec-monitor] ${filingType} upsert error: ${upsertErr.message}`)
+        result.errors++
+      } else if (!upsertData || (upsertData as unknown[]).length === 0) {
+        result.duplicates++
+      } else {
+        result.inserted++
+        console.log(
+          `[sec-monitor] ${filingType}: ${parsed.filerName || entry.filerName} ` +
+          `${eventType} ${parsed.percentOwned.toFixed(2)}% (${parsed.sharesOwned.toLocaleString()} shares) ` +
+          `of ${ticker ?? parsed.subjectCik}` +
+          (parsed.amendmentNo > 0 ? ` [Amendment ${parsed.amendmentNo}]` : ''),
+        )
+      }
+    } catch (e) {
+      console.warn(`[sec-monitor] ${filingType} entry error: ${(e as Error).message}`)
+      result.errors++
+    }
+
+    await new Promise(r => setTimeout(r, 100))  // polite pacing
+  }
+}
+
+/**
+ * Poll the recent firmwide 13D and 13G atom feeds, parse each filing's
+ * XML, filter (13G excludes passive giants), and write to filing_alerts.
+ *
+ * @param feedCount  Number of recent filings to consider per type
+ *                   (default 40 — both 13D and 13G feeds are low-volume
+ *                   so 40 covers a comfortable window).
+ */
+export async function fetchRecent13DG(feedCount = 40): Promise<ScheduleDGIngestResult> {
+  const admin = getAdmin()
+  if (!admin) {
+    return {
+      scanned13D: 0, scanned13G: 0, parsed: 0, inserted: 0,
+      passiveFiltered: 0, duplicates: 0, errors: 0,
+    }
+  }
+
+  const result: ScheduleDGIngestResult = {
+    scanned13D: 0, scanned13G: 0, parsed: 0, inserted: 0,
+    passiveFiltered: 0, duplicates: 0, errors: 0,
+  }
+
+  // Fetch both feeds in parallel — they're independent EDGAR endpoints
+  const [entries13D, entries13G] = await Promise.all([
+    fetchAtomFeed('13D', feedCount),
+    fetchAtomFeed('13G', feedCount),
+  ])
+
+  result.scanned13D = entries13D.length
+  result.scanned13G = entries13G.length
+
+  // Process 13D first (higher priority, smaller volume)
+  await processScheduleDGEntries(entries13D, '13D', result, admin)
+  await processScheduleDGEntries(entries13G, '13G', result, admin)
+
+  console.log(
+    `[sec-monitor] 13D/G run complete: scanned 13D=${result.scanned13D} 13G=${result.scanned13G} ` +
+    `parsed=${result.parsed} inserted=${result.inserted} ` +
+    `(${result.passiveFiltered} passive-filtered, ${result.duplicates} duplicates, ${result.errors} errors)`,
+  )
+
+  return result
+}

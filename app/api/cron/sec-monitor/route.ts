@@ -16,7 +16,7 @@
 // =============================================================
 
 import { NextRequest, NextResponse } from 'next/server'
-import { fetchRecentForm4s } from '@/app/lib/data/sec-monitor'
+import { fetchRecentForm4s, fetchRecent13DG } from '@/app/lib/data/sec-monitor'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300  // 5 min — well under Railway's HTTP cap
@@ -36,19 +36,25 @@ async function runMonitor(req: NextRequest) {
   const tStart = Date.now()
   console.log('[sec-monitor] cron run starting')
 
-  // Form 4 polling. Default feedCount=40 covers ~10 minutes of normal
-  // filing volume comfortably. Override via ?feedCount=N for catch-up
-  // runs if Railway logs ever show the backlog growing.
+  // Form 4 + 13D + 13G polling in parallel. Each is independent and
+  // hits different EDGAR endpoints, so concurrent calls don't cause
+  // rate-limit contention.
   const feedCountParam = req.nextUrl.searchParams.get('feedCount')
   const feedCount = feedCountParam ? Math.min(parseInt(feedCountParam, 10) || 40, 100) : 40
 
-  const form4Result = await fetchRecentForm4s(feedCount).catch((e: Error) => ({
-    error: e.message,
-    scanned: 0, parsed: 0, transactionsSeen: 0, inserted: 0,
-    belowThreshold: 0, nonPS: 0, duplicates: 0, errors: 1,
-  }))
+  const [form4Result, dgResult] = await Promise.all([
+    fetchRecentForm4s(feedCount).catch((e: Error) => ({
+      error: e.message,
+      scanned: 0, parsed: 0, transactionsSeen: 0, inserted: 0,
+      belowThreshold: 0, nonPS: 0, duplicates: 0, errors: 1,
+    })),
+    fetchRecent13DG(feedCount).catch((e: Error) => ({
+      error: e.message,
+      scanned13D: 0, scanned13G: 0, parsed: 0, inserted: 0,
+      passiveFiltered: 0, duplicates: 0, errors: 1,
+    })),
+  ])
 
-  // TODO Step 2: const dgResult = await fetchRecent13DG()
   // TODO Step 3: const k8Result = await fetchRecent8Ks()
 
   const totalDuration = Date.now() - tStart
@@ -58,7 +64,7 @@ async function runMonitor(req: NextRequest) {
     ok: true,
     durationMs: totalDuration,
     form4: form4Result,
-    // dg: dgResult,    // Step 2
+    dg: dgResult,
     // k8: k8Result,    // Step 3
   })
 }
