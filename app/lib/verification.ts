@@ -292,14 +292,25 @@ EXTRACT (these are factual claims):
 - Quoted numbers with named sources: "CPI came in at 3.2% vs 3.4% consensus"
 - Specific policy/regulatory actions: "SEC approved spot ETH ETF"
 
-DO NOT EXTRACT (these are not factual claims):
-- Technical indicator readings: "RSI is oversold at 28" (data we have)
+DO NOT EXTRACT (these are not factual claims that need external verification — they come from data already in the analysis bundle):
+- Technical indicator readings: "RSI is oversold at 28", "death cross", "Williams %R -93.7", "MACD negative"
+- Valuation multiples: "Forward P/E of 141x", "P/E ratio 90x", "P/S 0.9x", "P/B 1.6x", "EV/EBITDA 8x"
+- Margin/profitability figures: "Gross margin 18.7%", "Operating margin -0.5%", "Net margin 1%", "ROE -2.5%"
+- Growth metrics: "Revenue YoY 35.4%", "EPS YoY growth", "Forward earnings growth 12%"
+- EPS data: "EPS surprise -147%", "Average EPS surprise of -147.4%", "Beat estimate by $0.12", "Missed by 49.7%"
+- Analyst distribution: "14 buy / 15 hold / 2 sell", "Hold consensus", "Average price target $X"
+- Balance-sheet items already in bundle: "Cash position $1.2B", "Debt/equity 0.4", "FCF yield"
+- Options data: "P/C ratio 0.28", "IV skew 31.3%", "Max pain at $17"
+- Insider activity summary: "No insider buying", "$5M insider selling 90d" (bundle aggregates these from EDGAR)
+- Price/move statistics: "Stock down 7.6% today", "12% below VWAP", "26% below SMA200"
 - Sentiment descriptions: "Retail is panicking" (mood, not fact)
 - Conditional statements: "If price breaks $75k, shorts could squeeze"
 - Reasoning/logic: "The bearish thesis depends on..."
 - Common knowledge: "BTC is below its all-time high"
 - Tweet-style citations without underlying event: "@Someone said bearish"
 - Descriptions of what posters/traders are saying (that's sentiment)
+
+The key principle: if a number could come from the analysis bundle (technicals, fundamentals, options flow, insider data, smart money positions), it does NOT need external verification. Only extract claims about events, news, or external attributions that an outside source would need to confirm.
 
 REASONING BLOCK:
 """
@@ -964,6 +975,108 @@ function tryVerifyAgainstBundle(claim: string, bundle: SignalBundle | undefined)
       if (sayThisWeek && days >= 0 && days <= 7) {
         return { matched: true, verified: true, sourceOutlet: 'Bundle fundamentals (Finnhub-sourced)',
           reasoning: `Bundle confirms: earnings in ${days} days (${earningsDate}).` }
+      }
+    }
+  }
+
+  // ── EPS surprise claims (added Jun 2026) ──────────────────
+  // Match: "EPS surprise of -147%", "average EPS surprise -147.4%",
+  //        "missed by 49.7%", "beat by 12%".
+  // Bundle has avgSurprisePct and individual epsSurprises[].surprisePct.
+  const isEpsSurpriseClaim =
+    /\beps\s+surprise/i.test(c) ||
+    /\baverage\s+eps\s+surprise/i.test(c) ||
+    /\b(beat|missed|miss)\s+(?:the\s+)?estimate/i.test(c) ||
+    /\bsurprise\s+(?:of\s+)?-?\d+(?:\.\d+)?%/i.test(c)
+  if (isEpsSurpriseClaim) {
+    // Extract a percentage from the claim
+    const pctMatch = claim.match(/(-?\d+(?:\.\d+)?)\s*%/i)
+    if (pctMatch) {
+      const claimedPct = parseFloat(pctMatch[1])
+      // Check against average surprise first (most commonly cited)
+      const avgSurprise = bundle.fundamentals?.avgSurprisePct ?? null
+      if (avgSurprise !== null && Math.abs(avgSurprise) > 0) {
+        // ±5% relative tolerance for surprise magnitude, plus sign must match
+        if (Math.sign(claimedPct) === Math.sign(avgSurprise)) {
+          if (withinTolerance(Math.abs(claimedPct), Math.abs(avgSurprise), 0.05)) {
+            return {
+              matched: true,
+              verified: true,
+              sourceOutlet: 'Bundle fundamentals (Finnhub-sourced)',
+              reasoning: `Bundle confirms: avg EPS surprise = ${avgSurprise.toFixed(1)}% (claim: ${claimedPct.toFixed(1)}%, within 5%).`,
+            }
+          }
+        }
+      }
+      // Try matching against individual quarter surprises
+      const epsSurprises = bundle.fundamentals?.epsSurprises ?? []
+      for (const surprise of epsSurprises) {
+        if (Math.sign(claimedPct) === Math.sign(surprise.surprisePct)) {
+          if (withinTolerance(Math.abs(claimedPct), Math.abs(surprise.surprisePct), 0.05)) {
+            return {
+              matched: true,
+              verified: true,
+              sourceOutlet: 'Bundle fundamentals (Finnhub-sourced)',
+              reasoning: `Bundle confirms: ${surprise.period} EPS surprise = ${surprise.surprisePct.toFixed(1)}% (claim within 5%).`,
+            }
+          }
+        }
+      }
+      // Don't actively contradict — surprises are computed differently by
+      // different aggregators (some normalize for one-offs). Fall through.
+    }
+  }
+
+  // ── Margin claims (added Jun 2026) ────────────────────────
+  // Match: "gross margin 18.7%", "operating margin -0.5%", "net margin 1%"
+  const marginPatterns: Array<[RegExp, 'gross' | 'operating' | 'net']> = [
+    [/\bgross\s+margin\s+(?:of\s+|is\s+|at\s+|:\s+|=\s+)?(-?\d+(?:\.\d+)?)\s*%/i, 'gross'],
+    [/\boperating\s+margin\s+(?:of\s+|is\s+|at\s+|:\s+|=\s+)?(-?\d+(?:\.\d+)?)\s*%/i, 'operating'],
+    [/\bnet\s+(?:profit\s+)?margin\s+(?:of\s+|is\s+|at\s+|:\s+|=\s+)?(-?\d+(?:\.\d+)?)\s*%/i, 'net'],
+  ]
+  for (const [pattern, marginType] of marginPatterns) {
+    const m = claim.match(pattern)
+    if (m) {
+      const claimed = parseFloat(m[1])
+      const bundleValue =
+        marginType === 'gross' ? (bundle.fundamentals?.grossMargin ?? null) :
+        marginType === 'operating' ? (bundle.fundamentals?.operatingMargin ?? null) :
+        (bundle.fundamentals?.netMargin ?? null)
+      if (bundleValue !== null && withinTolerance(Math.abs(claimed), Math.abs(bundleValue), 0.10)) {
+        if (Math.sign(claimed) === Math.sign(bundleValue) || bundleValue === 0) {
+          return {
+            matched: true,
+            verified: true,
+            sourceOutlet: 'Bundle fundamentals (Finnhub-sourced)',
+            reasoning: `Bundle confirms: ${marginType} margin = ${bundleValue.toFixed(1)}% (claim: ${claimed.toFixed(1)}%, within 10%).`,
+          }
+        }
+      }
+      // Don't contradict — margins depend on GAAP vs non-GAAP, TTM vs latest
+      // quarter, etc. Different sources legitimately differ.
+    }
+  }
+
+  // ── Growth rate claims (added Jun 2026) ───────────────────
+  // Match: "revenue YoY 35.4%", "revenue growth of 35%", "EPS growth -10%"
+  const isRevenueGrowthClaim = /\brevenue\s+(?:growth|yoy|year[-\s]?over[-\s]?year)/i.test(c)
+  const isEpsGrowthClaim = /\beps\s+(?:growth|yoy|year[-\s]?over[-\s]?year)/i.test(c)
+  if (isRevenueGrowthClaim || isEpsGrowthClaim) {
+    const pctMatch = claim.match(/(-?\d+(?:\.\d+)?)\s*%/i)
+    if (pctMatch) {
+      const claimedPct = parseFloat(pctMatch[1])
+      const bundleGrowth = isRevenueGrowthClaim
+        ? (bundle.fundamentals?.revenueGrowthYoY ?? null)
+        : (bundle.fundamentals?.epsGrowthYoY ?? null)
+      if (bundleGrowth !== null && withinTolerance(Math.abs(claimedPct), Math.abs(bundleGrowth), 0.10)) {
+        if (Math.sign(claimedPct) === Math.sign(bundleGrowth) || bundleGrowth === 0) {
+          return {
+            matched: true,
+            verified: true,
+            sourceOutlet: 'Bundle fundamentals (Finnhub-sourced)',
+            reasoning: `Bundle confirms: ${isRevenueGrowthClaim ? 'revenue' : 'EPS'} YoY = ${bundleGrowth.toFixed(1)}% (claim: ${claimedPct.toFixed(1)}%, within 10%).`,
+          }
+        }
       }
     }
   }
