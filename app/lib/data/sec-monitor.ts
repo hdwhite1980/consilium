@@ -1305,9 +1305,13 @@ export async function getFilingAlerts(
   maxAlerts = 10,
 ): Promise<string> {
   const admin = getAdmin()
-  if (!admin) return ''
+  if (!admin) {
+    console.log(`[sec-monitor] getFilingAlerts(${ticker}): no admin client — returning empty`)
+    return ''
+  }
 
   const since = new Date(Date.now() - hoursWindow * 60 * 60 * 1000).toISOString()
+  console.log(`[sec-monitor] getFilingAlerts(${ticker}): querying since=${since}`)
 
   try {
     const { data, error } = await admin
@@ -1327,6 +1331,7 @@ export async function getFilingAlerts(
       return ''
     }
     const rows = (data ?? []) as unknown as FilingAlertRow[]
+    console.log(`[sec-monitor] getFilingAlerts(${ticker}): query returned ${rows.length} rows`)
     if (rows.length === 0) return ''
 
     const lines: string[] = ['=== SEC FILINGS (last 48h) ===']
@@ -1372,7 +1377,9 @@ export async function getFilingAlerts(
       }
     }
 
-    return lines.join('\n')
+    const result = lines.join('\n')
+    console.log(`[sec-monitor] getFilingAlerts(${ticker}): returning ${result.length} chars, ${rows.length} filings`)
+    return result
   } catch (e) {
     console.warn(`[sec-monitor] getFilingAlerts error for ${ticker}: ${(e as Error).message}`)
     return ''
