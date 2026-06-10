@@ -1,0 +1,81 @@
+# =============================================================
+# .github/workflows/reingest-13f-cron.yml
+#
+# Quarterly 13F re-ingestion. Calls the batch endpoint on Railway
+# which iterates TICKER_CUSIPS, re-fetches each institution's 13F,
+# and writes clean CUSIP-matched rows to institutional_holdings.
+#
+# Schedule logic:
+#   - 13F filings are due 45 days after quarter end
+#   - Q4 (Dec 31) → filings due Feb 14
+#   - Q1 (Mar 31) → filings due May 15
+#   - Q2 (Jun 30) → filings due Aug 14
+#   - Q3 (Sep 30) → filings due Nov 14
+#   - We run 1 week after each deadline to give late filers time
+# =============================================================
+name: 13F Re-ingestion
+
+on:
+  schedule:
+    # Run quarterly at 09:00 UTC on the 21st of Feb/May/Aug/Nov
+    # (~1 week after each 13F filing deadline)
+    - cron: '0 9 21 2,5,8,11 *'
+
+  # Allow manual trigger from the Actions UI (Run workflow button).
+  # Useful right after deploying a fix to rebuild the table immediately.
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Ingestion mode'
+        required: true
+        default: 'incremental'
+        type: choice
+        options:
+          - incremental
+          - full
+      only:
+        description: 'Comma-separated ticker list (leave blank for all)'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  reingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Trigger Railway batch endpoint
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          # Inputs default to scheduled values when triggered by cron
+          MODE: ${{ inputs.mode || 'incremental' }}
+          ONLY: ${{ inputs.only || '' }}
+        run: |
+          set -e
+
+          # Build URL with optional only= filter
+          URL="https://wali-os.com/api/cron/reingest-13f-batch?mode=$MODE"
+          if [ -n "$ONLY" ]; then
+            URL="${URL}&only=${ONLY}"
+          fi
+
+          echo "Calling: $URL"
+
+          # POST with auth, capture response with status code separately
+          HTTP_RESPONSE=$(curl --silent --max-time 1800 \
+            --write-out "HTTPSTATUS:%{http_code}" \
+            -X POST "$URL" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "Content-Type: application/json")
+
+          HTTP_STATUS=$(echo "$HTTP_RESPONSE" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
+          HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed -e 's/HTTPSTATUS\:.*//g')
+
+          echo "HTTP $HTTP_STATUS"
+          echo "Response body:"
+          echo "$HTTP_BODY" | head -c 5000
+
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "::error::Batch endpoint returned HTTP $HTTP_STATUS"
+            exit 1
+          fi

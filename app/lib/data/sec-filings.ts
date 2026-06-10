@@ -341,7 +341,7 @@ const MAJOR_INSTITUTIONS: Record<string, string> = {
 // To add a ticker: look up its CUSIP and add an entry. CUSIPs
 // must be exactly 9 characters, uppercase, no dashes or spaces.
 // ─────────────────────────────────────────────────────────────
-const TICKER_CUSIPS: Record<string, string> = {
+export const TICKER_CUSIPS: Record<string, string> = {
   // Mega-cap tech
   AAPL:  '037833100',
   MSFT:  '594918104',
