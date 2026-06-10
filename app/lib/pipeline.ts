@@ -3083,6 +3083,18 @@ export async function runPipeline(
   const counterVerifyPromise = verifyFactualClaims(bundle.ticker, 'counter', counterText, bundle)
     .catch((e) => { console.warn('[verification/counter] failed:', (e as Error).message); return null })
 
+  // Surface the verification wait to the UI. Without this event, the user
+  // sees "Devil's Advocate done" and then 5-15 seconds of dead air before
+  // the Judge stage starts — long enough that people think the app froze
+  // and refresh the page. The verification pass runs four parallel LLM-
+  // backed fact-checks (Lead, Devil, Rebuttal, Counter) and naturally
+  // takes a few seconds; surfacing it as a visible stage keeps the user
+  // oriented during the wait.
+  onProgress('verification_start', {
+    message: 'Verifying factual claims against the data bundle...',
+    sources: ['lead', 'devil', 'rebuttal', 'counter'],
+  })
+
   // Await all verifications before Judge so calibration has clean data
   const [leadVer, devilVer, rebuttalVer, counterVer] = await Promise.all([
     leadVerifyPromise,
