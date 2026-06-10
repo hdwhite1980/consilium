@@ -1048,34 +1048,58 @@ interface EightKItems {
 }
 
 async function fetchEightKItems(indexUrl: string): Promise<EightKItems | null> {
-  const baseUrl = indexUrl.replace(/\/[^/]+$/, '')
+  // Use the atom feed's indexUrl directly — that's the EDGAR filing
+  // detail page where items are listed. Previous bug: stripping to
+  // the base directory hit the directory listing page instead, which
+  // contains CSS/HTML noise that was matching the generic X.YY regex
+  // (e.g. "3.7" from "/images/chairman-quote-bg-3.7.png").
 
   try {
-    // Try the filing index page first — it has an "Items" header
-    // formatted as something like:
-    //   <strong>Items:</strong> 2.02, 9.01
-    //   or
-    //   <td><b>Item Number:</b></td><td>5.02</td>
-    const idxRes = await fetch(`${baseUrl}/`, { headers: EDGAR_HEADERS })
+    const idxRes = await fetch(indexUrl, { headers: EDGAR_HEADERS })
     if (idxRes.ok) {
       const html = await idxRes.text()
 
       // Diagnostic (first few filings only): log sample HTML so we can
-      // see how items are actually formatted. We use module-scope
-      // counter to avoid spamming the logs.
+      // see how items are actually formatted on the detail page.
       eightKDiagLogged++
       if (eightKDiagLogged <= 2) {
-        const stripped = html.replace(/\s+/g, ' ').slice(0, 800)
-        console.log(`[sec-monitor] 8-K diag #${eightKDiagLogged} ${baseUrl.split('/').pop()}: ${stripped}`)
+        const stripped = html.replace(/\s+/g, ' ').slice(0, 1200)
+        console.log(`[sec-monitor] 8-K diag #${eightKDiagLogged}: ${stripped}`)
       }
 
-      // Pattern 1: explicit "Items:" label followed by comma-separated codes
-      // Pattern 2: standalone item codes in the page (more permissive)
-      const itemPattern = /(\d\.\d{1,2})/g
-      const allMatches = [...html.matchAll(itemPattern)].map(m => m[1])
+      // PRIMARY EXTRACTION: look for "Items:" labeled section.
+      // EDGAR's filing detail page formats items as something like:
+      //   <strong>Items:</strong>&nbsp;2.02, 9.01
+      // or
+      //   <td>Items</td><td>2.02, 9.01</td>
+      // or
+      //   Item 2.02 Results of Operations and Financial Condition
+      //   Item 9.01 Financial Statements and Exhibits
+      // We use multiple patterns to be robust.
+      let items: string[] = []
 
-      // Filter to plausible 8-K item codes (X.YY where X is 1-9, YY is 01-99)
-      const validItems = allMatches.filter(code => {
+      // Pattern 1: "Items:" label followed by comma-separated codes
+      const itemsLabelMatch = html.match(/Items?\s*[:>]?\s*(?:<\/[a-z]+>)?\s*(?:&nbsp;|\s)*((?:\d\.\d{1,2}\s*,?\s*)+)/i)
+      if (itemsLabelMatch) {
+        items = [...itemsLabelMatch[1].matchAll(/(\d\.\d{1,2})/g)].map(m => m[1])
+      }
+
+      // Pattern 2: "Item X.YY" headings — common on the description side
+      if (items.length === 0) {
+        const itemHeadings = [...html.matchAll(/Item\s+(\d\.\d{1,2})\b/gi)].map(m => m[1])
+        items = itemHeadings
+      }
+
+      // Pattern 3 (fallback): scan for any X.YY-format codes in the
+      // page, but ONLY when they're not adjacent to file extensions
+      // or stylesheet refs (the "/3.7.png" / "960.min.css" trap).
+      if (items.length === 0) {
+        const generic = [...html.matchAll(/(?:^|[\s>"])(\d\.\d{1,2})(?:[\s<",.]|$)/g)].map(m => m[1])
+        items = generic
+      }
+
+      // Filter to plausible 8-K item codes: X is 1-9, YY is 01-99.
+      const validItems = items.filter(code => {
         const [section, sub] = code.split('.')
         const sectionNum = parseInt(section, 10)
         const subNum = parseInt(sub, 10)
@@ -1083,18 +1107,20 @@ async function fetchEightKItems(indexUrl: string): Promise<EightKItems | null> {
       })
 
       // Dedupe
-      const items = [...new Set(validItems)]
+      const dedupedItems = [...new Set(validItems)]
 
       // Filter to high-signal items only
-      const matchingItems = items.filter(i => HIGH_SIGNAL_ITEMS.has(i))
+      const matchingItems = dedupedItems.filter(i => HIGH_SIGNAL_ITEMS.has(i))
       const eventTypes = [...new Set(matchingItems.map(i => EIGHT_K_ITEM_MAP[i].eventType))]
 
       // Diagnostic: log items found vs items matching for first few
-      if (eightKDiagLogged <= 5 && (items.length === 0 || matchingItems.length === 0)) {
-        console.log(`[sec-monitor] 8-K ${baseUrl.split('/').pop()}: items=[${items.join(',')}] matching=[${matchingItems.join(',')}]`)
+      if (eightKDiagLogged <= 5 && (dedupedItems.length === 0 || matchingItems.length === 0)) {
+        console.log(`[sec-monitor] 8-K ${indexUrl.split('/').slice(-2, -1)[0]}: items=[${dedupedItems.join(',')}] matching=[${matchingItems.join(',')}]`)
       }
 
-      return { items, matchingItems, eventTypes }
+      return { items: dedupedItems, matchingItems, eventTypes }
+    } else {
+      console.warn(`[sec-monitor] 8-K index fetch failed: HTTP ${idxRes.status} for ${indexUrl}`)
     }
   } catch (e) {
     console.warn(`[sec-monitor] 8-K index fetch error: ${(e as Error).message}`)
