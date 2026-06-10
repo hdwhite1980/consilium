@@ -160,14 +160,23 @@ async function fetchAtomFeed(type: '4' | '13D' | '13G' | '8-K', count: number): 
     type
   const url = `${EDGAR_BASE}/cgi-bin/browse-edgar?action=getcurrent&type=${typeParam}&company=&dateb=&owner=include&count=${count}&output=atom`
 
+  // Diagnostic: log the URL we're hitting
+  console.log(`[sec-monitor] fetching atom feed: ${url}`)
+
   try {
     const res = await fetch(url, { headers: EDGAR_HEADERS })
     if (!res.ok) {
-      console.warn(`[sec-monitor] atom feed fetch failed for type=${type}: ${res.status}`)
+      console.warn(`[sec-monitor] atom feed fetch failed for type=${type}: HTTP ${res.status} ${res.statusText}`)
       return []
     }
     const xml = await res.text()
+
+    // Diagnostic: log what we got back
+    console.log(`[sec-monitor] atom feed type=${type}: response ${xml.length} bytes, first 400 chars: ${xml.slice(0, 400).replace(/\s+/g, ' ')}`)
+
     const entries = xml.match(/<entry>[\s\S]*?<\/entry>/g) ?? []
+    console.log(`[sec-monitor] atom feed type=${type}: matched ${entries.length} <entry> blocks`)
+
     const parsed: AtomEntry[] = []
     for (const entry of entries) {
       // Title format: "{form} - {filer name} (CIK {cik}) (Filing date: {date})"
@@ -175,13 +184,20 @@ async function fetchAtomFeed(type: '4' | '13D' | '13G' | '8-K', count: number): 
       const linkMatch = entry.match(/<link[^>]*href="([^"]+)"/)
       const updatedMatch = entry.match(/<updated>([^<]+)<\/updated>/)
       const idMatch = entry.match(/<id>([^<]+)<\/id>/)
-      if (!titleMatch || !linkMatch || !updatedMatch || !idMatch) continue
+      if (!titleMatch || !linkMatch || !updatedMatch || !idMatch) {
+        // Diagnostic: log entries we couldn't parse
+        console.log(`[sec-monitor] skipping unparseable entry (first 200 chars): ${entry.slice(0, 200).replace(/\s+/g, ' ')}`)
+        continue
+      }
 
       const title = titleMatch[1]
       const cikMatch = title.match(/\(CIK\s+(\d+)\)/i)
       const filerName = title.replace(/^[^-]+-\s*/, '').replace(/\s*\(CIK.*$/i, '').trim()
       const accessionFromId = idMatch[1].match(/accession-number=([\d-]+)/)?.[1] ?? ''
-      if (!cikMatch || !accessionFromId) continue
+      if (!cikMatch || !accessionFromId) {
+        console.log(`[sec-monitor] skipping entry missing cik or accession — title: "${title.slice(0, 100)}" id: "${idMatch[1].slice(0, 100)}"`)
+        continue
+      }
 
       parsed.push({
         accessionNo: accessionFromId,
