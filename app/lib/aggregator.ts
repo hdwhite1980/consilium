@@ -22,6 +22,7 @@ import { buildConvictionOutput } from './signals/conviction'
 import { getLatestDigestContext } from './market-digest'
 import { getLatestSocialContext } from './social-signals'
 import { getMonitorAlerts } from './market-monitor'
+import { getFilingAlerts } from './data/sec-monitor'
 
 
 
@@ -73,6 +74,7 @@ export type SignalBundle = {
     digestContext: string  // end-of-day market regime context
     socialContext: string   // social/political signal context
     monitorAlerts: string   // breaking market alerts (last 2 hours)
+    filingAlerts: string    // SEC filings: Form 4, 13D/G, 8-K (last 48 hours)
     fullBundle: string  // everything combined
   }
 }
@@ -234,7 +236,7 @@ Focus on technical signals, volume trends, and market structure for directional 
       fundamentals: cryptoFundamentals,
       smartMoney: cryptoSmartMoney,
       optionsFlow, conviction,
-      aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: '', socialContext: '', monitorAlerts: '', fullBundle },
+      aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: '', socialContext: '', monitorAlerts: '', filingAlerts: '', fullBundle },
     }
   }
 
@@ -371,7 +373,7 @@ For directional bias, focus on:
       fundamentals: metalFundamentals,
       smartMoney: metalSmartMoney,
       optionsFlow, conviction,
-      aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: '', socialContext: '', monitorAlerts: '', fullBundle },
+      aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: '', socialContext: '', monitorAlerts: '', filingAlerts: '', fullBundle },
     }
   }
 
@@ -483,7 +485,7 @@ Focus on central bank policy signals, economic data releases, and technical stru
       fundamentals: forexFundamentals,
       smartMoney: forexSmartMoney,
       optionsFlow, conviction,
-      aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: '', socialContext: '', monitorAlerts: '', fullBundle },
+      aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: '', socialContext: '', monitorAlerts: '', filingAlerts: '', fullBundle },
     }
   }
 
@@ -526,6 +528,7 @@ Focus on central bank policy signals, economic data releases, and technical stru
   const digestContextPromise = getLatestDigestContext().catch(() => '')
   const socialContextPromise = getLatestSocialContext(sym).catch(() => '')
   const monitorAlertsPromise = getMonitorAlerts(sym, 120).catch(() => '')
+  const filingAlertsPromise = getFilingAlerts(sym, 48).catch(() => '')
 
   const [marketContext, fundamentals, smartMoney, optionsFlow, edgarData, extendedHours, sectorContext] = await Promise.all([
     buildMarketContext(sym, timeframe),
@@ -543,7 +546,7 @@ Focus on central bank policy signals, economic data releases, and technical stru
   // Congressional trades: 4s max (House XML or QuiverQuant)
   // fetchAllFilingsForTicker (13-F, Form 4 XML) is intentionally excluded from hot path
   // — it makes 15+ HTTP calls and is seeded via /api/sec-filings cron instead
-  const [secFilingsContext, legislativeContext, digestContext, socialContext, monitorAlerts] = await Promise.all([
+  const [secFilingsContext, legislativeContext, digestContext, socialContext, monitorAlerts, filingAlerts] = await Promise.all([
     Promise.race([
       (async () => {
         // Check cache first — only fetch if no data exists for this ticker
@@ -572,6 +575,7 @@ Focus on central bank policy signals, economic data releases, and technical stru
     digestContextPromise,
     socialContextPromise,
     monitorAlertsPromise,
+    filingAlertsPromise,
   ])
 
   // Compute relative strength vs sector now that we have both
@@ -616,6 +620,7 @@ Focus on central bank policy signals, economic data releases, and technical stru
 
   const fullBundle = [
     monitorAlerts || null,  // breaking alerts first — most time-sensitive
+    filingAlerts || null,   // SEC filings (Form 4, 13D/G, 8-K) — material events
     digestContext || null,  // market regime context — sets the stage
     socialContext || null,  // social/political signals — Trump posts, Elon, Fed, etc.
     newsSection, priceSection, technicalsSection, marketSection,
@@ -628,6 +633,6 @@ Focus on central bank policy signals, economic data releases, and technical stru
     technicals, marketContext, fundamentals, smartMoney, optionsFlow, conviction,
     extendedHours,
     sectorContext,
-    aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: digestContext || '', socialContext: socialContext || '', monitorAlerts: monitorAlerts || '', fullBundle },
+    aiContext: { newsSection, priceSection, technicalsSection, marketSection, fundamentalsSection, smartMoneySection, optionsSection, convictionSection, digestContext: digestContext || '', socialContext: socialContext || '', monitorAlerts: monitorAlerts || '', filingAlerts: filingAlerts || '', fullBundle },
   }
 }

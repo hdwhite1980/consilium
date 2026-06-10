@@ -1256,3 +1256,174 @@ export async function fetchRecent8Ks(feedCount = 40): Promise<EightKIngestResult
 
   return result
 }
+
+// =============================================================
+// Step 4: Discovery layer integration
+// =============================================================
+//
+// getMonitorAlerts in market-monitor.ts already feeds breaking news
+// alerts into the signal bundle. We add a parallel function that
+// pulls recent SEC filings for the same ticker and returns formatted
+// text for inclusion in the bundle.
+//
+// Called from aggregator.ts alongside getMonitorAlerts; the two
+// outputs are concatenated into the "monitor alerts" section that
+// the Council and News Scout see first.
+
+interface FilingAlertRow {
+  filing_type: string
+  ticker: string | null
+  issuer_name: string | null
+  filer_name: string | null
+  filer_role: string | null
+  event_type: string | null
+  filed_at: string
+  filing_url: string | null
+  dollar_value: number | null
+  shares: number | null
+  percent_owned: number | null
+  transaction_code: string | null
+  transaction_data: Record<string, unknown> | null
+}
+
+/**
+ * Fetch recent SEC filing alerts for a ticker and return a formatted
+ * text block suitable for inclusion in the AI bundle.
+ *
+ * @param ticker        the ticker to look up
+ * @param hoursWindow   how far back to look (default 48 hours —
+ *                      8-Ks are time-sensitive, 13D/G slightly less,
+ *                      Form 4 has 2-day filing deadline so 48h covers
+ *                      all fresh activity)
+ * @param maxAlerts     cap on rows returned (default 10 — keeps the
+ *                      bundle section bounded; most tickers have 0-2
+ *                      per window so this is loose)
+ */
+export async function getFilingAlerts(
+  ticker: string,
+  hoursWindow = 48,
+  maxAlerts = 10,
+): Promise<string> {
+  const admin = getAdmin()
+  if (!admin) return ''
+
+  const since = new Date(Date.now() - hoursWindow * 60 * 60 * 1000).toISOString()
+
+  try {
+    const { data, error } = await admin
+      .from('filing_alerts')
+      .select(
+        'filing_type, ticker, issuer_name, filer_name, filer_role, event_type, ' +
+        'filed_at, filing_url, dollar_value, shares, percent_owned, ' +
+        'transaction_code, transaction_data',
+      )
+      .eq('ticker', ticker.toUpperCase())
+      .gte('filed_at', since)
+      .order('filed_at', { ascending: false })
+      .limit(maxAlerts)
+
+    if (error) {
+      console.warn(`[sec-monitor] getFilingAlerts query error for ${ticker}: ${error.message}`)
+      return ''
+    }
+    const rows = (data ?? []) as FilingAlertRow[]
+    if (rows.length === 0) return ''
+
+    const lines: string[] = ['=== SEC FILINGS (last 48h) ===']
+
+    for (const r of rows) {
+      const ageHours = Math.round((Date.now() - new Date(r.filed_at).getTime()) / 3.6e6 * 10) / 10
+      const ageStr = ageHours < 1
+        ? `${Math.round(ageHours * 60)}m ago`
+        : `${ageHours.toFixed(1)}h ago`
+
+      if (r.filing_type === '4') {
+        // Form 4: insider open-market trade
+        const direction = r.event_type === 'open_market_buy' ? 'BOUGHT' : 'SOLD'
+        const dollars = r.dollar_value
+          ? `$${(r.dollar_value / 1e6).toFixed(2)}M`
+          : 'unknown amount'
+        const sharesStr = r.shares
+          ? `${r.shares.toLocaleString()} shares`
+          : 'shares (count unknown)'
+        lines.push(
+          `[FORM 4 ${ageStr}] ${r.filer_name ?? 'Insider'} (${r.filer_role ?? 'role unknown'}) ${direction} ${sharesStr} (${dollars})`,
+        )
+      } else if (r.filing_type === '13D' || r.filing_type === '13G') {
+        // 13D/G: 5%+ ownership disclosure
+        const formLabel = r.filing_type === '13D' ? '13D (activist)' : '13G (passive)'
+        const amendmentInfo = r.transaction_data?.amendment_no &&
+          Number(r.transaction_data.amendment_no) > 0
+          ? ` [Amendment ${r.transaction_data.amendment_no}]`
+          : ''
+        const filerLabel = r.filer_name ?? '[filer unknown]'
+        const detail = r.percent_owned != null && r.shares != null
+          ? `${r.percent_owned.toFixed(2)}% (${r.shares.toLocaleString()} shares)`
+          : '[metadata only — see filing for details]'
+        lines.push(
+          `[${formLabel} ${ageStr}]${amendmentInfo} ${filerLabel}: ${detail}`,
+        )
+      } else if (r.filing_type === '8-K') {
+        // 8-K: material event
+        const itemLabels = r.transaction_data?.item_labels ?? 'items unknown'
+        lines.push(
+          `[8-K ${ageStr}] ${r.event_type}: ${itemLabels}`,
+        )
+      }
+    }
+
+    return lines.join('\n')
+  } catch (e) {
+    console.warn(`[sec-monitor] getFilingAlerts error for ${ticker}: ${(e as Error).message}`)
+    return ''
+  }
+}
+
+/**
+ * Has a recent earnings 8-K been filed for this ticker?
+ *
+ * Used by the verifier (step 5) — when News Scout or Council claims
+ * "company beat/missed earnings", the verifier can check whether the
+ * 8-K Item 2.02 actually exists. Returns the most recent earnings
+ * 8-K row within the lookup window, or null.
+ *
+ * @param ticker         the company ticker
+ * @param hoursWindow    look-back window in hours (default 168 = 7 days;
+ *                       earnings releases stay relevant for at least
+ *                       a week after they're filed)
+ */
+export async function findRecentEarningsRelease(
+  ticker: string,
+  hoursWindow = 168,
+): Promise<FilingAlertRow | null> {
+  const admin = getAdmin()
+  if (!admin) return null
+
+  const since = new Date(Date.now() - hoursWindow * 60 * 60 * 1000).toISOString()
+
+  try {
+    const { data, error } = await admin
+      .from('filing_alerts')
+      .select(
+        'filing_type, ticker, issuer_name, filer_name, filer_role, event_type, ' +
+        'filed_at, filing_url, dollar_value, shares, percent_owned, ' +
+        'transaction_code, transaction_data',
+      )
+      .eq('ticker', ticker.toUpperCase())
+      .eq('filing_type', '8-K')
+      .eq('event_type', 'earnings_release')
+      .gte('filed_at', since)
+      .order('filed_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (error) {
+      console.warn(`[sec-monitor] findRecentEarningsRelease error for ${ticker}: ${error.message}`)
+      return null
+    }
+    return (data as FilingAlertRow) ?? null
+  } catch (e) {
+    console.warn(`[sec-monitor] findRecentEarningsRelease error for ${ticker}: ${(e as Error).message}`)
+    return null
+  }
+}
