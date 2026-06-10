@@ -85,16 +85,20 @@ async function processTicker(
 
     await fetch13FForTicker(ticker)
 
-    // Count what got written
+    // Count what got written.
+    // Explicit type annotation needed because Supabase JS returns `never[]`
+    // when table types aren't generated — the filter callbacks below need
+    // the row shape declared so TypeScript can check `r.data_quality`.
     const { data: rowsAfter, error: postErr } = await supabase
       .from('institutional_holdings')
       .select('data_quality')
       .eq('ticker', ticker)
     if (postErr) throw new Error(`verify: ${postErr.message}`)
 
-    result.rowsWritten = rowsAfter?.length ?? 0
-    result.verified = rowsAfter?.filter(r => r.data_quality === 'verified').length ?? 0
-    result.unverified = rowsAfter?.filter(r => r.data_quality === 'unverified').length ?? 0
+    const typedRows = (rowsAfter ?? []) as Array<{ data_quality: string }>
+    result.rowsWritten = typedRows.length
+    result.verified = typedRows.filter(r => r.data_quality === 'verified').length
+    result.unverified = typedRows.filter(r => r.data_quality === 'unverified').length
   } catch (e) {
     result.error = e instanceof Error ? e.message : String(e)
   }
@@ -124,9 +128,9 @@ async function runBatch(req: NextRequest) {
   // Optional comma-separated ticker filter — if not provided, run the
   // entire TICKER_CUSIPS list. Useful for one-off "fix one ticker" runs.
   const onlyParam = req.nextUrl.searchParams.get('only')
-  const allTickers = Object.keys(TICKER_CUSIPS).filter(t => !t.endsWith('_DUP'))
+  const allTickers = Object.keys(TICKER_CUSIPS).filter((t: string) => !t.endsWith('_DUP'))
   const tickers = onlyParam
-    ? onlyParam.split(',').map(t => t.trim().toUpperCase()).filter(t => allTickers.includes(t))
+    ? onlyParam.split(',').map((t: string) => t.trim().toUpperCase()).filter((t: string) => allTickers.includes(t))
     : allTickers
 
   if (tickers.length === 0) {

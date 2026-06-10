@@ -104,15 +104,24 @@ export async function POST(req: NextRequest) {
       }, { status: 500 })
     }
 
+    // Cast for type-checker — Supabase JS returns `never[]` when table
+    // types aren't generated, breaking the .filter() callbacks below.
+    const typedRows = (rowsAfter ?? []) as Array<{
+      institution: string
+      shares_held: number
+      data_quality: string
+      quarter: string
+    }>
+
     return NextResponse.json({
       ok: true,
       ticker,
       rowsDeleted: countBefore ?? 0,
-      rowsWritten: rowsAfter?.length ?? 0,
+      rowsWritten: typedRows.length,
       durationMs,
-      verified: rowsAfter?.filter(r => r.data_quality === 'verified').length ?? 0,
-      unverified: rowsAfter?.filter(r => r.data_quality === 'unverified').length ?? 0,
-      rows: rowsAfter,
+      verified: typedRows.filter(r => r.data_quality === 'verified').length,
+      unverified: typedRows.filter(r => r.data_quality === 'unverified').length,
+      rows: typedRows,
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
