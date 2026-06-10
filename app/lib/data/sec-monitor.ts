@@ -989,3 +989,226 @@ export async function fetchRecent13DG(feedCount = 40): Promise<ScheduleDGIngestR
 
   return result
 }
+
+// =============================================================
+// Step 3: 8-K monitoring (material events)
+// =============================================================
+//
+// 8-K is the highest-volume filing type (~500-1000/day across the
+// market). Items are coded numerically — the form has 9 sections
+// each with specific disclosure requirements. We filter aggressively
+// to the items that carry actual signal:
+//
+//   1.01  Entry into a material definitive agreement
+//   2.01  Completion of acquisition or disposition of assets
+//   2.02  Results of operations and financial condition (earnings)
+//   5.02  Departure/appointment of directors or officers
+//   7.01  Regulation FD disclosure
+//   8.01  Other events (catch-all — companies use for surprises)
+//
+// Excluded items (mostly noise):
+//   3.01-3.03  Listing/delisting (routine)
+//   4.01-4.02  Auditor changes (rarely material)
+//   5.01      Changes in control (rare; would file 14A/proxy if material)
+//   5.03      Amendments to bylaws (mostly procedural)
+//   5.04-5.08 Submission to security holders, ethics waivers, etc.
+//   9.01      Financial statements/exhibits (attachments, not events)
+//
+// Why parse items from the index HTML and not the document itself:
+// EDGAR's index page lists items in a clear "Items: 1.01, 2.02"
+// header. The 8-K document itself is freeform HTML. Index parsing
+// is dramatically faster and more reliable.
+
+// Map item codes to event types and human-readable labels.
+// Keys MUST be the canonical item code as it appears on EDGAR
+// (with the period, e.g. "5.02" not "502").
+const EIGHT_K_ITEM_MAP: Record<string, { eventType: string; label: string }> = {
+  '1.01': { eventType: 'material_agreement',   label: 'Material agreement' },
+  '2.01': { eventType: 'acquisition',          label: 'Acquisition/disposition' },
+  '2.02': { eventType: 'earnings_release',     label: 'Earnings release' },
+  '5.02': { eventType: 'executive_change',     label: 'Executive change' },
+  '7.01': { eventType: 'reg_fd',               label: 'Regulation FD disclosure' },
+  '8.01': { eventType: 'other_event',          label: 'Other material event' },
+}
+
+const HIGH_SIGNAL_ITEMS = new Set(Object.keys(EIGHT_K_ITEM_MAP))
+
+// ─────────────────────────────────────────────────────────────
+// 8-K item extraction from filing index page
+// ─────────────────────────────────────────────────────────────
+
+interface EightKItems {
+  items: string[]              // ['2.02', '9.01']
+  matchingItems: string[]      // intersection with HIGH_SIGNAL_ITEMS
+  eventTypes: string[]         // deduped event types from matchingItems
+}
+
+async function fetchEightKItems(indexUrl: string): Promise<EightKItems | null> {
+  const baseUrl = indexUrl.replace(/\/[^/]+$/, '')
+
+  try {
+    // Try the filing index page first — it has an "Items" header
+    // formatted as something like:
+    //   <strong>Items:</strong> 2.02, 9.01
+    //   or
+    //   <td><b>Item Number:</b></td><td>5.02</td>
+    const idxRes = await fetch(`${baseUrl}/`, { headers: EDGAR_HEADERS })
+    if (idxRes.ok) {
+      const html = await idxRes.text()
+
+      // Pattern 1: explicit "Items:" label followed by comma-separated codes
+      // Pattern 2: standalone item codes in the page (more permissive)
+      const itemPattern = /(\d\.\d{1,2})/g
+      const allMatches = [...html.matchAll(itemPattern)].map(m => m[1])
+
+      // Filter to plausible 8-K item codes (X.YY where X is 1-9, YY is 01-99)
+      const validItems = allMatches.filter(code => {
+        const [section, sub] = code.split('.')
+        const sectionNum = parseInt(section, 10)
+        const subNum = parseInt(sub, 10)
+        return sectionNum >= 1 && sectionNum <= 9 && subNum >= 1 && subNum <= 99
+      })
+
+      // Dedupe
+      const items = [...new Set(validItems)]
+
+      // Filter to high-signal items only
+      const matchingItems = items.filter(i => HIGH_SIGNAL_ITEMS.has(i))
+      const eventTypes = [...new Set(matchingItems.map(i => EIGHT_K_ITEM_MAP[i].eventType))]
+
+      return { items, matchingItems, eventTypes }
+    }
+  } catch (e) {
+    console.warn(`[sec-monitor] 8-K index fetch error: ${(e as Error).message}`)
+  }
+
+  return null
+}
+
+// ─────────────────────────────────────────────────────────────
+// Public: fetch recent 8-K filings, filter to high-signal items
+// ─────────────────────────────────────────────────────────────
+
+export interface EightKIngestResult {
+  scanned: number
+  itemsParsed: number          // index pages successfully scraped for items
+  inserted: number             // filings with at least one high-signal item
+  noMatchingItems: number      // skipped — no high-signal items in filing
+  duplicates: number
+  errors: number
+}
+
+/**
+ * Poll the recent firmwide 8-K atom feed, parse items from each filing's
+ * index page, and write filings with high-signal items to filing_alerts.
+ *
+ * @param feedCount  Number of recent filings to consider (default 40).
+ *                   8-K is high-volume so this represents only a few
+ *                   minutes of filings during market hours.
+ */
+export async function fetchRecent8Ks(feedCount = 40): Promise<EightKIngestResult> {
+  const admin = getAdmin()
+  if (!admin) {
+    return {
+      scanned: 0, itemsParsed: 0, inserted: 0,
+      noMatchingItems: 0, duplicates: 0, errors: 0,
+    }
+  }
+
+  const result: EightKIngestResult = {
+    scanned: 0, itemsParsed: 0, inserted: 0,
+    noMatchingItems: 0, duplicates: 0, errors: 0,
+  }
+
+  const entries = await fetchAtomFeed('8-K', feedCount)
+  result.scanned = entries.length
+
+  for (const entry of entries) {
+    try {
+      const itemsResult = await fetchEightKItems(entry.indexUrl)
+      if (!itemsResult) {
+        result.errors++
+        continue
+      }
+      result.itemsParsed++
+
+      // Filter: skip filings with no high-signal items.
+      if (itemsResult.matchingItems.length === 0) {
+        result.noMatchingItems++
+        continue
+      }
+
+      // For 8-K, the filer IS the company (issuer files its own 8-K).
+      // So entry.filerCik is the issuer CIK directly.
+      const issuerCik = entry.filerCik
+      const resolved = await resolveTicker(issuerCik)
+      const ticker = resolved.ticker
+      const issuerName = decodeHtmlEntities(resolved.name ?? entry.filerName)
+
+      // Pick the primary event type: prefer earnings_release (verifier
+      // path), then executive_change, then material_agreement, then
+      // acquisition, then reg_fd, then other_event. This determines
+      // the row's `event_type` field; full list of items lives in
+      // transaction_data.
+      const priority = ['earnings_release', 'executive_change', 'material_agreement', 'acquisition', 'reg_fd', 'other_event']
+      const primaryEventType = priority.find(p => itemsResult.eventTypes.includes(p)) ?? itemsResult.eventTypes[0]
+
+      const itemLabels = itemsResult.matchingItems.map(i => `${i} (${EIGHT_K_ITEM_MAP[i].label})`).join(', ')
+
+      const { data: upsertData, error: upsertErr } = await admin.from('filing_alerts').upsert(
+        {
+          filing_type: '8-K',
+          ticker,
+          issuer_cik: issuerCik,
+          issuer_name: issuerName,
+          // For 8-K the filer is the issuer itself — record the company
+          // in both fields rather than leaving filer_name null. That way
+          // the discovery layer's "filer_name" rendering still works.
+          filer_name: issuerName,
+          filer_cik: issuerCik,
+          filer_role: 'issuer',
+          accession_no: entry.accessionNo,
+          filed_at: entry.filedAt,
+          filing_url: entry.indexUrl,
+          event_type: primaryEventType,
+          dollar_value: null,
+          shares: null,
+          percent_owned: null,
+          transaction_code: null,
+          transaction_data: {
+            items: itemsResult.items,
+            matching_items: itemsResult.matchingItems,
+            event_types: itemsResult.eventTypes,
+            item_labels: itemLabels,
+          },
+        },
+        { onConflict: 'accession_no', ignoreDuplicates: true },
+      ).select('id')
+
+      if (upsertErr) {
+        console.warn(`[sec-monitor] 8-K upsert error: ${upsertErr.message}`)
+        result.errors++
+      } else if (!upsertData || (upsertData as unknown[]).length === 0) {
+        result.duplicates++
+      } else {
+        result.inserted++
+        console.log(
+          `[sec-monitor] 8-K: ${issuerName} (${ticker ?? issuerCik}) ${primaryEventType}: ${itemLabels}`,
+        )
+      }
+    } catch (e) {
+      console.warn(`[sec-monitor] 8-K entry error: ${(e as Error).message}`)
+      result.errors++
+    }
+
+    await new Promise(r => setTimeout(r, 100))  // polite pacing
+  }
+
+  console.log(
+    `[sec-monitor] 8-K run complete: scanned=${result.scanned} ` +
+    `items-parsed=${result.itemsParsed} inserted=${result.inserted} ` +
+    `(${result.noMatchingItems} no-match, ${result.duplicates} duplicates, ${result.errors} errors)`,
+  )
+
+  return result
+}

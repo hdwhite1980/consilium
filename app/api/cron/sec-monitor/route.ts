@@ -16,7 +16,7 @@
 // =============================================================
 
 import { NextRequest, NextResponse } from 'next/server'
-import { fetchRecentForm4s, fetchRecent13DG } from '@/app/lib/data/sec-monitor'
+import { fetchRecentForm4s, fetchRecent13DG, fetchRecent8Ks } from '@/app/lib/data/sec-monitor'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300  // 5 min — well under Railway's HTTP cap
@@ -42,7 +42,7 @@ async function runMonitor(req: NextRequest) {
   const feedCountParam = req.nextUrl.searchParams.get('feedCount')
   const feedCount = feedCountParam ? Math.min(parseInt(feedCountParam, 10) || 40, 100) : 40
 
-  const [form4Result, dgResult] = await Promise.all([
+  const [form4Result, dgResult, k8Result] = await Promise.all([
     fetchRecentForm4s(feedCount).catch((e: Error) => ({
       error: e.message,
       scanned: 0, parsed: 0, transactionsSeen: 0, inserted: 0,
@@ -53,9 +53,12 @@ async function runMonitor(req: NextRequest) {
       scanned13D: 0, scanned13G: 0, parsed: 0, metadataOnly: 0, inserted: 0,
       passiveFiltered: 0, duplicates: 0, errors: 1,
     })),
+    fetchRecent8Ks(feedCount).catch((e: Error) => ({
+      error: e.message,
+      scanned: 0, itemsParsed: 0, inserted: 0,
+      noMatchingItems: 0, duplicates: 0, errors: 1,
+    })),
   ])
-
-  // TODO Step 3: const k8Result = await fetchRecent8Ks()
 
   const totalDuration = Date.now() - tStart
   console.log(`[sec-monitor] cron run complete in ${totalDuration}ms`)
@@ -65,7 +68,7 @@ async function runMonitor(req: NextRequest) {
     durationMs: totalDuration,
     form4: form4Result,
     dg: dgResult,
-    // k8: k8Result,    // Step 3
+    k8: k8Result,
   })
 }
 
