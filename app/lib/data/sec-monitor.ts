@@ -152,16 +152,35 @@ interface AtomEntry {
 }
 
 async function fetchAtomFeed(type: '4' | '13D' | '13G' | '8-K', count: number): Promise<AtomEntry[]> {
-  // SEC's getcurrent type parameter doesn't accept '13D' or '13G'
-  // directly — uses 'SC 13D' and 'SC 13G'. Form 4 and 8-K are simple.
+  // SEC's getcurrent endpoint accepts a type parameter but does NOT
+  // actually filter results server-side — we get every recent filing
+  // regardless of what we ask for. So we still pass the parameter
+  // (to be polite), but the real filtering happens client-side below
+  // by inspecting each entry's title prefix.
   const typeParam =
     type === '13D' ? 'SC%2013D' :
     type === '13G' ? 'SC%2013G' :
     type
-  const url = `${EDGAR_BASE}/cgi-bin/browse-edgar?action=getcurrent&type=${typeParam}&company=&dateb=&owner=include&count=${count}&output=atom`
+  // Pull more entries when we'll be filtering client-side — most won't
+  // be the type we want, so we need a bigger sample to find enough.
+  const requestedCount = Math.min(count * 4, 100)
+  const url = `${EDGAR_BASE}/cgi-bin/browse-edgar?action=getcurrent&type=${typeParam}&company=&dateb=&owner=include&count=${requestedCount}&output=atom`
 
   // Diagnostic: log the URL we're hitting
   console.log(`[sec-monitor] fetching atom feed: ${url}`)
+
+  // Client-side filter prefix to match in title. Title format is:
+  //   "{form-type} - {filer name} ({cik}) ({role})"
+  // where role is "(Filer)", "(Subject)", or "(Filer, Subject)".
+  // For 13D/G, the same filing may appear twice in the feed — once
+  // for the filer (the holder) and once for the subject (the company
+  // being disclosed about). We want the (Filer) row since that's
+  // where the holder identity lives.
+  const titlePrefix =
+    type === '4'   ? /^4\s*-\s+/ :
+    type === '13D' ? /^SC\s+13D(?:\/A)?\s*-\s+/ :
+    type === '13G' ? /^SC\s+13G(?:\/A)?\s*-\s+/ :
+                     /^8-K\s*-\s+/
 
   try {
     const res = await fetch(url, { headers: EDGAR_HEADERS })
@@ -170,32 +189,57 @@ async function fetchAtomFeed(type: '4' | '13D' | '13G' | '8-K', count: number): 
       return []
     }
     const xml = await res.text()
+    console.log(`[sec-monitor] atom feed type=${type}: response ${xml.length} bytes`)
 
-    // Diagnostic: log what we got back
-    console.log(`[sec-monitor] atom feed type=${type}: response ${xml.length} bytes, first 400 chars: ${xml.slice(0, 400).replace(/\s+/g, ' ')}`)
-
-    const entries = xml.match(/<entry>[\s\S]*?<\/entry>/g) ?? []
-    console.log(`[sec-monitor] atom feed type=${type}: matched ${entries.length} <entry> blocks`)
+    const entryBlocks = xml.match(/<entry>[\s\S]*?<\/entry>/g) ?? []
+    console.log(`[sec-monitor] atom feed type=${type}: total ${entryBlocks.length} entries (will filter to type ${type})`)
 
     const parsed: AtomEntry[] = []
-    for (const entry of entries) {
-      // Title format: "{form} - {filer name} (CIK {cik}) (Filing date: {date})"
+    let matchedTypeCount = 0
+    let skippedRole = 0
+    let skippedNoCik = 0
+    let skippedNoAccession = 0
+
+    for (const entry of entryBlocks) {
       const titleMatch = entry.match(/<title>([^<]+)<\/title>/)
-      const linkMatch = entry.match(/<link[^>]*href="([^"]+)"/)
-      const updatedMatch = entry.match(/<updated>([^<]+)<\/updated>/)
-      const idMatch = entry.match(/<id>([^<]+)<\/id>/)
-      if (!titleMatch || !linkMatch || !updatedMatch || !idMatch) {
-        // Diagnostic: log entries we couldn't parse
-        console.log(`[sec-monitor] skipping unparseable entry (first 200 chars): ${entry.slice(0, 200).replace(/\s+/g, ' ')}`)
+      if (!titleMatch) continue
+      const title = titleMatch[1]
+
+      // Client-side type filter
+      if (!titlePrefix.test(title)) continue
+      matchedTypeCount++
+
+      // For 13D/G, prefer the (Filer) role. The (Subject) row is the
+      // same filing viewed from the issuer's perspective and would
+      // produce a duplicate accession_no upsert.
+      if ((type === '13D' || type === '13G') && /\(Subject\)/i.test(title) && !/\(Filer\)/i.test(title)) {
+        skippedRole++
         continue
       }
 
-      const title = titleMatch[1]
-      const cikMatch = title.match(/\(CIK\s+(\d+)\)/i)
-      const filerName = title.replace(/^[^-]+-\s*/, '').replace(/\s*\(CIK.*$/i, '').trim()
+      const linkMatch = entry.match(/<link[^>]*href="([^"]+)"/)
+      const updatedMatch = entry.match(/<updated>([^<]+)<\/updated>/)
+      const idMatch = entry.match(/<id>([^<]+)<\/id>/)
+      if (!linkMatch || !updatedMatch || !idMatch) continue
+
+      // Title CIK is in bare-digits parens: "Foo Inc (0001234567) (Filer)"
+      // The 4-12 digit constraint catches 7-10-digit CIKs without
+      // grabbing accession numbers (18 digits) that may appear elsewhere.
+      const cikMatch = title.match(/\((\d{4,12})\)\s*\([A-Za-z]/i)
+      if (!cikMatch) {
+        skippedNoCik++
+        continue
+      }
+
+      // Strip the form prefix and trailing (cik) (role) to get filer name
+      const filerName = title
+        .replace(titlePrefix, '')
+        .replace(/\s*\(\d{4,12}\).*$/i, '')
+        .trim()
+
       const accessionFromId = idMatch[1].match(/accession-number=([\d-]+)/)?.[1] ?? ''
-      if (!cikMatch || !accessionFromId) {
-        console.log(`[sec-monitor] skipping entry missing cik or accession — title: "${title.slice(0, 100)}" id: "${idMatch[1].slice(0, 100)}"`)
+      if (!accessionFromId) {
+        skippedNoAccession++
         continue
       }
 
@@ -207,6 +251,13 @@ async function fetchAtomFeed(type: '4' | '13D' | '13G' | '8-K', count: number): 
         filedAt: updatedMatch[1],
       })
     }
+
+    console.log(
+      `[sec-monitor] atom feed type=${type}: filtered to ${parsed.length} parseable entries ` +
+      `(${matchedTypeCount} matched type, ${skippedRole} skipped role, ` +
+      `${skippedNoCik} skipped no-cik, ${skippedNoAccession} skipped no-accession)`,
+    )
+
     return parsed
   } catch (e) {
     console.warn(`[sec-monitor] atom feed parse error for type=${type}: ${(e as Error).message}`)
