@@ -315,6 +315,127 @@ const MAJOR_INSTITUTIONS: Record<string, string> = {
   '0000906504': 'Baupost Group',
 }
 
+// ─────────────────────────────────────────────────────────────
+// TICKER → CUSIP map for unambiguous 13F position matching.
+//
+// Why: 13F-HR filings list positions by <nameOfIssuer> AND <cusip>.
+// The previous implementation matched by name substring, which is
+// catastrophically broken for short tickers — e.g. searching for
+// 'LI' matched ELI LILLY, LINDE, ALIBABA, LIVE NATION, LIBERTY
+// MEDIA, etc., attributing those positions to Li Auto. Discovered
+// June 2026 when the table showed Vanguard owning 347M shares of
+// LI (~33% ownership, not plausible) and Berkshire owning LI
+// (Berkshire does not own LI). The "Berkshire" position was
+// actually Berkshire's holding in Linde or another LI-substring
+// company.
+//
+// CUSIP is a 9-character alphanumeric identifier unique per
+// security — no substring ambiguity. Adding tickers to this map
+// is what enables 13F ingestion for them.
+//
+// Source for CUSIPs: SEC EDGAR (each filing's information table
+// has them), Bloomberg, Refinitiv, or commercial CUSIP databases.
+// CUSIPs occasionally change after corporate actions (mergers,
+// reverse splits, restructurings); verify periodically.
+//
+// To add a ticker: look up its CUSIP and add an entry. CUSIPs
+// must be exactly 9 characters, uppercase, no dashes or spaces.
+// ─────────────────────────────────────────────────────────────
+const TICKER_CUSIPS: Record<string, string> = {
+  // Mega-cap tech
+  AAPL:  '037833100',
+  MSFT:  '594918104',
+  GOOGL: '02079K305',
+  GOOG:  '02079K107',
+  AMZN:  '023135106',
+  META:  '30303M102',
+  NVDA:  '67066G104',
+  TSLA:  '88160R101',
+  NFLX:  '64110L106',
+
+  // Other large-cap US equities
+  BRK_A: '084670108',  // Berkshire Hathaway Class A (rename key if you use BRK.A)
+  BRK_B: '084670702',  // Berkshire Hathaway Class B
+  JPM:   '46625H100',
+  LLY:   '532457108',
+  AVGO:  '11135F101',
+  V:     '92826C839',
+  MA:    '57636Q104',
+  UNH:   '91324P102',
+  XOM:   '30231G102',
+  WMT:   '931142103',
+  PG:    '742718109',
+  HD:    '437076102',
+  JNJ:   '478160104',
+
+  // Semis / AI infra
+  AMD:   '007903107',
+  INTC:  '458140100',
+  MU:    '595112103',
+  MRVL:  '573874104',
+  ARM:   '042068106',
+  TSM:   '874039100',
+  ASML:  'N07059210',
+  SMCI:  '86800U104',
+  PLTR:  '69608A108',
+
+  // Foreign ADRs (the ones most prone to substring bugs)
+  LI:    '50202M102',  // Li Auto — the original bug case
+  XPEV:  '98422D105',  // XPeng
+  NIO:   '62914V106',  // NIO
+  BABA:  '01609W102',  // Alibaba
+  JD:    '47215P106',  // JD.com
+  PDD:   '722304101',  // PDD Holdings (Pinduoduo)
+  BIDU:  '056752108',  // Baidu
+  IQ:    '45174J507',  // iQIYI
+
+  // Other commonly analyzed names
+  COIN:  '19260Q107',
+  HOOD:  '436433106',
+  SHOP:  '82509L107',
+  UBER:  '90353T100',
+  ABNB:  '009066101',
+  SNOW:  '833445109',
+  CRWD:  '22788C105',
+  DDOG:  '23804L103',
+  NET:   '18915M107',
+  ZS:    '98980G102',  // Zscaler (NOT soybean futures)
+  DELL:  '24703L103',
+  AZO:   '053332102',
+  CAVA:  '14964U108',
+  LMND:  '53538L107',
+  RAMP:  '551704102',
+  CZR:   '12769G100',
+  EDIT:  '28106W103',
+  USO:   '91232N108',
+  GLD:   '78463V107',
+  SLV:   '46428Q109',
+  SPY:   '78462F103',
+  QQQ:   '46090E103',
+  IWM:   '464287655',
+  DIA:   '73935A104',
+  TLT:   '464287432',
+  IEF:   '464287440',
+  CPER:  '46138E859',
+  PPLT:  '46428R108',
+  PALL:  '46428Q307',
+
+  // News-Scout / Active-Stories regulars
+  KO:    '191216100',
+  PEP:   '713448108',
+  MCD:   '580135101',
+  NKE:   '654106103',
+  DIS:   '254687106',
+  NFLX_DUP: '64110L106', // safety: keep mapped even if user retypes
+}
+
+// Normalize a CUSIP string from XML — strip whitespace, uppercase.
+// 13F XML occasionally pads or wraps the cusip; this handles both.
+function normalizeCusip(raw: string | null | undefined): string {
+  return String(raw ?? '').replace(/[^A-Z0-9]/gi, '').toUpperCase()
+}
+
+
 export async function fetch13FForTicker(ticker: string): Promise<void> {
   const admin = getAdmin()
 
@@ -417,35 +538,106 @@ export async function fetch13FForTicker(ticker: string): Promise<void> {
             console.log(`[13-F] ${instName}: found XML using ${usedFilename} (${xml.length} bytes)`)
 
             // Find ticker in the XML
-            const tickerRegex = new RegExp(`<nameOfIssuer>[^<]*${ticker}[^<]*<\\/nameOfIssuer>[\\s\\S]*?(?=<infoTable>|$)`, 'gi')
             const infoBlocks = xml.match(/<infoTable>[\s\S]*?<\/infoTable>/g) || []
 
-            // Build name variants for flexible matching
-            const nameVariants: Record<string, string[]> = {
-              'NVDA': ['NVIDIA'], 'AAPL': ['APPLE INC'], 'MSFT': ['MICROSOFT'],
-              'GOOGL': ['ALPHABET'], 'GOOG': ['ALPHABET'], 'META': ['META PLATFORM'],
-              'AMZN': ['AMAZON'], 'TSLA': ['TESLA'], 'NFLX': ['NETFLIX'],
-              'JPM': ['JPMORGAN','JP MORGAN'], 'BRK': ['BERKSHIRE'],
-            }
+            // ─────────────────────────────────────────────────────
+            // CUSIP-FIRST MATCHING (fixed June 2026)
+            //
+            // The previous implementation matched by name substring
+            // (issuerUpper.includes(tickerUpper)) which catastrophically
+            // misattributed positions for short tickers — e.g. 'LI' matched
+            // ELI LILLY, LINDE, ALIBABA, LIVE NATION, LIBERTY MEDIA, etc.
+            // This is why the table had Berkshire "owning 39.81M shares of LI"
+            // (it was actually Berkshire's Linde or similar position) and
+            // Vanguard "owning 347M shares of LI" (Vanguard's actual LI
+            // position is ~few million; the 347M was Vanguard's largest
+            // LI-substring holding, probably Eli Lilly).
+            //
+            // CUSIP is the canonical unambiguous identifier in 13F filings.
+            // We match by CUSIP equality first. If the ticker isn't in the
+            // CUSIP map, we fall back to exact name matching with a warning.
+            // We deliberately do NOT fall back to substring matching — that
+            // path is what created the bug, so silent name-substring matches
+            // are now blocked.
+            // ─────────────────────────────────────────────────────
             const tickerUpper = ticker.toUpperCase()
-            const variants = nameVariants[tickerUpper] || []
+            const expectedCusip = TICKER_CUSIPS[tickerUpper]
 
-            // Find ONLY the first (largest/most recent) match — avoid duplicate quarters
+            // Build name variants for the fallback path (used only when
+            // ticker has no CUSIP entry). These are EXACT-name matches,
+            // not substring — the substring matching is what was broken.
+            const nameVariants: Record<string, string[]> = {
+              NVDA:  ['NVIDIA CORP', 'NVIDIA CORPORATION'],
+              AAPL:  ['APPLE INC'],
+              MSFT:  ['MICROSOFT CORP', 'MICROSOFT CORPORATION'],
+              GOOGL: ['ALPHABET INC CL A', 'ALPHABET INC CLASS A'],
+              GOOG:  ['ALPHABET INC CL C', 'ALPHABET INC CLASS C'],
+              META:  ['META PLATFORMS INC', 'META PLATFORMS INC CLASS A'],
+              AMZN:  ['AMAZON COM INC', 'AMAZON.COM INC'],
+              TSLA:  ['TESLA INC'],
+              NFLX:  ['NETFLIX INC'],
+              JPM:   ['JPMORGAN CHASE & CO', 'JP MORGAN CHASE & CO'],
+              LI:    ['LI AUTO INC', 'LI AUTO INC ADR', 'LI AUTO INC SPONSORED ADR'],
+            }
+            const variants = nameVariants[tickerUpper] ?? []
+
+            // Track diagnostic stats per institution
+            let matchedBy: 'cusip' | 'exact-name' | null = null
             let bestBlock: string | null = null
             let bestShares = 0
+
             for (const block of infoBlocks) {
-              const nameMatch = block.match(/<nameOfIssuer>(.*?)<\/nameOfIssuer>/i)
-              if (!nameMatch) continue
-              const issuerUpper = nameMatch[1].toUpperCase()
-              const matches = issuerUpper.includes(tickerUpper) ||
-                variants.some(v => issuerUpper.includes(v))
-              if (!matches) continue
-              const shares = parseInt(block.match(/<sshPrnamt>(.*?)<\/sshPrnamt>/)?.[1] || '0')
-              // Take the block with the most shares (primary position, not derivatives)
-              if (shares > bestShares) { bestShares = shares; bestBlock = block }
+              const blockCusipRaw = block.match(/<cusip>(.*?)<\/cusip>/i)?.[1]
+              const blockCusip = normalizeCusip(blockCusipRaw)
+              const nameMatchInBlock = block.match(/<nameOfIssuer>(.*?)<\/nameOfIssuer>/i)
+              if (!nameMatchInBlock) continue
+              const issuerUpper = nameMatchInBlock[1].toUpperCase().trim()
+
+              // PRIMARY MATCH: CUSIP equality. CUSIPs are 9-character
+              // unique identifiers — no false-positive risk.
+              if (expectedCusip && blockCusip === expectedCusip) {
+                const shares = parseInt(block.match(/<sshPrnamt>(.*?)<\/sshPrnamt>/)?.[1] || '0')
+                if (shares > bestShares) {
+                  bestShares = shares
+                  bestBlock = block
+                  matchedBy = 'cusip'
+                }
+                continue
+              }
+
+              // FALLBACK (ONLY when ticker has no CUSIP entry): exact
+              // name match against known variants. This is risky for
+              // unknown tickers — they get NO match rather than a wrong
+              // match. That's the right tradeoff: empty > fabricated.
+              if (!expectedCusip && variants.length > 0) {
+                const exactMatch = variants.some(v => issuerUpper === v)
+                if (exactMatch) {
+                  const shares = parseInt(block.match(/<sshPrnamt>(.*?)<\/sshPrnamt>/)?.[1] || '0')
+                  if (shares > bestShares) {
+                    bestShares = shares
+                    bestBlock = block
+                    matchedBy = 'exact-name'
+                  }
+                }
+              }
+            }
+
+            // Log misses loudly — they indicate a ticker that should be
+            // added to TICKER_CUSIPS, not a hallucination. Helps catch
+            // future coverage gaps before they show up as user complaints.
+            if (!bestBlock) {
+              if (!expectedCusip) {
+                console.warn(
+                  `[13-F] ${instName}: no match for ${ticker} ` +
+                  `(no CUSIP mapped, exact-name fallback found nothing). ` +
+                  `Add CUSIP to TICKER_CUSIPS to enable ingestion.`,
+                )
+              }
+              // else: institution simply doesn't hold this ticker — silent
             }
 
             if (!bestBlock || bestShares === 0) continue
+            console.log(`[13-F] ${instName}: matched ${ticker} by ${matchedBy} (${bestShares.toLocaleString()} shares)`)
 
             {
               const block = bestBlock
@@ -487,6 +679,12 @@ export async function fetch13FForTicker(ticker: string): Promise<void> {
                 action,
                 filing_date: filingDate,
                 accession_no: accNo,
+                // CUSIP-matched rows are verified by construction —
+                // matching by CUSIP equality is unambiguous. Exact-name
+                // matches are written as 'unverified' since they're a
+                // fallback path and warrant spot-checking before the
+                // Council reads them. See TICKER_CUSIPS comment above.
+                data_quality: matchedBy === 'cusip' ? 'verified' : 'unverified',
               }, { onConflict: 'ticker,institution_cik,quarter' })
 
               // Log significant changes to sec_filings
