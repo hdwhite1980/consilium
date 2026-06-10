@@ -1305,13 +1305,9 @@ export async function getFilingAlerts(
   maxAlerts = 10,
 ): Promise<string> {
   const admin = getAdmin()
-  if (!admin) {
-    console.log(`[sec-monitor] getFilingAlerts(${ticker}): no admin client — returning empty`)
-    return ''
-  }
+  if (!admin) return ''
 
   const since = new Date(Date.now() - hoursWindow * 60 * 60 * 1000).toISOString()
-  console.log(`[sec-monitor] getFilingAlerts(${ticker}): querying since=${since}`)
 
   try {
     const { data, error } = await admin
@@ -1331,10 +1327,19 @@ export async function getFilingAlerts(
       return ''
     }
     const rows = (data ?? []) as unknown as FilingAlertRow[]
-    console.log(`[sec-monitor] getFilingAlerts(${ticker}): query returned ${rows.length} rows`)
     if (rows.length === 0) return ''
 
-    const lines: string[] = ['=== SEC FILINGS (last 48h) ===']
+    // Section header is deliberately attention-grabbing — these are
+    // SEC-verified official disclosures with regulatory weight, often
+    // more reliable than news headlines (which may include speculation).
+    // The header tells downstream AI stages to treat them as primary
+    // catalysts alongside news, not as ambient background context.
+    const lines: string[] = [
+      '=== SEC FILINGS — OFFICIAL DISCLOSURES (last 48h) ===',
+      'These are real, SEC-filed material events for this ticker, sourced directly from EDGAR.',
+      'Treat as PRIMARY CATALYSTS — same weight as news headlines. Cite explicitly in your analysis.',
+      '',
+    ]
 
     for (const r of rows) {
       const ageHours = Math.round((Date.now() - new Date(r.filed_at).getTime()) / 3.6e6 * 10) / 10
@@ -1378,7 +1383,6 @@ export async function getFilingAlerts(
     }
 
     const result = lines.join('\n')
-    console.log(`[sec-monitor] getFilingAlerts(${ticker}): returning ${result.length} chars, ${rows.length} filings`)
     return result
   } catch (e) {
     console.warn(`[sec-monitor] getFilingAlerts error for ${ticker}: ${(e as Error).message}`)
