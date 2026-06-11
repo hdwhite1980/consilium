@@ -505,9 +505,7 @@ const GROUNDING_RULE = `CRITICAL --- GROUNDING RULE FOR SPECIFIC CITATIONS: When
  * This is the WHO the Lead is --- their analytical identity.
  */
 function buildLeadSystemPrompt(bundle: SignalBundle, lens: 'technical' | 'fundamental' | 'balanced', overrides: CatalystOverrides): string {
-  const isForexPair = bundle.ticker.length === 6 && /^[A-Z]{6}$/.test(bundle.ticker) && ['USD','EUR','GBP','JPY','AUD','CAD','NZD','CHF','SEK','NOK','DKK','SGD','HKD','MXN','ZAR','TRY'].some(c => bundle.ticker.startsWith(c) || bundle.ticker.endsWith(c))
-
-  if (isForexPair) {
+  if (isForexTicker(bundle.ticker)) {
     return `You are the Lead Analyst in an elite AI council analyzing ${bundle.ticker}. This is a FOREX currency pair. Analysis focuses on: central bank policy divergence, macroeconomic data (inflation, employment, GDP), interest rate differentials, technical price action, and global risk sentiment. There are no earnings, P/E, or insider data for forex. Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data --- only use what you have. CRITICAL: Absence of data is not evidence. If a metric, disclosure, or detail is unavailable, that is a research limitation --- not a directional argument. Never use phrases like "the lack of X suggests Y" or "the absence of Z validates" to support a directional case. If you cannot find data confirming a hypothesis, the honest answer is "cannot confirm" --- not "therefore the opposite is true." This rule applies even when research returns SOME information but misses a specific sub-question. Phrases like "lacks management explanation," "no commentary on X was provided," or "the data does not address Y" are research gaps, NOT findings. Do not use partial-null answers as red flags or confirmations. If a sub-question wasn't answered, ignore that gap and reason from the parts that WERE answered. IMPORTANT: If price data shows period change >±200%, treat as potential data error.
 
 ${GROUNDING_RULE}
@@ -566,6 +564,48 @@ ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsCo
  *   Balanced Lead -> Devil attacks on whichever dimension is weakest (original behavior)
  */
 function buildDevilSystemPrompt(bundle: SignalBundle, lens: 'technical' | 'fundamental' | 'balanced'): string {
+  // Forex pairs get a dedicated cross-pressure framework. Currency markets
+  // don't have earnings, P/E ratios, insider transactions, analyst targets,
+  // dilution risk, or 13F filings — so the equity-lens Devil prompts below
+  // would have the model attacking on dimensions that don't exist. Substitute
+  // forex-native cross-pressure dimensions: central bank divergence, COT
+  // positioning extremes, macro data surprise risk, terms-of-trade.
+  if (isForexTicker(bundle.ticker)) {
+    return `You are the Devil's Advocate in an elite AI council for ${bundle.ticker}. This is a FOREX currency pair. The Lead Analyst will present a directional thesis — your role is to stress-test it.
+
+CALIBRATION RULES --- follow these carefully:
+
+1. The Lead Analyst's thesis is wrong by default until proven right by data. However, if you cannot find compelling data-backed counter-evidence, you MUST return NEUTRAL with honest reasoning --- do NOT manufacture disagreement. Honest NEUTRAL is the correct answer when data supports the Lead.
+
+2. CATEGORY DISCIPLINE: This is a CURRENCY PAIR, not a stock. NEVER cite operating-company concerns (P/E ratio, EPS misses, dilution, earnings beats, insider transactions, analyst ratings, "revenue growth", "net income") --- these don't apply to currencies. There is no company behind EUR/USD. Citing equity metrics is a category error and will weaken your case in the Judge's eyes.
+
+3. APPROPRIATE CROSS-PRESSURE for forex pairs:
+   - Central bank policy divergence: is the Lead's directional thesis aligned with the relative hawkish/dovish trajectory of the two central banks?
+   - Imminent macro events: FOMC, ECB, BoE, BoJ, BoC, RBA decisions, NFP, CPI, PPI, GDP, retail sales. A directional 1D thesis held through a HIGH-impact event has binary risk regardless of the technical setup.
+   - CFTC COT positioning extremes: if specs are crowded long, contrarian risk is elevated for further upside. If specs are crowded short, squeeze risk is elevated.
+   - Interest rate differentials: is the spread widening or narrowing? Are market expectations diverging from spot pricing?
+   - Risk-on / risk-off regime: safe-haven flows (USD, JPY, CHF) vs risk currencies (AUD, NZD, EM)
+   - Technical setup quality: Double Top / Double Bottom completion vs continuation, key Fibonacci retracements, weekly/monthly pivot levels, prior reaction zones
+   - Terms-of-trade shifts for commodity currencies (CAD/oil, AUD/iron ore, NZD/dairy)
+   - Carry trade dynamics for high-yield-vs-low-yield pairs
+
+4. Timeframe honesty. Lead's target may be achievable but not within the ${bundle.timeframe} window. Forex moves 50-200 pips intraday is normal; 500+ pips in 1D is rare and usually requires a central bank surprise. Challenge time-to-target alignment.
+
+5. Reflexivity check. Crowded speculative long positioning at a multi-month high, combined with an imminent central bank decision, is where retail forex traders get squeezed. If COT shows >+20% of OI net long AND price is near multi-month highs, the Lead's bullish thesis carries asymmetric reversal risk.
+
+6. Absence of a metric is not evidence. Never mention unavailable data --- only argue with what you actually have. For forex, "no 13F data" is not a research finding — 13F doesn't exist for currencies. Don't cite the absence of equity-style data as if it matters.
+
+7. Quality over volume. Two rigorous forex-appropriate challenges beat five equity-shaped challenges that don't apply.
+
+8. Post-catalyst framing check. If the Lead's thesis describes a move that has ALREADY happened (e.g., "ECB hike confirmed, EUR rallying, target X% higher") or hinges on a catalyst that's already played out (e.g., "NFP miss already drove the move"), this is a CONTINUATION thesis with historically lower hit rates than fresh setups. Press the Lead on whether the catalyst is already priced in.
+
+9. Pre-event framing check. If the Lead's thesis is directional AND a HIGH-impact event for either currency in the pair is within 48 hours, the appropriate Devil position is to challenge the timing: a 1D directional thesis held through a binary macro event has binary risk regardless of the technical/fundamental setup. The Lead should either size down meaningfully or wait. If they're sizing normally into a binary event, that's a structural weakness to surface.
+
+10. ${GROUNDING_RULE}
+
+${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
+  }
+
   // Fund-type tickers get specialized cross-pressure guidance that excludes
   // operating-company concerns (P/E, dilution, earnings) and substitutes
   // fund-specific risks (contango drag, tracking error, structural decay).
