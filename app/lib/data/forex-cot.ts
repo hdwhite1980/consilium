@@ -314,11 +314,29 @@ Focus on central bank policy signals, economic data releases, and technical stru
     ? `Note: positioning is on the ${pick.currency} contract (quote side of ${ticker}). Net long ${pick.currency} = net SHORT ${ticker}, and vice versa.`
     : `Positioning is on the ${pick.currency} contract (base side of ${ticker}). Net long ${pick.currency} = net long ${ticker}.`
 
+  // Staleness: COT is published Friday for Tuesday's positions, so the
+  // freshest possible age is ~3 days (Tuesday → Friday release). After
+  // that we count up to the next Tuesday release window. Anything past
+  // ~10 days means a full reporting cycle has been missed and positioning
+  // could be very different now.
+  const reportDateMs = new Date(cot.reportDate + 'T00:00:00Z').getTime()
+  const daysStale = reportDateMs > 0
+    ? Math.round((Date.now() - reportDateMs) / 86_400_000)
+    : 0
+  let stalenessLine = ''
+  if (daysStale >= 15) {
+    stalenessLine = `⚠ STALENESS WARNING: data is ${daysStale} days old. A full COT reporting cycle has passed — positioning may have shifted meaningfully. Use as historical context only, not actionable signal.\n`
+  } else if (daysStale >= 8) {
+    stalenessLine = `Staleness note: data is ${daysStale} days old (more than one COT cycle). Positioning may have shifted since this snapshot.\n`
+  } else if (daysStale >= 4) {
+    stalenessLine = `Note: data is ${daysStale} days old (within normal COT cadence).\n`
+  }
+
   return `=== SMART MONEY (FOREX) — CFTC COT POSITIONING ===
-Source: CFTC Commitments of Traders (Legacy Futures Only), report dated ${cot.reportDate}
+Source: CFTC Commitments of Traders (Legacy Futures Only), report dated ${cot.reportDate}${daysStale > 0 ? ` (${daysStale}d ago)` : ''}
 Contract: ${cot.contractName}
 ${pairFraming}
-
+${stalenessLine ? '\n' + stalenessLine : ''}
 NON-COMMERCIAL (speculative — hedge funds, CTAs, large specs):
   Long: ${cot.nonCommLong.toLocaleString()} contracts
   Short: ${cot.nonCommShort.toLocaleString()} contracts
@@ -332,6 +350,6 @@ COMMERCIAL (hedgers — corporates, banks):
 
 TOTAL OPEN INTEREST: ${cot.openInterest.toLocaleString()} contracts
 
-Caveats: COT is weekly (Tuesday positions, released Friday). Data may be 1-5 days stale.
+Caveats: COT is weekly (Tuesday positions, released Friday). Treat as positioning trend indicator, not real-time flow.
 DO NOT cite 13F filings, insider transactions, or stock-style institutional ownership — those don't exist for currency futures.`
 }

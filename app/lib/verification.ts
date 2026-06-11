@@ -1160,6 +1160,149 @@ function tryVerifyAgainstBundle(
     }
   }
 
+  // ── COT positioning claims (Phase 5, Jun 2026) ────────────────
+  // Match forex claims that cite CFTC COT positioning specifics:
+  //   "+48,866 contracts net long"
+  //   "+5.8% of open interest"
+  //   "+19,440 contracts week-over-week"
+  //   "moderately net long"
+  //   "non-commercial net long"
+  // For forex tickers, the bundle's smartMoneySection (assembled by
+  // buildForexSmartMoneyContext in data/forex-cot.ts) is the authoritative
+  // source. Pattern-match against it before sending to Google search.
+  //
+  // The bundle's smartMoneySection format (when COT is available) contains:
+  //   Long: 239,871 contracts
+  //   Short: 184,329 contracts
+  //   Net: +55,542 (+12.5% of OI) — Moderate net long
+  //   Week-over-week shift: ... (+19,440 contracts).
+  const cotSection = bundle.aiContext?.smartMoneySection ?? ''
+  const isCotClaim =
+    /\bnon[\s-]?commercial/i.test(c) ||
+    /\bcot\b/i.test(c) ||
+    /\bcommitments?\s+of\s+traders?/i.test(c) ||
+    (/\bnet\s+(long|short)/i.test(c) && /(contracts?|positioning|spec(s|ulators?|ulative))/i.test(c)) ||
+    /\bopen\s+interest/i.test(c) ||
+    /(week[-\s]?over[-\s]?week|wow)\b.*\bcontracts?/i.test(c)
+
+  if (isCotClaim && cotSection.includes('CFTC COT POSITIONING')) {
+    // Bundle has COT data — extract canonical numbers from the section
+    const netLine = cotSection.match(/Net:\s*([+-]?[\d,]+)\s*\(([+-]?[\d.]+)% of OI\)\s*—\s*([^\n]+)/i)
+    const wowLine = cotSection.match(/(?:Week[-\s]?over[-\s]?week\s+shift:[^(]*)\(([+-]?[\d,]+)\s+contracts?\)/i)
+    const longLine = cotSection.match(/Long:\s*([\d,]+)\s*contracts?/i)
+    const shortLine = cotSection.match(/Short:\s*([\d,]+)\s*contracts?/i)
+
+    const parseNum = (s: string): number => parseInt(s.replace(/,/g, ''), 10)
+    const bundleNet = netLine ? parseNum(netLine[1]) : null
+    const bundleNetPct = netLine ? parseFloat(netLine[2]) : null
+    const bundleIntensity = netLine ? netLine[3].trim().toLowerCase() : null
+    const bundleWow = wowLine ? parseNum(wowLine[1]) : null
+    const bundleLong = longLine ? parseNum(longLine[1]) : null
+    const bundleShort = shortLine ? parseNum(shortLine[1]) : null
+
+    // 1. Numeric net contracts claim
+    //    e.g. "+48,866 contracts net long"
+    const netNumMatch = claim.match(/([+-]?[\d,]+)\s*contracts?\s+net\s+(long|short)/i) ||
+                        claim.match(/net\s+(long|short)\s+(?:position\s+)?(?:of|at)?\s*([+-]?[\d,]+)\s*contracts?/i)
+    if (netNumMatch && bundleNet !== null) {
+      const claimedAbs = Math.abs(parseNum(netNumMatch[1].match(/[\d,]+/)?.[0] ?? '0') || parseNum(netNumMatch[2] ?? '0'))
+      const claimedSign = /short/i.test(netNumMatch[0]) ? -1 : 1
+      const bundleSign = bundleNet >= 0 ? 1 : -1
+      if (claimedSign === bundleSign && withinTolerance(claimedAbs, Math.abs(bundleNet), 0.05)) {
+        return {
+          matched: true,
+          verified: true,
+          sourceOutlet: 'CFTC Commitments of Traders',
+          reasoning: `Bundle COT confirms: net ${bundleNet > 0 ? 'long' : 'short'} ${Math.abs(bundleNet).toLocaleString()} contracts (claim: ${claimedAbs.toLocaleString()}, within 5%).`,
+        }
+      }
+    }
+
+    // 2. % of OI claim
+    //    e.g. "5.8% of open interest", "+5.8% of OI"
+    const pctMatch = claim.match(/([+-]?\d+(?:\.\d+)?)\s*%\s+of\s+(?:total\s+)?(?:open\s+interest|oi)/i)
+    if (pctMatch && bundleNetPct !== null) {
+      const claimedPct = parseFloat(pctMatch[1])
+      if (Math.sign(claimedPct) === Math.sign(bundleNetPct) || bundleNetPct === 0) {
+        if (withinTolerance(Math.abs(claimedPct), Math.abs(bundleNetPct), 0.10)) {
+          return {
+            matched: true,
+            verified: true,
+            sourceOutlet: 'CFTC Commitments of Traders',
+            reasoning: `Bundle COT confirms: net positioning = ${bundleNetPct > 0 ? '+' : ''}${bundleNetPct.toFixed(1)}% of OI (claim: ${claimedPct.toFixed(1)}%, within 10%).`,
+          }
+        }
+      }
+    }
+
+    // 3. WoW shift claim
+    //    e.g. "+19,440 contracts week-over-week"
+    const wowMatch = claim.match(/([+-]?[\d,]+)\s*contracts?\s+(?:week[-\s]?over[-\s]?week|wow)/i) ||
+                     claim.match(/(?:added|increased|reduced).*?([\d,]+)\s*contracts?/i)
+    if (wowMatch && bundleWow !== null) {
+      const claimedWow = parseNum(wowMatch[1])
+      if (withinTolerance(Math.abs(claimedWow), Math.abs(bundleWow), 0.10)) {
+        return {
+          matched: true,
+          verified: true,
+          sourceOutlet: 'CFTC Commitments of Traders',
+          reasoning: `Bundle COT confirms: WoW shift = ${bundleWow > 0 ? '+' : ''}${bundleWow.toLocaleString()} contracts (claim: ${claimedWow.toLocaleString()}, within 10%).`,
+        }
+      }
+    }
+
+    // 4. Magnitude/intensity claim
+    //    e.g. "moderate net long", "strong net short", "roughly neutral"
+    const intensityMatch = claim.match(/\b(strong|strongly|moderate|moderately|roughly\s+neutral|near\s+neutral)\b/i)
+    const directionMatch = claim.match(/\bnet\s+(long|short)\b/i)
+    if (intensityMatch && directionMatch && bundleIntensity) {
+      const claimedIntensity = intensityMatch[1].toLowerCase().replace(/ly$/, '')
+      const claimedDirection = directionMatch[1].toLowerCase()
+      // Check both intensity word and direction word appear in bundle's intensity label
+      const intensityOK = bundleIntensity.includes(claimedIntensity) ||
+                          (claimedIntensity === 'roughly neutral' && bundleIntensity.includes('neutral')) ||
+                          (claimedIntensity === 'near neutral' && bundleIntensity.includes('neutral'))
+      const directionOK = bundleIntensity.includes(claimedDirection) || bundleIntensity.includes('neutral')
+      if (intensityOK && directionOK) {
+        return {
+          matched: true,
+          verified: true,
+          sourceOutlet: 'CFTC Commitments of Traders',
+          reasoning: `Bundle COT confirms: positioning labeled "${bundleIntensity}" (claim: "${intensityMatch[1]} ${claimedDirection}").`,
+        }
+      }
+    }
+
+    // 5. Long/short contract counts
+    //    e.g. "239,871 long contracts", "184,329 shorts"
+    const longCountMatch = claim.match(/([\d,]+)\s*(?:long\s+)?contracts?(?:\s+long)?/i)
+    if (longCountMatch && bundleLong !== null && /\blong\b/i.test(c)) {
+      const claimedLong = parseNum(longCountMatch[1])
+      if (withinTolerance(claimedLong, bundleLong, 0.05) && claimedLong > 1000) {
+        return {
+          matched: true,
+          verified: true,
+          sourceOutlet: 'CFTC Commitments of Traders',
+          reasoning: `Bundle COT confirms: ${bundleLong.toLocaleString()} long contracts (claim: ${claimedLong.toLocaleString()}, within 5%).`,
+        }
+      }
+    }
+    const shortCountMatch = claim.match(/([\d,]+)\s*(?:short\s+)?contracts?(?:\s+short)?/i)
+    if (shortCountMatch && bundleShort !== null && /\bshort\b/i.test(c) && !/\bnet\s+short/i.test(c)) {
+      const claimedShort = parseNum(shortCountMatch[1])
+      if (withinTolerance(claimedShort, bundleShort, 0.05) && claimedShort > 1000) {
+        return {
+          matched: true,
+          verified: true,
+          sourceOutlet: 'CFTC Commitments of Traders',
+          reasoning: `Bundle COT confirms: ${bundleShort.toLocaleString()} short contracts (claim: ${claimedShort.toLocaleString()}, within 5%).`,
+        }
+      }
+    }
+    // COT pattern matched but specific number didn't fit any handler —
+    // fall through to Google Search to verify externally.
+  }
+
   // Bundle is silent on this claim category — fall through to Google Search.
   return { matched: false }
 }

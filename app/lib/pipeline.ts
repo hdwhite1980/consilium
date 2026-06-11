@@ -1963,7 +1963,50 @@ JSON ONLY (do NOT echo the research questions or answers — they are already kn
 // regardless of what persona the user selected.
 // ─────────────────────────────────────────────────────────────
 function buildJudgeSystemPrompt(bundle: SignalBundle): string {
-  return `You are the Judge of an elite AI stock council for ${bundle.ticker}. The council has three roles: News Scout, Lead Analyst, and Devil's Advocate. You hold NO prior position. You weigh technical and fundamental arguments EQUALLY regardless of what analytical lens the Lead Analyst used. Higher quality evidence wins regardless of type.
+  // Phase 4: detect imminent HIGH-impact macro events so we can instruct
+  // the Judge to return NEUTRAL. Code-level enforcement in sanitizeJudgeResult
+  // is the safety net; this prompt block is for explanation quality so the
+  // Judge writes natural NEUTRAL reasoning rather than the override looking
+  // like a post-hoc rewrite.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const econ = ((bundle.aiContext as any)?.econCalendar || '') as string
+  const imminentHighLines = econ.split('\n').filter(line =>
+    line.includes('[HIGH]') && (line.includes('TODAY') || line.includes('TOMORROW'))
+  )
+  const macroBinaryBlock = imminentHighLines.length > 0
+    ? `
+
+═════════════════════════════════════════════════════════════════════
+MANDATORY: IMMINENT BINARY MACRO EVENT
+═════════════════════════════════════════════════════════════════════
+
+The following HIGH-impact macro event(s) are scheduled within the next 24 hours:
+${imminentHighLines.join('\n')}
+
+A directional 1D/intraday verdict held through a binary macro event has the same
+structural problem as holding through earnings: the outcome of the event will
+dominate the price action regardless of the technical or fundamental thesis the
+Lead and Devil debated. Even a "correct" thesis can be wiped out by a single
+press conference sentence.
+
+YOUR VERDICT MUST BE: NEUTRAL
+
+In your summary, explicitly acknowledge:
+  1. The event by name (e.g., "ECB rate decision is tomorrow")
+  2. That the directional case (whichever side made it) may well be correct,
+     but cannot be acted on with confidence before the event resolves
+  3. The user should wait for post-event price discovery, then re-evaluate
+     using the directional thesis as a starting hypothesis
+
+This is NOT a judgment about which side won the debate — note that explicitly.
+The Lead may have built a strong case and the Devil may have honestly conceded.
+The verdict is NEUTRAL on TIMING grounds, not on thesis quality.
+
+═════════════════════════════════════════════════════════════════════
+`
+    : ''
+
+  return `You are the Judge of an elite AI stock council for ${bundle.ticker}. The council has three roles: News Scout, Lead Analyst, and Devil's Advocate. You hold NO prior position. You weigh technical and fundamental arguments EQUALLY regardless of what analytical lens the Lead Analyst used. Higher quality evidence wins regardless of type.${macroBinaryBlock}
 
 PROCEDURAL RULES:
 - YOUR JOB IS TO JUDGE THE DEBATE, NOT REDO THE ANALYSIS. The Lead Analyst already analyzed the data. The Devil's Advocate already cross-pressured. The News Scout already filtered news. Your job is to weigh which side built the stronger case --- not to re-evaluate the underlying signals from scratch. If you find yourself starting a sentence with "the RSI is..." or "the price is X% below the SMA200..." you've gone wrong. Cite the COUNCIL MEMBER, not the raw indicator. Example: "The Lead correctly identified the death cross, but the Devil's Advocate's research into insider buying at higher prices materially weakened the bearish case." That's judging. "RSI at 30 with MACD bearish suggests further downside" is re-analyzing --- don't do that.
@@ -3014,6 +3057,67 @@ function enforceTargetRealism(judge: JudgeResult, bundle: SignalBundle, timefram
   }
 }
 
+/**
+ * Detect imminent HIGH-impact macro events from the bundle's econCalendar.
+ *
+ * Mirrors the earnings tier system. Returns the highest-urgency tier found
+ * and the event name. Used by sanitizeJudgeResult to force NEUTRAL on Tier
+ * 0/1 (TODAY/TOMORROW) and to add risk warnings on Tier 2/3 (2-3 days out).
+ *
+ * Tier 0 (TODAY)    → mandatory NEUTRAL, no entry
+ * Tier 1 (TOMORROW) → mandatory NEUTRAL, no entry
+ * Tier 2 (in 2d)    → entry allowed, action plan force-prefixed with binary risk warning
+ * Tier 3 (in 3d)    → entry allowed, milder binary risk warning
+ *
+ * Why: forex pairs are dominated by central bank decisions (ECB, FOMC, BoE,
+ * BoJ, etc.) and major data releases (NFP, CPI). A 1D directional thesis
+ * held through a HIGH-impact event has the same binary structure as a stock
+ * thesis held through earnings. The earnings tier system already handles
+ * that for stocks; this extends the same discipline to macro events.
+ */
+function detectImminentMacroEvent(bundle: SignalBundle): { tier: 0 | 1 | 2 | 3; eventName: string } | null {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const econ = (bundle.aiContext as any)?.econCalendar as string | undefined
+  if (!econ || typeof econ !== 'string' || econ.length === 0) return null
+
+  // Lines look like:
+  //   • [HIGH] 2026-06-11 (TOMORROW): ECB Meeting (rate decision + press conference)
+  //   • [HIGH] 2026-06-17 (in 7d): FOMC Meeting (...)
+  // We only care about HIGH-impact events. Med/Low don't trigger overrides.
+  const lines = econ.split('\n').filter(line => line.includes('[HIGH]'))
+  if (lines.length === 0) return null
+
+  // Extract event name from after the colon. Robust to extra colons in the name.
+  const extractName = (line: string): string => {
+    const colonIdx = line.indexOf(':')
+    if (colonIdx === -1) return line.trim()
+    return line.substring(colonIdx + 1).trim()
+  }
+
+  // Check tiers in priority order — TODAY (0) > TOMORROW (1) > in 2d (2) > in 3d (3)
+  for (const line of lines) {
+    if (line.includes('(TODAY)')) {
+      return { tier: 0, eventName: extractName(line) }
+    }
+  }
+  for (const line of lines) {
+    if (line.includes('(TOMORROW)')) {
+      return { tier: 1, eventName: extractName(line) }
+    }
+  }
+  for (const line of lines) {
+    if (line.includes('(in 2d)')) {
+      return { tier: 2, eventName: extractName(line) }
+    }
+  }
+  for (const line of lines) {
+    if (line.includes('(in 3d)')) {
+      return { tier: 3, eventName: extractName(line) }
+    }
+  }
+  return null
+}
+
 function sanitizeJudgeResult(judge: JudgeResult, bundle: SignalBundle): JudgeResult {
   const currentPrice = bundle.technicals?.currentPrice ?? 0
   if (!currentPrice) return judge
@@ -3092,6 +3196,67 @@ function sanitizeJudgeResult(judge: JudgeResult, bundle: SignalBundle): JudgeRes
     // normal sanitization below, and apply the prefix at the end.
     // Cleanest: set the prefix flag and check at the end.
     judge = wasGuarded ? judge : { ...judge, actionPlan: guardTier23 + (judge.actionPlan ?? '') }
+  }
+
+  // ── Macro event tier enforcement (Phase 4) ────────────────────
+  // Same Tier 0-3 system as earnings, but for HIGH-impact macro events
+  // (FOMC, ECB, NFP, CPI, etc.) detected in the bundle's econCalendar.
+  //
+  // Why: forex pairs and macro-sensitive equities can have catastrophic
+  // binary outcomes from central bank decisions. A 1D directional thesis
+  // held through ECB tomorrow is the same structural bet as holding through
+  // earnings — should not be a directional verdict at all.
+  //
+  // Earnings tier checks above take precedence if both fire (rare). If
+  // earnings was Tier 0/1, the function has already returned; if Tier 2/3,
+  // both warnings can stack in the action plan, which is correct behavior
+  // (binary risk x2 should be more cautious, not less).
+  const macroEvent = detectImminentMacroEvent(bundle)
+  if (macroEvent && (macroEvent.tier === 0 || macroEvent.tier === 1)) {
+    const tierLabel = macroEvent.tier === 0 ? 'TODAY' : 'TOMORROW'
+    const blockedEntry = `No entry before ${macroEvent.eventName} (${tierLabel}) --- wait for post-event price discovery`
+    const blockedStop  = `N/A --- stop level depends on post-event price discovery`
+    const blockedTp    = `N/A --- target level depends on post-event price discovery`
+    const guard = `IMPORTANT: ${macroEvent.eventName} is ${tierLabel}. This is a binary macro catalyst — a directional position held through it has binary risk regardless of the technical/fundamental setup. Wait for post-event price action to establish a new trend, then re-evaluate using the directional thesis below as a starting hypothesis.\n\n`
+
+    const wasOverridden = (
+      judge.signal !== 'NEUTRAL' ||
+      extractPrice(judge.entryPrice) !== null ||
+      extractPrice(judge.stopLoss) !== null ||
+      extractPrice(judge.takeProfit) !== null
+    )
+    if (wasOverridden) {
+      console.warn(`[pipeline] macro tier ${tierLabel} (${macroEvent.eventName}) --- forcing NEUTRAL signal and blocking actionable fields`)
+    }
+
+    // Strip price-bearing sentences from action plan body to avoid
+    // contradicting the blocked structured fields.
+    const stripPriceSentencesMacro = (s: string): string => {
+      if (!s) return s
+      const parts = s.split(/(?<=[.!?])\s+/)
+      return parts.filter(p => !/\$\d{1,6}(?:\.\d{1,5})?/.test(p) && !/\b\d\.\d{4,5}\b/.test(p)).join(' ').trim()
+    }
+    const cleanedActionPlan = stripPriceSentencesMacro(judge.actionPlan ?? '')
+
+    return {
+      ...judge,
+      signal: 'NEUTRAL',                        // ← the key change: force NEUTRAL
+      entryPrice: blockedEntry,
+      stopLoss:   blockedStop,
+      takeProfit: blockedTp,
+      actionPlan: guard + cleanedActionPlan,
+    }
+  }
+
+  // Tier 2 + Tier 3 macro events: entry allowed, prefix warning
+  if (macroEvent && (macroEvent.tier === 2 || macroEvent.tier === 3)) {
+    const dayWord = macroEvent.tier === 2 ? '2 days' : '3 days'
+    const guardTier23Macro = `BINARY EVENT WARNING: ${macroEvent.eventName} is in ${dayWord}. Major macro events (central bank decisions, NFP, CPI) can override technical setups in a single tick. If you take this trade, use REDUCED POSITION SIZE (target ~50% of normal sizing) and define a clear pre-event invalidation level. Plan to either close the position before the event or accept full binary risk through the catalyst.\n\n`
+    const wasGuarded = (judge.actionPlan ?? '').includes(`${macroEvent.eventName} is in ${dayWord}`)
+    if (!wasGuarded) {
+      console.warn(`[pipeline] macro tier ${macroEvent.tier}d (${macroEvent.eventName}) --- prefixing action plan with binary-risk acknowledgment`)
+      judge = { ...judge, actionPlan: guardTier23Macro + (judge.actionPlan ?? '') }
+    }
   }
 
   if (signal === 'BULLISH') {
