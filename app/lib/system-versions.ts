@@ -59,6 +59,24 @@ export interface SystemVersion {
 
 export const SYSTEM_VERSIONS: SystemVersion[] = [
   {
+    number: 4,
+    label: 'Version 4',
+    subtitle: 'Real-time filings and forex done right',
+    releasedAt: '2026-06-11',
+    summary: 'The Council now reacts to SEC filings within minutes and analyzes currency pairs the way currency traders actually think.',
+    improvements: [
+      'SEC filings flow into every relevant verdict within minutes of being filed — insider trades, activist positions, executive changes, and material events that used to take hours or days to surface',
+      'Earnings claims are now verified against the company\'s own SEC filing, not a press release or news summary — when the Council says "beat by 12 cents", you can click through to the actual document',
+      'Forex pairs (EURUSD, GBPUSD, USDJPY, and others) finally get analysis built for currency markets — central bank schedules, speculative positioning data, and macro releases instead of equity-shaped metrics that didn\'t apply',
+      'New binary-event protection: when a major catalyst like a Fed meeting, ECB decision, or jobs report is within 24 to 48 hours, the Council automatically returns NEUTRAL and recommends waiting — the same discipline that already applies to stocks reporting earnings',
+      'Upcoming economic events now appear in every verdict where they matter, with their consensus expectations — so the Council can reason about what\'s already priced in versus what would be a surprise',
+      'Forex positioning data (the closest thing currency markets have to "smart money") now appears in forex verdicts with week-over-week shifts and crowded-position warnings',
+      'Devil\'s Advocate has separate playbooks for stocks, funds, and currencies — no more attacks on a forex pair\'s earnings or analyst ratings that don\'t exist',
+    ],
+    maturity: 'preview',
+    internalTags: ['sec-monitor-form4-13d-8k', 'earnings-8k-2.02-verification', 'forex-phases-1-through-8', 'mandatory-neutral-on-binary-catalyst', 'cot-positioning', 'forexfactory-consensus', 'devil-forex-branch'],
+  },
+  {
     number: 3,
     label: 'Version 3',
     subtitle: 'Smarter evidence gathering',
@@ -72,7 +90,7 @@ export const SYSTEM_VERSIONS: SystemVersion[] = [
       'Improved continuity — repeated analyses on the same ticker explore complementary angles instead of repeating',
       'Smarter framing of stocks that have already moved on a recent catalyst — distinguishes fresh setups from continuation trades and calibrates confidence accordingly',
     ],
-    maturity: 'preview',
+    maturity: 'mature',
     internalTags: ['bugs-5,7,9,10,11,12,13,14,15,16,17,18,19', 'first-multi-question-r2', 'post-catalyst-awareness'],
   },
   {
