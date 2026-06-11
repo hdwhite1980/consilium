@@ -115,6 +115,18 @@ const SESSION_LABELS: Record<SessionAnchor, string> = {
   weekend: 'Weekend',
 }
 
+// The set of selectable view tabs. Three are session anchors that filter
+// stocks/crypto stories by when their catalyst plays out; 'macro' is an
+// asset-class filter that shows all macro stories (FX, metals, energy, DXY)
+// regardless of session.
+type TabKey = SessionAnchor | 'macro'
+const TAB_LABELS: Record<TabKey, string> = {
+  today: 'Today',
+  tomorrow: 'Tomorrow',
+  weekend: 'Weekend',
+  macro: 'Macro',
+}
+
 const TIMEFRAME_LABELS: Record<Timeframe, string> = {
   '1D': '1-Day',
   '1W': '1-Week',
@@ -748,7 +760,7 @@ function SocialPanel({ signals, onScan, loading, onAnalyze }: {
 export default function ActiveStoriesPage() {
   const router = useRouter()
 
-  const [session, setSession] = useState<SessionAnchor>('today')
+  const [activeTab, setActiveTab] = useState<TabKey>('today')
   const [data, setData] = useState<ActiveStoriesPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -763,10 +775,17 @@ export default function ActiveStoriesPage() {
   const [socialLoading, setSocialLoading] = useState(false)
 
   // ─── Active Stories load
-  const load = useCallback(async (sess: SessionAnchor) => {
+  // The load function accepts a TabKey — three session anchors plus 'macro'.
+  // - session tabs: fetch ?session=<sess>  (stocks/crypto stories, filtered by API)
+  // - macro tab:    fetch ?assetType=forex (all FX/metals/oil/DXY stories,
+  //                  no session filter — macro shows everything in one view)
+  const load = useCallback(async (tab: TabKey) => {
     setError(null)
     try {
-      const res = await fetch(`/api/active-stories?session=${sess}`)
+      const url = tab === 'macro'
+        ? `/api/active-stories?assetType=forex`
+        : `/api/active-stories?session=${tab}`
+      const res = await fetch(url)
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         throw new Error(body.error ?? `HTTP ${res.status}`)
@@ -783,12 +802,12 @@ export default function ActiveStoriesPage() {
 
   useEffect(() => {
     setLoading(true)
-    load(session)
-  }, [session, load])
+    load(activeTab)
+  }, [activeTab, load])
 
   const refresh = () => {
     setRefreshing(true)
-    load(session)
+    load(activeTab)
   }
 
   // ─── Macro themes
@@ -952,19 +971,27 @@ export default function ActiveStoriesPage() {
           {/* ── Main column ─────────────────────────────────────── */}
           <main className="space-y-5 min-w-0">
 
-            {/* Session toggle */}
+            {/* Tab toggle: 3 session anchors + Macro asset-class tab */}
             <div
               className="flex items-center gap-1 p-1 rounded-xl border"
               style={{ background: 'var(--surface)', borderColor: 'var(--border)', width: 'fit-content' }}
             >
-              {(['today', 'tomorrow', 'weekend'] as SessionAnchor[]).map(sess => {
-                const isActive = session === sess
-                const count = data?.counts.bySession[sess] ?? 0
-                const Icon = sess === 'today' ? Sun : sess === 'tomorrow' ? Moon : Calendar
+              {(['today', 'tomorrow', 'weekend', 'macro'] as TabKey[]).map(tab => {
+                const isActive = activeTab === tab
+                // For session tabs, count = stories with that sessionAnchor (from API).
+                // For macro tab, count = total stories returned (already filtered to forex by API).
+                const count = tab === 'macro'
+                  ? (data?.counts.total ?? 0)
+                  : (data?.counts.bySession[tab as SessionAnchor] ?? 0)
+                const Icon =
+                  tab === 'today'    ? Sun :
+                  tab === 'tomorrow' ? Moon :
+                  tab === 'weekend'  ? Calendar :
+                                       Globe
                 return (
                   <button
-                    key={sess}
-                    onClick={() => setSession(sess)}
+                    key={tab}
+                    onClick={() => setActiveTab(tab)}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
                     style={{
                       background: isActive ? 'rgba(167,139,250,0.15)' : 'transparent',
@@ -973,7 +1000,7 @@ export default function ActiveStoriesPage() {
                     }}
                   >
                     <Icon size={12} />
-                    {SESSION_LABELS[sess]}
+                    {TAB_LABELS[tab]}
                     <span className="text-[10px] font-mono opacity-60">({count})</span>
                   </button>
                 )
@@ -1079,10 +1106,15 @@ export default function ActiveStoriesPage() {
                 style={{ borderColor: 'rgba(255,255,255,0.08)' }}
               >
                 <Radio size={20} className="mx-auto text-white/20 mb-2" />
-                <div className="text-xs text-white/45 font-semibold mb-1">No active stories for {SESSION_LABELS[session].toLowerCase()}</div>
+                <div className="text-xs text-white/45 font-semibold mb-1">
+                  {activeTab === 'macro'
+                    ? 'No active macro stories'
+                    : `No active stories for ${TAB_LABELS[activeTab].toLowerCase()}`}
+                </div>
                 <p className="text-[11px] text-white/30 leading-relaxed max-w-md mx-auto">
-                  The classifier runs 4× daily (6 AM / 12 PM / 5 PM / 9 PM ET).
-                  Stories appear here when fresh news creates actionable catalysts.
+                  {activeTab === 'macro'
+                    ? 'The macro tracker runs 3× daily at session opens (London 08:00 UTC, NY 13:30 UTC, Asia 22:00 UTC). Stories appear here when fresh news creates actionable catalysts across FX, metals, energy, or the dollar index.'
+                    : 'The classifier runs 4× daily (6 AM / 12 PM / 5 PM / 9 PM ET). Stories appear here when fresh news creates actionable catalysts.'}
                 </p>
                 {data.generatedAt && (
                   <p className="text-[10px] text-white/25 font-mono mt-3">
