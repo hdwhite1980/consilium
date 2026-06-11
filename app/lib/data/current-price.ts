@@ -22,7 +22,7 @@
 import { fetchCryptoPrice, isCryptoTicker } from './crypto'
 import { fetchForexRate, isForexTicker } from './forex'
 
-export type AssetType = 'stock' | 'crypto' | 'forex'
+export type AssetType = 'stock' | 'crypto' | 'forex' | 'macro'
 
 /** Result of a price lookup. Always returns an object — null fields signal missing data. */
 export interface PriceLookup {
@@ -30,7 +30,34 @@ export interface PriceLookup {
   assetType: AssetType
   price: number | null         // null if lookup failed
   fetchedAt: string            // ISO timestamp of the lookup
-  source: 'finnhub' | 'coingecko' | 'frankfurter' | 'cache' | 'failed'
+  source: 'finnhub' | 'coingecko' | 'frankfurter' | 'twelvedata' | 'cache' | 'failed'
+}
+
+// ─────────────────────────────────────────────────────────────
+// Macro universe — FX exotics, precious metals, energy, indices.
+// These route through TwelveData rather than Frankfurter (which has
+// patchy EM/commodity coverage) or Finnhub (which doesn't know
+// commodity symbols).
+//
+// Stored as a Set of internal canonical tickers; the TwelveData symbol
+// mapping happens inside fetchMacroPrice() below.
+// ─────────────────────────────────────────────────────────────
+
+const MACRO_TICKERS = new Set<string>([
+  // FX crosses not in FOREX_PAIRS (so they fall through to stock today)
+  'GBPCAD', 'EURAUD', 'EURCAD', 'GBPAUD', 'CADJPY', 'CHFJPY',
+  // EM majors not reliably in Frankfurter
+  'USDTRY', 'USDCNH', 'USDHKD', 'USDBRL',
+  // Precious metals (spot, USD-quoted)
+  'XAUUSD', 'XAGUSD', 'XPTUSD', 'XPDUSD',
+  // Energy
+  'WTIUSD', 'BRENTUSD', 'NATGASUSD',
+  // Dollar index
+  'DXY',
+])
+
+export function isMacroTicker(ticker: string): boolean {
+  return MACRO_TICKERS.has((ticker ?? '').toUpperCase().replace(/[^A-Z]/g, ''))
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -42,14 +69,23 @@ export interface PriceLookup {
  * declaration if it conflicts with what the lookup tables know.
  *
  * Order of precedence:
- *   1. Explicit non-stock declaration ('crypto'/'forex') is trusted IF it lines up
- *      with a known mapping. If it doesn't, fall through to detection.
- *   2. isForexTicker() — if it's a known forex pair, use forex
- *   3. isCryptoTicker() — if it's a known crypto symbol, use crypto
- *   4. Otherwise fall back to stock
+ *   1. Macro ticker check first — catches FX exotics, metals, oil, DXY
+ *      that need TwelveData routing
+ *   2. Explicit non-stock declaration ('crypto'/'forex') is trusted IF
+ *      it lines up with a known mapping
+ *   3. isForexTicker() — known FX pair → forex (Frankfurter)
+ *   4. isCryptoTicker() — known crypto → crypto
+ *   5. Otherwise fall back to stock
+ *
+ * Note: 'macro' declaration from the LLM is treated equivalent to 'forex'
+ * for routing purposes — both end up here and re-checked against MACRO_TICKERS.
  */
 export function resolveAssetType(ticker: string, declared?: string | null): AssetType {
   const upper = (ticker ?? '').toUpperCase()
+
+  // Macro first — metals/oil/DXY/EM exotics need TwelveData regardless of
+  // what was declared
+  if (isMacroTicker(upper)) return 'macro'
 
   // Trust the declaration only if it matches a known mapping
   if (declared === 'crypto' && isCryptoTicker(upper)) return 'crypto'
@@ -76,6 +112,122 @@ interface FinnhubQuote {
   d: number   // change
   dp: number  // % change
   t: number   // unix timestamp
+}
+
+// ─────────────────────────────────────────────────────────────
+// Macro spot price (TwelveData)
+//
+// Covers FX exotics, precious metals, energy, indices. TwelveData's
+// /price endpoint returns a single number per symbol; it accepts pairs
+// in either slash or compact form, and has its own conventions for
+// commodities (USOIL/UKOIL historically, WTI/USD newer).
+//
+// Symbol mapping: internal canonical ticker → TwelveData symbol.
+// For oil/gas we provide a fallback in case TwelveData's primary symbol
+// has changed.
+// ─────────────────────────────────────────────────────────────
+
+interface TwelveDataPriceResponse {
+  price?: string | number     // TwelveData returns price as STRING usually
+  symbol?: string
+  status?: string             // 'error' when symbol not found / rate-limited
+  code?: number               // numeric error code on failures
+  message?: string            // error description
+}
+
+// Primary TwelveData symbol for each canonical macro ticker.
+const TD_SYMBOL: Record<string, string> = {
+  // FX exotics — slash form
+  GBPCAD: 'GBP/CAD',
+  EURAUD: 'EUR/AUD',
+  EURCAD: 'EUR/CAD',
+  GBPAUD: 'GBP/AUD',
+  CADJPY: 'CAD/JPY',
+  CHFJPY: 'CHF/JPY',
+  USDTRY: 'USD/TRY',
+  USDCNH: 'USD/CNH',
+  USDHKD: 'USD/HKD',
+  USDBRL: 'USD/BRL',
+  // Metals — slash form
+  XAUUSD: 'XAU/USD',
+  XAGUSD: 'XAG/USD',
+  XPTUSD: 'XPT/USD',
+  XPDUSD: 'XPD/USD',
+  // Energy — TwelveData uses "WTI/USD" and "BRENT/USD" on Basic tier;
+  // older docs / some tiers used USOIL/UKOIL. Fallback handled below.
+  WTIUSD: 'WTI/USD',
+  BRENTUSD: 'BRENT/USD',
+  NATGASUSD: 'NG/USD',
+  // Dollar index
+  DXY: 'DXY',
+}
+
+// Fallback symbols to try if the primary returns an error.
+// (Empty array means no fallback — primary is canonical.)
+const TD_FALLBACK_SYMBOLS: Record<string, string[]> = {
+  WTIUSD: ['USOIL', 'WTI'],
+  BRENTUSD: ['UKOIL', 'BRENT'],
+  NATGASUSD: ['NG', 'XNG/USD'],
+}
+
+async function tryTwelveDataSymbol(symbol: string, apiKey: string): Promise<number | null> {
+  try {
+    const url = `https://api.twelvedata.com/price?symbol=${encodeURIComponent(symbol)}&apikey=${apiKey}`
+    // Use AbortController for a hard timeout; Next's revalidate also helps cache
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 6_000)
+    let res: Response
+    try {
+      res = await fetch(url, { signal: ctrl.signal, next: { revalidate: 60 } })
+    } finally {
+      clearTimeout(timer)
+    }
+    if (!res.ok) {
+      console.warn(`[current-price] TwelveData returned ${res.status} for symbol="${symbol}"`)
+      return null
+    }
+    const body = await res.json() as TwelveDataPriceResponse
+    if (body.status === 'error' || body.code) {
+      console.warn(`[current-price] TwelveData error for symbol="${symbol}": ${body.message ?? body.code}`)
+      return null
+    }
+    if (body.price === undefined || body.price === null) return null
+    const n = typeof body.price === 'string' ? parseFloat(body.price) : body.price
+    if (!Number.isFinite(n) || n <= 0) return null
+    return n
+  } catch (e) {
+    console.warn(`[current-price] TwelveData fetch failed for symbol="${symbol}":`, e instanceof Error ? e.message : e)
+    return null
+  }
+}
+
+async function fetchMacroPrice(ticker: string): Promise<number | null> {
+  const apiKey = process.env.TWELVE_DATA_API_KEY ?? process.env.TWELVEDATA_API_KEY
+  if (!apiKey) {
+    console.warn('[current-price] TWELVE_DATA_API_KEY not set — cannot fetch macro price for', ticker)
+    return null
+  }
+  const upper = ticker.toUpperCase()
+  const primary = TD_SYMBOL[upper]
+  if (!primary) {
+    console.warn(`[current-price] no TwelveData symbol mapping for ${ticker}`)
+    return null
+  }
+
+  // Try primary symbol first
+  const p1 = await tryTwelveDataSymbol(primary, apiKey)
+  if (p1 !== null) return p1
+
+  // Try fallback symbols if defined
+  const fallbacks = TD_FALLBACK_SYMBOLS[upper] ?? []
+  for (const fb of fallbacks) {
+    const pf = await tryTwelveDataSymbol(fb, apiKey)
+    if (pf !== null) {
+      console.log(`[current-price] ${ticker} resolved via fallback symbol "${fb}"`)
+      return pf
+    }
+  }
+  return null
 }
 
 async function fetchStockPrice(ticker: string): Promise<number | null> {
@@ -164,6 +316,9 @@ export async function fetchCurrentPrice(
   } else if (assetType === 'forex') {
     const p = await fetchForexRate(upper)
     if (p > 0) { price = p; source = 'frankfurter' }
+  } else if (assetType === 'macro') {
+    const p = await fetchMacroPrice(upper)
+    if (p !== null && p > 0) { price = p; source = 'twelvedata' }
   } else {
     const p = await fetchStockPrice(upper)
     if (p !== null && p > 0) { price = p; source = 'finnhub' }
