@@ -28,6 +28,8 @@ export const runtime = 'nodejs'
 export const maxDuration = 15  // bumped from 10 to accommodate price fetches
 
 const VALID_SESSIONS: SessionAnchor[] = ['today', 'tomorrow', 'weekend']
+const VALID_ASSET_TYPES = ['stock', 'crypto', 'forex'] as const
+type AssetTypeFilter = typeof VALID_ASSET_TYPES[number]
 
 function getAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
@@ -49,12 +51,33 @@ export async function GET(req: NextRequest) {
     const sessionParam = (url.searchParams.get('session') ?? 'today') as SessionAnchor
     const session: SessionAnchor = VALID_SESSIONS.includes(sessionParam) ? sessionParam : 'today'
 
+    // Parse assetType param (default: stock).
+    // The forex Active Stories page passes ?assetType=forex to get only
+    // forex pairs + the forex run metadata. Equity callers either omit
+    // the param (defaults to stock) or pass ?assetType=stock — both behave
+    // identically and match pre-forex behavior for backward compatibility.
+    const assetTypeParam = url.searchParams.get('assetType') as AssetTypeFilter | null
+    const assetType: AssetTypeFilter =
+      assetTypeParam && VALID_ASSET_TYPES.includes(assetTypeParam) ? assetTypeParam : 'stock'
+
+    // Meta row id: 1 = equity (stocks/crypto), 2 = forex.
+    // Forex cron persists its own metadata to id=2 so it doesn't clobber
+    // the equity dashboard's marketTheme/marketStatus.
+    const metaId = assetType === 'forex' ? 2 : 1
+
     // Load filtered stories + latest run metadata in parallel
     const admin = getAdmin()
-    const [stories, metaRes] = await Promise.all([
+    const [storiesAll, metaRes] = await Promise.all([
       loadStoriesBySession(session),
-      admin.from('active_stories_meta').select('*').eq('id', 1).maybeSingle(),
+      admin.from('active_stories_meta').select('*').eq('id', metaId).maybeSingle(),
     ])
+
+    // Filter stories by asset type. Forex = forex only; stock = everything
+    // that isn't forex (preserves pre-existing behavior where /api/active-stories
+    // returned stocks AND crypto in the same payload).
+    const stories = assetType === 'forex'
+      ? storiesAll.filter(s => (s.assetType as string) === 'forex')
+      : storiesAll.filter(s => (s.assetType as string) !== 'forex')
 
     // Bug 23: enrich with live current price (60s cache server-side, so repeated
     // page loads within a minute don't re-hit external APIs)

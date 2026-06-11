@@ -1,0 +1,39 @@
+# .github/workflows/active-stories-forex-cron.yml
+#
+# Forex-specific Active Stories cron. Runs 3× daily aligned to
+# forex session opens:
+#   - 08:00 UTC → London open
+#   - 13:30 UTC → NY open / morning US data releases
+#   - 22:00 UTC → Asia open
+#
+# Different cadence from equity cron (4× daily at NYSE-aligned times)
+# because forex is 24/5 and session opens drive different flow.
+name: active-stories-forex-cron
+
+on:
+  schedule:
+    - cron: '0 8 * * 1-5'    # 08:00 UTC, Mon-Fri (London open)
+    - cron: '30 13 * * 1-5'  # 13:30 UTC, Mon-Fri (NY open)
+    - cron: '0 22 * * 0-4'   # 22:00 UTC, Sun-Thu (Asia open — Sun for Mon Asia)
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit active-stories-forex cron endpoint
+        run: |
+          set -e
+          response=$(curl -s -w "\n%{http_code}" \
+            -X GET \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_BASE_URL }}/api/cron/active-stories-forex" \
+            --max-time 300)
+          status=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "Status: $status"
+          echo "Body: $body"
+          if [ "$status" -ne 200 ]; then
+            echo "::error::Forex cron endpoint returned non-200 status: $status"
+            exit 1
+          fi
