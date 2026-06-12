@@ -22,12 +22,21 @@
 import { fetchCryptoPrice, isCryptoTicker } from './crypto'
 import { fetchForexRate, isForexTicker } from './forex'
 
-export type AssetType = 'stock' | 'crypto' | 'forex' | 'macro'
+// Public asset type — what gets stored in the DB and what callers see.
+// Macro tickers (metals, oil, FX exotics, DXY) are stored as 'forex'
+// at the data layer; they're an INTERNAL routing distinction only.
+export type AssetType = 'stock' | 'crypto' | 'forex'
+
+// Internal routing type — adds 'macro' so we can pick the TwelveData
+// branch without exposing it to the DB layer (which has a CHECK constraint
+// limiting asset_type to stock/crypto/forex). 'macro' is never returned
+// from any exported function.
+type InternalAssetType = AssetType | 'macro'
 
 /** Result of a price lookup. Always returns an object — null fields signal missing data. */
 export interface PriceLookup {
   ticker: string
-  assetType: AssetType
+  assetType: AssetType         // always one of the three public values
   price: number | null         // null if lookup failed
   fetchedAt: string            // ISO timestamp of the lookup
   source: 'finnhub' | 'coingecko' | 'frankfurter' | 'twelvedata' | 'cache' | 'failed'
@@ -68,24 +77,25 @@ export function isMacroTicker(ticker: string): boolean {
  * Resolve the actual asset type for a ticker, ignoring the LLM's
  * declaration if it conflicts with what the lookup tables know.
  *
+ * This is the PUBLIC resolver — it returns one of the three public
+ * AssetType values. Macro tickers (XAUUSD, WTIUSD, DXY, etc.) report
+ * as 'forex' here because that's how they're stored at the DB layer.
+ *
  * Order of precedence:
- *   1. Macro ticker check first — catches FX exotics, metals, oil, DXY
- *      that need TwelveData routing
+ *   1. Macro tickers → 'forex' (publicly), routed to TwelveData internally
  *   2. Explicit non-stock declaration ('crypto'/'forex') is trusted IF
  *      it lines up with a known mapping
- *   3. isForexTicker() — known FX pair → forex (Frankfurter)
+ *   3. isForexTicker() — known FX pair → forex
  *   4. isCryptoTicker() — known crypto → crypto
  *   5. Otherwise fall back to stock
- *
- * Note: 'macro' declaration from the LLM is treated equivalent to 'forex'
- * for routing purposes — both end up here and re-checked against MACRO_TICKERS.
  */
 export function resolveAssetType(ticker: string, declared?: string | null): AssetType {
   const upper = (ticker ?? '').toUpperCase()
 
-  // Macro first — metals/oil/DXY/EM exotics need TwelveData regardless of
-  // what was declared
-  if (isMacroTicker(upper)) return 'macro'
+  // Macro tickers report publicly as 'forex' so they pass the DB constraint.
+  // Internal routing (which actually fetches via TwelveData) lives in
+  // resolveAssetTypeForRouting below.
+  if (isMacroTicker(upper)) return 'forex'
 
   // Trust the declaration only if it matches a known mapping
   if (declared === 'crypto' && isCryptoTicker(upper)) return 'crypto'
@@ -96,6 +106,24 @@ export function resolveAssetType(ticker: string, declared?: string | null): Asse
   if (isCryptoTicker(upper)) return 'crypto'
 
   // Fall back to stock — Finnhub is permissive with ticker symbols
+  return 'stock'
+}
+
+/**
+ * INTERNAL routing resolver — adds 'macro' so we can pick the TwelveData
+ * branch. Never exported. Callers see the public resolveAssetType.
+ */
+function resolveAssetTypeForRouting(ticker: string, declared?: string | null): InternalAssetType {
+  const upper = (ticker ?? '').toUpperCase()
+
+  if (isMacroTicker(upper)) return 'macro'
+
+  if (declared === 'crypto' && isCryptoTicker(upper)) return 'crypto'
+  if (declared === 'forex' && isForexTicker(upper)) return 'forex'
+
+  if (isForexTicker(upper)) return 'forex'
+  if (isCryptoTicker(upper)) return 'crypto'
+
   return 'stock'
 }
 
@@ -265,11 +293,11 @@ interface CacheEntry {
 const priceCache = new Map<string, CacheEntry>()
 const CACHE_TTL_MS = 60_000
 
-function cacheKey(ticker: string, assetType: AssetType): string {
+function cacheKey(ticker: string, assetType: InternalAssetType): string {
   return `${assetType}:${ticker.toUpperCase()}`
 }
 
-function getCached(ticker: string, assetType: AssetType): number | null {
+function getCached(ticker: string, assetType: InternalAssetType): number | null {
   const entry = priceCache.get(cacheKey(ticker, assetType))
   if (!entry) return null
   if (Date.now() - entry.fetchedAt > CACHE_TTL_MS) {
@@ -279,7 +307,7 @@ function getCached(ticker: string, assetType: AssetType): number | null {
   return entry.price
 }
 
-function setCached(ticker: string, assetType: AssetType, price: number): void {
+function setCached(ticker: string, assetType: InternalAssetType, price: number): void {
   priceCache.set(cacheKey(ticker, assetType), { price, fetchedAt: Date.now() })
 }
 
@@ -298,25 +326,29 @@ export async function fetchCurrentPrice(
   declaredAssetType?: string | null,
 ): Promise<PriceLookup> {
   const upper = (ticker ?? '').toUpperCase()
-  const assetType = resolveAssetType(upper, declaredAssetType)
+  // Internal type drives routing — distinguishes macro from forex so we can
+  // pick the TwelveData branch. The PUBLIC assetType returned in the
+  // PriceLookup collapses macro → forex for DB-layer compatibility.
+  const routingType = resolveAssetTypeForRouting(upper, declaredAssetType)
+  const publicAssetType: AssetType = routingType === 'macro' ? 'forex' : routingType
   const fetchedAt = new Date().toISOString()
 
-  // Cache hit?
-  const cached = getCached(upper, assetType)
+  // Cache hit? Key by routing type so macro and forex don't collide.
+  const cached = getCached(upper, routingType)
   if (cached !== null) {
-    return { ticker: upper, assetType, price: cached, fetchedAt, source: 'cache' }
+    return { ticker: upper, assetType: publicAssetType, price: cached, fetchedAt, source: 'cache' }
   }
 
   let price: number | null = null
   let source: PriceLookup['source'] = 'failed'
 
-  if (assetType === 'crypto') {
+  if (routingType === 'crypto') {
     const p = await fetchCryptoPrice(upper)
     if (p > 0) { price = p; source = 'coingecko' }
-  } else if (assetType === 'forex') {
+  } else if (routingType === 'forex') {
     const p = await fetchForexRate(upper)
     if (p > 0) { price = p; source = 'frankfurter' }
-  } else if (assetType === 'macro') {
+  } else if (routingType === 'macro') {
     const p = await fetchMacroPrice(upper)
     if (p !== null && p > 0) { price = p; source = 'twelvedata' }
   } else {
@@ -325,10 +357,10 @@ export async function fetchCurrentPrice(
   }
 
   if (price !== null) {
-    setCached(upper, assetType, price)
+    setCached(upper, routingType, price)
   }
 
-  return { ticker: upper, assetType, price, fetchedAt, source }
+  return { ticker: upper, assetType: publicAssetType, price, fetchedAt, source }
 }
 
 /**
