@@ -43,7 +43,7 @@ interface AdminUsersResponse {
   totalCount: number
 }
 
-const TIER_OPTIONS = ['free', 'trial', 'basic', 'pro', 'premium', 'comp']
+const TIER_OPTIONS = ['standard', 'pro', 'trial', 'comp']
 const STATUS_OPTIONS = ['trialing', 'active', 'canceled', 'past_due', 'incomplete', 'paused']
 const TRIAL_PRESETS = [7, 14, 30, 60, 90]
 

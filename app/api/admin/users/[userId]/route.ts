@@ -27,8 +27,9 @@ import { requireAdmin, getSupabaseAdmin } from '@/app/lib/admin/admin-auth'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// Allowed tier values — restrict to known set to prevent accidental garbage
-const ALLOWED_TIERS = new Set(['free', 'trial', 'basic', 'pro', 'premium', 'comp'])
+// Allowed tier values — must match the subscriptions_tier_check CHECK constraint
+// in the DB. Update both in sync if changing the schema.
+const ALLOWED_TIERS = new Set(['standard', 'pro', 'trial', 'comp'])
 // Allowed subscription status values (Stripe-compatible)
 const ALLOWED_STATUSES = new Set(['trialing', 'active', 'canceled', 'past_due', 'incomplete', 'paused'])
 
@@ -184,7 +185,7 @@ export async function PATCH(
         } else {
           const { error } = await admin
             .from('subscriptions')
-            .insert({ user_id: userId, status, tier: 'free', is_exempt: false })
+            .insert({ user_id: userId, status, tier: 'standard', is_exempt: false })
           if (error) throw error
         }
         console.log(`[admin/users PATCH] set_status user=${userId} status=${status} by=${guard.user?.email}`)
@@ -195,7 +196,24 @@ export async function PATCH(
         return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 })
     }
   } catch (e) {
-    console.error('[admin/users PATCH] action failed:', e instanceof Error ? e.message : e)
-    return NextResponse.json({ error: e instanceof Error ? e.message : 'Server error' }, { status: 500 })
+    // Supabase errors come back as objects with .message/.code/.details/.hint
+    // rather than Error instances. Defensively extract whatever shape exists.
+    // Since this route is admin-only, surfacing detail is safe (helps debugging).
+    let errorDetail: string
+    if (e instanceof Error) {
+      errorDetail = e.message
+    } else if (e && typeof e === 'object') {
+      const obj = e as Record<string, unknown>
+      errorDetail = [
+        obj.message,
+        obj.details,
+        obj.hint,
+        obj.code ? `code=${obj.code}` : null,
+      ].filter(Boolean).join(' | ') || JSON.stringify(obj)
+    } else {
+      errorDetail = String(e)
+    }
+    console.error('[admin/users PATCH] action failed:', errorDetail, e)
+    return NextResponse.json({ error: errorDetail }, { status: 500 })
   }
 }
