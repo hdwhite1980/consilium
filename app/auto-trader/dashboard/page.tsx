@@ -1,0 +1,785 @@
+'use client'
+// =============================================================
+// app/auto-trader/dashboard/page.tsx
+//
+// Auto-trader monitoring dashboard. Shows live state, today's KPIs,
+// open positions (joined Alpaca + our overlay), recent activity,
+// skip reason breakdown, 30-day track record.
+//
+// Auto-refresh every 30s + manual refresh button.
+// =============================================================
+
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { useRouter } from 'next/navigation'
+import { createClient } from '@/app/lib/auth/client'
+import {
+  Activity, AlertTriangle, RefreshCw, CheckCircle, XCircle, Pause,
+  TrendingUp, TrendingDown, Zap, Target, Shield, DollarSign, Clock,
+  ChevronDown, ChevronUp, Settings, ExternalLink,
+} from 'lucide-react'
+
+// ─────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────
+
+interface DashboardSettings {
+  enabled: boolean
+  mode: 'paper' | 'live'
+  halted: boolean
+  haltReason: string | null
+  haltedAt: string | null
+  riskPerTradePct: number
+  maxPositionPct: number
+  maxDailyLossPct: number
+  maxConcurrentPos: number
+  maxConsecLosses: number
+  minGrade: 'A' | 'B' | 'C'
+  scannerEnabled: boolean
+  scannerMaxConcurrent: number
+  scannerMinComposite: number
+  activeMgmtEnabled: boolean
+  reevalDrawdownPct: number
+  allowTightenStop: boolean
+  allowEarlyExit: boolean
+  allowAddPosition: boolean
+}
+
+interface DashboardBroker {
+  connected: boolean
+  broker?: string
+  mode?: string
+  keyIdMasked?: string
+  accountStatus?: string | null
+  accountEquity?: number | null
+  accountCash?: number | null
+  lastValidatedAt?: string | null
+}
+
+interface DashboardKpis {
+  total: number
+  placed: number
+  skipped: number
+  rejected: number
+  errors: number
+  closedWin: number
+  closedLoss: number
+  closedBe: number
+  realizedPnl: number
+  winRate: number | null
+  bySignalSource: { council: number; scanner: number; reeval: number }
+}
+
+interface Summary30d {
+  totalClosed: number
+  wins: number
+  losses: number
+  breakEvens: number
+  winRate: number | null
+  totalPnl: number
+  avgWin: number | null
+  avgLoss: number | null
+  bySignalSource: { council: number; scanner: number }
+}
+
+interface RecentAttempt {
+  id: string
+  created_at: string
+  ticker: string
+  signal_source: string | null
+  council_signal: string | null
+  outcome: string
+  side: string | null
+  qty: number | null
+  entry_price_est: number | null
+  stop_price: number | null
+  target_price: number | null
+  filled_avg_price: number | null
+  realized_pnl: number | null
+  reject_reason: string | null
+  mode: string | null
+  broker_order_id: string | null
+  reeval_count: number | null
+  last_reeval_at: string | null
+}
+
+interface SkipBreakdownRow {
+  category: string
+  count: number
+  sample: string
+}
+
+interface DashboardData {
+  ok: boolean
+  notSetup?: boolean
+  message?: string
+  settings?: DashboardSettings
+  broker?: DashboardBroker
+  todayKpis?: DashboardKpis
+  summary30d?: Summary30d
+  recent?: RecentAttempt[]
+  skipBreakdown?: SkipBreakdownRow[]
+}
+
+interface PositionRow {
+  ticker: string
+  side: 'long' | 'short'
+  qty: number
+  avgEntry: number
+  currentPrice: number
+  marketValue: number
+  unrealizedPl: number
+  unrealizedPlPct: number
+  attemptId?: string
+  ourStop?: number
+  ourTarget?: number
+  signalSource?: string
+  councilSignal?: string
+  reevalCount?: number
+  lastReevalAt?: string
+  filledAt?: string
+}
+
+interface PositionsData {
+  ok: boolean
+  positions: PositionRow[]
+  account: {
+    status: string
+    equity: number
+    cash: number
+    buyingPower: number
+  } | null
+  message?: string
+}
+
+const REFRESH_INTERVAL_MS = 30_000
+
+// ─────────────────────────────────────────────────────────────
+// Page component
+// ─────────────────────────────────────────────────────────────
+
+export default function AutoTraderDashboardPage() {
+  const router = useRouter()
+  const [authChecked, setAuthChecked] = useState(false)
+  const [data, setData] = useState<DashboardData | null>(null)
+  const [positions, setPositions] = useState<PositionsData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const [clearingHalt, setClearingHalt] = useState(false)
+  const [expandedSection, setExpandedSection] = useState<string | null>('positions')
+  const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Auth check
+  useEffect(() => {
+    let active = true
+    ;(async () => {
+      const supa = createClient()
+      const { data: { user } } = await supa.auth.getUser()
+      if (!active) return
+      if (!user) {
+        router.push('/')
+        return
+      }
+      setAuthChecked(true)
+    })()
+    return () => { active = false }
+  }, [router])
+
+  // Fetch data
+  const fetchAll = useCallback(async () => {
+    try {
+      setError(null)
+      const [dashRes, posRes] = await Promise.all([
+        fetch('/api/auto-trader/dashboard', { cache: 'no-store' }),
+        fetch('/api/auto-trader/positions', { cache: 'no-store' }),
+      ])
+
+      if (!dashRes.ok) {
+        const errBody = await dashRes.json().catch(() => ({})) as { error?: string }
+        throw new Error(errBody.error || `dashboard returned ${dashRes.status}`)
+      }
+      if (!posRes.ok) {
+        const errBody = await posRes.json().catch(() => ({})) as { error?: string }
+        throw new Error(errBody.error || `positions returned ${posRes.status}`)
+      }
+
+      const dashData = await dashRes.json() as DashboardData
+      const posData = await posRes.json() as PositionsData
+      setData(dashData)
+      setPositions(posData)
+      setLastUpdated(new Date())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!authChecked) return
+    void fetchAll()
+    refreshTimerRef.current = setInterval(() => { void fetchAll() }, REFRESH_INTERVAL_MS)
+    return () => {
+      if (refreshTimerRef.current) clearInterval(refreshTimerRef.current)
+    }
+  }, [authChecked, fetchAll])
+
+  const clearHalt = async () => {
+    if (!confirm('Clear the halt? Auto-trading will resume on the next worker run if enabled.')) return
+    setClearingHalt(true)
+    try {
+      const res = await fetch('/api/auto-trader/clear-halt', { method: 'POST' })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as { error?: string }
+        alert(`Failed: ${err.error ?? res.status}`)
+      } else {
+        await fetchAll()
+      }
+    } catch (e) {
+      alert(`Error: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setClearingHalt(false)
+    }
+  }
+
+  if (!authChecked) {
+    return <div style={{ padding: 40, color: 'var(--text)' }}>Checking authentication...</div>
+  }
+
+  if (loading && !data) {
+    return (
+      <div style={{ padding: 40, background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh' }}>
+        <div className="flex items-center gap-2">
+          <RefreshCw size={16} className="animate-spin" />
+          <span>Loading auto-trader dashboard...</span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ background: 'var(--bg)', color: 'var(--text)', minHeight: '100vh', padding: '20px 16px 40px' }}>
+      <div style={{ maxWidth: 1200, margin: '0 auto' }}>
+
+        {/* Header */}
+        <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+          <div className="flex items-center gap-3">
+            <Zap size={24} style={{ color: '#fbbf24' }} />
+            <div>
+              <h1 className="text-xl font-bold" style={{ color: 'var(--text)' }}>Auto Trader Dashboard</h1>
+              <p className="text-xs" style={{ color: 'var(--text3)' }}>
+                {lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : 'Loading...'} · Auto-refresh 30s
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => { void fetchAll() }}
+              disabled={loading}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all hover:opacity-80"
+              style={{
+                background: 'var(--surface)',
+                color: 'var(--text)',
+                border: '1px solid var(--border)',
+              }}>
+              <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+              Refresh
+            </button>
+            <button
+              onClick={() => router.push('/settings/auto-trading')}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all hover:opacity-80"
+              style={{
+                background: 'var(--surface)',
+                color: 'var(--text)',
+                border: '1px solid var(--border)',
+              }}>
+              <Settings size={12} />
+              Settings
+            </button>
+          </div>
+        </div>
+
+        {/* Error banner */}
+        {error && (
+          <div className="mb-4 p-3 rounded-lg flex items-start gap-2"
+            style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: '#f87171' }}>
+            <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+            <div className="flex-1">
+              <div className="text-xs font-semibold mb-0.5">Error loading data</div>
+              <div className="text-xs opacity-80">{error}</div>
+            </div>
+          </div>
+        )}
+
+        {/* Not configured */}
+        {data?.notSetup && (
+          <div className="mb-4 p-4 rounded-lg"
+            style={{ background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)', color: '#fbbf24' }}>
+            <div className="text-sm font-semibold mb-1">Auto-trader not configured</div>
+            <div className="text-xs opacity-80 mb-3">{data.message}</div>
+            <button
+              onClick={() => router.push('/settings/auto-trading')}
+              className="px-3 py-2 rounded-lg text-xs font-semibold"
+              style={{ background: '#fbbf24', color: '#000' }}>
+              Go to Settings →
+            </button>
+          </div>
+        )}
+
+        {data?.settings && (
+          <>
+            {/* Status banner */}
+            <StatusBanner
+              settings={data.settings}
+              broker={data.broker}
+              onClearHalt={clearHalt}
+              clearingHalt={clearingHalt}
+            />
+
+            {/* KPI row */}
+            {data.todayKpis && (
+              <KpiRow kpis={data.todayKpis} mode={data.settings.mode} />
+            )}
+
+            {/* Account snapshot */}
+            {positions?.account && (
+              <AccountSnapshot account={positions.account} mode={data.settings.mode} />
+            )}
+
+            {/* Open positions */}
+            <Section
+              title="Open Positions"
+              icon={<TrendingUp size={14} />}
+              expanded={expandedSection === 'positions'}
+              onToggle={() => setExpandedSection(expandedSection === 'positions' ? null : 'positions')}
+              count={positions?.positions?.length ?? 0}
+              color="#34d399">
+              <OpenPositionsTable positions={positions?.positions ?? []} />
+            </Section>
+
+            {/* Recent activity */}
+            <Section
+              title="Recent Activity"
+              icon={<Activity size={14} />}
+              expanded={expandedSection === 'recent'}
+              onToggle={() => setExpandedSection(expandedSection === 'recent' ? null : 'recent')}
+              count={data.recent?.length ?? 0}
+              color="#60a5fa">
+              <RecentTable rows={data.recent ?? []} />
+            </Section>
+
+            {/* Skip breakdown */}
+            <Section
+              title="Skipped Trades (7d)"
+              icon={<Pause size={14} />}
+              expanded={expandedSection === 'skips'}
+              onToggle={() => setExpandedSection(expandedSection === 'skips' ? null : 'skips')}
+              count={data.skipBreakdown?.reduce((s, r) => s + r.count, 0) ?? 0}
+              color="#a78bfa">
+              <SkipBreakdownTable rows={data.skipBreakdown ?? []} />
+            </Section>
+
+            {/* 30-day track record */}
+            {data.summary30d && (
+              <Section
+                title="30-Day Track Record"
+                icon={<Target size={14} />}
+                expanded={expandedSection === 'track'}
+                onToggle={() => setExpandedSection(expandedSection === 'track' ? null : 'track')}
+                count={data.summary30d.totalClosed}
+                color="#fbbf24">
+                <TrackRecord30 summary={data.summary30d} />
+              </Section>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+// Subcomponents
+// ─────────────────────────────────────────────────────────────
+
+function StatusBanner({
+  settings, broker, onClearHalt, clearingHalt,
+}: {
+  settings: DashboardSettings
+  broker?: DashboardBroker
+  onClearHalt: () => void
+  clearingHalt: boolean
+}) {
+  // Three states: halted (red), disabled (gray), running (green)
+  const state = settings.halted ? 'halted'
+              : !settings.enabled ? 'disabled'
+              : 'running'
+  const stateConfig = {
+    halted: { bg: 'rgba(248,113,113,0.08)', border: 'rgba(248,113,113,0.2)', color: '#f87171', label: 'HALTED', icon: <XCircle size={14} /> },
+    disabled: { bg: 'rgba(156,163,175,0.08)', border: 'rgba(156,163,175,0.2)', color: '#9ca3af', label: 'DISABLED', icon: <Pause size={14} /> },
+    running: { bg: 'rgba(52,211,153,0.08)', border: 'rgba(52,211,153,0.2)', color: '#34d399', label: 'RUNNING', icon: <CheckCircle size={14} /> },
+  }[state]
+
+  return (
+    <div className="mb-4 p-4 rounded-xl"
+      style={{ background: stateConfig.bg, border: `1px solid ${stateConfig.border}` }}>
+      <div className="flex items-start justify-between flex-wrap gap-3">
+        <div className="flex items-start gap-3">
+          <div style={{ color: stateConfig.color }} className="mt-0.5">{stateConfig.icon}</div>
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-sm font-bold" style={{ color: stateConfig.color }}>{stateConfig.label}</span>
+              <span className="text-xs px-2 py-0.5 rounded-md font-mono"
+                style={{
+                  background: settings.mode === 'live' ? 'rgba(248,113,113,0.15)' : 'rgba(96,165,250,0.15)',
+                  color: settings.mode === 'live' ? '#f87171' : '#60a5fa',
+                }}>
+                {settings.mode.toUpperCase()}
+              </span>
+            </div>
+            {settings.halted && settings.haltReason && (
+              <div className="text-xs mb-1" style={{ color: 'var(--text2)' }}>
+                <span className="font-semibold">Reason:</span> {settings.haltReason}
+                {settings.haltedAt && (
+                  <span className="opacity-60"> · {new Date(settings.haltedAt).toLocaleString()}</span>
+                )}
+              </div>
+            )}
+            <div className="text-xs flex flex-wrap gap-x-3 gap-y-1" style={{ color: 'var(--text3)' }}>
+              <span>Risk: <strong>{(settings.riskPerTradePct * 100).toFixed(2)}%/trade</strong></span>
+              <span>Daily loss limit: <strong>{(settings.maxDailyLossPct * 100).toFixed(1)}%</strong></span>
+              <span>Max positions: <strong>{settings.maxConcurrentPos}</strong></span>
+              <span>Grade floor: <strong>{settings.minGrade}</strong></span>
+              <span>Scanner: <strong style={{ color: settings.scannerEnabled ? '#34d399' : '#9ca3af' }}>{settings.scannerEnabled ? 'ON' : 'OFF'}</strong></span>
+              <span>Active mgmt: <strong style={{ color: settings.activeMgmtEnabled ? '#34d399' : '#9ca3af' }}>{settings.activeMgmtEnabled ? 'ON' : 'OFF'}</strong></span>
+            </div>
+            {broker?.connected && (
+              <div className="text-xs mt-1" style={{ color: 'var(--text3)' }}>
+                Broker: <strong>{broker.broker} {broker.mode}</strong> · Key <code>{broker.keyIdMasked}</code> · Status <strong>{broker.accountStatus ?? '?'}</strong>
+              </div>
+            )}
+          </div>
+        </div>
+        {settings.halted && (
+          <button
+            onClick={onClearHalt}
+            disabled={clearingHalt}
+            className="px-3 py-2 rounded-lg text-xs font-semibold transition-all hover:opacity-80"
+            style={{ background: '#f87171', color: '#000' }}>
+            {clearingHalt ? 'Clearing...' : 'Clear Halt'}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function KpiRow({ kpis, mode }: { kpis: DashboardKpis; mode: 'paper' | 'live' }) {
+  const pnlColor = kpis.realizedPnl > 0 ? '#34d399' : kpis.realizedPnl < 0 ? '#f87171' : 'var(--text3)'
+  const cards: Array<{ label: string; value: string; sub?: string; color: string }> = [
+    { label: 'Attempts today', value: kpis.total.toString(), sub: `${kpis.placed} placed · ${kpis.skipped} skipped`, color: '#60a5fa' },
+    { label: 'Closed today', value: (kpis.closedWin + kpis.closedLoss + kpis.closedBe).toString(), sub: `${kpis.closedWin}W · ${kpis.closedLoss}L · ${kpis.closedBe}BE`, color: '#a78bfa' },
+    { label: 'Realized P&L', value: `${kpis.realizedPnl >= 0 ? '+' : ''}$${kpis.realizedPnl.toFixed(2)}`, sub: mode === 'paper' ? 'paper money' : 'live', color: pnlColor },
+    { label: 'Win rate today', value: kpis.winRate !== null ? `${kpis.winRate.toFixed(0)}%` : '—', sub: kpis.winRate !== null ? `of ${kpis.closedWin + kpis.closedLoss + kpis.closedBe} closed` : 'no closed trades', color: '#fbbf24' },
+    { label: 'Errors today', value: kpis.errors.toString(), sub: kpis.errors > 0 ? 'check logs' : 'clean', color: kpis.errors > 0 ? '#f87171' : '#34d399' },
+  ]
+
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
+      {cards.map(c => (
+        <div key={c.label} className="p-3 rounded-lg"
+          style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+          <div className="text-xs opacity-60 mb-1" style={{ color: 'var(--text3)' }}>{c.label}</div>
+          <div className="text-lg font-bold" style={{ color: c.color }}>{c.value}</div>
+          {c.sub && <div className="text-xs opacity-70 mt-0.5" style={{ color: 'var(--text3)' }}>{c.sub}</div>}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function AccountSnapshot({ account, mode }: { account: { status: string; equity: number; cash: number; buyingPower: number }; mode: string }) {
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
+      <div className="p-3 rounded-lg" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <div className="text-xs opacity-60 mb-1" style={{ color: 'var(--text3)' }}>Status</div>
+        <div className="text-sm font-bold" style={{ color: account.status === 'ACTIVE' ? '#34d399' : '#f87171' }}>
+          {account.status}
+        </div>
+        <div className="text-xs opacity-70 mt-0.5" style={{ color: 'var(--text3)' }}>{mode}</div>
+      </div>
+      <div className="p-3 rounded-lg" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <div className="text-xs opacity-60 mb-1" style={{ color: 'var(--text3)' }}>Equity</div>
+        <div className="text-sm font-bold" style={{ color: 'var(--text)' }}>${account.equity.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+      </div>
+      <div className="p-3 rounded-lg" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <div className="text-xs opacity-60 mb-1" style={{ color: 'var(--text3)' }}>Cash</div>
+        <div className="text-sm font-bold" style={{ color: 'var(--text)' }}>${account.cash.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+      </div>
+      <div className="p-3 rounded-lg" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <div className="text-xs opacity-60 mb-1" style={{ color: 'var(--text3)' }}>Buying power</div>
+        <div className="text-sm font-bold" style={{ color: 'var(--text)' }}>${account.buyingPower.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+      </div>
+    </div>
+  )
+}
+
+function Section({
+  title, icon, expanded, onToggle, count, color, children,
+}: {
+  title: string
+  icon: React.ReactNode
+  expanded: boolean
+  onToggle: () => void
+  count: number
+  color: string
+  children: React.ReactNode
+}) {
+  return (
+    <div className="mb-3 rounded-xl overflow-hidden"
+      style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between p-3 hover:opacity-90"
+        style={{ background: 'transparent', color: 'var(--text)' }}>
+        <div className="flex items-center gap-2">
+          <div style={{ color }}>{icon}</div>
+          <span className="text-sm font-semibold">{title}</span>
+          <span className="text-xs px-2 py-0.5 rounded-md font-mono"
+            style={{ background: `${color}20`, color }}>
+            {count}
+          </span>
+        </div>
+        {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+      </button>
+      {expanded && (
+        <div style={{ borderTop: '1px solid var(--border)' }}>
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function OpenPositionsTable({ positions }: { positions: PositionRow[] }) {
+  if (positions.length === 0) {
+    return <div className="p-6 text-center text-xs" style={{ color: 'var(--text3)' }}>No open positions.</div>
+  }
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table className="w-full text-xs">
+        <thead>
+          <tr style={{ borderBottom: '1px solid var(--border)' }}>
+            <Th>Ticker</Th>
+            <Th>Side</Th>
+            <Th>Qty</Th>
+            <Th>Entry</Th>
+            <Th>Current</Th>
+            <Th>Stop</Th>
+            <Th>Target</Th>
+            <Th>P/L</Th>
+            <Th>P/L %</Th>
+            <Th>Source</Th>
+            <Th>Reeval</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {positions.map(p => (
+            <tr key={p.ticker} style={{ borderBottom: '1px solid var(--border)' }}>
+              <Td><strong>{p.ticker}</strong></Td>
+              <Td>
+                <span style={{ color: p.side === 'long' ? '#34d399' : '#f87171' }}>
+                  {p.side.toUpperCase()}
+                </span>
+              </Td>
+              <Td>{p.qty}</Td>
+              <Td>${p.avgEntry.toFixed(2)}</Td>
+              <Td>${p.currentPrice.toFixed(2)}</Td>
+              <Td>{p.ourStop !== undefined ? `$${p.ourStop.toFixed(2)}` : '—'}</Td>
+              <Td>{p.ourTarget !== undefined ? `$${p.ourTarget.toFixed(2)}` : '—'}</Td>
+              <Td style={{ color: p.unrealizedPl > 0 ? '#34d399' : p.unrealizedPl < 0 ? '#f87171' : 'var(--text3)' }}>
+                {p.unrealizedPl >= 0 ? '+' : ''}${p.unrealizedPl.toFixed(2)}
+              </Td>
+              <Td style={{ color: p.unrealizedPlPct > 0 ? '#34d399' : p.unrealizedPlPct < 0 ? '#f87171' : 'var(--text3)' }}>
+                {p.unrealizedPlPct >= 0 ? '+' : ''}{p.unrealizedPlPct.toFixed(2)}%
+              </Td>
+              <Td>
+                {p.signalSource && (
+                  <span className="text-xs px-1.5 py-0.5 rounded font-mono"
+                    style={{
+                      background: p.signalSource === 'council' ? 'rgba(167,139,250,0.15)' : 'rgba(251,191,36,0.15)',
+                      color: p.signalSource === 'council' ? '#a78bfa' : '#fbbf24',
+                    }}>
+                    {p.signalSource}
+                  </span>
+                )}
+              </Td>
+              <Td>
+                {p.reevalCount !== undefined && p.reevalCount > 0
+                  ? <span title={p.lastReevalAt ?? ''}>{p.reevalCount}×</span>
+                  : <span style={{ color: 'var(--text3)' }}>—</span>}
+              </Td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function RecentTable({ rows }: { rows: RecentAttempt[] }) {
+  if (rows.length === 0) {
+    return <div className="p-6 text-center text-xs" style={{ color: 'var(--text3)' }}>No recent activity.</div>
+  }
+  return (
+    <div style={{ overflowX: 'auto', maxHeight: 600 }}>
+      <table className="w-full text-xs">
+        <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)' }}>
+          <tr style={{ borderBottom: '1px solid var(--border)' }}>
+            <Th>Time</Th>
+            <Th>Ticker</Th>
+            <Th>Source</Th>
+            <Th>Outcome</Th>
+            <Th>Side</Th>
+            <Th>Qty</Th>
+            <Th>Entry</Th>
+            <Th>P&L</Th>
+            <Th>Reason</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.id} style={{ borderBottom: '1px solid var(--border)' }}>
+              <Td>
+                <span style={{ color: 'var(--text3)' }}>
+                  {new Date(r.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </Td>
+              <Td><strong>{r.ticker}</strong></Td>
+              <Td>
+                {r.signal_source && (
+                  <span className="text-xs px-1.5 py-0.5 rounded font-mono"
+                    style={{
+                      background: r.signal_source === 'council' ? 'rgba(167,139,250,0.15)'
+                                : r.signal_source === 'scanner' ? 'rgba(251,191,36,0.15)'
+                                : 'rgba(96,165,250,0.15)',
+                      color: r.signal_source === 'council' ? '#a78bfa'
+                           : r.signal_source === 'scanner' ? '#fbbf24'
+                           : '#60a5fa',
+                    }}>
+                    {r.signal_source}
+                  </span>
+                )}
+              </Td>
+              <Td><OutcomeBadge outcome={r.outcome} /></Td>
+              <Td>{r.side ?? '—'}</Td>
+              <Td>{r.qty ?? '—'}</Td>
+              <Td>{r.entry_price_est !== null ? `$${Number(r.entry_price_est).toFixed(2)}` : '—'}</Td>
+              <Td style={{ color: (r.realized_pnl ?? 0) > 0 ? '#34d399' : (r.realized_pnl ?? 0) < 0 ? '#f87171' : 'var(--text3)' }}>
+                {r.realized_pnl !== null ? `${Number(r.realized_pnl) >= 0 ? '+' : ''}$${Number(r.realized_pnl).toFixed(2)}` : '—'}
+              </Td>
+              <Td>
+                <span style={{ color: 'var(--text3)' }} title={r.reject_reason ?? ''}>
+                  {r.reject_reason ? (r.reject_reason.length > 60 ? r.reject_reason.slice(0, 60) + '…' : r.reject_reason) : '—'}
+                </span>
+              </Td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function SkipBreakdownTable({ rows }: { rows: SkipBreakdownRow[] }) {
+  if (rows.length === 0) {
+    return <div className="p-6 text-center text-xs" style={{ color: 'var(--text3)' }}>No skipped trades in last 7 days.</div>
+  }
+  const total = rows.reduce((s, r) => s + r.count, 0)
+  return (
+    <div style={{ padding: '8px 12px' }}>
+      {rows.map(r => (
+        <div key={r.category} className="flex items-center justify-between py-2"
+          style={{ borderBottom: '1px solid var(--border)' }}>
+          <div className="flex-1 min-w-0 pr-3">
+            <div className="text-xs font-semibold" style={{ color: 'var(--text)' }}>{r.category}</div>
+            <div className="text-xs mt-0.5 opacity-60" style={{ color: 'var(--text3)' }}>
+              e.g. {r.sample.length > 100 ? r.sample.slice(0, 100) + '…' : r.sample}
+            </div>
+          </div>
+          <div className="text-right shrink-0">
+            <div className="text-sm font-bold" style={{ color: '#a78bfa' }}>{r.count}</div>
+            <div className="text-xs opacity-60" style={{ color: 'var(--text3)' }}>{((r.count / total) * 100).toFixed(0)}%</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function TrackRecord30({ summary }: { summary: Summary30d }) {
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-3">
+      <Stat label="Closed trades" value={summary.totalClosed.toString()} sub={`${summary.bySignalSource.council} council · ${summary.bySignalSource.scanner} scanner`} />
+      <Stat
+        label="Win rate"
+        value={summary.winRate !== null ? `${summary.winRate.toFixed(0)}%` : '—'}
+        sub={`${summary.wins}W · ${summary.losses}L · ${summary.breakEvens}BE`}
+        color={summary.winRate !== null && summary.winRate >= 50 ? '#34d399' : summary.winRate !== null ? '#f87171' : 'var(--text3)'}
+      />
+      <Stat
+        label="Total P&L"
+        value={`${summary.totalPnl >= 0 ? '+' : ''}$${summary.totalPnl.toFixed(2)}`}
+        sub="30 days"
+        color={summary.totalPnl > 0 ? '#34d399' : summary.totalPnl < 0 ? '#f87171' : 'var(--text3)'}
+      />
+      <Stat
+        label="Avg win / avg loss"
+        value={
+          summary.avgWin !== null && summary.avgLoss !== null
+            ? `+$${summary.avgWin.toFixed(0)} / $${summary.avgLoss.toFixed(0)}`
+            : '—'
+        }
+        sub="per trade"
+      />
+    </div>
+  )
+}
+
+function Stat({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
+  return (
+    <div className="p-2 rounded-lg" style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}>
+      <div className="text-xs opacity-60 mb-1" style={{ color: 'var(--text3)' }}>{label}</div>
+      <div className="text-sm font-bold" style={{ color: color ?? 'var(--text)' }}>{value}</div>
+      {sub && <div className="text-xs opacity-70 mt-0.5" style={{ color: 'var(--text3)' }}>{sub}</div>}
+    </div>
+  )
+}
+
+function OutcomeBadge({ outcome }: { outcome: string }) {
+  const config = (() => {
+    if (outcome === 'placed' || outcome === 'filled' || outcome === 'partial_fill') return { bg: 'rgba(52,211,153,0.15)', color: '#34d399' }
+    if (outcome === 'skipped') return { bg: 'rgba(167,139,250,0.15)', color: '#a78bfa' }
+    if (outcome === 'rejected' || outcome === 'error') return { bg: 'rgba(248,113,113,0.15)', color: '#f87171' }
+    if (outcome === 'cancelled') return { bg: 'rgba(156,163,175,0.15)', color: '#9ca3af' }
+    if (outcome === 'closed_win') return { bg: 'rgba(52,211,153,0.2)', color: '#34d399' }
+    if (outcome === 'closed_loss') return { bg: 'rgba(248,113,113,0.2)', color: '#f87171' }
+    if (outcome === 'closed_be') return { bg: 'rgba(156,163,175,0.2)', color: '#9ca3af' }
+    if (outcome.startsWith('reeval_')) return { bg: 'rgba(96,165,250,0.15)', color: '#60a5fa' }
+    return { bg: 'var(--surface)', color: 'var(--text)' }
+  })()
+  return (
+    <span className="text-xs px-1.5 py-0.5 rounded font-mono"
+      style={{ background: config.bg, color: config.color }}>
+      {outcome}
+    </span>
+  )
+}
+
+function Th({ children }: { children: React.ReactNode }) {
+  return <th className="text-left p-2 font-semibold opacity-70" style={{ color: 'var(--text3)' }}>{children}</th>
+}
+
+function Td({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return <td className="p-2" style={style}>{children}</td>
+}
