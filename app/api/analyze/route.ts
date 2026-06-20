@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import { buildSignalBundle, type SignalBundle } from '@/app/lib/aggregator'
+import { buildFuturesAwareBundle } from '@/app/lib/pipeline/futures-router'
 import { technicalsToPayload } from '@/app/lib/signals/technicals'
 import { runPipeline } from '@/app/lib/pipeline'
 import { runSocialScout } from '@/app/lib/social-scout'
@@ -372,9 +373,24 @@ export async function POST(req: NextRequest) {
         dlog(`LIVE pipeline starting (cache miss or stale)`)
         send('status', { stage: 'building_bundle', message: 'Gathering market data and computing signals...' })
 
-        const bundle = await buildSignalBundle(symbol, tf, (step) =>
-          send('status', { stage: 'building_bundle', message: step })
-        )
+        const bundle = await (async (): Promise<SignalBundle> => {
+          if (preGate.ok && preGate.assetClass === 'futures' && preGate.futuresRoot) {
+            send('status', { stage: 'building_bundle', message: `Building futures bundle for ${preGate.futuresRoot}...` })
+            const futuresBundle = await buildFuturesAwareBundle(
+              preGate.futuresRoot,
+              symbol,
+              tf,
+              (step) => send('status', { stage: 'building_bundle', message: step })
+            )
+            if (!futuresBundle) {
+              throw new Error(`Could not build futures bundle for ${symbol} — underlying data layer returned empty`)
+            }
+            return futuresBundle
+          }
+          return buildSignalBundle(symbol, tf, (step) =>
+            send('status', { stage: 'building_bundle', message: step })
+          )
+        })()
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ;(bundle as any).persona = persona ?? 'balanced'
 

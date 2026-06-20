@@ -35,6 +35,12 @@ import { runAggregatorScout, formatAggregatorForPrompt, type AggregatorScoutResu
 import { evaluateTrade, type TraderVerdict } from './trader'
 import { callGrok } from './grok'
 import { verifyFactualClaims, type VerificationResult } from './verification'
+import {
+  buildFuturesLeadSystemPrompt,
+  buildFuturesDevilSystemPrompt,
+  buildFuturesJudgeSystemPrompt,
+} from './pipeline/futures-prompts'
+import { isFuturesBundle } from './pipeline/futures-router'
 
 function getAnthropic() { return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) }
 function getOpenAI()    { return new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) }
@@ -505,6 +511,9 @@ const GROUNDING_RULE = `CRITICAL --- GROUNDING RULE FOR SPECIFIC CITATIONS: When
  * This is the WHO the Lead is --- their analytical identity.
  */
 function buildLeadSystemPrompt(bundle: SignalBundle, lens: 'technical' | 'fundamental' | 'balanced', overrides: CatalystOverrides): string {
+  if (isFuturesBundle(bundle)) {
+    return buildFuturesLeadSystemPrompt(bundle.futuresMeta)
+  }
   if (isForexTicker(bundle.ticker)) {
     return `You are the Lead Analyst in an elite AI council analyzing ${bundle.ticker}. This is a FOREX currency pair. Analysis focuses on: central bank policy divergence, macroeconomic data (inflation, employment, GDP), interest rate differentials, technical price action, and global risk sentiment. There are no earnings, P/E, or insider data for forex. Be decisive. Support every claim with specific data. Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data --- only use what you have. CRITICAL: Absence of data is not evidence. If a metric, disclosure, or detail is unavailable, that is a research limitation --- not a directional argument. Never use phrases like "the lack of X suggests Y" or "the absence of Z validates" to support a directional case. If you cannot find data confirming a hypothesis, the honest answer is "cannot confirm" --- not "therefore the opposite is true." This rule applies even when research returns SOME information but misses a specific sub-question. Phrases like "lacks management explanation," "no commentary on X was provided," or "the data does not address Y" are research gaps, NOT findings. Do not use partial-null answers as red flags or confirmations. If a sub-question wasn't answered, ignore that gap and reason from the parts that WERE answered. IMPORTANT: If price data shows period change >±200%, treat as potential data error.
 
@@ -564,6 +573,9 @@ ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsCo
  *   Balanced Lead -> Devil attacks on whichever dimension is weakest (original behavior)
  */
 function buildDevilSystemPrompt(bundle: SignalBundle, lens: 'technical' | 'fundamental' | 'balanced'): string {
+  if (isFuturesBundle(bundle)) {
+    return buildFuturesDevilSystemPrompt(bundle.futuresMeta)
+  }
   // Forex pairs get a dedicated cross-pressure framework. Currency markets
   // don't have earnings, P/E ratios, insider transactions, analyst targets,
   // dilution risk, or 13F filings — so the equity-lens Devil prompts below
@@ -2003,6 +2015,9 @@ JSON ONLY (do NOT echo the research questions or answers — they are already kn
 // regardless of what persona the user selected.
 // ─────────────────────────────────────────────────────────────
 function buildJudgeSystemPrompt(bundle: SignalBundle): string {
+  if (isFuturesBundle(bundle)) {
+    return buildFuturesJudgeSystemPrompt(bundle.futuresMeta)
+  }
   // Phase 4: detect imminent HIGH-impact macro events so we can instruct
   // the Judge to return NEUTRAL. Code-level enforcement in sanitizeJudgeResult
   // is the safety net; this prompt block is for explanation quality so the
@@ -2306,6 +2321,11 @@ async function runJudgeGemini(
  * because calibration is about confidence math, not analytical framing.
  */
 function buildJudgeReviewerSystemPrompt(bundle: SignalBundle): string {
+  if (isFuturesBundle(bundle)) {
+    // For v1, futures Reviewer reuses the Judge prompt. A dedicated
+    // futures-aware Reviewer with its own 5-rule checklist comes in Layer 6+.
+    return buildFuturesJudgeSystemPrompt(bundle.futuresMeta)
+  }
   return `You are the Judge Reviewer in an elite AI stock council for ${bundle.ticker}. The Judge has produced a DRAFT verdict. Your job is to audit the draft against a 5-rule checklist BEFORE the verdict ships to the user.
 
 You are NOT re-arguing the directional case. You are NOT proposing alternative verdicts. You ONLY check for specific procedural and structural issues per these 5 rules:
