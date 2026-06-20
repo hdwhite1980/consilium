@@ -74,12 +74,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         const { runScan } = await import('@/app/lib/scanner-engine')
         const scan = await runScan({
           universe: 'sp500',
-          filter: { minPrice: 5, minVolume: 500_000 },
+          filter: { priceMin: 5 },
           mode: 'bullish',
           limit: 50,
           newsBoost: true,
           scanType: 'fast_movers',
-          horizon: 'short' as never, // engine accepts the literal; cast for our local import
+          horizon: 'day',
           priceCeiling: 1_000,
         })
         result.picksConsidered = scan.picks.length
