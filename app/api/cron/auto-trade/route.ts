@@ -283,7 +283,7 @@ async function logTradeAttempt(
   const admin = await getSupabaseAdmin()
   await admin.from('trade_attempts').insert({
     user_id: settings.userId,
-    verdict_log_id: null,                // verdict_log.id is bigint; no FK in our schema
+    verdict_log_id: verdict.id,           // link back to verdict_log row for thesis-check
     analysis_id: null,
     ticker: verdict.ticker,
     council_signal: verdict.signal,
