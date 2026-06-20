@@ -704,8 +704,10 @@ function HomeInner() {
       icon: <Briefcase size={12} />,
       color: '#34d399',
       items: [
-        { label: 'Portfolio', icon: <Briefcase size={12} />,     path: '/portfolio', color: '#34d399' },
-        { label: 'Watchlist', icon: <ClipboardList size={12} />, path: '/watchlist', color: '#60a5fa' },
+        { label: 'Portfolio',         icon: <Briefcase size={12} />,     path: '/portfolio',             color: '#34d399' },
+        { label: 'Watchlist',         icon: <ClipboardList size={12} />, path: '/watchlist',             color: '#60a5fa' },
+        { label: 'Auto Trader',       icon: <Zap size={12} />,           path: '/auto-trader/dashboard', color: '#fbbf24' },
+        { label: 'Auto Trader Setup', icon: <Shield size={12} />,        path: '/settings/auto-trading', color: '#a78bfa' },
       ],
     },
   ]

@@ -246,8 +246,8 @@ async function callAnthropic(prompt: string): Promise<LLMResult> {
     messages: [{ role: 'user', content: prompt }],
   })
   const text = res.content
-    .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
-    .map(b => b.text)
+    .filter(b => b.type === 'text')
+    .map(b => (b as { text: string }).text)
     .join('\n')
 
   // Strip markdown fences if present (defensive)
