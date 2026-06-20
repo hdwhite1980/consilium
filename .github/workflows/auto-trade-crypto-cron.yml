@@ -1,0 +1,29 @@
+name: auto-trade-crypto-cron
+on:
+  schedule:
+    # Crypto is 24/7 — run every 10 min around the clock
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit auto-trade-crypto endpoint
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -e
+          response=$(curl -s -L -w "\n%{http_code}" \
+            -X GET \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$APP_BASE_URL/api/cron/auto-trade-crypto" \
+            --max-time 70)
+          status=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "Status: $status"
+          echo "Body: $body"
+          if [ "$status" -ne 200 ]; then
+            echo "::error::auto-trade-crypto returned non-200 status: $status"
+            exit 1
+          fi
