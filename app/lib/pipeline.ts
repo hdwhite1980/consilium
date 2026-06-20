@@ -1555,7 +1555,7 @@ export async function runClaude(bundle: SignalBundle, gemini: GeminiResult, soci
   const citationReqs = buildCitationRequirements(lens)
 
   const msg = await getAnthropic().messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 1000,
     system: systemPrompt,
     messages: [{
@@ -1849,7 +1849,7 @@ export async function runRebuttal(
   const forexGuidance = buildForexQuestionGuidance(bundle)
 
   const researchAsk = await getAnthropic().messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 250,
     system: `You are the Lead Analyst in a stock debate about ${bundle.ticker}. You can send TWO research questions to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before you respond to the Devil's Advocate. Choose two questions that target the most important data points to resolve the Devil's strongest challenges. The two questions should explore DIFFERENT angles --- do not ask variations of the same thing. Return them as a numbered list, ONE QUESTION PER LINE: "1. <question>\\n2. <question>". Nothing else.${forexGuidance}`,
     messages: [{
@@ -1880,7 +1880,7 @@ What TWO questions should the News Scout research right now to help you respond?
   ).join('\n\n')
 
   const msg = await getAnthropic().messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 1500,
     system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research from TWO of your questions. Use both responses. Defend your position where data supports you, concede where the Devil's Advocate is correct. Intellectual honesty wins with the Judge --- a thoughtful concession beats a dishonest defense.`,
     messages: [{
