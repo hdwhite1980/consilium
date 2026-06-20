@@ -1,8 +1,16 @@
 // =============================================================
 // app/api/user/broker-credentials/route.ts
 //
-// Multi-broker credential management with broker-specific
-// validation. Alpaca + OANDA implemented. Tradovate placeholder.
+// Multi-broker credential management. Now wires Tradovate validation
+// alongside Alpaca and OANDA.
+//
+// Tradovate body shape (uses tradovate object instead of keyId/secret):
+//   { broker: 'tradovate', mode, assetClass: 'futures',
+//     keyId: <username>,
+//     secret: JSON.stringify({ password, appId, appVersion, cid, sec }) }
+//
+// We keep the simple keyId/secret shape so the UI doesn't have to know.
+// The secret carries the bundle as JSON; the validator unpacks it.
 // =============================================================
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -16,6 +24,7 @@ import {
 } from '@/app/lib/trading/credentials'
 import { validateAlpacaCredential } from '@/app/lib/trading/alpaca-validate'
 import { validateOandaCredential } from '@/app/lib/trading/oanda-validate'
+import { validateTradovateCredential } from '@/app/lib/trading/tradovate-validate'
 import type { AssetClass } from '@/app/lib/trading/settings'
 
 export const runtime = 'nodejs'
@@ -75,11 +84,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (!VALID_ASSET_CLASSES.includes(assetClass)) {
     return NextResponse.json({ error: `assetClass must be one of: ${VALID_ASSET_CLASSES.join(', ')}` }, { status: 400 })
   }
-  if (!keyId || typeof keyId !== 'string' || keyId.length < 4) {
-    return NextResponse.json({ error: 'keyId is required (use OANDA account ID for OANDA)' }, { status: 400 })
+  if (!keyId || typeof keyId !== 'string' || keyId.length < 2) {
+    return NextResponse.json({ error: 'keyId is required' }, { status: 400 })
   }
   if (!secret || typeof secret !== 'string' || secret.length < 4) {
-    return NextResponse.json({ error: 'secret is required (use Personal Access Token for OANDA)' }, { status: 400 })
+    return NextResponse.json({ error: 'secret is required' }, { status: 400 })
   }
 
   // ── ALPACA ────────────────────────────────────────────────
@@ -130,10 +139,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       })
       return NextResponse.json({
         ok: true, credentialId: cred.id, broker, mode, assetClass,
-        accountStatus: validation.accountStatus,
-        currency: validation.currency,
-        balance: validation.balance,
-        marginAvailable: validation.marginAvailable,
+        accountStatus: validation.accountStatus, currency: validation.currency,
+        balance: validation.balance, marginAvailable: validation.marginAvailable,
       })
     } catch (e) {
       console.error('[user/broker-credentials POST oanda] failed:', e instanceof Error ? e.message : e)
@@ -141,10 +148,64 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
   }
 
+  // ── TRADOVATE ─────────────────────────────────────────────
   if (broker === 'tradovate') {
-    return NextResponse.json({
-      error: `Tradovate credentials not yet supported. Coming in next deployment.`,
-    }, { status: 501 })
+    if (assetClass !== 'futures') {
+      return NextResponse.json({ error: `Tradovate only supports assetClass=futures` }, { status: 400 })
+    }
+
+    // For Tradovate, secret is a JSON bundle containing the rest of the creds.
+    // The UI assembles it; we unpack here.
+    let bundle: { password?: string; appId?: string; appVersion?: string; cid?: string; sec?: string }
+    try { bundle = JSON.parse(secret) as typeof bundle }
+    catch {
+      return NextResponse.json({
+        error: 'Tradovate secret must be JSON: { "password":"...", "appId":"...", "appVersion":"...", "cid":"...", "sec":"..." }',
+      }, { status: 400 })
+    }
+    if (!bundle.password || !bundle.appId || !bundle.appVersion || !bundle.cid || !bundle.sec) {
+      return NextResponse.json({
+        error: 'Tradovate secret bundle missing one of: password, appId, appVersion, cid, sec',
+      }, { status: 400 })
+    }
+
+    const validation = await validateTradovateCredential({
+      username: keyId,
+      password: bundle.password,
+      appId: bundle.appId,
+      appVersion: bundle.appVersion,
+      cid: bundle.cid,
+      sec: bundle.sec,
+    }, mode)
+    if (!validation.ok) {
+      return NextResponse.json({ error: `Tradovate validation failed: ${validation.error}` }, { status: 400 })
+    }
+
+    try {
+      const cred = await saveBrokerCredential({
+        userId, broker, mode, assetClass, keyId, secret,
+        accountId: validation.accountSpec ?? null,
+        cachedAccessToken: validation.accessToken,
+        cachedTokenExpiresAt: validation.expirationTime,
+        cachedAccountSpec: validation.accountSpec,
+        cachedAccountIntId: validation.accountIntId,
+      })
+      await updateCachedAccountInfo(cred.id, {
+        accountId: validation.accountSpec,
+        accountStatus: 'ACTIVE',
+        accountCash: validation.balance,
+        accountEquity: validation.balance,
+      })
+      return NextResponse.json({
+        ok: true, credentialId: cred.id, broker, mode, assetClass,
+        accountSpec: validation.accountSpec,
+        balance: validation.balance,
+        marginAvailable: validation.marginAvailable,
+      })
+    } catch (e) {
+      console.error('[user/broker-credentials POST tradovate] failed:', e instanceof Error ? e.message : e)
+      return NextResponse.json({ error: e instanceof Error ? e.message : 'Failed to save Tradovate credential' }, { status: 500 })
+    }
   }
 
   return NextResponse.json({ error: 'Unhandled broker' }, { status: 400 })

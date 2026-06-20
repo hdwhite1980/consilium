@@ -82,12 +82,12 @@ const BROKERS: BrokerConfig[] = [
     label: 'Tradovate',
     color: '#a78bfa',
     allowedAssetClasses: ['futures'],
-    helpUrl: 'https://api.tradovate.com/',
+    helpUrl: 'https://trader.tradovate.com/welcome',
     keyIdLabel: 'Username',
     keyIdPlaceholder: 'Your Tradovate username',
     secretLabel: 'Password',
     secretPlaceholder: 'Your Tradovate password',
-    instructions: 'Tradovate uses OAuth2 with username + password + an app key. Sign up at tradovate.com and request API access. NOTE: Tradovate validation is not yet implemented server-side; saving will return a 501 error until the next deployment. You can fill the form to test the UI flow.',
+    instructions: 'Tradovate needs your username + password PLUS API access keys (cid, sec) from the Tradovate API portal. The "App ID" and "App Version" are short labels you choose (e.g. "Wali-OS" and "1.0"). Demo and Live environments use separate Tradovate accounts.',
   },
 ]
 
@@ -111,6 +111,11 @@ export default function AutoTradingSettingsPage() {
   const [newMode, setNewMode] = useState<Mode>('paper')
   const [newKeyId, setNewKeyId] = useState('')
   const [newSecret, setNewSecret] = useState('')
+  // Tradovate-only extra fields
+  const [tradovateAppId, setTradovateAppId] = useState('Wali-OS')
+  const [tradovateAppVersion, setTradovateAppVersion] = useState('1.0')
+  const [tradovateCid, setTradovateCid] = useState('')
+  const [tradovateSec, setTradovateSec] = useState('')
   const [showSecret, setShowSecret] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
@@ -152,6 +157,20 @@ export default function AutoTradingSettingsPage() {
     setSubmitting(true)
     setSubmitError(null)
     try {
+      // For Tradovate, pack the extra credentials into secret as JSON
+      let payloadSecret = newSecret.trim()
+      if (newBroker === 'tradovate') {
+        if (!tradovateCid.trim() || !tradovateSec.trim()) {
+          throw new Error('Tradovate requires API CID and Secret from the API portal')
+        }
+        payloadSecret = JSON.stringify({
+          password: newSecret.trim(),
+          appId: tradovateAppId.trim() || 'Wali-OS',
+          appVersion: tradovateAppVersion.trim() || '1.0',
+          cid: tradovateCid.trim(),
+          sec: tradovateSec.trim(),
+        })
+      }
       const res = await fetch('/api/user/broker-credentials', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -160,7 +179,7 @@ export default function AutoTradingSettingsPage() {
           mode: newMode,
           assetClass: newAssetClass,
           keyId: newKeyId.trim(),
-          secret: newSecret.trim(),
+          secret: payloadSecret,
         }),
       })
       const body = await res.json().catch(() => ({})) as { error?: string }
@@ -169,6 +188,8 @@ export default function AutoTradingSettingsPage() {
       }
       setNewKeyId('')
       setNewSecret('')
+      setTradovateCid('')
+      setTradovateSec('')
       setShowAddForm(false)
       await load()
     } catch (e) {
@@ -422,6 +443,63 @@ export default function AutoTradingSettingsPage() {
               </p>
             </div>
 
+            {newBroker === 'tradovate' && (
+              <div className="space-y-3 rounded-lg p-3 border" style={{ background: 'rgba(167,139,250,0.04)', borderColor: 'rgba(167,139,250,0.2)' }}>
+                <div className="text-[10px] uppercase tracking-widest font-bold" style={{ color: '#a78bfa' }}>
+                  Tradovate API access
+                </div>
+                <p className="text-[10px] text-white/45 leading-relaxed">
+                  Get CID + Secret from Tradovate's API portal (Settings → API Access). App ID and Version are labels you choose.
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] uppercase tracking-widest text-white/40 font-bold">App ID</label>
+                    <input
+                      type="text"
+                      value={tradovateAppId}
+                      onChange={e => setTradovateAppId(e.target.value)}
+                      placeholder="Wali-OS"
+                      className="w-full mt-1 px-3 py-2 rounded-lg border text-xs font-mono outline-none"
+                      style={{ background: 'var(--bg)', borderColor: 'var(--border)' }}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase tracking-widest text-white/40 font-bold">App Version</label>
+                    <input
+                      type="text"
+                      value={tradovateAppVersion}
+                      onChange={e => setTradovateAppVersion(e.target.value)}
+                      placeholder="1.0"
+                      className="w-full mt-1 px-3 py-2 rounded-lg border text-xs font-mono outline-none"
+                      style={{ background: 'var(--bg)', borderColor: 'var(--border)' }}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase tracking-widest text-white/40 font-bold">CID (Client ID)</label>
+                  <input
+                    type="text"
+                    value={tradovateCid}
+                    onChange={e => setTradovateCid(e.target.value)}
+                    placeholder="From Tradovate API portal"
+                    className="w-full mt-1 px-3 py-2 rounded-lg border text-xs font-mono outline-none"
+                    style={{ background: 'var(--bg)', borderColor: 'var(--border)' }}
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase tracking-widest text-white/40 font-bold">Secret</label>
+                  <input
+                    type={showSecret ? 'text' : 'password'}
+                    value={tradovateSec}
+                    onChange={e => setTradovateSec(e.target.value)}
+                    placeholder="From Tradovate API portal"
+                    className="w-full mt-1 px-3 py-2 rounded-lg border text-xs font-mono outline-none"
+                    style={{ background: 'var(--bg)', borderColor: 'var(--border)' }}
+                  />
+                </div>
+              </div>
+            )}
+
             {submitError && (
               <div className="text-[11px] text-red-300 px-3 py-2 rounded border"
                 style={{ background: 'rgba(248,113,113,0.05)', borderColor: 'rgba(248,113,113,0.3)' }}>
@@ -431,7 +509,10 @@ export default function AutoTradingSettingsPage() {
 
             <button
               onClick={() => { void handleAdd() }}
-              disabled={submitting || !newKeyId.trim() || !newSecret.trim()}
+              disabled={
+                submitting || !newKeyId.trim() || !newSecret.trim() ||
+                (newBroker === 'tradovate' && (!tradovateCid.trim() || !tradovateSec.trim()))
+              }
               className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold border disabled:opacity-30"
               style={{
                 background: `${selectedBrokerConfig.color}15`,

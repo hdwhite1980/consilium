@@ -1,0 +1,32 @@
+name: auto-trade-futures-cron
+on:
+  schedule:
+    # Futures: Sun 22:00 UTC → Fri 22:00 UTC (CME globex hours, broad coverage)
+    # Every 15 min during open period.
+    - cron: '*/15 22-23 * * 0'     # Sunday from 22:00 UTC
+    - cron: '*/15 * * * 1-4'        # Mon-Thu all day
+    - cron: '*/15 0-21 * * 5'       # Fri until 22:00 UTC
+  workflow_dispatch: {}
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit auto-trade-futures endpoint
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -e
+          response=$(curl -s -L -w "\n%{http_code}" \
+            -X GET \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$APP_BASE_URL/api/cron/auto-trade-futures" \
+            --max-time 70)
+          status=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "Status: $status"
+          echo "Body: $body"
+          if [ "$status" -ne 200 ]; then
+            echo "::error::auto-trade-futures returned non-200 status: $status"
+            exit 1
+          fi

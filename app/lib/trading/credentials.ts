@@ -4,6 +4,10 @@
 // Multi-asset, multi-broker credential storage.
 // Each row is keyed (user_id, broker, mode, asset_class).
 // Secrets AES-256-GCM encrypted.
+//
+// Layer 4 additions:
+//   - Tradovate session token cache fields (encrypted)
+//   - loadTradovateSession / saveTradovateToken helpers
 // =============================================================
 
 import { getSupabaseAdmin } from '@/app/lib/admin/admin-auth'
@@ -48,11 +52,15 @@ export interface BrokerCredentialView {
 
 interface DbRow {
   id: string; user_id: string; broker: string; mode: string
-  asset_class: string | null    // null on legacy rows pre-migration
+  asset_class: string | null
   key_id: string; encrypted_secret: string
   account_id: string | null; account_status: string | null
   account_cash: string | number | null; account_equity: string | number | null
   last_synced_at: string | null; last_validated_at: string | null; validation_error: string | null
+  cached_access_token: string | null
+  cached_token_expires_at: string | null
+  cached_account_spec: string | null
+  cached_account_int_id: number | null
   created_at: string; updated_at: string
 }
 
@@ -96,11 +104,15 @@ export async function saveBrokerCredential(opts: {
   keyId: string
   secret: string
   accountId?: string | null
+  // Tradovate-specific cached session state (optional)
+  cachedAccessToken?: string
+  cachedTokenExpiresAt?: string
+  cachedAccountSpec?: string
+  cachedAccountIntId?: number
 }): Promise<BrokerCredentialRow> {
   const admin = await getSupabaseAdmin()
   const encryptedSecret = encrypt(opts.secret)
 
-  // Look up existing (user, broker, mode, asset_class) tuple
   const { data: existing } = await admin
     .from('user_broker_credentials')
     .select('id')
@@ -110,33 +122,38 @@ export async function saveBrokerCredential(opts: {
     .eq('asset_class', opts.assetClass)
     .maybeSingle()
 
+  const upsertFields: Record<string, unknown> = {
+    key_id: opts.keyId,
+    encrypted_secret: encryptedSecret,
+    account_id: opts.accountId ?? null,
+    last_validated_at: null,
+    validation_error: null,
+  }
+  if (opts.cachedAccessToken !== undefined) upsertFields.cached_access_token = encrypt(opts.cachedAccessToken)
+  if (opts.cachedTokenExpiresAt !== undefined) upsertFields.cached_token_expires_at = opts.cachedTokenExpiresAt
+  if (opts.cachedAccountSpec !== undefined) upsertFields.cached_account_spec = opts.cachedAccountSpec
+  if (opts.cachedAccountIntId !== undefined) upsertFields.cached_account_int_id = opts.cachedAccountIntId
+
   if (existing) {
     const { data, error } = await admin
       .from('user_broker_credentials')
-      .update({
-        key_id: opts.keyId,
-        encrypted_secret: encryptedSecret,
-        account_id: opts.accountId ?? null,
-        last_validated_at: null,
-        validation_error: null,
-      })
+      .update(upsertFields)
       .eq('id', (existing as { id: string }).id)
       .select('*').single()
     if (error) throw new Error(`saveBrokerCredential update failed: ${error.message}`)
     return rowToCred(data as DbRow)
   }
 
+  const insertFields: Record<string, unknown> = {
+    user_id: opts.userId,
+    broker: opts.broker,
+    mode: opts.mode,
+    asset_class: opts.assetClass,
+    ...upsertFields,
+  }
   const { data, error } = await admin
     .from('user_broker_credentials')
-    .insert({
-      user_id: opts.userId,
-      broker: opts.broker,
-      mode: opts.mode,
-      asset_class: opts.assetClass,
-      key_id: opts.keyId,
-      encrypted_secret: encryptedSecret,
-      account_id: opts.accountId ?? null,
-    })
+    .insert(insertFields)
     .select('*').single()
   if (error) throw new Error(`saveBrokerCredential insert failed: ${error.message}`)
   return rowToCred(data as DbRow)
@@ -163,6 +180,79 @@ export async function loadBrokerCredentialForUse(
   const dbRow = data as DbRow
   const secret = decrypt(dbRow.encrypted_secret)
   return { row, keyId: row.keyId, secret }
+}
+
+/**
+ * Tradovate-specific: load credential + cached session state.
+ * Returns enough to construct a TradovateClient.
+ */
+export interface TradovateSessionLoad {
+  credentialRowId: string
+  // Persisted creds — used to refresh the access token when needed
+  username: string                  // stored in key_id
+  password: string                  // first part of structured secret
+  appId: string
+  appVersion: string
+  cid: string
+  sec: string
+  // Cached session (may be expired)
+  cachedAccessToken: string | null
+  cachedTokenExpiresAt: string | null
+  accountSpec: string | null
+  accountIntId: number | null
+}
+
+export async function loadTradovateSession(
+  userId: string,
+  mode: 'paper' | 'live',
+): Promise<TradovateSessionLoad | null> {
+  const admin = await getSupabaseAdmin()
+  const { data, error } = await admin
+    .from('user_broker_credentials')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('broker', 'tradovate')
+    .eq('mode', mode)
+    .eq('asset_class', 'futures')
+    .maybeSingle()
+  if (error || !data) return null
+  const dbRow = data as DbRow
+
+  // The "secret" for Tradovate is a JSON-encoded blob with all the creds
+  // beyond username. We store: { password, appId, appVersion, cid, sec }
+  // username goes in key_id (plaintext, like Alpaca key_id)
+  let bundle: { password: string; appId: string; appVersion: string; cid: string; sec: string }
+  try {
+    bundle = JSON.parse(decrypt(dbRow.encrypted_secret)) as typeof bundle
+  } catch {
+    return null
+  }
+  const cachedToken = dbRow.cached_access_token ? decrypt(dbRow.cached_access_token) : null
+  return {
+    credentialRowId: dbRow.id,
+    username: dbRow.key_id,
+    password: bundle.password,
+    appId: bundle.appId,
+    appVersion: bundle.appVersion,
+    cid: bundle.cid,
+    sec: bundle.sec,
+    cachedAccessToken: cachedToken,
+    cachedTokenExpiresAt: dbRow.cached_token_expires_at,
+    accountSpec: dbRow.cached_account_spec,
+    accountIntId: dbRow.cached_account_int_id,
+  }
+}
+
+export async function saveTradovateTokenCache(
+  credentialRowId: string,
+  accessToken: string,
+  expiresAt: string,
+): Promise<void> {
+  const admin = await getSupabaseAdmin()
+  await admin.from('user_broker_credentials').update({
+    cached_access_token: encrypt(accessToken),
+    cached_token_expires_at: expiresAt,
+  }).eq('id', credentialRowId)
 }
 
 export async function listBrokerCredentials(userId: string): Promise<BrokerCredentialView[]> {
