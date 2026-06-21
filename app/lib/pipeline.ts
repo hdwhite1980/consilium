@@ -1168,6 +1168,63 @@ export async function runTargetedResearch(
     }
   }
 
+  // Layer 5 (Fix 2): futures bundles carry COT in futuresMeta.dataAvailability.cotData
+  // The Lead's R2 question is often "what does COT show?" — without this branch
+  // the news scout would say "data not available" even though we have it in hand.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const isFuturesContract = (bundle as any).instrumentType === 'futures'
+  if (isFuturesContract) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const futuresMeta = (bundle as any).futuresMeta as {
+      root: string
+      category: string
+      underlyingEtfProxy: string | null
+      dataAvailability: {
+        cotAvailable: boolean
+        cotData?: {
+          reportDate: string
+          contractName: string
+          nonCommercialLong: number
+          nonCommercialShort: number
+          nonCommercialNet: number
+          nonCommercialNetPctOI: number
+          nonCommercialLongChangeWoW: number
+          nonCommercialShortChangeWoW: number
+          commercialNet: number
+          openInterest: number
+          interpretation: string
+        }
+      }
+    } | undefined
+
+    if (futuresMeta) {
+      const lines: string[] = []
+      lines.push(`FUTURES CONTRACT CONTEXT for ${futuresMeta.root}:`)
+      lines.push(`  Category: ${futuresMeta.category}`)
+      if (futuresMeta.underlyingEtfProxy) {
+        lines.push(`  Underlying proxy used for technicals/news: ${futuresMeta.underlyingEtfProxy}`)
+      }
+      const cot = futuresMeta.dataAvailability.cotData
+      if (cot) {
+        lines.push(``)
+        lines.push(`CFTC COMMITMENTS OF TRADERS (already in bundle, as of ${cot.reportDate}):`)
+        lines.push(`  Contract: ${cot.contractName}`)
+        lines.push(`  Non-commercial (speculators) net: ${cot.nonCommercialNet > 0 ? '+' : ''}${cot.nonCommercialNet.toLocaleString()} contracts (${(cot.nonCommercialNetPctOI * 100).toFixed(1)}% of OI)`)
+        lines.push(`  Speculator long: ${cot.nonCommercialLong.toLocaleString()} (WoW ${cot.nonCommercialLongChangeWoW > 0 ? '+' : ''}${cot.nonCommercialLongChangeWoW.toLocaleString()})`)
+        lines.push(`  Speculator short: ${cot.nonCommercialShort.toLocaleString()} (WoW ${cot.nonCommercialShortChangeWoW > 0 ? '+' : ''}${cot.nonCommercialShortChangeWoW.toLocaleString()})`)
+        lines.push(`  Commercial (hedgers) net: ${cot.commercialNet > 0 ? '+' : ''}${cot.commercialNet.toLocaleString()} contracts`)
+        lines.push(`  Open interest: ${cot.openInterest.toLocaleString()}`)
+        lines.push(`  Interpretation: ${cot.interpretation}`)
+      } else {
+        lines.push(`  CFTC COT: not available this run (fetch failed or CFTC API silent).`)
+      }
+      lines.push(``)
+      lines.push(`DO NOT say "COT data is not available in this feed" if a Lead asks about positioning — the bundle includes whatever is above.`)
+      lines.push(`DO NOT cite stock fundamentals (P/E, EPS, insider Form 4, 13F holdings) for ${futuresMeta.root} — futures contracts don't have those.`)
+      liveDataParts.push(lines.join('\n'))
+    }
+  }
+
   // ── Bundle-sourced smart-money data (no external calls) ───────────
   // The bundle already carries detailed insider transactions, congressional
   // trades, and institutional holdings. Surface them here so personas
@@ -3402,7 +3459,14 @@ export async function runPipeline(
 
   // ── Gap #9: kick off verification of Lead's reasoning in parallel ──
   // Doesn't block GPT/Rebuttal; we await all verifications at the end.
-  const leadVerifyPromise = verifyFactualClaims(bundle.ticker, 'lead', claude.reasoning, bundle)
+  // Layer 5 Fix 3: skip stock-flavored verification for futures bundles.
+  // The stock verifier was stripping legitimate COT/futures citations
+  // because its handlers only know about insider/institutional/analyst claims.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const isFuturesBundleForVerification = (bundle as any).instrumentType === 'futures'
+  const leadVerifyPromise = isFuturesBundleForVerification
+    ? Promise.resolve(null)
+    : verifyFactualClaims(bundle.ticker, 'lead', claude.reasoning, bundle)
     .catch((e) => { console.warn('[verification/lead] failed:', (e as Error).message); return null })
 
   onProgress('gpt_start', { gemini, claude })
@@ -3410,9 +3474,11 @@ export async function runPipeline(
   transcript.push({ role: 'gpt', stage: 'devils_advocate', content: gpt.reasoning, signal: gpt.signal, confidence: gpt.confidence, timestamp: ts() })
   onProgress('gpt_done', gpt)
 
-  // Verify Devil's challenges in parallel
+  // Verify Devil's challenges in parallel (skip for futures — Layer 5 Fix 3)
   const devilText = [gpt.reasoning, ...gpt.challenges, gpt.strongestCounterArgument].filter(Boolean).join('\n\n')
-  const devilVerifyPromise = verifyFactualClaims(bundle.ticker, 'devil', devilText, bundle)
+  const devilVerifyPromise = isFuturesBundleForVerification
+    ? Promise.resolve(null)
+    : verifyFactualClaims(bundle.ticker, 'devil', devilText, bundle)
     .catch((e) => { console.warn('[verification/devil] failed:', (e as Error).message); return null })
 
   onProgress('rebuttal_start', { claude, gpt })
@@ -3420,9 +3486,11 @@ export async function runPipeline(
   transcript.push({ role: 'claude', stage: 'rebuttal', content: rebuttal.rebuttal, signal: rebuttal.signal, confidence: rebuttal.confidence, timestamp: ts() })
   onProgress('rebuttal_done', rebuttal)
 
-  // Verify Rebuttal's research answer + rebuttal text
+  // Verify Rebuttal's research answer + rebuttal text (skip for futures)
   const rebuttalText = [rebuttal.rebuttal, rebuttal.researchAnswer, ...rebuttal.maintains, rebuttal.finalStance].filter(Boolean).join('\n\n')
-  const rebuttalVerifyPromise = verifyFactualClaims(bundle.ticker, 'rebuttal', rebuttalText, bundle)
+  const rebuttalVerifyPromise = isFuturesBundleForVerification
+    ? Promise.resolve(null)
+    : verifyFactualClaims(bundle.ticker, 'rebuttal', rebuttalText, bundle)
     .catch((e) => { console.warn('[verification/rebuttal] failed:', (e as Error).message); return null })
 
   onProgress('counter_start', { gpt, rebuttal })
@@ -3430,9 +3498,11 @@ export async function runPipeline(
   transcript.push({ role: 'gpt', stage: 'counter', content: counter.finalChallenge, timestamp: ts() })
   onProgress('counter_done', counter)
 
-  // Verify Counter's research answer + challenge text
+  // Verify Counter's research answer + challenge text (skip for futures)
   const counterText = [counter.finalChallenge, counter.researchAnswer, ...counter.pressesOn, counter.closingArgument].filter(Boolean).join('\n\n')
-  const counterVerifyPromise = verifyFactualClaims(bundle.ticker, 'counter', counterText, bundle)
+  const counterVerifyPromise = isFuturesBundleForVerification
+    ? Promise.resolve(null)
+    : verifyFactualClaims(bundle.ticker, 'counter', counterText, bundle)
     .catch((e) => { console.warn('[verification/counter] failed:', (e as Error).message); return null })
 
   // Surface the verification wait to the UI. Without this event, the user

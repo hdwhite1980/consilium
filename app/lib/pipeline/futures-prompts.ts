@@ -25,6 +25,17 @@ function buildCompactDataBlock(meta: FuturesMeta): string {
   if (meta.underlyingEtfProxy) {
     parts.push(`Underlying proxy in bundle: ${meta.underlyingEtfProxy}`)
   }
+  // Surface the price derivation so the Council reasons in the correct units
+  if (meta.priceDerivation) {
+    const d = meta.priceDerivation
+    if (d.method === 'linear' && d.multiplier && d.proxyTicker && d.proxyPrice !== null && d.futuresPrice !== null) {
+      parts.push(`PRICE: ${meta.root} ≈ $${d.futuresPrice.toFixed(2)} (derived from ${d.proxyTicker} $${d.proxyPrice.toFixed(2)} × ${d.multiplier}). Reason in ${meta.root} units, not ${d.proxyTicker} units. ATR/support/resistance levels in this prompt are from ${d.proxyTicker} — translate to ${meta.root} by multiplying by ${d.multiplier} before stating any price levels.`)
+    } else if (d.method === 'proxy_only' && d.proxyTicker) {
+      parts.push(`PRICE WARNING: Bundle shows ${d.proxyTicker} ETF price as approximation. The actual ${meta.root} contract trades in different units. ${d.note} State entry/stop/target in ${meta.root} units conceptually (e.g., "stop 50 ticks below entry") rather than in dollar amounts, since the proxy price is not the contract price.`)
+    } else if (d.method === 'none') {
+      parts.push(`PRICE WARNING: No price data wired for ${meta.root} in v1. State entries/stops conceptually (ticks/points) rather than absolute price levels.`)
+    }
+  }
   parts.push(``)
   parts.push(`DATA WIRED: COT positioning${meta.dataAvailability.cotAvailable ? ' (in prompt below)' : ' (unavailable this run)'}, technical indicators on ${meta.underlyingEtfProxy ?? 'underlying'}, macro/news context.`)
   parts.push(`DATA NOT WIRED: ${notWiredList(meta.category)}. Do NOT cite these data sources — say "${meta.category} fundamentals not in data layer" if pressed.`)

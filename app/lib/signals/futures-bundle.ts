@@ -30,7 +30,7 @@
 // =============================================================
 
 import type { SignalBundle } from '../aggregator'
-import { getFuturesSpec, type FuturesContractSpec } from '../trading/futures-sizing'
+import { getFuturesSpec, deriveFuturesPriceFromProxy, type FuturesContractSpec } from '../trading/futures-sizing'
 
 export interface FuturesMeta {
   root: string
@@ -45,6 +45,17 @@ export interface FuturesMeta {
     cotAvailable: boolean
     cotData?: CotSnapshot
   }
+  // Price derivation info — important for Council prompts and verification
+  // so they know the price is an approximation from the underlying proxy.
+  priceDerivation: {
+    method: 'linear' | 'proxy_only' | 'none' | 'unknown'
+    multiplier?: number
+    note: string
+    approximate: boolean
+    proxyTicker: string | null
+    proxyPrice: number | null
+    futuresPrice: number | null
+  } | null
 }
 
 export interface CotSnapshot {
@@ -98,6 +109,17 @@ export function buildFuturesBundle(input: BuildFuturesBundleInput): FuturesBundl
   const cotData = input.cotSnapshot
   const cotAvailable = cotData !== null
 
+  // Extract priceDerivation from baseBundle (set by cloneBundleForFutures)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const derivedFromClone = (baseBundle as any).priceDerivation as {
+    method: 'linear' | 'proxy_only' | 'none' | 'unknown'
+    multiplier?: number
+    note: string
+    approximate: boolean
+    proxyTicker: string | null
+    proxyPrice: number
+  } | null | undefined
+
   const meta: FuturesMeta = {
     root: input.futuresRoot,
     category: spec.category,
@@ -110,6 +132,15 @@ export function buildFuturesBundle(input: BuildFuturesBundleInput): FuturesBundl
       cotAvailable,
       cotData: cotData ?? undefined,
     },
+    priceDerivation: derivedFromClone ? {
+      method: derivedFromClone.method,
+      multiplier: derivedFromClone.multiplier,
+      note: derivedFromClone.note,
+      approximate: derivedFromClone.approximate,
+      proxyTicker: derivedFromClone.proxyTicker,
+      proxyPrice: derivedFromClone.proxyPrice,
+      futuresPrice: Number(baseBundle.currentPrice) || null,
+    } : null,
   }
 
   return {
@@ -135,24 +166,39 @@ function cloneBundleForFutures(
   futuresRoot: string,
   spec: FuturesContractSpec,
 ): SignalBundle {
-  // Shallow-clone, override ticker + add proxy note
+  // Derive the futures contract price from the proxy ETF/spot price.
+  // For ES/NQ/RTY/YM: futures = proxy × multiplier (10, 40, 10, 100 respectively)
+  // For non-equity-index families: keep proxy price but flag as approximation
+  const proxyPrice = Number(underlying.currentPrice) || 0
+  const derived = deriveFuturesPriceFromProxy(futuresRoot, proxyPrice)
+
+  // Shallow-clone, override ticker + price + add proxy/derivation metadata
   const cloned: SignalBundle = {
     ...underlying,
     ticker: futuresRoot,
-    // Underlying ETF identifier preserved in metadata so verification
-    // handlers know the data came from there
+    currentPrice: derived ? derived.price : proxyPrice,
+    // Preserve proxy info + derivation note for verification + UI
     underlyingProxy: spec.dataLayer.underlyingEtfProxy ?? undefined,
-  } as SignalBundle & { underlyingProxy?: string }
+    underlyingProxyPrice: proxyPrice,
+    priceDerivation: derived ? {
+      method: spec.priceFromProxy?.method ?? 'unknown',
+      multiplier: spec.priceFromProxy?.method === 'linear' ? spec.priceFromProxy.multiplier : undefined,
+      note: derived.note,
+      approximate: derived.approximate,
+      proxyTicker: spec.dataLayer.underlyingEtfProxy ?? null,
+      proxyPrice,
+    } : null,
+  } as SignalBundle & {
+    underlyingProxy?: string
+    underlyingProxyPrice?: number
+    priceDerivation?: unknown
+  }
 
   // For non-equity-index families using ETF proxy, strip fields that
   // are ETF-specific but don't translate cleanly. (For SPY/QQQ/IWM/DIA
   // proxy of ES/NQ/RTY/YM, we keep everything — they're tracking the
   // same underlying index.)
   if (spec.category !== 'equity_index' && spec.category !== 'fx') {
-    // Energy/metals/grains/rates ETF proxies (USO/GLD/CORN/TLT) are
-    // imperfect: they have contango drag, holdings transparency,
-    // expense ratios. We mark the bundle so the Council knows the
-    // proxy isn't the underlying.
     const c = cloned as SignalBundle & { proxyDisclaimer?: string }
     c.proxyDisclaimer = `Bundle data is from ${spec.dataLayer.underlyingEtfProxy ?? 'ETF proxy'}, NOT direct ${futuresRoot} contract data. ETF and futures can diverge due to contango/roll dynamics.`
   }
