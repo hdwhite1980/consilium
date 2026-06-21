@@ -1209,6 +1209,10 @@ export async function runTargetedResearch(
           interpretation: string
         }
       }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      energyFundamentals?: any
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      grainFundamentals?: any
     } | undefined
 
     if (futuresMeta) {
@@ -1267,8 +1271,67 @@ export async function runTargetedResearch(
       } else {
         lines.push(`  CFTC COT: not available this run (fetch failed or CFTC API silent).`)
       }
+
+      // Layer 6: EIA energy data — surface to scout so it can answer follow-up questions
+      // about crude/natgas inventory, refinery utilization, SPR, etc.
+      if (futuresMeta.energyFundamentals) {
+        const eia = futuresMeta.energyFundamentals
+        lines.push(``)
+        lines.push(`EIA WEEKLY ${eia.family === 'crude' ? 'PETROLEUM' : 'NATURAL GAS'} STATUS (already in bundle, as of ${eia.primary?.reportDate}):`)
+        if (eia.primary) {
+          const p = eia.primary
+          lines.push(`  ${p.label}: ${p.latest?.toFixed?.(0) ?? p.latest} ${p.units}`)
+          if (p.wowChange !== null && p.wowChange !== undefined) {
+            const sign = p.wowChange > 0 ? '+' : ''
+            lines.push(`  WoW change: ${sign}${p.wowChange.toFixed(0)} ${p.units}`)
+          }
+          if (p.fiveYearMin !== null && p.fiveYearMax !== null) {
+            lines.push(`  5Y seasonal band: ${p.fiveYearMin.toFixed(0)} - ${p.fiveYearMax.toFixed(0)} (mean ${p.fiveYearMean?.toFixed(0)})`)
+            lines.push(`  Position in 5Y band: ${p.positionInRange}`)
+          }
+        }
+        if (Array.isArray(eia.secondary)) {
+          for (const s of eia.secondary) {
+            const sign = s.wowChange !== null && s.wowChange > 0 ? '+' : ''
+            const wow = s.wowChange !== null ? ` (WoW ${sign}${s.wowChange.toFixed(1)})` : ''
+            lines.push(`  ${s.label}: ${s.latest} ${s.units}${wow}`)
+          }
+        }
+        if (eia.interpretation) lines.push(`  Interpretation: ${eia.interpretation}`)
+      }
+
+      // Layer 7: USDA + NOAA grain data — surface to scout so it can answer follow-up
+      // questions about crop progress, condition ratings, and weather in growing states.
+      if (futuresMeta.grainFundamentals) {
+        const grain = futuresMeta.grainFundamentals
+        lines.push(``)
+        lines.push(`USDA NASS + NOAA WEATHER (already in bundle, commodity: ${grain.commodity}${grain.inheritedFrom ? `, inherited from ${grain.inheritedFrom}` : ''}):`)
+        if (Array.isArray(grain.cropProgress) && grain.cropProgress.length > 0) {
+          lines.push(`  Crop progress (latest USDA weekly report):`)
+          for (const m of grain.cropProgress) {
+            const vs5y = m.vsFiveYearAvg !== null && m.vsFiveYearAvg !== undefined
+              ? ` vs 5Y avg ${m.fiveYearAvg}% (${m.vsFiveYearAvg > 0 ? '+' : ''}${m.vsFiveYearAvg}pp)`
+              : ''
+            lines.push(`    ${m.metric}: ${m.pctNational}% (week ${m.weekEnding})${vs5y}`)
+          }
+        } else {
+          lines.push(`  Crop progress: no current USDA NASS data (likely off-season or USDA fetch failed)`)
+        }
+        if (Array.isArray(grain.weatherByState) && grain.weatherByState.length > 0) {
+          lines.push(`  Weather in key growing states (NOAA daily, last 7/30 days):`)
+          for (const w of grain.weatherByState) {
+            const tmax = w.recentTmaxAvg !== null && w.recentTmaxAvg !== undefined ? `, avg max ${w.recentTmaxAvg}°C` : ''
+            lines.push(`    ${w.cityName}: 7d ${w.last7DayPrcp}mm / 30d ${w.last30DayPrcp}mm precip${tmax} — ${w.note}`)
+          }
+        } else {
+          lines.push(`  Weather: NOAA data not available this run`)
+        }
+        if (grain.interpretation) lines.push(`  Interpretation: ${grain.interpretation}`)
+      }
+
       lines.push(``)
       lines.push(`DO NOT say "COT data is not available in this feed" if a Lead asks about positioning — the bundle includes whatever is above.`)
+      lines.push(`DO NOT say "EIA / USDA / NOAA / crop / weather data is not available" if a Lead asks about energy inventory or grain crop conditions — the bundle includes whatever EIA/USDA/NOAA blocks are surfaced above. If a block is missing, that means it genuinely wasn't fetched (no data to share); if a block IS above, USE IT to answer the Lead's question rather than disclaiming.`)
       lines.push(`DO NOT cite stock fundamentals (P/E, EPS, insider Form 4, 13F holdings) for ${futuresMeta.root} — futures contracts don't have those.`)
       liveDataParts.push(lines.join('\n'))
     }
