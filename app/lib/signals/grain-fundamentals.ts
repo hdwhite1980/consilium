@@ -108,6 +108,7 @@ async function fetchCropProgress(commodity: string, futuresRoot: string): Promis
     statisticcat_desc: 'PROGRESS',
     year: String(currentYear),
   }, 1000)
+  console.log(`[grain-fundamentals] ${commodity} currentYearProgress: ${currentYearProgress?.length ?? 'null'} rows`)
 
   // Fetch historical (last 5 prior years) progress separately for 5Y comparison.
   const historicalProgress = await fetchNassRecords({
@@ -116,6 +117,7 @@ async function fetchCropProgress(commodity: string, futuresRoot: string): Promis
     year__GE: String(currentYear - 5),
     year__LE: String(currentYear - 1),
   }, 5000)
+  console.log(`[grain-fundamentals] ${commodity} historicalProgress: ${historicalProgress?.length ?? 'null'} rows`)
 
   const records = [
     ...(currentYearProgress ?? []),
@@ -130,6 +132,7 @@ async function fetchCropProgress(commodity: string, futuresRoot: string): Promis
     statisticcat_desc: 'CONDITION',
     year: String(currentYear),
   }, 1000)
+  console.log(`[grain-fundamentals] ${commodity} conditionRecords: ${conditionRecords?.length ?? 'null'} rows`)
 
   const metrics: CropProgressMetric[] = []
 
@@ -140,6 +143,7 @@ async function fetchCropProgress(commodity: string, futuresRoot: string): Promis
   const nationalProgress = records.filter(r =>
     r.agg_level_desc === 'NATIONAL' || r.state_alpha === 'US'
   )
+  console.log(`[grain-fundamentals] ${commodity} nationalProgress after filter: ${nationalProgress.length} rows`)
   const grouped = groupByShortDesc(nationalProgress)
 
   for (const [shortDesc, rows] of Object.entries(grouped)) {
