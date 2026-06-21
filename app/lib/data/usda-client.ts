@@ -45,7 +45,8 @@ interface NassQueryParams {
   statisticcat_desc?: string     // 'PROGRESS' | 'CONDITION' | 'YIELD'
   state_alpha?: string           // 'IA', 'IL', 'KS', etc.
   year__GE?: string              // '2026' to get 2026 onwards
-  year?: string                  // exact year
+  year__LE?: string              // '2025' to get up to and including 2025
+  year?: string                  // exact year (e.g. '2026')
   short_desc__LIKE?: string      // wildcard match on short_desc
 }
 
@@ -114,24 +115,33 @@ export async function checkUsdaHealth(): Promise<{ ok: boolean; error?: string; 
   if (!process.env.USDA_API_KEY) {
     return { ok: false, error: 'USDA_API_KEY not configured' }
   }
-  // Light query — just fetch one row of corn data
+  // Fetch current-year corn progress and pick the most recent week
+  // (the API's default order is by load_time, not week_ending,
+  // so we have to sort client-side to find the latest report).
   const result = await fetchNassRecords({
     commodity_desc: 'CORN',
     statisticcat_desc: 'PROGRESS',
-    state_alpha: 'IA',
-    year__GE: String(new Date().getFullYear()),
-  }, 1)
+    year: String(new Date().getFullYear()),
+  }, 1000)
   if (!result || result.length === 0) {
-    return { ok: false, error: 'USDA fetch returned no data (key may be invalid, or no current-year data yet)' }
+    return { ok: false, error: 'USDA fetch returned no data for current year (key valid but no data — could be early in season)' }
   }
-  const r = result[0]
+  // Pick the row with the most recent week_ending AND a nonzero value
+  // (early-season weeks often have "0 PCT SILKING" placeholder rows).
+  const meaningful = result
+    .filter(r => {
+      const v = parseInt(r.Value, 10)
+      return Number.isFinite(v) && v > 0
+    })
+    .sort((a, b) => (b.week_ending || '').localeCompare(a.week_ending || ''))
+  const sample = meaningful[0] ?? result[0]
   return {
     ok: true,
     sample: {
-      commodity: r.commodity_desc,
-      year: r.year,
-      weekEnding: r.week_ending,
-      value: r.Value,
+      commodity: sample.commodity_desc,
+      year: sample.year,
+      weekEnding: sample.week_ending,
+      value: sample.Value,
     },
   }
 }

@@ -99,19 +99,36 @@ export async function buildGrainFundamentals(
 
 async function fetchCropProgress(commodity: string, futuresRoot: string): Promise<CropProgressMetric[]> {
   const currentYear = new Date().getFullYear()
-  const records = await fetchNassRecords({
+
+  // Fetch CURRENT-YEAR progress rows separately so we don't lose them
+  // to the 1000-row cap when the API returns 5 years' worth ordered by load_time.
+  // The fundamental fix: don't ask the API for 5 years and slice — ask for what we need.
+  const currentYearProgress = await fetchNassRecords({
     commodity_desc: commodity,
     statisticcat_desc: 'PROGRESS',
-    year__GE: String(currentYear - 5),  // get 5 years for seasonal comparison
+    year: String(currentYear),
   }, 1000)
 
-  if (!records || records.length === 0) return []
+  // Fetch historical (last 5 prior years) progress separately for 5Y comparison.
+  const historicalProgress = await fetchNassRecords({
+    commodity_desc: commodity,
+    statisticcat_desc: 'PROGRESS',
+    year__GE: String(currentYear - 5),
+    year__LE: String(currentYear - 1),
+  }, 5000)
 
-  // Also fetch condition ratings
+  const records = [
+    ...(currentYearProgress ?? []),
+    ...(historicalProgress ?? []),
+  ]
+
+  if (records.length === 0) return []
+
+  // Also fetch CONDITION ratings (current year is enough — we don't compute 5Y for conditions in v1)
   const conditionRecords = await fetchNassRecords({
     commodity_desc: commodity,
     statisticcat_desc: 'CONDITION',
-    year__GE: String(currentYear - 5),
+    year: String(currentYear),
   }, 1000)
 
   const metrics: CropProgressMetric[] = []
@@ -126,8 +143,15 @@ async function fetchCropProgress(commodity: string, futuresRoot: string): Promis
     if (!metric) continue
 
     // Most recent row for this metric in current year
+    // Also require Value to be a meaningful number — skip the "0 PCT SILKING" rows
+    // from early-season weeks where the metric hasn't started reporting yet.
     const latestThisYear = rows
       .filter(r => r.year === String(currentYear))
+      .filter(r => {
+        const v = parseInt(r.Value, 10)
+        // Keep nonzero rows, OR the most recent zero if no nonzero exists for this metric
+        return Number.isFinite(v) && v > 0
+      })
       .sort((a, b) => (b.week_ending || '').localeCompare(a.week_ending || ''))[0]
 
     if (!latestThisYear) continue
