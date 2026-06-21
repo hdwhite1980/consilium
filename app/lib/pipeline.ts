@@ -1613,7 +1613,7 @@ export async function runClaude(bundle: SignalBundle, gemini: GeminiResult, soci
 
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 1000,
+    max_tokens: 2000,  // Layer 6: bumped from 1000 — futures + EIA prompts are larger; truncation caused parseJSON failures
     system: systemPrompt,
     messages: [{
       role: 'user',
@@ -1701,7 +1701,7 @@ ${bundle.aiContext.convictionSection}`
 
   const completion = await getOpenAI().chat.completions.create({
     model: 'gpt-4o',
-    max_tokens: 1000,
+    max_tokens: 2000,  // Layer 6: bumped from 1000 — futures + EIA prompts are larger
     messages: [
       { role: 'system', content: devilSystemPrompt },
       { role: 'user', content: `TICKER: ${bundle.ticker} | PRICE: $${bundle.currentPrice.toFixed(2)} | LEAD'S LENS: ${lens.toUpperCase()}
@@ -1938,7 +1938,7 @@ What TWO questions should the News Scout research right now to help you respond?
 
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 1500,
+    max_tokens: 2500,  // Layer 6: bumped from 1500 — futures R2 needs room with research + EIA + COT
     system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research from TWO of your questions. Use both responses. Defend your position where data supports you, concede where the Devil's Advocate is correct. Intellectual honesty wins with the Judge --- a thoughtful concession beats a dishonest defense.`,
     messages: [{
       role: 'user',
