@@ -2551,20 +2551,22 @@ CONCRETE GUIDANCE:
 - For proxy_only families (CL/GC/ZB/etc), the bundle price is the PROXY's price (USO/GLD/TLT), NOT the futures contract. Real ${bundle.ticker} options trade at very different strike values.
 
 For 'linear' families: strikes within ±10% of bundle currentPrice are plausible.
-For 'proxy_only' families: ANY specific dollar strike is suspect — the Judge likely pulled it from the proxy ETF's chain. The verdict should either:
-  (a) decline to give specific strikes (use phrases like "ATM put", "5% OTM call", "delta-25 strike"), OR
-  (b) explicitly state the strike is for the proxy ETF and provide a translation note, OR
-  (c) skip the optionsStrategy field entirely.
+For 'proxy_only' families: ANY specific dollar strike is suspect. The verdict MUST EITHER:
+  (a) Use ONLY conceptual deltas / OTM percentages (e.g. "ATM put", "delta-25 short put", "5% OTM call"), OR
+  (b) Omit the optionsStrategy field entirely.
+
+There is NO third option. "Iron Condor on USO with $120/$108 strikes" is NOT acceptable even with the "USO" label — users analyzing ${bundle.ticker} (the futures contract) cannot trade USO strikes against ${bundle.ticker}, and presenting an alternate-instrument trade plan inside a ${bundle.ticker} verdict is misleading. The fact that a strike is labeled as belonging to the proxy ETF does NOT cure the problem — it just makes the wrong instrument explicit.
 
 Flag SPECIFIC mismatches. Examples:
   - "ES strikes \\$760/\\$730 reference SPY chain ($746 SPY × 10 ≈ ES at $7460; real ES options chain would use strikes near 7400/7500)"
-  - "CL strikes \\$115/\\$122 reference USO ETF chain; actual CL options trade in dollars-per-barrel near 60-80 currently"
+  - "CL strikes \\$115/\\$122 reference USO ETF chain (even if labeled 'on USO'); CL options chain itself trades dollars-per-barrel"
+  - "GC iron condor with $300/$280/$240/$220 strikes references GLD chain; verdict should use deltas or omit strikes"
 
 If the verdict does NOT include any optionsStrategy field, return an empty array.
-If the verdict's options strikes are clearly conceptual (e.g. "ATM puts", "OTM calls") rather than specific dollar amounts, return an empty array.
+If the verdict's options strikes are clearly conceptual (e.g. "ATM puts", "delta-30 calls", "5% OTM puts") rather than specific dollar amounts, return an empty array.
 If this is an equity-index linear-derived futures (ES/MES/NQ/MNQ/RTY/M2K/YM/MYM/VX) AND strikes are within ±10% of bundle currentPrice, return an empty array.
 
-Rule 8 flags are MATERIAL — they trigger retry with explicit instruction to either restate strikes for the actual futures contract OR drop specific strikes for conceptual deltas. Pretending the proxy's chain is the contract's chain is a real misinformation risk for users.` : `N/A — this is not a futures bundle. Return an empty array.`}
+Rule 8 flags are MATERIAL — they trigger retry. The Judge MUST replace specific dollar strikes with conceptual deltas OR remove the optionsStrategy field entirely. Re-labeling proxy strikes as "on the proxy ETF" is NOT a fix.` : `N/A — this is not a futures bundle. Return an empty array.`}
 
 ═════════════════════════════════════════════════════════════════════
 
@@ -3004,7 +3006,13 @@ ${calibration.priceGroundingViolations.map(issue => `  - ${issue}`).join('\n')}
   const optionsBasisBlock = calibration.optionsBasisIssues.length > 0 ? `
 OPTIONS BASIS (Rule 8) — MUST FIX:
 ${calibration.optionsBasisIssues.map(issue => `  - ${issue}`).join('\n')}
-  Your draft includes options strikes that reference the underlying ETF proxy's strike chain instead of the actual futures contract's options chain. For futures contracts where the bundle uses an ETF proxy (USO/GLD/TLT/CORN/etc.), the bundle's $${bundle.currentPrice.toFixed(2)} price is the PROXY's price, not the contract's price. The real ${bundle.ticker} options chain trades at very different strike values. EITHER (a) replace the specific dollar strikes with conceptual deltas (e.g., "ATM put", "5% OTM call", "delta-25 strike"), OR (b) explicitly label the strikes as proxy-ETF strikes with a translation note, OR (c) remove the optionsStrategy field entirely from this verdict. Do NOT defend the proxy strikes as if they apply to the contract — that's the misinformation we're catching.` : ''
+  Your draft includes options strikes that reference the underlying ETF proxy's strike chain instead of the actual futures contract's options chain. For futures contracts where the bundle uses an ETF proxy (USO/GLD/TLT/CORN/etc.), the bundle's $${bundle.currentPrice.toFixed(2)} price is the PROXY's price, not the contract's price. The real ${bundle.ticker} options chain trades at very different strike values.
+
+  You have EXACTLY two acceptable fixes:
+  (a) Replace EVERY specific dollar strike with a conceptual delta or OTM percentage (e.g., "ATM put", "delta-25 short put", "5% OTM call spread"), OR
+  (b) Remove the optionsStrategy field entirely from this verdict.
+
+  Re-labeling the strikes as "on the proxy ETF" (e.g., "Iron Condor on USO with $114/$108 strikes") is NOT an acceptable fix. Users analyzing ${bundle.ticker} cannot trade proxy-ETF strikes against ${bundle.ticker}; presenting an alternate-instrument trade plan inside a ${bundle.ticker} verdict is misleading even when the alternate instrument is named. Pick (a) or (b). Do not write any dollar strike numbers in your revised optionsStrategy.` : ''
 
   const calibrationGuidance = `
 
