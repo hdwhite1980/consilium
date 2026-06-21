@@ -159,6 +159,12 @@ export interface JudgeReviewResult {
    *  hallucinated, or verification-failed sources? Each entry describes a specific
    *  contaminated claim that influenced the draft. Empty when clean. */
   sourceIntegrityIssues: string[]
+  /** Rule 7 (Layer 6 Fix 3): did the verdict's trade levels (entry/stop/target/options strikes)
+   *  anchor to a price that differs from the bundle's currentPrice by more than 3%?
+   *  This catches the failure mode where R2 news scout returns a hallucinated price
+   *  and the Judge anchors the trade plan to it instead of the bundle's ground truth.
+   *  Each entry describes ONE level-vs-bundle-price mismatch. Empty when clean. */
+  priceGroundingViolations: string[]
 
   // ── Overall status determines retry behavior ──
   /** clean = no flags fired
@@ -1204,6 +1210,41 @@ export async function runTargetedResearch(
       if (futuresMeta.underlyingEtfProxy) {
         lines.push(`  Underlying proxy used for technicals/news: ${futuresMeta.underlyingEtfProxy}`)
       }
+
+      // Layer 6 Fix 1: price grounding anchor. Critical guardrail to prevent
+      // the news scout from hallucinating wildly different futures prices
+      // from web search results (which often reference stale, different
+      // contract months, or different instruments entirely).
+      const bundlePrice = Number(bundle.currentPrice) || 0
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const priceDerivation = (futuresMeta as any).priceDerivation as {
+        method: string
+        multiplier?: number
+        proxyTicker: string | null
+        proxyPrice: number | null
+        futuresPrice: number | null
+      } | null | undefined
+
+      if (bundlePrice > 0) {
+        lines.push(``)
+        lines.push(`PRICE GROUND TRUTH — DO NOT CONTRADICT THIS:`)
+        if (priceDerivation && priceDerivation.method === 'linear' && priceDerivation.multiplier) {
+          lines.push(`  ${futuresMeta.root} bundle price: $${bundlePrice.toFixed(2)} (derived from ${priceDerivation.proxyTicker} × ${priceDerivation.multiplier})`)
+        } else if (priceDerivation && priceDerivation.method === 'proxy_only') {
+          lines.push(`  ${futuresMeta.root} bundle price reference: $${bundlePrice.toFixed(2)} (from ${priceDerivation.proxyTicker} ETF proxy — actual ${futuresMeta.root} contract trades in different units)`)
+        } else {
+          lines.push(`  ${futuresMeta.root} bundle price: $${bundlePrice.toFixed(2)}`)
+        }
+        lines.push(``)
+        lines.push(`If web search returns a current ${futuresMeta.root} price that differs from $${bundlePrice.toFixed(2)} by more than 10%, that data source is likely:`)
+        lines.push(`  - Referring to a different contract month (e.g. cash vs. front-month)`)
+        lines.push(`  - Stale or cached from weeks ago`)
+        lines.push(`  - A different instrument (e.g. CL vs. BZ vs. spot crude)`)
+        lines.push(`  - Misinterpreted by you from a chart or article`)
+        lines.push(`In that case, REPORT the bundle price as authoritative. Do not invent a current price that contradicts the bundle. State explicitly: "The bundle price for ${futuresMeta.root} is $${bundlePrice.toFixed(2)}; my web search returned conflicting numbers which appear to reference different contracts or stale data."`)
+        lines.push(`If asked about intraday highs/lows or breakouts of specific support/resistance levels, you can answer with web data BUT all price references must be plausible relative to the $${bundlePrice.toFixed(2)} bundle price.`)
+      }
+
       const cot = futuresMeta.dataAvailability.cotData
       if (cot) {
         lines.push(``)
@@ -1939,7 +1980,9 @@ What TWO questions should the News Scout research right now to help you respond?
   const msg = await getAnthropic().messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 2500,  // Layer 6: bumped from 1500 — futures R2 needs room with research + EIA + COT
-    system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research from TWO of your questions. Use both responses. Defend your position where data supports you, concede where the Devil's Advocate is correct. Intellectual honesty wins with the Judge --- a thoughtful concession beats a dishonest defense.`,
+    system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research from TWO of your questions. Use both responses. Defend your position where data supports you, concede where the Devil's Advocate is correct. Intellectual honesty wins with the Judge --- a thoughtful concession beats a dishonest defense.
+
+CRITICAL PRICE-GROUNDING RULE: The bundle's ground-truth price for ${bundle.ticker} is $${bundle.currentPrice.toFixed(2)}. If the news scout's research contains a current price that differs from the bundle's $${bundle.currentPrice.toFixed(2)} by more than 5%, do NOT pivot your thesis based on that conflicting price. Treat it with explicit skepticism — the research may be referring to a different contract month, a different instrument, stale data, or simply hallucinated from web search noise. State clearly that the research-reported price conflicts with the bundle's reference price, and either (a) use the bundle's price as authoritative, or (b) note the conflict and refuse to rebuild the thesis on the basis of a single uncorroborated price datapoint. NEVER produce a dramatic confidence flip (e.g. NEUTRAL→strong BEARISH or weak→strong any direction) based solely on a conflicting price number that contradicts the bundle. The Devil's actual challenges (positioning, fundamentals, macro narrative) can still be addressed without anchoring to an unverified price.`,
     messages: [{
       role: 'user',
       content: `YOUR ORIGINAL CALL: ${claude.signal} on ${bundle.ticker} at $${bundle.currentPrice.toFixed(2)}, target ${claude.target}
@@ -2475,6 +2518,20 @@ Flag SPECIFIC instances. Each entry in sourceIntegrityIssues should describe ONE
 Rule 6 flags are MATERIAL — they trigger retry with explicit instruction to re-derive without the contaminated framing.
 
 ═════════════════════════════════════════════════════════════════════
+RULE 7 — Price grounding (trade plan anchored to wrong price)
+═════════════════════════════════════════════════════════════════════
+Does the verdict's trade plan (entry/stop/target) or options strikes anchor to a price that differs from the bundle's ground-truth currentPrice by MORE than 3%?
+
+Bundle currentPrice for ${bundle.ticker}: $${bundle.currentPrice.toFixed(2)}
+3% band: $${(bundle.currentPrice * 0.97).toFixed(2)} - $${(bundle.currentPrice * 1.03).toFixed(2)}
+
+If entry, stop, target, or options strikes fall meaningfully outside this band (e.g. entry is $89.50 when bundle says $114.90, or call strikes at $88 when bundle is $114), the trade plan is anchored to a price the system does not actually have in hand. This is a critical failure mode: R2 news scout sometimes returns hallucinated prices from web search noise, and if the Judge anchors the trade plan to that fabricated price, the user could place real orders at levels that have no relationship to where the contract actually trades.
+
+Flag SPECIFIC mismatches. Each entry should describe ONE level that's off-bundle (e.g., "entry $89.50 is 22% below bundle price $114.90 — appears anchored to R2 hallucinated price" or "options put strikes $88/$83 anchored to $89.50, not bundle $114.90").
+
+Rule 7 flags are MATERIAL — they trigger retry with explicit instruction to re-anchor trade levels to the bundle's currentPrice. The Judge can keep its directional thesis but MUST re-derive entry/stop/target/strikes from the bundle's actual price.
+
+═════════════════════════════════════════════════════════════════════
 
 OUTPUT contract:
 
@@ -2577,7 +2634,8 @@ JSON ONLY:
   "tradePlanIssues": ["specific structural problems with entry/stop/target (Rule 3), 0-3 items. Empty array if clean. Examples: 'BULLISH but stop ($52) above entry ($48)', 'Target is unparseable: above breakout', 'Stop within 0.15× ATR — inside noise band'"],
   "optionsStrategyIssues": ["specific missing components in optionsStrategy (Rule 4), 0-6 items. Empty array if clean or N/A. Examples: 'No expiry window specified', 'No IV regime context', 'Generic recommend calls without strikes'"],
   "signalMismatchConcern": "single string describing how signal contradicts debate weight (Rule 5), or null if signal aligns with evidence.",
-  "sourceIntegrityIssues": ["specific instances where the draft acknowledged contaminated sources (Rule 6), 0-5 items. Empty array if clean. Examples: 'Lead R2 cited fabricated Berkshire Hathaway 13F position', 'Devil R2 invented institutional ownership claim that failed verification'. Scan summary/winningArgument/dissent for words like fabricated/hallucinated/proven false/could not verify."]
+  "sourceIntegrityIssues": ["specific instances where the draft acknowledged contaminated sources (Rule 6), 0-5 items. Empty array if clean. Examples: 'Lead R2 cited fabricated Berkshire Hathaway 13F position', 'Devil R2 invented institutional ownership claim that failed verification'. Scan summary/winningArgument/dissent for words like fabricated/hallucinated/proven false/could not verify."],
+  "priceGroundingViolations": ["specific trade levels anchored to a price >3% from bundle's currentPrice (Rule 7), 0-4 items. Empty array if clean. Each entry describes ONE off-bundle level. Examples: 'entry $89.50 is 22% below bundle price $114.90 — appears anchored to R2 hallucinated price', 'options put strikes $88/$83 anchored to $89.50 not bundle $114.90'. Check entry, stop, target, and any options strike against the 3% band around bundle currentPrice."]
 }`
 
   try {
@@ -2603,13 +2661,15 @@ JSON ONLY:
     const optionsStrategyIssues = Array.isArray(raw.optionsStrategyIssues) ? raw.optionsStrategyIssues.slice(0, 6) : []
     const signalMismatchConcern = typeof raw.signalMismatchConcern === 'string' && raw.signalMismatchConcern.trim() ? raw.signalMismatchConcern : null
     const sourceIntegrityIssues = Array.isArray(raw.sourceIntegrityIssues) ? raw.sourceIntegrityIssues.slice(0, 5) : []
+    const priceGroundingViolations = Array.isArray(raw.priceGroundingViolations) ? raw.priceGroundingViolations.slice(0, 4) : []
 
     // ── Compute overallStatus deterministically based on which rules fired ──
-    // material if rule 3, 5, or 6 fired, OR if rule 2 delta >= 15 (severe miscalibration)
+    // material if rule 3, 5, 6, or 7 fired, OR if rule 2 delta >= 15 (severe miscalibration)
     const materialRuleNumbers: number[] = []
     if (tradePlanIssues.length > 0) materialRuleNumbers.push(3)
     if (signalMismatchConcern) materialRuleNumbers.push(5)
     if (sourceIntegrityIssues.length > 0) materialRuleNumbers.push(6)
+    if (priceGroundingViolations.length > 0) materialRuleNumbers.push(7)
     if (Math.abs(delta) >= 15) materialRuleNumbers.push(2)
 
     // minor if any flag fired but no material ones
@@ -2641,6 +2701,7 @@ JSON ONLY:
       optionsStrategyIssues,
       signalMismatchConcern,
       sourceIntegrityIssues,
+      priceGroundingViolations,
       overallStatus,
       materialRuleNumbers,
       calibratorModel: 'claude-opus-4-7',
@@ -2666,6 +2727,7 @@ JSON ONLY:
       optionsStrategyIssues: [],
       signalMismatchConcern: null,
       sourceIntegrityIssues: [],
+      priceGroundingViolations: [],
       overallStatus: 'clean',
       materialRuleNumbers: [],
       calibratorModel: 'reviewer-failed',
@@ -2894,14 +2956,19 @@ SOURCE INTEGRITY (Rule 6) — MUST FIX:
 ${calibration.sourceIntegrityIssues.map(issue => `  - ${issue}`).join('\n')}
   Your draft's narrative explicitly acknowledged that the debate built on fabricated, hallucinated, or verification-failed sources. This is unacceptable in a user-facing verdict. Re-derive the verdict using ONLY verified evidence from the bundle and the surviving parts of the debate. Do NOT allow the discarded claim to influence framing, confidence, or trade plan. Do NOT mention "fabricated", "hallucinated", "proven false", "could not verify" or similar language in your revised summary, winningArgument, or dissent — those phrases should not appear in the user-facing verdict. If the discarded source was a meaningful part of the original reasoning, your revised confidence should reflect the weaker remaining evidence (typically lower than the draft).` : ''
 
+  const priceGroundingBlock = calibration.priceGroundingViolations.length > 0 ? `
+PRICE GROUNDING (Rule 7) — MUST FIX:
+${calibration.priceGroundingViolations.map(issue => `  - ${issue}`).join('\n')}
+  Your draft's trade plan anchors entry/stop/target or options strikes to a price that differs from the bundle's ground-truth currentPrice ($${bundle.currentPrice.toFixed(2)}) by more than 3%. This is a critical failure: the R2 news scout sometimes returns hallucinated prices from web search noise, and you appear to have anchored the trade plan to that fabricated number instead of the bundle's actual price. RE-DERIVE all trade levels from the bundle's currentPrice ($${bundle.currentPrice.toFixed(2)}). You can keep your directional thesis (BULLISH/BEARISH/NEUTRAL) — that may be right — but every price level must be plausible relative to $${bundle.currentPrice.toFixed(2)}. If you cannot justify the original off-bundle levels with bundle-grounded reasoning, replace them with levels derived from technical support/resistance visible in the bundle's actual price action. Do NOT defend the off-bundle anchoring; replace it.` : ''
+
   const calibrationGuidance = `
 
 ━━━ INDEPENDENT REVIEWER FEEDBACK ON YOUR DRAFT ━━━
 
 Your DRAFT verdict was ${draft.signal} @ ${draft.confidence}% confidence with entry ${draft.entryPrice ?? '(none)'} / stop ${draft.stopLoss ?? '(none)'} / target ${draft.takeProfit ?? '(none)'}.
 
-An independent reviewer (Claude Opus) audited your draft against a 6-rule procedural checklist. The following concerns were flagged as material and need to be addressed in your final verdict:
-${calibrationBlock}${tradePlanBlock}${optionsBlock}${signalBlock}${sourceIntegrityBlock}
+An independent reviewer (Claude Opus) audited your draft against a 7-rule procedural checklist. The following concerns were flagged as material and need to be addressed in your final verdict:
+${calibrationBlock}${tradePlanBlock}${optionsBlock}${signalBlock}${sourceIntegrityBlock}${priceGroundingBlock}
 
 The reviewer did NOT re-analyze the directional thesis — only audit your draft for procedural and structural quality. You are NOT required to follow every recommendation blindly, but address each flagged concern explicitly. If you disagree with a flag, your final verdict should make the case for why your draft was correct on that dimension.
 
