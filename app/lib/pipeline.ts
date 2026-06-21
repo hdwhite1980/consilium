@@ -165,6 +165,14 @@ export interface JudgeReviewResult {
    *  and the Judge anchors the trade plan to it instead of the bundle's ground truth.
    *  Each entry describes ONE level-vs-bundle-price mismatch. Empty when clean. */
   priceGroundingViolations: string[]
+  /** Rule 8 (Layer 6 Fix 4 — futures only): for futures bundles, do the options
+   *  strikes reference the underlying ETF proxy's strike range instead of the
+   *  actual futures contract's strike range? E.g., for ES the Judge writes strikes
+   *  of $760/$730 (SPY-scale) when the real ES options chain trades around 5500+.
+   *  This is the basis-mismatch that the Reviewer noted as a soft "options format"
+   *  flag in the second CL verdict — now elevated to a material check.
+   *  Each entry describes ONE off-contract strike. Empty when clean (or N/A for non-futures). */
+  optionsBasisIssues: string[]
 
   // ── Overall status determines retry behavior ──
   /** clean = no flags fired
@@ -2532,15 +2540,42 @@ Flag SPECIFIC mismatches. Each entry should describe ONE level that's off-bundle
 Rule 7 flags are MATERIAL — they trigger retry with explicit instruction to re-anchor trade levels to the bundle's currentPrice. The Judge can keep its directional thesis but MUST re-derive entry/stop/target/strikes from the bundle's actual price.
 
 ═════════════════════════════════════════════════════════════════════
+RULE 8 — Options basis-mismatch (futures only)
+═════════════════════════════════════════════════════════════════════
+${isFuturesBundle(bundle) ? `For futures bundle ${bundle.ticker}, do the options strikes reference the underlying PROXY ETF strike range instead of the actual futures contract's strike range?
+
+This rule exists because for futures contracts like ES/NQ/RTY/YM, the bundle's technicals come from the underlying ETF proxy (SPY/QQQ/IWM/DIA). The Judge may pull a strike from the proxy's strike-range and write it into the optionsStrategy field without translating to the real futures options chain.
+
+CONCRETE GUIDANCE:
+- Bundle price (derived): $${bundle.currentPrice.toFixed(2)} — this IS roughly where ${bundle.ticker} options chain trades, IF priceDerivation is 'linear' (ES/NQ/RTY/YM equity-index futures).
+- For proxy_only families (CL/GC/ZB/etc), the bundle price is the PROXY's price (USO/GLD/TLT), NOT the futures contract. Real ${bundle.ticker} options trade at very different strike values.
+
+For 'linear' families: strikes within ±10% of bundle currentPrice are plausible.
+For 'proxy_only' families: ANY specific dollar strike is suspect — the Judge likely pulled it from the proxy ETF's chain. The verdict should either:
+  (a) decline to give specific strikes (use phrases like "ATM put", "5% OTM call", "delta-25 strike"), OR
+  (b) explicitly state the strike is for the proxy ETF and provide a translation note, OR
+  (c) skip the optionsStrategy field entirely.
+
+Flag SPECIFIC mismatches. Examples:
+  - "ES strikes \\$760/\\$730 reference SPY chain ($746 SPY × 10 ≈ ES at $7460; real ES options chain would use strikes near 7400/7500)"
+  - "CL strikes \\$115/\\$122 reference USO ETF chain; actual CL options trade in dollars-per-barrel near 60-80 currently"
+
+If the verdict does NOT include any optionsStrategy field, return an empty array.
+If the verdict's options strikes are clearly conceptual (e.g. "ATM puts", "OTM calls") rather than specific dollar amounts, return an empty array.
+If this is an equity-index linear-derived futures (ES/MES/NQ/MNQ/RTY/M2K/YM/MYM/VX) AND strikes are within ±10% of bundle currentPrice, return an empty array.
+
+Rule 8 flags are MATERIAL — they trigger retry with explicit instruction to either restate strikes for the actual futures contract OR drop specific strikes for conceptual deltas. Pretending the proxy's chain is the contract's chain is a real misinformation risk for users.` : `N/A — this is not a futures bundle. Return an empty array.`}
+
+═════════════════════════════════════════════════════════════════════
 
 OUTPUT contract:
 
-You return strict JSON. The schema includes all 6 rules' findings PLUS overall status. Material concerns trigger a one-shot Judge retry; minor notes only get surfaced. Cleanness is the default — only flag when the rule actually fires.
+You return strict JSON. The schema includes all 8 rules' findings PLUS overall status. Material concerns trigger a one-shot Judge retry; minor notes only get surfaced. Cleanness is the default — only flag when the rule actually fires.
 
 overallStatus computation:
 - "clean" = no flags on any rule
 - "minor_notes" = flags only on rules 1 or 4, AND rule 2 adjustment if any is <15 points
-- "material_concerns" = rules 3, 5, or 6 fired, OR rule 2 adjustment is >=15 points
+- "material_concerns" = rules 3, 5, 6, 7, or 8 fired, OR rule 2 adjustment is >=15 points
 
 ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
 }
@@ -2635,7 +2670,8 @@ JSON ONLY:
   "optionsStrategyIssues": ["specific missing components in optionsStrategy (Rule 4), 0-6 items. Empty array if clean or N/A. Examples: 'No expiry window specified', 'No IV regime context', 'Generic recommend calls without strikes'"],
   "signalMismatchConcern": "single string describing how signal contradicts debate weight (Rule 5), or null if signal aligns with evidence.",
   "sourceIntegrityIssues": ["specific instances where the draft acknowledged contaminated sources (Rule 6), 0-5 items. Empty array if clean. Examples: 'Lead R2 cited fabricated Berkshire Hathaway 13F position', 'Devil R2 invented institutional ownership claim that failed verification'. Scan summary/winningArgument/dissent for words like fabricated/hallucinated/proven false/could not verify."],
-  "priceGroundingViolations": ["specific trade levels anchored to a price >3% from bundle's currentPrice (Rule 7), 0-4 items. Empty array if clean. Each entry describes ONE off-bundle level. Examples: 'entry $89.50 is 22% below bundle price $114.90 — appears anchored to R2 hallucinated price', 'options put strikes $88/$83 anchored to $89.50 not bundle $114.90'. Check entry, stop, target, and any options strike against the 3% band around bundle currentPrice."]
+  "priceGroundingViolations": ["specific trade levels anchored to a price >3% from bundle's currentPrice (Rule 7), 0-4 items. Empty array if clean. Each entry describes ONE off-bundle level. Examples: 'entry $89.50 is 22% below bundle price $114.90 — appears anchored to R2 hallucinated price', 'options put strikes $88/$83 anchored to $89.50 not bundle $114.90'. Check entry, stop, target, and any options strike against the 3% band around bundle currentPrice."],
+  "optionsBasisIssues": ["specific options strikes that reference the proxy ETF chain instead of the actual futures contract (Rule 8 — futures only), 0-3 items. Empty array if clean or N/A. Examples: 'ES strikes 760/730 reference SPY chain; real ES options chain trades near 7400/7500', 'CL strikes 115/122 reference USO ETF; actual CL options chain trades dollars-per-barrel near 60-80'. For non-futures bundles, return empty array. For futures bundles without specific dollar strikes (conceptual only), return empty array."]
 }`
 
   try {
@@ -2662,14 +2698,16 @@ JSON ONLY:
     const signalMismatchConcern = typeof raw.signalMismatchConcern === 'string' && raw.signalMismatchConcern.trim() ? raw.signalMismatchConcern : null
     const sourceIntegrityIssues = Array.isArray(raw.sourceIntegrityIssues) ? raw.sourceIntegrityIssues.slice(0, 5) : []
     const priceGroundingViolations = Array.isArray(raw.priceGroundingViolations) ? raw.priceGroundingViolations.slice(0, 4) : []
+    const optionsBasisIssues = Array.isArray(raw.optionsBasisIssues) ? raw.optionsBasisIssues.slice(0, 3) : []
 
     // ── Compute overallStatus deterministically based on which rules fired ──
-    // material if rule 3, 5, 6, or 7 fired, OR if rule 2 delta >= 15 (severe miscalibration)
+    // material if rule 3, 5, 6, 7, or 8 fired, OR if rule 2 delta >= 15 (severe miscalibration)
     const materialRuleNumbers: number[] = []
     if (tradePlanIssues.length > 0) materialRuleNumbers.push(3)
     if (signalMismatchConcern) materialRuleNumbers.push(5)
     if (sourceIntegrityIssues.length > 0) materialRuleNumbers.push(6)
     if (priceGroundingViolations.length > 0) materialRuleNumbers.push(7)
+    if (optionsBasisIssues.length > 0) materialRuleNumbers.push(8)
     if (Math.abs(delta) >= 15) materialRuleNumbers.push(2)
 
     // minor if any flag fired but no material ones
@@ -2702,6 +2740,7 @@ JSON ONLY:
       signalMismatchConcern,
       sourceIntegrityIssues,
       priceGroundingViolations,
+      optionsBasisIssues,
       overallStatus,
       materialRuleNumbers,
       calibratorModel: 'claude-opus-4-7',
@@ -2728,6 +2767,7 @@ JSON ONLY:
       signalMismatchConcern: null,
       sourceIntegrityIssues: [],
       priceGroundingViolations: [],
+      optionsBasisIssues: [],
       overallStatus: 'clean',
       materialRuleNumbers: [],
       calibratorModel: 'reviewer-failed',
@@ -2961,14 +3001,19 @@ PRICE GROUNDING (Rule 7) — MUST FIX:
 ${calibration.priceGroundingViolations.map(issue => `  - ${issue}`).join('\n')}
   Your draft's trade plan anchors entry/stop/target or options strikes to a price that differs from the bundle's ground-truth currentPrice ($${bundle.currentPrice.toFixed(2)}) by more than 3%. This is a critical failure: the R2 news scout sometimes returns hallucinated prices from web search noise, and you appear to have anchored the trade plan to that fabricated number instead of the bundle's actual price. RE-DERIVE all trade levels from the bundle's currentPrice ($${bundle.currentPrice.toFixed(2)}). You can keep your directional thesis (BULLISH/BEARISH/NEUTRAL) — that may be right — but every price level must be plausible relative to $${bundle.currentPrice.toFixed(2)}. If you cannot justify the original off-bundle levels with bundle-grounded reasoning, replace them with levels derived from technical support/resistance visible in the bundle's actual price action. Do NOT defend the off-bundle anchoring; replace it.` : ''
 
+  const optionsBasisBlock = calibration.optionsBasisIssues.length > 0 ? `
+OPTIONS BASIS (Rule 8) — MUST FIX:
+${calibration.optionsBasisIssues.map(issue => `  - ${issue}`).join('\n')}
+  Your draft includes options strikes that reference the underlying ETF proxy's strike chain instead of the actual futures contract's options chain. For futures contracts where the bundle uses an ETF proxy (USO/GLD/TLT/CORN/etc.), the bundle's $${bundle.currentPrice.toFixed(2)} price is the PROXY's price, not the contract's price. The real ${bundle.ticker} options chain trades at very different strike values. EITHER (a) replace the specific dollar strikes with conceptual deltas (e.g., "ATM put", "5% OTM call", "delta-25 strike"), OR (b) explicitly label the strikes as proxy-ETF strikes with a translation note, OR (c) remove the optionsStrategy field entirely from this verdict. Do NOT defend the proxy strikes as if they apply to the contract — that's the misinformation we're catching.` : ''
+
   const calibrationGuidance = `
 
 ━━━ INDEPENDENT REVIEWER FEEDBACK ON YOUR DRAFT ━━━
 
 Your DRAFT verdict was ${draft.signal} @ ${draft.confidence}% confidence with entry ${draft.entryPrice ?? '(none)'} / stop ${draft.stopLoss ?? '(none)'} / target ${draft.takeProfit ?? '(none)'}.
 
-An independent reviewer (Claude Opus) audited your draft against a 7-rule procedural checklist. The following concerns were flagged as material and need to be addressed in your final verdict:
-${calibrationBlock}${tradePlanBlock}${optionsBlock}${signalBlock}${sourceIntegrityBlock}${priceGroundingBlock}
+An independent reviewer (Claude Opus) audited your draft against an 8-rule procedural checklist. The following concerns were flagged as material and need to be addressed in your final verdict:
+${calibrationBlock}${tradePlanBlock}${optionsBlock}${signalBlock}${sourceIntegrityBlock}${priceGroundingBlock}${optionsBasisBlock}
 
 The reviewer did NOT re-analyze the directional thesis — only audit your draft for procedural and structural quality. You are NOT required to follow every recommendation blindly, but address each flagged concern explicitly. If you disagree with a flag, your final verdict should make the case for why your draft was correct on that dimension.
 

@@ -171,23 +171,41 @@ export function getMarketStatus(now: Date = new Date()): MarketStatus {
 // =============================================================
 
 async function fetchSnapshot(ticker: string): Promise<AlpacaSnapshot | null> {
+  const hasKey = !!process.env.ALPACA_API_KEY
+  const hasSecret = !!process.env.ALPACA_SECRET_KEY
+  if (!hasKey || !hasSecret) {
+    console.warn(`[extended-hours] ${ticker}: missing Alpaca credentials (key=${hasKey} secret=${hasSecret}). Set ALPACA_API_KEY and ALPACA_SECRET_KEY in env.`)
+    return null
+  }
+
+  const lastErrors: string[] = []
   for (const feed of ['sip', 'iex'] as const) {
+    const url = `${BASE}/v2/stocks/${ticker}/snapshot?feed=${feed}`
     try {
-      const url = `${BASE}/v2/stocks/${ticker}/snapshot?feed=${feed}`
       const res = await fetch(url, {
         headers: alpacaHeaders(),
         next: { revalidate: 60 },
       })
-      if (res.ok) {
-        const data = (await res.json()) as AlpacaSnapshot
-        if (data && (data.latestTrade || data.dailyBar)) {
-          return data
-        }
+      if (!res.ok) {
+        // Bug 20: surface the actual error so we can diagnose
+        let bodyText = ''
+        try { bodyText = await res.text() } catch { /* ignore */ }
+        const truncated = bodyText.slice(0, 200)
+        lastErrors.push(`feed=${feed} HTTP ${res.status} body=${truncated}`)
+        continue
       }
-    } catch {
-      // try next feed
+      const data = (await res.json()) as AlpacaSnapshot
+      if (data && (data.latestTrade || data.dailyBar)) {
+        return data
+      }
+      lastErrors.push(`feed=${feed} HTTP 200 but no latestTrade or dailyBar in response`)
+    } catch (e) {
+      lastErrors.push(`feed=${feed} exception: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
+
+  // Bug 20: never swallow silently — if both feeds failed, log why
+  console.warn(`[extended-hours] ${ticker} snapshot fetch failed on all feeds. BASE=${BASE}. Errors: ${lastErrors.join(' | ')}`)
   return null
 }
 
