@@ -2482,10 +2482,12 @@ Rule 3 flags are MATERIAL — they trigger retry.
 ═════════════════════════════════════════════════════════════════════
 RULE 4 — Options strategy format violations (per Bug 25 contract)
 ═════════════════════════════════════════════════════════════════════
-If the verdict includes an optionsStrategy field, does it include all 6 required components?
+${isFuturesBundle(bundle) ? `JURISDICTIONAL CARVE-OUT FOR FUTURES BUNDLES: This is a futures bundle (${bundle.ticker}). For futures bundles, Rule 4 covers ONLY components (a), (c), (d), (e), (f) below. ALL strike-related concerns — including specific dollar strikes that look mispriced, strikes referencing the proxy ETF chain, strikes outside plausible futures-options range, or strikes anchored to wrong contract — are the EXCLUSIVE jurisdiction of Rule 8 (Options basis-mismatch), not Rule 4. If you notice ANY strike issue here, do NOT flag it under Rule 4 — pass it to Rule 8 instead and leave Rule 4's strike component (b) un-flagged. Rule 4 is surface-only; Rule 8 is material; the same strike issue cannot generate both flags. Choose Rule 8 only for futures-strike issues.
+
+`: ''}If the verdict includes an optionsStrategy field, does it include all 6 required components?
 
   (a) Specific structure (long call/put, vertical spread, calendar, iron condor — NOT just "options" or "calls")
-  (b) Specific strike(s) anchored to current price + target delta
+  (b) Specific strike(s) anchored to current price + target delta${isFuturesBundle(bundle) ? '  [FUTURES BUNDLE: skip this component here, handle under Rule 8]' : ''}
   (c) Specific expiry window anchored to thesis horizon
   (d) IV regime context (elevated/normal/compressed vs historical or earnings implied move)
   (e) Approximate dollar risk per contract or spread
@@ -2542,7 +2544,9 @@ Rule 7 flags are MATERIAL — they trigger retry with explicit instruction to re
 ═════════════════════════════════════════════════════════════════════
 RULE 8 — Options basis-mismatch (futures only)
 ═════════════════════════════════════════════════════════════════════
-${isFuturesBundle(bundle) ? `For futures bundle ${bundle.ticker}, do the options strikes reference the underlying PROXY ETF strike range instead of the actual futures contract's strike range?
+${isFuturesBundle(bundle) ? `RULE 8 IS THE PRIMARY AND EXCLUSIVE JURISDICTION FOR FUTURES OPTIONS-STRIKE ISSUES. If you saw a futures-options strike concern and were tempted to flag it under Rule 4 above, that was wrong — flag it here under Rule 8 instead. Rule 4 explicitly defers to Rule 8 for strike component (b) on futures bundles.
+
+For futures bundle ${bundle.ticker}, do the options strikes reference the underlying PROXY ETF strike range instead of the actual futures contract's strike range?
 
 This rule exists because for futures contracts like ES/NQ/RTY/YM, the bundle's technicals come from the underlying ETF proxy (SPY/QQQ/IWM/DIA). The Judge may pull a strike from the proxy's strike-range and write it into the optionsStrategy field without translating to the real futures options chain.
 
