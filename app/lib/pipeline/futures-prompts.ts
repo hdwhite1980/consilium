@@ -14,6 +14,7 @@
 import type { FuturesMeta } from '../signals/futures-bundle'
 import { formatCotForPrompt } from '../signals/futures-bundle'
 import { formatEnergyFundamentalsForPrompt, type EnergyFundamentalsSnapshot } from '../signals/energy-fundamentals'
+import { formatGrainFundamentalsForPrompt, type GrainFundamentalsSnapshot } from '../signals/grain-fundamentals'
 
 // ─────────────────────────────────────────────────────────────
 // Compact data-availability block
@@ -42,6 +43,10 @@ function buildCompactDataBlock(meta: FuturesMeta): string {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const energyData = (meta as any).energyFundamentals as EnergyFundamentalsSnapshot | undefined
   const hasEiaData = energyData != null
+  // Layer 7: check for grain fundamentals
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const grainData = (meta as any).grainFundamentals as GrainFundamentalsSnapshot | undefined
+  const hasGrainData = grainData != null
 
   parts.push(``)
   // DATA WIRED line — now includes EIA when present
@@ -51,10 +56,11 @@ function buildCompactDataBlock(meta: FuturesMeta): string {
   wiredItems.push(`technical indicators on ${meta.underlyingEtfProxy ?? 'underlying'}`)
   wiredItems.push('macro/news context')
   if (hasEiaData) wiredItems.push('EIA weekly petroleum/natural gas data (in prompt below)')
+  if (hasGrainData) wiredItems.push('USDA NASS crop progress + NOAA weather data (in prompt below)')
   parts.push(`DATA WIRED: ${wiredItems.join(', ')}.`)
 
-  // DATA NOT WIRED — adjusts when EIA is present for energy
-  parts.push(`DATA NOT WIRED: ${notWiredList(meta.category, hasEiaData)}. Do NOT cite these data sources — say "${meta.category} fundamentals beyond what is wired are not in data layer" if pressed.`)
+  // DATA NOT WIRED — adjusts when EIA/USDA is present for energy/grains
+  parts.push(`DATA NOT WIRED: ${notWiredList(meta.category, hasEiaData, hasGrainData)}. Do NOT cite these data sources — say "${meta.category} fundamentals beyond what is wired are not in data layer" if pressed.`)
 
   if (meta.dataAvailability.cotData) {
     parts.push(``)
@@ -67,18 +73,25 @@ function buildCompactDataBlock(meta: FuturesMeta): string {
     parts.push(formatEnergyFundamentalsForPrompt(energyData))
   }
 
+  // Layer 7: USDA + NOAA block for ZC/ZS/ZW/KE/ZM/ZL
+  if (hasGrainData && grainData) {
+    parts.push(``)
+    parts.push(formatGrainFundamentalsForPrompt(grainData))
+  }
+
   return parts.join('\n')
 }
 
-function notWiredList(category: FuturesMeta['category'], hasEiaData: boolean): string {
+function notWiredList(category: FuturesMeta['category'], hasEiaData: boolean, hasGrainData: boolean): string {
   switch (category) {
     case 'energy':
-      // Layer 6: EIA inventory + refinery util ARE wired for CL/NG when hasEiaData=true.
-      // OPEC production decisions still NOT wired (need news source).
       return hasEiaData
         ? 'OPEC production decisions (use news scout only), real-time refinery outages, Cushing inventory breakdowns'
         : 'EIA weekly inventory, OPEC production, refinery utilization, SPR levels'
-    case 'grains':     return 'USDA WASDE, crop progress, drought monitor, USDA export sales'
+    case 'grains':
+      return hasGrainData
+        ? 'WASDE supply/demand balances, USDA export sales report, FAS daily export sales reporting'
+        : 'USDA WASDE, crop progress, drought monitor, USDA export sales'
     case 'metals':     return 'COMEX warehouse stocks, LBMA fixes, World Gold Council central bank flows'
     case 'rates':      return 'FRED yield curve, Fed funds futures-implied rates, Treasury auction results, breakevens'
     case 'volatility': return 'VIX term structure (VIX9D/VIX3M/VIX6M), VVIX, SKEW'
@@ -109,9 +122,15 @@ function categoryLabel(cat: FuturesMeta['category']): string {
 export function buildFuturesLeadSystemPrompt(meta: FuturesMeta): string {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const hasEia = (meta as any).energyFundamentals != null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const hasGrain = (meta as any).grainFundamentals != null
   const eiaRule = hasEia
     ? `- EIA data is wired for ${meta.root}: the "EIA WEEKLY ..." block above is real. Treat the WoW change + 5Y band position as primary fundamental drivers. Consensus expectation is NOT in the data layer — call out builds/draws as raw signal, and acknowledge that the market-moving signal is actual-vs-consensus which you cannot compute.`
     : ''
+  const grainRule = hasGrain
+    ? `- USDA + NOAA data is wired for ${meta.root}: the "USDA NASS + NOAA WEATHER" block above is real. Crop condition % good+excellent and weather stress in major growing states are the primary near-term fundamental drivers. WASDE supply/demand balance is NOT in the data layer — treat USDA condition ratings as the proxy for crop health. Weather anomalies (heat stress, drought, excessive rain) over the next 30 days matter most for yield outlook.`
+    : ''
+  const ruleAddendums = [eiaRule, grainRule].filter(Boolean).join('\n')
 
   return `You are the Lead Analyst in an elite AI council analyzing a FUTURES CONTRACT: ${meta.root}. This is a derivative, NOT a stock or ETF.
 
@@ -122,7 +141,7 @@ ANALYSIS RULES:
 - COT positioning is a primary input. Extreme >30% net-of-OI is reversal risk; building positioning is momentum confirmation.
 - Do not cite data sources listed as "DATA NOT WIRED" above. If you would normally cite them, instead state "data layer doesn't include X" and reason from what IS available.
 - Futures have no earnings, no insider trades, no analyst ratings, no P/E. Don't use those frames.
-- For non-equity-index families, the underlying proxy can diverge from the contract via contango/basis — acknowledge if proxy data is your main evidence.${eiaRule ? '\n' + eiaRule : ''}
+- For non-equity-index families, the underlying proxy can diverge from the contract via contango/basis — acknowledge if proxy data is your main evidence.${ruleAddendums ? '\n' + ruleAddendums : ''}
 
 Be decisive. Cite specific evidence. Use the same JSON output schema the user prompt requests below.`
 }

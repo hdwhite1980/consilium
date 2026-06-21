@@ -60,6 +60,10 @@ export interface FuturesMeta {
   // Null for all other families.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   energyFundamentals?: any  // EnergyFundamentalsSnapshot; kept as `any` to avoid cross-module circular import in this Layer's seam
+  // Layer 7: grain-family fundamentals (ZC/ZS/ZW/KE/ZM/ZL).
+  // Null for all other families.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  grainFundamentals?: any  // GrainFundamentalsSnapshot; same loose-coupling pattern as energyFundamentals
 }
 
 export interface CotSnapshot {
@@ -93,6 +97,9 @@ export interface BuildFuturesBundleInput {
   // Layer 6: energy-family snapshot (CL/MCL/NG/QG only). Null for others.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   energyFundamentals?: any | null
+  // Layer 7: grain-family snapshot (ZC/ZS/ZW/KE/ZM/ZL only). Null for others.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  grainFundamentals?: any | null
 }
 
 export interface FuturesBundle extends SignalBundle {
@@ -127,10 +134,13 @@ export function buildFuturesBundle(input: BuildFuturesBundleInput): FuturesBundl
     proxyPrice: number
   } | null | undefined
 
-  // Layer 6: if energyFundamentals is present, the family IS effectively wired
+  // Layer 6/7: if energy/grain Fundamentals are present, the family IS effectively wired
   // regardless of the static spec flag. The spec marks "fundamentalsWired: false"
-  // for energy because in v1 the data layer was empty; Layer 6 fixes that for CL/NG.
-  const fundamentalsActuallyWired = spec.dataLayer.fundamentalsWired || input.energyFundamentals != null
+  // for those families because in v1 the data layer was empty; Layers 6/7 fix that
+  // for CL/NG (energy) and ZC/ZS/ZW/KE/ZM/ZL (grains).
+  const fundamentalsActuallyWired = spec.dataLayer.fundamentalsWired
+    || input.energyFundamentals != null
+    || input.grainFundamentals != null
 
   const meta: FuturesMeta = {
     root: input.futuresRoot,
@@ -154,6 +164,7 @@ export function buildFuturesBundle(input: BuildFuturesBundleInput): FuturesBundl
       futuresPrice: Number(baseBundle.currentPrice) || null,
     } : null,
     energyFundamentals: input.energyFundamentals ?? undefined,
+    grainFundamentals: input.grainFundamentals ?? undefined,
   }
 
   return {

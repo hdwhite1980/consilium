@@ -27,6 +27,7 @@ import { buildFuturesBundle, type FuturesBundle, type FuturesMeta } from '@/app/
 import { fetchFuturesCot } from '@/app/lib/signals/futures-cot'
 import { getFuturesSpec } from '@/app/lib/trading/futures-sizing'
 import { buildEnergyFundamentals } from '@/app/lib/signals/energy-fundamentals'
+import { buildGrainFundamentals } from '@/app/lib/signals/grain-fundamentals'
 
 /**
  * Type guard: is this bundle a futures bundle?
@@ -88,21 +89,29 @@ export async function buildFuturesAwareBundle(
     }
   }
 
-  // 2. Fetch CFTC COT (best-effort) AND energy fundamentals in parallel
+  // 2. Fetch CFTC COT (best-effort) AND energy/grain fundamentals in parallel
   onProgress?.(`Fetching CFTC COT for ${futuresRoot}`)
   const isEnergyFamily = spec.category === 'energy'
+  const isGrainFamily = spec.category === 'grains'
   if (isEnergyFamily) {
     onProgress?.(`Fetching EIA fundamentals for ${futuresRoot}`)
   }
-  const [cotSnapshot, energyFundamentals] = await Promise.all([
+  if (isGrainFamily) {
+    onProgress?.(`Fetching USDA + NOAA fundamentals for ${futuresRoot}`)
+  }
+  const [cotSnapshot, energyFundamentals, grainFundamentals] = await Promise.all([
     fetchFuturesCot(futuresRoot).catch(() => null),
     isEnergyFamily ? buildEnergyFundamentals(futuresRoot).catch(() => null) : Promise.resolve(null),
+    isGrainFamily ? buildGrainFundamentals(futuresRoot).catch(() => null) : Promise.resolve(null),
   ])
   if (!cotSnapshot) {
     onProgress?.(`COT data not available for ${futuresRoot}`)
   }
   if (isEnergyFamily && !energyFundamentals) {
     onProgress?.(`EIA fundamentals not available for ${futuresRoot} (CL/MCL/NG/QG only in v1, or EIA fetch failed)`)
+  }
+  if (isGrainFamily && !grainFundamentals) {
+    onProgress?.(`USDA/NOAA fundamentals not available for ${futuresRoot} (fetch failed or off-season)`)
   }
 
   // 3. Build futures bundle
@@ -113,6 +122,7 @@ export async function buildFuturesAwareBundle(
     cotSnapshot,
     currentFuturesPrice: null,  // future enhancement: live front-month from Tradovate
     energyFundamentals,
+    grainFundamentals,
   })
 
   return futuresBundle
