@@ -24,15 +24,16 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 
 export interface NassRecord {
   commodity_desc: string
-  state_alpha: string
+  state_alpha: string         // 'US' for national rows, 2-letter state for state rows
   state_name: string
   year: string
   week_ending: string         // YYYY-MM-DD or empty
   reference_period_desc: string  // "WEEK #N" or "YEAR" etc.
   short_desc: string          // human-readable description, e.g. "CORN - PROGRESS, MEASURED IN PCT SILKING"
-  unit_desc: string           // e.g. "PCT"
+  unit_desc: string           // e.g. "PCT EXCELLENT", "PCT GOOD", "PCT FAIR", "PCT POOR", "PCT VERY POOR"
   Value: string               // numeric value as string (e.g. "67" for 67%)
   load_time: string
+  agg_level_desc?: string     // 'NATIONAL' | 'STATE' | etc.
 }
 
 interface NassApiResponse {
@@ -127,8 +128,11 @@ export async function checkUsdaHealth(): Promise<{ ok: boolean; error?: string; 
     return { ok: false, error: 'USDA fetch returned no data for current year (key valid but no data — could be early in season)' }
   }
   // Pick the row with the most recent week_ending AND a nonzero value
-  // (early-season weeks often have "0 PCT SILKING" placeholder rows).
+  // AND that's a national/US-total row (state_alpha='US' or agg_level_desc='NATIONAL').
+  // Without the national filter, the sample can come from any state and not represent
+  // the actual headline crop progress.
   const meaningful = result
+    .filter(r => r.agg_level_desc === 'NATIONAL' || r.state_alpha === 'US')
     .filter(r => {
       const v = parseInt(r.Value, 10)
       return Number.isFinite(v) && v > 0

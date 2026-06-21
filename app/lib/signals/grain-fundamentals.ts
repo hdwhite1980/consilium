@@ -134,8 +134,12 @@ async function fetchCropProgress(commodity: string, futuresRoot: string): Promis
   const metrics: CropProgressMetric[] = []
 
   // Extract latest progress metrics (national level only)
-  // National rows have agg_level_desc='NATIONAL' but we'll just take state_alpha=''
-  const nationalProgress = records.filter(r => !r.state_alpha)
+  // National rows have agg_level_desc='NATIONAL' AND state_alpha='US' (not empty).
+  // The earlier `!r.state_alpha` filter was wrong — it rejected all national rows
+  // because they have the string "US" as state_alpha (truthy), not empty.
+  const nationalProgress = records.filter(r =>
+    r.agg_level_desc === 'NATIONAL' || r.state_alpha === 'US'
+  )
   const grouped = groupByShortDesc(nationalProgress)
 
   for (const [shortDesc, rows] of Object.entries(grouped)) {
@@ -183,7 +187,10 @@ async function fetchCropProgress(commodity: string, futuresRoot: string): Promis
 
   // Process condition ratings
   if (conditionRecords && conditionRecords.length > 0) {
-    const nationalCond = conditionRecords.filter(r => !r.state_alpha && r.year === String(currentYear))
+    const nationalCond = conditionRecords.filter(r =>
+      (r.agg_level_desc === 'NATIONAL' || r.state_alpha === 'US') &&
+      r.year === String(currentYear)
+    )
 
     // % Good + Excellent (combined bullish health metric)
     const goodExcellent = sumConditionPct(nationalCond, ['GOOD', 'EXCELLENT'])
@@ -269,8 +276,12 @@ function sumConditionPct(records: NassRecord[], levels: string[]): number | null
   if (!latestWeek) return null
   const latestRows = records.filter(r => r.week_ending === latestWeek)
 
+  // Match on unit_desc EXACTLY (e.g. "PCT GOOD", "PCT EXCELLENT", "PCT POOR", "PCT VERY POOR").
+  // Using short_desc.includes was a collision risk: "PCT POOR".includes("POOR") matches both
+  // "CORN ... PCT POOR" and "CORN ... PCT VERY POOR" rows, double-counting.
   for (const lvl of levels) {
-    const row = latestRows.find(r => r.short_desc.toUpperCase().includes(lvl) && r.short_desc.toUpperCase().includes('PCT'))
+    const targetUnit = `PCT ${lvl}`.toUpperCase()
+    const row = latestRows.find(r => (r.unit_desc || '').toUpperCase() === targetUnit)
     if (row) {
       const v = parseInt(row.Value, 10)
       if (Number.isFinite(v)) {
