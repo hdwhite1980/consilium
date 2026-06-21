@@ -38,6 +38,7 @@ export interface UserTradingSettings {
   scannerEnabled: boolean
   scannerMaxConcurrent: number
   scannerMinComposite: number
+  scannerMaxPositionPct: number
   // Active mgmt (existing)
   activeMgmtEnabled: boolean
   reevalDrawdownPct: number
@@ -78,6 +79,7 @@ export const DEFAULT_TRADING_SETTINGS: Omit<UserTradingSettings, 'id' | 'userId'
   scannerEnabled: false,
   scannerMaxConcurrent: 3,
   scannerMinComposite: 70,
+  scannerMaxPositionPct: 0.2000,
   activeMgmtEnabled: false,
   reevalDrawdownPct: 0.5,
   allowTightenStop: true,
@@ -103,6 +105,7 @@ interface DbRow {
   trade_futures: boolean | null
   min_grade: string | null; last_processed_verdict_id: number | string | null
   scanner_enabled: boolean; scanner_max_concurrent: number; scanner_min_composite: number
+  scanner_max_position_pct: string | number | null
   active_mgmt_enabled: boolean; reeval_drawdown_pct: string | number
   allow_tighten_stop: boolean; allow_early_exit: boolean; allow_add_position: boolean
   max_add_count: number
@@ -135,6 +138,8 @@ function rowToSettings(row: DbRow): UserTradingSettings {
     scannerEnabled: row.scanner_enabled ?? false,
     scannerMaxConcurrent: row.scanner_max_concurrent ?? 3,
     scannerMinComposite: row.scanner_min_composite ?? 70,
+    scannerMaxPositionPct: row.scanner_max_position_pct !== null && row.scanner_max_position_pct !== undefined
+      ? Number(row.scanner_max_position_pct) : 0.20,
     activeMgmtEnabled: row.active_mgmt_enabled ?? false,
     reevalDrawdownPct: row.reeval_drawdown_pct !== undefined && row.reeval_drawdown_pct !== null
       ? Number(row.reeval_drawdown_pct) : 0.5,
@@ -184,6 +189,7 @@ export async function upsertUserTradingSettings(
     minGrade: 'min_grade', lastProcessedVerdictId: 'last_processed_verdict_id',
     scannerEnabled: 'scanner_enabled', scannerMaxConcurrent: 'scanner_max_concurrent',
     scannerMinComposite: 'scanner_min_composite',
+    scannerMaxPositionPct: 'scanner_max_position_pct',
     activeMgmtEnabled: 'active_mgmt_enabled', reevalDrawdownPct: 'reeval_drawdown_pct',
     allowTightenStop: 'allow_tighten_stop', allowEarlyExit: 'allow_early_exit',
     allowAddPosition: 'allow_add_position', maxAddCount: 'max_add_count',
@@ -221,6 +227,7 @@ export async function upsertUserTradingSettings(
     min_grade: merged.minGrade, last_processed_verdict_id: merged.lastProcessedVerdictId,
     scanner_enabled: merged.scannerEnabled, scanner_max_concurrent: merged.scannerMaxConcurrent,
     scanner_min_composite: merged.scannerMinComposite,
+    scanner_max_position_pct: merged.scannerMaxPositionPct,
     active_mgmt_enabled: merged.activeMgmtEnabled, reeval_drawdown_pct: merged.reevalDrawdownPct,
     allow_tighten_stop: merged.allowTightenStop, allow_early_exit: merged.allowEarlyExit,
     allow_add_position: merged.allowAddPosition, max_add_count: merged.maxAddCount,
@@ -275,4 +282,21 @@ export function isAssetClassEnabled(s: UserTradingSettings, ac: AssetClass): boo
   if (ac === 'forex') return s.tradeForex
   if (ac === 'futures') return s.tradeFutures
   return false
+}
+
+/**
+ * Compute the scanner price ceiling for a user given their current account equity.
+ * Returns a dollar amount used as priceMax in scanner runs.
+ *
+ * Example:
+ *   equity=$100, scannerMaxPositionPct=0.20 → ceiling $20
+ *   equity=$10000, scannerMaxPositionPct=0.20 → ceiling $2000
+ */
+export function computeScannerPriceCeiling(
+  equity: number,
+  settings: Pick<UserTradingSettings, 'scannerMaxPositionPct'>,
+): number {
+  if (!Number.isFinite(equity) || equity <= 0) return 0
+  const pct = settings.scannerMaxPositionPct > 0 ? settings.scannerMaxPositionPct : 0.20
+  return equity * pct
 }

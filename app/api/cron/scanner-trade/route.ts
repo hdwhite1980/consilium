@@ -3,23 +3,33 @@
 //
 // Scanner-feeds-Council worker. Every 5 min during market hours:
 //   1. For each scanner-enabled user
-//   2. Run the scanner (fast_movers, bullish, newsBoost)
-//   3. Filter picks: composite >= scannerMinComposite, news direct,
+//   2. Read live Alpaca equity → compute scanner priceMax
+//      (equity × scannerMaxPositionPct, default 20%)
+//   3. Run the scanner with the priceMax filter so we only get
+//      stocks the account can actually afford
+//   4. Filter picks: composite >= scannerMinComposite, news direct,
 //      price change in safe range, dedupe against recent verdicts
-//   4. For top picks, POST internally to /api/analyze
-//   5. Existing auto-trade worker will pick up TAKE verdicts naturally
+//   5. For top picks, POST internally to /api/analyze
+//   6. Existing auto-trade worker picks up TAKE verdicts naturally
 //
 // We don't place orders here directly — the analyze route writes to
 // verdict_log, and the existing auto-trade cron picks them up. This
 // keeps scanner trades on the same discipline path as Council trades.
 //
-// Concurrent-position check: counts current OPEN scanner-source
-// positions for this user. If at scannerMaxConcurrent, skip.
+// Capital-awareness (added with scanner_max_position_pct column):
+//   - Tiny account ($100, ceiling $20): scanner finds stocks $5-$20
+//   - Mid account ($10k, ceiling $2k): scanner finds stocks $5-$2k
+//   - Council still applies its own per-trade discipline; the
+//     scanner ceiling is a DISCOVERY filter, not a sizing limit.
+//   - If equity × pct < $5 (the priceMin floor), the scanner
+//     returns nothing for that user; we log clearly and skip.
 // =============================================================
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/app/lib/admin/admin-auth'
-import { listEnabledTradingUsers } from '@/app/lib/trading/settings'
+import { listEnabledTradingUsers, computeScannerPriceCeiling } from '@/app/lib/trading/settings'
+import { loadBrokerCredentialForUse } from '@/app/lib/trading/credentials'
+import { AlpacaClient } from '@/app/lib/trading/alpaca-client'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -28,12 +38,19 @@ export const maxDuration = 60
 interface UserResult {
   userId: string
   scannerEnabled: boolean
+  equity: number | null
+  scannerMaxPositionPct: number
+  priceMaxComputed: number | null
+  priceMaxApplied: number | null
   picksConsidered: number
   picksTriggered: number
   skipped: Array<{ ticker: string; reason: string }>
   triggered: Array<{ ticker: string; composite: number }>
   errors: number
 }
+
+// Fixed floor — avoid pump-and-dump pennies regardless of account size.
+const PRICE_MIN_FLOOR = 5
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const auth = req.headers.get('authorization') ?? ''
@@ -53,6 +70,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       const result: UserResult = {
         userId: settings.userId,
         scannerEnabled: true,
+        equity: null,
+        scannerMaxPositionPct: settings.scannerMaxPositionPct,
+        priceMaxComputed: null,
+        priceMaxApplied: null,
         picksConsidered: 0,
         picksTriggered: 0,
         skipped: [],
@@ -61,7 +82,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       }
 
       try {
-        // Capacity check: count this user's open scanner-source positions
+        // ── Capacity check: count this user's open scanner-source positions
         const openCount = await countOpenScannerPositions(settings.userId)
         const remainingSlots = settings.scannerMaxConcurrent - openCount
         if (remainingSlots <= 0) {
@@ -70,17 +91,49 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           continue
         }
 
-        // Run the scanner (in-process import to avoid HTTP)
+        // ── Read live Alpaca equity to compute the price ceiling ──
+        // Best effort: if equity lookup fails (creds missing, Alpaca down),
+        // we DON'T skip the user — we fall back to no price ceiling and let
+        // the existing scanner defaults run. The user gets logged so it's
+        // visible Monday morning.
+        const equity = await fetchAccountEquity(settings.userId, settings.mode)
+        result.equity = equity
+
+        let priceMax: number | null = null
+        if (equity !== null && equity > 0) {
+          const ceiling = computeScannerPriceCeiling(equity, settings)
+          result.priceMaxComputed = ceiling
+          if (ceiling < PRICE_MIN_FLOOR) {
+            // Account too small for the floor — scanner won't find anything.
+            // Skip with a clear log so the user (you) sees this Monday morning.
+            result.skipped.push({
+              ticker: '*',
+              reason: `account too small: equity $${equity.toFixed(2)} × ${(settings.scannerMaxPositionPct * 100).toFixed(0)}% = $${ceiling.toFixed(2)} ceiling < $${PRICE_MIN_FLOOR} floor. Increase equity or scannerMaxPositionPct.`,
+            })
+            users.push(result)
+            continue
+          }
+          priceMax = ceiling
+          result.priceMaxApplied = ceiling
+          console.log(`[scanner-trade] user=${settings.userId} equity=$${equity.toFixed(2)} × ${(settings.scannerMaxPositionPct * 100).toFixed(0)}% → priceMax=$${ceiling.toFixed(2)}`)
+        } else {
+          console.warn(`[scanner-trade] user=${settings.userId} no equity available; running scanner without priceMax (Alpaca creds missing or fetch failed)`)
+        }
+
+        // ── Run the scanner with the computed price ceiling ──
         const { runScan } = await import('@/app/lib/scanner-engine')
         const scan = await runScan({
           universe: 'sp500',
-          filter: { priceMin: 5 },
+          filter: {
+            priceMin: PRICE_MIN_FLOOR,
+            ...(priceMax !== null ? { priceMax } : {}),
+          },
           mode: 'bullish',
           limit: 50,
           newsBoost: true,
           scanType: 'fast_movers',
           horizon: 'day',
-          priceCeiling: 1_000,
+          priceCeiling: priceMax ?? 1_000,
         })
         result.picksConsidered = scan.picks.length
 
@@ -95,8 +148,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
         for (const pick of toTrigger) {
           try {
-            // Internally invoke the analyze pipeline. Use the same wire format
-            // as the dashboard does.
             const triggered = await triggerAnalyze(settings.userId, pick.ticker)
             if (triggered) {
               result.picksTriggered++
@@ -160,9 +211,33 @@ function filterPicks(picks: ScannerPick[], minComposite: number): ScannerPick[] 
   })
 }
 
+/**
+ * Fetch the user's live Alpaca account equity.
+ * Returns null if creds missing, broker unavailable, or fetch fails.
+ *
+ * The mode argument routes to paper vs live Alpaca API endpoints — handled
+ * by the AlpacaClient constructor.
+ */
+async function fetchAccountEquity(userId: string, mode: 'paper' | 'live'): Promise<number | null> {
+  try {
+    const creds = await loadBrokerCredentialForUse(userId, 'alpaca', mode, 'stock')
+    if (!creds) return null
+    const client = new AlpacaClient({
+      keyId: creds.keyId,
+      secret: creds.secret,
+      mode,
+    })
+    const account = await client.account()
+    const equity = Number(account.equity)
+    return Number.isFinite(equity) && equity > 0 ? equity : null
+  } catch (e) {
+    console.warn(`[scanner-trade] equity fetch failed for user=${userId}:`, e instanceof Error ? e.message : e)
+    return null
+  }
+}
+
 async function countOpenScannerPositions(userId: string): Promise<number> {
   const admin = await getSupabaseAdmin()
-  // "Open" = filled/partial_fill scanner-origin attempts that haven't closed
   const { count, error } = await admin
     .from('trade_attempts')
     .select('id', { count: 'exact', head: true })
@@ -189,15 +264,11 @@ async function getRecentlyAnalyzedTickers(userId: string, hours: number): Promis
 }
 
 async function triggerAnalyze(userId: string, ticker: string): Promise<boolean> {
-  // Call our own /api/analyze. Use APP_BASE_URL since we're server-side.
   const baseUrl = process.env.APP_BASE_URL ?? process.env.NEXT_PUBLIC_APP_BASE_URL ?? ''
   if (!baseUrl) {
     console.warn('[scanner-trade] APP_BASE_URL not set; cannot trigger /api/analyze')
     return false
   }
-  // Use the CRON_SECRET as a service-to-service auth, OR a dedicated SERVICE_TOKEN.
-  // The analyze route may require a session; we tag the request with X-Service-Trigger
-  // so it can recognize internal scanner calls. Customize as needed.
   try {
     const res = await fetch(`${baseUrl}/api/analyze`, {
       method: 'POST',
@@ -214,7 +285,6 @@ async function triggerAnalyze(userId: string, ticker: string): Promise<boolean> 
         timeframe: '1D',
         persona: 'balanced',
       }),
-      // Analyze can take 30-60s
       signal: AbortSignal.timeout(90_000),
     })
     if (!res.ok) {
