@@ -26,6 +26,7 @@ import { buildSignalBundle, type SignalBundle } from '@/app/lib/aggregator'
 import { buildFuturesBundle, type FuturesBundle, type FuturesMeta } from '@/app/lib/signals/futures-bundle'
 import { fetchFuturesCot } from '@/app/lib/signals/futures-cot'
 import { getFuturesSpec } from '@/app/lib/trading/futures-sizing'
+import { buildEnergyFundamentals } from '@/app/lib/signals/energy-fundamentals'
 
 /**
  * Type guard: is this bundle a futures bundle?
@@ -87,11 +88,21 @@ export async function buildFuturesAwareBundle(
     }
   }
 
-  // 2. Fetch CFTC COT (best-effort)
+  // 2. Fetch CFTC COT (best-effort) AND energy fundamentals in parallel
   onProgress?.(`Fetching CFTC COT for ${futuresRoot}`)
-  const cotSnapshot = await fetchFuturesCot(futuresRoot).catch(() => null)
+  const isEnergyFamily = spec.category === 'energy'
+  if (isEnergyFamily) {
+    onProgress?.(`Fetching EIA fundamentals for ${futuresRoot}`)
+  }
+  const [cotSnapshot, energyFundamentals] = await Promise.all([
+    fetchFuturesCot(futuresRoot).catch(() => null),
+    isEnergyFamily ? buildEnergyFundamentals(futuresRoot).catch(() => null) : Promise.resolve(null),
+  ])
   if (!cotSnapshot) {
     onProgress?.(`COT data not available for ${futuresRoot}`)
+  }
+  if (isEnergyFamily && !energyFundamentals) {
+    onProgress?.(`EIA fundamentals not available for ${futuresRoot} (CL/MCL/NG/QG only in v1, or EIA fetch failed)`)
   }
 
   // 3. Build futures bundle
@@ -101,6 +112,7 @@ export async function buildFuturesAwareBundle(
     underlyingBundle,
     cotSnapshot,
     currentFuturesPrice: null,  // future enhancement: live front-month from Tradovate
+    energyFundamentals,
   })
 
   return futuresBundle

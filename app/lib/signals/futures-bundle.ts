@@ -56,6 +56,10 @@ export interface FuturesMeta {
     proxyPrice: number | null
     futuresPrice: number | null
   } | null
+  // Layer 6: energy-family fundamentals (CL/MCL/NG/QG only).
+  // Null for all other families.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  energyFundamentals?: any  // EnergyFundamentalsSnapshot; kept as `any` to avoid cross-module circular import in this Layer's seam
 }
 
 export interface CotSnapshot {
@@ -86,6 +90,9 @@ export interface BuildFuturesBundleInput {
   underlyingBundle: SignalBundle | null
   cotSnapshot: CotSnapshot | null
   currentFuturesPrice: number | null      // optional: live front-month price if caller has it
+  // Layer 6: energy-family snapshot (CL/MCL/NG/QG only). Null for others.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  energyFundamentals?: any | null
 }
 
 export interface FuturesBundle extends SignalBundle {
@@ -120,6 +127,11 @@ export function buildFuturesBundle(input: BuildFuturesBundleInput): FuturesBundl
     proxyPrice: number
   } | null | undefined
 
+  // Layer 6: if energyFundamentals is present, the family IS effectively wired
+  // regardless of the static spec flag. The spec marks "fundamentalsWired: false"
+  // for energy because in v1 the data layer was empty; Layer 6 fixes that for CL/NG.
+  const fundamentalsActuallyWired = spec.dataLayer.fundamentalsWired || input.energyFundamentals != null
+
   const meta: FuturesMeta = {
     root: input.futuresRoot,
     category: spec.category,
@@ -127,7 +139,7 @@ export function buildFuturesBundle(input: BuildFuturesBundleInput): FuturesBundl
     underlyingEtfProxy: spec.dataLayer.underlyingEtfProxy,
     spec,
     dataAvailability: {
-      fundamentalsWired: spec.dataLayer.fundamentalsWired,
+      fundamentalsWired: fundamentalsActuallyWired,
       citationNote: spec.dataLayer.citationNote,
       cotAvailable,
       cotData: cotData ?? undefined,
@@ -141,6 +153,7 @@ export function buildFuturesBundle(input: BuildFuturesBundleInput): FuturesBundl
       proxyPrice: derivedFromClone.proxyPrice,
       futuresPrice: Number(baseBundle.currentPrice) || null,
     } : null,
+    energyFundamentals: input.energyFundamentals ?? undefined,
   }
 
   return {

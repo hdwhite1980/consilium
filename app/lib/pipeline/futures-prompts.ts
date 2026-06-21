@@ -13,6 +13,7 @@
 
 import type { FuturesMeta } from '../signals/futures-bundle'
 import { formatCotForPrompt } from '../signals/futures-bundle'
+import { formatEnergyFundamentalsForPrompt, type EnergyFundamentalsSnapshot } from '../signals/energy-fundamentals'
 
 // ─────────────────────────────────────────────────────────────
 // Compact data-availability block
@@ -36,19 +37,47 @@ function buildCompactDataBlock(meta: FuturesMeta): string {
       parts.push(`PRICE WARNING: No price data wired for ${meta.root} in v1. State entries/stops conceptually (ticks/points) rather than absolute price levels.`)
     }
   }
+
+  // Layer 6: check for energy fundamentals
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const energyData = (meta as any).energyFundamentals as EnergyFundamentalsSnapshot | undefined
+  const hasEiaData = energyData != null
+
   parts.push(``)
-  parts.push(`DATA WIRED: COT positioning${meta.dataAvailability.cotAvailable ? ' (in prompt below)' : ' (unavailable this run)'}, technical indicators on ${meta.underlyingEtfProxy ?? 'underlying'}, macro/news context.`)
-  parts.push(`DATA NOT WIRED: ${notWiredList(meta.category)}. Do NOT cite these data sources — say "${meta.category} fundamentals not in data layer" if pressed.`)
+  // DATA WIRED line — now includes EIA when present
+  const wiredItems: string[] = []
+  if (meta.dataAvailability.cotAvailable) wiredItems.push('COT positioning (in prompt below)')
+  else wiredItems.push('COT positioning (unavailable this run)')
+  wiredItems.push(`technical indicators on ${meta.underlyingEtfProxy ?? 'underlying'}`)
+  wiredItems.push('macro/news context')
+  if (hasEiaData) wiredItems.push('EIA weekly petroleum/natural gas data (in prompt below)')
+  parts.push(`DATA WIRED: ${wiredItems.join(', ')}.`)
+
+  // DATA NOT WIRED — adjusts when EIA is present for energy
+  parts.push(`DATA NOT WIRED: ${notWiredList(meta.category, hasEiaData)}. Do NOT cite these data sources — say "${meta.category} fundamentals beyond what is wired are not in data layer" if pressed.`)
+
   if (meta.dataAvailability.cotData) {
     parts.push(``)
     parts.push(formatCotForPrompt(meta.dataAvailability.cotData))
   }
+
+  // Layer 6: EIA block for CL/MCL/NG/QG
+  if (hasEiaData && energyData) {
+    parts.push(``)
+    parts.push(formatEnergyFundamentalsForPrompt(energyData))
+  }
+
   return parts.join('\n')
 }
 
-function notWiredList(category: FuturesMeta['category']): string {
+function notWiredList(category: FuturesMeta['category'], hasEiaData: boolean): string {
   switch (category) {
-    case 'energy':     return 'EIA weekly inventory, OPEC production, refinery utilization, SPR levels'
+    case 'energy':
+      // Layer 6: EIA inventory + refinery util ARE wired for CL/NG when hasEiaData=true.
+      // OPEC production decisions still NOT wired (need news source).
+      return hasEiaData
+        ? 'OPEC production decisions (use news scout only), real-time refinery outages, Cushing inventory breakdowns'
+        : 'EIA weekly inventory, OPEC production, refinery utilization, SPR levels'
     case 'grains':     return 'USDA WASDE, crop progress, drought monitor, USDA export sales'
     case 'metals':     return 'COMEX warehouse stocks, LBMA fixes, World Gold Council central bank flows'
     case 'rates':      return 'FRED yield curve, Fed funds futures-implied rates, Treasury auction results, breakevens'
@@ -78,6 +107,12 @@ function categoryLabel(cat: FuturesMeta['category']): string {
 // ─────────────────────────────────────────────────────────────
 
 export function buildFuturesLeadSystemPrompt(meta: FuturesMeta): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const hasEia = (meta as any).energyFundamentals != null
+  const eiaRule = hasEia
+    ? `- EIA data is wired for ${meta.root}: the "EIA WEEKLY ..." block above is real. Treat the WoW change + 5Y band position as primary fundamental drivers. Consensus expectation is NOT in the data layer — call out builds/draws as raw signal, and acknowledge that the market-moving signal is actual-vs-consensus which you cannot compute.`
+    : ''
+
   return `You are the Lead Analyst in an elite AI council analyzing a FUTURES CONTRACT: ${meta.root}. This is a derivative, NOT a stock or ETF.
 
 ${buildCompactDataBlock(meta)}
@@ -87,7 +122,7 @@ ANALYSIS RULES:
 - COT positioning is a primary input. Extreme >30% net-of-OI is reversal risk; building positioning is momentum confirmation.
 - Do not cite data sources listed as "DATA NOT WIRED" above. If you would normally cite them, instead state "data layer doesn't include X" and reason from what IS available.
 - Futures have no earnings, no insider trades, no analyst ratings, no P/E. Don't use those frames.
-- For non-equity-index families, the underlying proxy can diverge from the contract via contango/basis — acknowledge if proxy data is your main evidence.
+- For non-equity-index families, the underlying proxy can diverge from the contract via contango/basis — acknowledge if proxy data is your main evidence.${eiaRule ? '\n' + eiaRule : ''}
 
 Be decisive. Cite specific evidence. Use the same JSON output schema the user prompt requests below.`
 }
