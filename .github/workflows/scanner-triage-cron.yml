@@ -1,0 +1,39 @@
+name: scanner-triage-cron
+
+on:
+  schedule:
+    # Every 15 min during US market hours (with a 30-min pre-open buffer
+    # to absorb pre-market scanner picks before they're stale).
+    # 13-21 UTC covers both EST and EDT market sessions.
+    - cron: '*/15 13-21 * * 1-5'
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit scanner-triage endpoint
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -e
+          # Normalize APP_BASE_URL: prepend https:// if scheme missing, strip trailing slash
+          BASE="${APP_BASE_URL%/}"
+          case "$BASE" in
+            http://*|https://*) ;;
+            *) BASE="https://$BASE" ;;
+          esac
+          response=$(curl -s -L -w "\n%{http_code}" \
+            -X GET \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$BASE/api/cron/scanner-triage" \
+            --max-time 90)
+          status=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "Status: $status"
+          echo "Body: $body"
+          if [ "$status" -ne 200 ]; then
+            echo "::error::scanner-triage returned non-200 status: $status"
+            exit 1
+          fi

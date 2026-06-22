@@ -115,28 +115,45 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const newsTickers = await fetchNewsCandidates()
     summary.newsCandidates = newsTickers.length
 
-    // Fetch scanner candidates ONCE — also user-agnostic (scanner runs against universe)
-    const scannerTickers = await fetchScannerCandidates()
-    summary.scannerCandidates = scannerTickers.length
-
-    if (newsTickers.length === 0 && scannerTickers.length === 0) {
-      summary.durationMs = Date.now() - startedAt
-      console.log(`[auto-council-trigger cron] no candidates from either path, exiting`)
-      return NextResponse.json(summary)
-    }
-
-    // Merge: scanner picks first (typically higher quality directional), then news
-    const merged = mergeUnique(scannerTickers, newsTickers)
-    summary.mergedUnique = merged.length
+    // Fetch global scanner candidates ONCE as a fallback. When a user has
+    // fresh fire_now triage rows, we'll prefer those (per-user, scored).
+    // When triage is empty (cron not yet deployed, or no fire_now picks
+    // this cycle), we fall back to the global scanner list.
+    const globalScannerTickers = await fetchScannerCandidates()
+    summary.scannerCandidates = globalScannerTickers.length
 
     const users = await listEnabledTradingUsers()
     summary.users = users.length
 
     for (const settings of users) {
+      // Per-user scanner candidates: prefer triaged fire_now rows.
+      // Returns [] when no fresh fire_now rows exist for this user; we
+      // fall back to the global scanner list in that case.
+      const { tickers: triagedTickers, triageRowsByTicker } =
+        await fetchFireNowTriageForUser(settings.userId)
+      const scannerTickersForUser = triagedTickers.length > 0
+        ? triagedTickers
+        : globalScannerTickers
+
+      // Merge: scanner picks first (higher quality), then news
+      const merged = mergeUnique(scannerTickersForUser, newsTickers)
+      summary.mergedUnique = Math.max(summary.mergedUnique, merged.length)
+
+      if (merged.length === 0) {
+        summary.byUser.push({
+          userId: settings.userId,
+          newsTickers: [],
+          scannerTickers: [],
+          triggered: [],
+          skipped: [],
+        })
+        continue
+      }
+
       const userEntry = {
         userId: settings.userId,
         newsTickers: newsTickers.filter(t => merged.includes(t)),
-        scannerTickers: scannerTickers.filter(t => merged.includes(t)),
+        scannerTickers: scannerTickersForUser.filter(t => merged.includes(t)),
         triggered: [] as string[],
         skipped: [] as string[],
       }
@@ -161,6 +178,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           if (fired) {
             summary.triggered++
             userEntry.triggered.push(ticker)
+
+            // If this ticker came from a triage row, mark it as fired
+            const triageRow = triageRowsByTicker.get(ticker)
+            if (triageRow) {
+              await markTriageRowFired(triageRow.id, /* verdictId */ null)
+                .catch(err => console.warn(`[auto-council-trigger] markTriageRowFired failed for triage row ${triageRow.id}: ${err instanceof Error ? err.message : err}`))
+            }
           } else {
             summary.errors++
             userEntry.skipped.push(`${ticker}(fire-fail)`)
@@ -309,6 +333,63 @@ function mergeUnique(primary: string[], secondary: string[]): string[] {
     out.push(t)
   }
   return out
+}
+
+// ─────────────────────────────────────────────────────────────
+// Scanner triage table — fire_now consumption
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Fetch fire_now triage rows for a user that haven't been fired yet,
+ * within the last 30 minutes. Returns tickers in score-desc order plus
+ * a map for later lookup (so we can mark the row as fired).
+ *
+ * Returns empty when no triaged rows are available — caller falls back
+ * to the global scanner candidates. This preserves backward compat with
+ * the prior behavior when the triage cron isn't running.
+ */
+async function fetchFireNowTriageForUser(userId: string): Promise<{
+  tickers: string[]
+  triageRowsByTicker: Map<string, { id: number; score: number | null }>
+}> {
+  const admin = await getSupabaseAdmin()
+  const cutoff = new Date(Date.now() - 30 * 60_000).toISOString()
+  const { data, error } = await admin
+    .from('scanner_triage')
+    .select('id, ticker, score')
+    .eq('user_id', userId)
+    .eq('decision', 'fire_now')
+    .is('fired_at', null)
+    .gt('triaged_at', cutoff)
+    .order('score', { ascending: false })
+    .limit(10)
+  if (error) {
+    console.warn(`[auto-council-trigger] fetchFireNowTriageForUser err: ${error.message}`)
+    return { tickers: [], triageRowsByTicker: new Map() }
+  }
+  const rows = (data ?? []) as Array<{ id: number; ticker: string; score: number | null }>
+  const tickers = rows.map(r => String(r.ticker).toUpperCase())
+  const triageRowsByTicker = new Map<string, { id: number; score: number | null }>()
+  for (const r of rows) {
+    triageRowsByTicker.set(String(r.ticker).toUpperCase(), { id: r.id, score: r.score })
+  }
+  return { tickers, triageRowsByTicker }
+}
+
+/**
+ * Mark a triage row as fired. Set fired_at = now, fired_verdict_id if
+ * we know it (caller may not — verdict_log row is written async after
+ * /api/analyze completes, well after this function returns).
+ */
+async function markTriageRowFired(triageRowId: number, verdictId: number | null): Promise<void> {
+  const admin = await getSupabaseAdmin()
+  const patch: Record<string, unknown> = { fired_at: new Date().toISOString() }
+  if (verdictId !== null) patch.fired_verdict_id = verdictId
+  const { error } = await admin
+    .from('scanner_triage')
+    .update(patch)
+    .eq('id', triageRowId)
+  if (error) throw new Error(error.message)
 }
 
 // ─────────────────────────────────────────────────────────────
