@@ -51,7 +51,7 @@ export function computePositionSize(input: SizingInput): SizingOutcome {
     entryPrice,
     stopPrice,
     traderPositionSizePct = 1,
-    minSharePrice = 5,
+    minSharePrice = 3,
     minDollarRisk = 1,
     minDollarRiskPerTrade = null,
     maxDollarRiskPerTrade = null,
