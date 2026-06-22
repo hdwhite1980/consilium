@@ -188,11 +188,10 @@ export function scoreCandidate(
     rules.push('penalty_bearish_stock:-20')
   }
 
-  // Unclear direction — Council also struggles with these
-  if (pick.direction === 'unclear') {
-    score -= 10
-    rules.push('penalty_unclear:-10')
-  }
+  // NOTE: TickerScore.direction is typed 'bullish' | 'bearish' only —
+  // no 'unclear' state exists at this layer. Momentum scoring has its
+  // own 'unclear' state but it gets resolved to one of bullish/bearish
+  // (or left at the scoreTicker default) before reaching EnrichedScore.
 
   // ────────────────────────────────────────────────────────────
   // Final decision
