@@ -151,6 +151,92 @@ interface PositionsData {
   message?: string
 }
 
+// ── Verdicts (today's Council pipeline) ──
+interface VerdictsKpis {
+  total: number
+  takes: number
+  passes: number
+  waits: number
+  bullish: number
+  bearish: number
+  takesBullish: number
+  takesBearish: number
+}
+
+interface RecentVerdict {
+  id: number
+  ticker: string
+  signal: string | null
+  confidence: number | null
+  trader_decision: string | null
+  trader_grade: string | null
+  trader_risk_reward: number | null
+  entry_price: number | null
+  stop_loss: number | null
+  take_profit: number | null
+  timeframe: string | null
+  pass_reason_short: string | null
+  created_at: string
+}
+
+interface PassReasonCategory {
+  category: string
+  count: number
+  sample: string
+}
+
+interface VerdictsData {
+  ok: boolean
+  kpis: VerdictsKpis
+  recent: RecentVerdict[]
+  passReasons: PassReasonCategory[]
+  error?: string
+}
+
+// ── Position-monitor activity (today) ──
+interface MonitorKpis {
+  total: number
+  holds: number
+  tightens: number
+  exits: number
+  escalates: number
+  failures: number
+}
+
+interface RecentMonitorCheck {
+  id: number
+  ticker: string
+  decision: string
+  action_taken: string
+  current_price: number | null
+  current_stop: number | null
+  new_stop_price: number | null
+  bearish_15m: number | null
+  bullish_15m: number | null
+  bearish_5m: number | null
+  bullish_5m: number | null
+  error_reason: string | null
+  created_at: string
+}
+
+interface PerTickerLatest {
+  ticker: string
+  latest_decision: string
+  latest_action: string
+  latest_at: string
+  total_checks_today: number
+  total_tightens: number
+  total_exits: number
+}
+
+interface MonitorActivityData {
+  ok: boolean
+  kpis: MonitorKpis
+  recent: RecentMonitorCheck[]
+  perTicker: PerTickerLatest[]
+  error?: string
+}
+
 const REFRESH_INTERVAL_MS = 30_000
 
 // ─────────────────────────────────────────────────────────────
@@ -162,6 +248,8 @@ export default function AutoTraderDashboardPage() {
   const [authChecked, setAuthChecked] = useState(false)
   const [data, setData] = useState<DashboardData | null>(null)
   const [positions, setPositions] = useState<PositionsData | null>(null)
+  const [verdicts, setVerdicts] = useState<VerdictsData | null>(null)
+  const [monitor, setMonitor] = useState<MonitorActivityData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
@@ -189,9 +277,11 @@ export default function AutoTraderDashboardPage() {
   const fetchAll = useCallback(async () => {
     try {
       setError(null)
-      const [dashRes, posRes] = await Promise.all([
+      const [dashRes, posRes, verdRes, monRes] = await Promise.all([
         fetch('/api/auto-trader/dashboard', { cache: 'no-store' }),
         fetch('/api/auto-trader/positions', { cache: 'no-store' }),
+        fetch('/api/auto-trader/dashboard/verdicts', { cache: 'no-store' }),
+        fetch('/api/auto-trader/dashboard/monitor-activity', { cache: 'no-store' }),
       ])
 
       if (!dashRes.ok) {
@@ -202,11 +292,15 @@ export default function AutoTraderDashboardPage() {
         const errBody = await posRes.json().catch(() => ({})) as { error?: string }
         throw new Error(errBody.error || `positions returned ${posRes.status}`)
       }
-
+      // verdicts/monitor are non-blocking — partial failure shouldn't break the page
       const dashData = await dashRes.json() as DashboardData
       const posData = await posRes.json() as PositionsData
+      const verdData = verdRes.ok ? await verdRes.json() as VerdictsData : null
+      const monData = monRes.ok ? await monRes.json() as MonitorActivityData : null
       setData(dashData)
       setPositions(posData)
+      setVerdicts(verdData)
+      setMonitor(monData)
       setLastUpdated(new Date())
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -355,6 +449,28 @@ export default function AutoTraderDashboardPage() {
               count={positions?.positions?.length ?? 0}
               color="#34d399">
               <OpenPositionsTable positions={positions?.positions ?? []} />
+            </Section>
+
+            {/* Today's verdicts (Council pipeline) */}
+            <Section
+              title="Today's Verdicts"
+              icon={<Zap size={14} />}
+              expanded={expandedSection === 'verdicts'}
+              onToggle={() => setExpandedSection(expandedSection === 'verdicts' ? null : 'verdicts')}
+              count={verdicts?.kpis.total ?? 0}
+              color="#60a5fa">
+              <VerdictsPanel data={verdicts} />
+            </Section>
+
+            {/* Position-monitor activity (today) */}
+            <Section
+              title="Position-Monitor Activity"
+              icon={<Shield size={14} />}
+              expanded={expandedSection === 'monitor'}
+              onToggle={() => setExpandedSection(expandedSection === 'monitor' ? null : 'monitor')}
+              count={monitor?.kpis.total ?? 0}
+              color="#a78bfa">
+              <MonitorActivityPanel data={monitor} />
             </Section>
 
             {/* Recent activity */}
@@ -782,4 +898,280 @@ function Th({ children }: { children: React.ReactNode }) {
 
 function Td({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
   return <td className="p-2" style={style}>{children}</td>
+}
+
+// ─────────────────────────────────────────────────────────────
+// Verdicts (today's Council pipeline)
+// ─────────────────────────────────────────────────────────────
+
+function VerdictsPanel({ data }: { data: VerdictsData | null }) {
+  if (!data) {
+    return <div className="p-4 text-xs opacity-60" style={{ color: 'var(--text3)' }}>Loading verdicts…</div>
+  }
+  if (!data.ok && data.error) {
+    return (
+      <div className="p-4 text-xs" style={{ color: '#f87171' }}>
+        Failed to load: {data.error}
+      </div>
+    )
+  }
+  if (data.kpis.total === 0) {
+    return <div className="p-4 text-xs opacity-60" style={{ color: 'var(--text3)' }}>No verdicts today yet.</div>
+  }
+  return (
+    <div className="space-y-3">
+      {/* KPI row */}
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 p-2">
+        <Stat label="Total" value={String(data.kpis.total)} />
+        <Stat label="TAKE" value={String(data.kpis.takes)} color="#34d399" />
+        <Stat label="PASS" value={String(data.kpis.passes)} color="#f87171" />
+        <Stat label="WAIT" value={String(data.kpis.waits)} color="#fbbf24" />
+        <Stat label="Bullish" value={`${data.kpis.takesBullish}/${data.kpis.bullish}`} sub="taken / total" color="#34d399" />
+        <Stat label="Bearish" value={`${data.kpis.takesBearish}/${data.kpis.bearish}`} sub="taken / total" color="#f87171" />
+      </div>
+
+      {/* Pass reason categories */}
+      {data.passReasons.length > 0 && (
+        <div className="p-2">
+          <div className="text-xs font-semibold mb-2 opacity-70" style={{ color: 'var(--text3)' }}>
+            Why blocked
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {data.passReasons.map(p => (
+              <div key={p.category}
+                className="px-2 py-1 rounded-md text-xs flex items-center gap-2"
+                style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
+                title={p.sample}>
+                <span className="font-mono opacity-60" style={{ color: 'var(--text3)' }}>{p.category}</span>
+                <span className="font-bold">{p.count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Recent verdicts table */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr style={{ borderBottom: '1px solid var(--border)' }}>
+              <Th>Time</Th>
+              <Th>Ticker</Th>
+              <Th>Signal</Th>
+              <Th>Conf</Th>
+              <Th>Decision</Th>
+              <Th>R:R</Th>
+              <Th>Entry → Target / Stop</Th>
+              <Th>Note</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.recent.map(v => (
+              <tr key={v.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                <Td>
+                  <span className="font-mono opacity-70" style={{ color: 'var(--text3)' }}>
+                    {new Date(v.created_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </Td>
+                <Td><span className="font-bold">{v.ticker}</span></Td>
+                <Td>
+                  <SignalBadge signal={v.signal} />
+                </Td>
+                <Td><span className="font-mono">{v.confidence ?? '—'}%</span></Td>
+                <Td><DecisionBadge decision={v.trader_decision} grade={v.trader_grade} /></Td>
+                <Td>
+                  <span className="font-mono" style={{
+                    color: v.trader_risk_reward !== null && v.trader_risk_reward < 1.5
+                      ? '#f87171' : 'var(--text)',
+                  }}>
+                    {v.trader_risk_reward !== null ? `${v.trader_risk_reward.toFixed(2)}:1` : '—'}
+                  </span>
+                </Td>
+                <Td>
+                  <span className="font-mono opacity-80">
+                    {v.entry_price !== null
+                      ? `$${v.entry_price.toFixed(2)} → $${(v.take_profit ?? 0).toFixed(2)} / $${(v.stop_loss ?? 0).toFixed(2)}`
+                      : '—'}
+                  </span>
+                </Td>
+                <Td>
+                  <span className="text-xs opacity-70" style={{ color: 'var(--text3)' }}>
+                    {v.pass_reason_short ?? ''}
+                  </span>
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function SignalBadge({ signal }: { signal: string | null }) {
+  if (!signal) return <span className="opacity-50">—</span>
+  const isBull = signal === 'BULLISH'
+  return (
+    <span className="text-xs px-1.5 py-0.5 rounded font-mono"
+      style={{
+        background: isBull ? 'rgba(52,211,153,0.15)' : 'rgba(248,113,113,0.15)',
+        color: isBull ? '#34d399' : '#f87171',
+      }}>
+      {isBull ? '↑' : '↓'} {signal.slice(0, 4)}
+    </span>
+  )
+}
+
+function DecisionBadge({ decision, grade }: { decision: string | null; grade: string | null }) {
+  if (!decision) return <span className="opacity-50">—</span>
+  const config = (() => {
+    if (decision === 'TAKE') return { bg: 'rgba(52,211,153,0.2)', color: '#34d399' }
+    if (decision === 'PASS') return { bg: 'rgba(248,113,113,0.15)', color: '#f87171' }
+    if (decision === 'WAIT') return { bg: 'rgba(251,191,36,0.15)', color: '#fbbf24' }
+    return { bg: 'var(--surface)', color: 'var(--text)' }
+  })()
+  return (
+    <span className="text-xs px-1.5 py-0.5 rounded font-mono font-bold"
+      style={{ background: config.bg, color: config.color }}>
+      {decision}{grade ? ` ${grade}` : ''}
+    </span>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+// Position-Monitor Activity
+// ─────────────────────────────────────────────────────────────
+
+function MonitorActivityPanel({ data }: { data: MonitorActivityData | null }) {
+  if (!data) {
+    return <div className="p-4 text-xs opacity-60" style={{ color: 'var(--text3)' }}>Loading monitor activity…</div>
+  }
+  if (!data.ok && data.error) {
+    return (
+      <div className="p-4 text-xs" style={{ color: '#f87171' }}>
+        Failed to load: {data.error}
+      </div>
+    )
+  }
+  if (data.kpis.total === 0) {
+    return <div className="p-4 text-xs opacity-60" style={{ color: 'var(--text3)' }}>No monitor checks today yet.</div>
+  }
+  return (
+    <div className="space-y-3">
+      {/* KPI row */}
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 p-2">
+        <Stat label="Checks" value={String(data.kpis.total)} />
+        <Stat label="HOLD" value={String(data.kpis.holds)} color="#9ca3af" />
+        <Stat label="TIGHTEN" value={String(data.kpis.tightens)} color="#fbbf24" />
+        <Stat label="EXIT" value={String(data.kpis.exits)} color="#f87171" />
+        <Stat label="ESCALATE" value={String(data.kpis.escalates)} color="#a78bfa" />
+        <Stat label="Failures" value={String(data.kpis.failures)} color={data.kpis.failures > 0 ? '#f87171' : 'var(--text3)'} />
+      </div>
+
+      {/* Per-ticker summary */}
+      {data.perTicker.length > 0 && (
+        <div className="p-2">
+          <div className="text-xs font-semibold mb-2 opacity-70" style={{ color: 'var(--text3)' }}>
+            Today by ticker
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {data.perTicker.map(t => (
+              <div key={t.ticker}
+                className="p-2 rounded-md flex items-center justify-between"
+                style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold">{t.ticker}</span>
+                  <MonitorDecisionBadge decision={t.latest_decision} action={t.latest_action} />
+                </div>
+                <div className="text-xs opacity-70 font-mono" style={{ color: 'var(--text3)' }}>
+                  {t.total_checks_today} checks
+                  {t.total_tightens > 0 ? ` · ${t.total_tightens} tighten` : ''}
+                  {t.total_exits > 0 ? ` · ${t.total_exits} exit` : ''}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Recent checks table */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr style={{ borderBottom: '1px solid var(--border)' }}>
+              <Th>Time</Th>
+              <Th>Ticker</Th>
+              <Th>Decision</Th>
+              <Th>Price</Th>
+              <Th>Stop</Th>
+              <Th>15m b/u</Th>
+              <Th>5m b/u</Th>
+              <Th>Note</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.recent.map(c => (
+              <tr key={c.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                <Td>
+                  <span className="font-mono opacity-70" style={{ color: 'var(--text3)' }}>
+                    {new Date(c.created_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </Td>
+                <Td><span className="font-bold">{c.ticker}</span></Td>
+                <Td><MonitorDecisionBadge decision={c.decision} action={c.action_taken} /></Td>
+                <Td>
+                  <span className="font-mono">{c.current_price !== null ? `$${c.current_price.toFixed(2)}` : '—'}</span>
+                </Td>
+                <Td>
+                  <span className="font-mono opacity-80">
+                    {c.current_stop !== null ? `$${c.current_stop.toFixed(2)}` : '—'}
+                    {c.new_stop_price !== null && c.new_stop_price !== c.current_stop
+                      ? <span style={{ color: '#fbbf24' }}> → ${c.new_stop_price.toFixed(2)}</span>
+                      : null}
+                  </span>
+                </Td>
+                <Td>
+                  <span className="font-mono">
+                    <span style={{ color: '#f87171' }}>{c.bearish_15m ?? '—'}</span>
+                    /
+                    <span style={{ color: '#34d399' }}>{c.bullish_15m ?? '—'}</span>
+                  </span>
+                </Td>
+                <Td>
+                  <span className="font-mono">
+                    <span style={{ color: '#f87171' }}>{c.bearish_5m ?? '—'}</span>
+                    /
+                    <span style={{ color: '#34d399' }}>{c.bullish_5m ?? '—'}</span>
+                  </span>
+                </Td>
+                <Td>
+                  <span className="text-xs opacity-70" style={{ color: c.error_reason ? '#f87171' : 'var(--text3)' }}>
+                    {c.error_reason ?? ''}
+                  </span>
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function MonitorDecisionBadge({ decision, action }: { decision: string; action: string }) {
+  const isFailed = action.endsWith('_failed') || action === 'error'
+  const config = (() => {
+    if (isFailed) return { bg: 'rgba(248,113,113,0.2)', color: '#f87171', label: `${decision}!` }
+    if (decision === 'HOLD') return { bg: 'rgba(156,163,175,0.15)', color: '#9ca3af', label: 'HOLD' }
+    if (decision === 'TIGHTEN_STOP') return { bg: 'rgba(251,191,36,0.2)', color: '#fbbf24', label: 'TIGHTEN' }
+    if (decision === 'EXIT') return { bg: 'rgba(248,113,113,0.2)', color: '#f87171', label: 'EXIT' }
+    if (decision === 'ESCALATE') return { bg: 'rgba(167,139,250,0.2)', color: '#a78bfa', label: 'ESCALATE' }
+    return { bg: 'var(--surface)', color: 'var(--text)', label: decision }
+  })()
+  return (
+    <span className="text-xs px-1.5 py-0.5 rounded font-mono font-bold"
+      style={{ background: config.bg, color: config.color }}>
+      {config.label}
+    </span>
+  )
 }
