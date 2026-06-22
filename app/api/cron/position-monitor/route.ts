@@ -488,19 +488,25 @@ interface ExitResult { ok: boolean; reason?: string }
  */
 async function applyExit(alpaca: AlpacaClient, pos: AlpacaPosition): Promise<ExitResult> {
   const symbol = pos.symbol
-  const request = (alpaca as unknown as {
-    request: (m: string, p: string, body?: unknown) => Promise<unknown>
-  }).request
+  // IMPORTANT: do NOT extract `request` as a const — that loses the `this`
+  // binding inside the AlpacaClient and the call fails with
+  // "Cannot read properties of undefined (reading 'baseUrl')".
+  // Always call alpaca.request(...) inline so `this` is preserved.
+  // Cast on each call site is the cheapest way to satisfy the type checker.
+  const callAlpaca = (m: string, p: string, body?: unknown): Promise<unknown> =>
+    (alpaca as unknown as {
+      request: (m: string, p: string, body?: unknown) => Promise<unknown>
+    }).request(m, p, body)
 
   try {
     // Step 1: list open orders for this symbol
-    const ordersResp = await request('GET', `/v2/orders?status=open&symbols=${encodeURIComponent(symbol)}&limit=50`) as Array<{ id: string; status?: string }> | { id: string; status?: string }[]
+    const ordersResp = await callAlpaca('GET', `/v2/orders?status=open&symbols=${encodeURIComponent(symbol)}&limit=50`) as Array<{ id: string; status?: string }>
     const orders: Array<{ id: string; status?: string }> = Array.isArray(ordersResp) ? ordersResp : []
 
     // Step 2: cancel each open order (these are the bracket children)
     if (orders.length > 0) {
       const cancelPromises = orders.map(o =>
-        request('DELETE', `/v2/orders/${encodeURIComponent(o.id)}`)
+        callAlpaca('DELETE', `/v2/orders/${encodeURIComponent(o.id)}`)
           .then(() => ({ id: o.id, ok: true }))
           .catch((e: unknown) => ({
             id: o.id, ok: false,
@@ -526,7 +532,7 @@ async function applyExit(alpaca: AlpacaClient, pos: AlpacaPosition): Promise<Exi
 
     // Step 4: DELETE the position. Now that bracket children are cancelled,
     // shares are free and the close-at-market should succeed.
-    await request('DELETE', `/v2/positions/${encodeURIComponent(symbol)}`)
+    await callAlpaca('DELETE', `/v2/positions/${encodeURIComponent(symbol)}`)
     return { ok: true }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
