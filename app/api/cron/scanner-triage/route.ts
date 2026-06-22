@@ -227,7 +227,10 @@ async function fetchOpenPositionTickers(userId: string): Promise<Set<string>> {
     .from('trade_attempts')
     .select('ticker')
     .eq('user_id', userId)
-    .eq('asset_class', 'stocks')
+    // trade_attempts stores asset_class='stock' singular. Accept all
+    // variants (NULL + stock + stocks) for safety; same pattern used in
+    // position-monitor and auto-trade-positions crons.
+    .or('asset_class.is.null,asset_class.eq.stock,asset_class.eq.stocks')
     .in('outcome', ['placed', 'filled', 'partial_fill'])
   if (error) {
     console.warn(`[scanner-triage] fetchOpenPositionTickers err: ${error.message}`)

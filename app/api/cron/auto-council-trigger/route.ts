@@ -84,6 +84,7 @@ interface NewsStoryRow {
   age_hours: number | null
   verified: boolean | null
   asset_type: string | null
+  timeframes: string[] | null   // jsonb array on tracked_stories
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -112,8 +113,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   try {
     // Fetch news candidates ONCE — they're user-agnostic (active stories are global)
-    const newsTickers = await fetchNewsCandidates()
-    summary.newsCandidates = newsTickers.length
+    const newsCandidates = await fetchNewsCandidates()
+    summary.newsCandidates = newsCandidates.length
+    // Map from ticker -> preferred timeframe (from active-story). Scanner
+    // tickers not in the map default to '1W' below.
+    const newsTimeframeByTicker = new Map<string, string>(
+      newsCandidates.map(c => [c.ticker, c.timeframe]),
+    )
+    const newsTickers = newsCandidates.map(c => c.ticker)
 
     // Fetch global scanner candidates ONCE as a fallback. When a user has
     // fresh fire_now triage rows, we'll prefer those (per-user, scored).
@@ -173,8 +180,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             continue
           }
 
-          // Fire-and-forget POST to /api/analyze
-          const fired = await triggerAnalyze(settings.userId, ticker, '1W')
+          // Fire-and-forget POST to /api/analyze.
+          // Timeframe selection: if the ticker came from active-stories, use
+          // the story's preferred timeframe (shortest of its tagged set,
+          // typically 1D for fresh catalysts). Otherwise default to 1W
+          // (the existing scanner-path convention).
+          const timeframe = newsTimeframeByTicker.get(ticker) ?? '1W'
+          const fired = await triggerAnalyze(settings.userId, ticker, timeframe)
           if (fired) {
             summary.triggered++
             userEntry.triggered.push(ticker)
@@ -218,15 +230,21 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
  * named v_active_stories), but we add explicit guards in case the view
  * definition shifts.
  */
-async function fetchNewsCandidates(): Promise<string[]> {
+async function fetchNewsCandidates(): Promise<Array<{ ticker: string; timeframe: string }>> {
   const admin = await getSupabaseAdmin()
   try {
     const { data, error } = await admin
       .from('v_active_stories')
-      .select('ticker, signal, confidence, age_hours, verified, asset_type')
+      .select('ticker, signal, confidence, age_hours, verified, asset_type, timeframes')
       .gte('confidence', NEWS_CONFIDENCE_MIN)
       .lte('age_hours', NEWS_AGE_HOURS_MAX)
-      .eq('asset_type', 'stocks')
+      // BUG FIX (June 22 2026): asset_type is stored as 'stock' singular
+      // (per story-tracker.ts insertStory default). The previous .eq('stocks')
+      // plural silently matched zero rows, so the active-stories → Council
+      // integration has been completely dead since deploy.
+      // Accept both 'stock' singular (current convention) and 'stocks' plural
+      // (legacy/defensive) so any historical rows match too.
+      .in('asset_type', ['stock', 'stocks'])
       .not('verified', 'is', false)     // accepts null OR true; excludes explicit false
       .order('confidence', { ascending: false })
       .limit(NEWS_PATH_LIMIT * 4)        // overfetch in case some get deduped vs scanner
@@ -235,16 +253,29 @@ async function fetchNewsCandidates(): Promise<string[]> {
       return []
     }
     const rows = (data ?? []) as NewsStoryRow[]
-    const tickers: string[] = []
+    const out: Array<{ ticker: string; timeframe: string }> = []
+    const seen = new Set<string>()
     for (const r of rows) {
       if (!r.ticker || typeof r.ticker !== 'string') continue
       if (!r.signal || (r.signal !== 'BULLISH' && r.signal !== 'BEARISH')) continue
       const t = r.ticker.toUpperCase().trim()
       if (!/^[A-Z]{1,6}$/.test(t)) continue
-      if (!tickers.includes(t)) tickers.push(t)
-      if (tickers.length >= NEWS_PATH_LIMIT) break
+      if (seen.has(t)) continue
+      seen.add(t)
+
+      // Pick the SHORTEST timeframe the story is tagged with. Rationale: if
+      // the story is tagged 1D + 1W, the catalyst is acting now (the 1D
+      // signal is more time-sensitive); running Council on 1D gives a
+      // tighter trade with quicker resolution. Default '1W' if no
+      // timeframes (back-compat with older rows).
+      const tfs = Array.isArray(r.timeframes) ? r.timeframes : []
+      const order = ['1D', '1W', '1M', '3M']
+      const tf = order.find(o => tfs.includes(o)) ?? '1W'
+
+      out.push({ ticker: t, timeframe: tf })
+      if (out.length >= NEWS_PATH_LIMIT) break
     }
-    return tickers
+    return out
   } catch (e) {
     console.warn('[auto-council-trigger] news fetch threw:', e instanceof Error ? e.message : e)
     return []
