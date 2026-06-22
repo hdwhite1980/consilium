@@ -349,11 +349,19 @@ async function hasRecentVerdict(userId: string, ticker: string, windowHours: num
  * then we abandon the response.
  */
 async function triggerAnalyze(userId: string, ticker: string, timeframe: string): Promise<boolean> {
-  const baseUrl = process.env.APP_BASE_URL ?? ''
-  if (!baseUrl) {
+  const rawBase = process.env.APP_BASE_URL ?? ''
+  if (!rawBase) {
     console.warn('[auto-council-trigger] APP_BASE_URL not set; cannot trigger analyze')
     return false
   }
+
+  // Normalize: Railway env vars often contain the bare hostname (e.g.
+  // `consilium-production-d8e6.up.railway.app`) without a scheme. Node's
+  // fetch requires a fully-qualified URL with `https://`. Prepend if missing
+  // and strip any trailing slash to keep the join clean.
+  const baseUrl = (rawBase.startsWith('http://') || rawBase.startsWith('https://'))
+    ? rawBase.replace(/\/+$/, '')
+    : `https://${rawBase.replace(/\/+$/, '')}`
 
   const ctrl = new AbortController()
   const briefHeadTimeout = setTimeout(() => ctrl.abort(), 8_000)
