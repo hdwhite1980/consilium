@@ -171,7 +171,7 @@ export async function POST(req: NextRequest) {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
   const msg = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 1800,
     system: `You are the Reinvestment Council for a retail trader. Give three reinvestment strategies at different commitment levels: Aggressive (deploy 50%+ of gains into a high-conviction idea), Moderate (deploy 25-40% into a strategic play), and Conservative (deploy 10-20% into a lower-risk option). Each strategy must have a clear REASON (partial profit-taking, sector rotation, diversification, add to winner, hedge, etc.) and a specific entry/stop/target. Reference their actual tickers and P&L numbers. All suggestedAmount and pctOfGains values must be plain numbers.`,
     messages: [{

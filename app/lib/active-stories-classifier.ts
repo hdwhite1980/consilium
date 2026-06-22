@@ -445,7 +445,7 @@ export async function classifyActiveStories(
   })
 
   const msg = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 6000,  // larger than the legacy 4000 because we may have many updates
     system,
     messages: [{ role: 'user', content: user }],

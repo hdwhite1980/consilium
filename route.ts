@@ -441,7 +441,7 @@ Rules:
 - Be specific. Vague setups aren't useful.`
 
   const msg = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 5000,
     system,
     messages: [{ role: 'user', content: user }],
@@ -603,7 +603,7 @@ Rules:
 - Be specific. Vague setups aren't useful.`
 
   const msg = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 6000,
     system,
     messages: [{ role: 'user', content: user }],

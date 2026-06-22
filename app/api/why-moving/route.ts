@@ -52,7 +52,7 @@ Be direct and specific. If you don't have enough context, say so clearly.`)
       await send({ stage: 'verdict', status: 'Analyzing entry...' })
       const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
       const msg = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 400,
         messages: [{
           role: 'user',

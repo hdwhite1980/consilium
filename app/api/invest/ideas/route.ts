@@ -239,7 +239,7 @@ async function generateOptionIdeas(params: {
   ).join('\n')
 
   const msg = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 1500,
     system: `You are the Wali-OS options desk. Propose 2-3 directional option plays mirroring the top stock ideas. Strict cost cap: each contract premium × 100 ≤ $${(maxPremiumPerContract * 100).toFixed(0)}. Numeric fields plain numbers — no $ signs.`,
     messages: [{
@@ -453,7 +453,7 @@ export async function POST(req: NextRequest) {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
   const msg = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 2000,
     system: `You are the Wali-OS Council. The scanner has selected the tickers based on technical criteria. Your job is to produce a complete trade plan for each one — entry, stop, target, share count, and a 1-2 sentence rationale.
 

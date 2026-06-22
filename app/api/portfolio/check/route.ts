@@ -1758,7 +1758,7 @@ RULE 5 — Council alignment does not save a structurally broken contract
 These rules apply to the "action" field. The "reason" field can include nuance and explain the alignment with Council, the save-path probability, and the structural timing problem. But the action must be a clear, EV-positive instruction.`
 
     const msg = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-6',
       max_tokens: 1500,
       system: systemPrompt,
       messages: [{

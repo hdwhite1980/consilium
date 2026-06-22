@@ -348,7 +348,7 @@ export async function POST(req: NextRequest) {
       : 'No live options chain available'
 
     const msg = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-6',
       max_tokens: 1200,
       system: `You are an options trading expert providing specific, actionable options recommendations. Always explain in plain English that a complete beginner can understand. Never assume prior knowledge of options. Be honest about risks.`,
       messages: [{

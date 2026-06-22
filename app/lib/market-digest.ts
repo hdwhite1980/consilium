@@ -373,7 +373,7 @@ CRITICAL for JSON values:
 Be specific with numbers. Reference actual tickers and percentages. This analysis will be read by AI models, not humans, so precision and completeness matter more than readability.`
 
   const claudePromise = anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 6000,
     messages: [{ role: 'user', content: prompt }],
   })
@@ -424,7 +424,7 @@ Be specific with numbers. Reference actual tickers and percentages. This analysi
       key_levels: {},
       catalysts_tomorrow: { tickers: structuredData.tickers_to_watch },
       full_analysis: fullText,
-      model_used: 'claude-sonnet-4-20250514',
+      model_used: 'claude-sonnet-4-6',
     }, { onConflict: 'digest_date' })
     .select('id')
     .single()
@@ -515,7 +515,7 @@ End with JSON:
 CRITICAL: All string values must be human-readable sentences or proper names, never underscore_slugs.`
 
   const claudePromise = anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 3000,
     messages: [{ role: 'user', content: prompt }],
   })
@@ -550,7 +550,7 @@ CRITICAL: All string values must be human-readable sentences or proper names, ne
     sectors_bearish: structured.sectors_bearish || [],
     tickers_to_watch: structured.tickers_to_watch || [],
     digest_id: digest.id,
-    model_used: 'claude-sonnet-4-20250514',
+    model_used: 'claude-sonnet-4-6',
   }, { onConflict: 'brief_date' })
 
   console.log(`[premarket] Brief saved for ${targetDate}`)

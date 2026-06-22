@@ -238,7 +238,7 @@ Rules for the analysis:
 
   try {
     const msg = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-6',
       max_tokens: 1200,
       system: `You are a trading coach. You grade process, not outcome. You are direct but not harsh. Your output is STRICT JSON matching the requested schema — no markdown, no commentary outside the JSON.`,
       messages: [{ role: 'user', content: prompt }],

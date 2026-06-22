@@ -150,7 +150,7 @@ export async function POST(req: NextRequest) {
 
         const anthropic = new Anthropic()
         const compMsg = await anthropic.messages.create({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-6',
           max_tokens: 1000,
           system: `You are a senior portfolio analyst comparing two investment opportunities. Be decisive. Give a clear recommendation. Use specific data.`,
           messages: [{
