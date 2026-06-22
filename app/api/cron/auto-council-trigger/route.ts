@@ -85,6 +85,7 @@ interface NewsStoryRow {
   verified: boolean | null
   asset_type: string | null
   timeframes: string[] | null   // jsonb array on tracked_stories
+  session_anchor: string | null  // 'today' | 'tomorrow' | 'weekend'
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -235,7 +236,7 @@ async function fetchNewsCandidates(): Promise<Array<{ ticker: string; timeframe:
   try {
     const { data, error } = await admin
       .from('v_active_stories')
-      .select('ticker, signal, confidence, age_hours, verified, asset_type, timeframes')
+      .select('ticker, signal, confidence, age_hours, verified, asset_type, timeframes, session_anchor')
       .gte('confidence', NEWS_CONFIDENCE_MIN)
       .lte('age_hours', NEWS_AGE_HOURS_MAX)
       // BUG FIX (June 22 2026): asset_type is stored as 'stock' singular
@@ -263,14 +264,10 @@ async function fetchNewsCandidates(): Promise<Array<{ ticker: string; timeframe:
       if (seen.has(t)) continue
       seen.add(t)
 
-      // Pick the SHORTEST timeframe the story is tagged with. Rationale: if
-      // the story is tagged 1D + 1W, the catalyst is acting now (the 1D
-      // signal is more time-sensitive); running Council on 1D gives a
-      // tighter trade with quicker resolution. Default '1W' if no
-      // timeframes (back-compat with older rows).
-      const tfs = Array.isArray(r.timeframes) ? r.timeframes : []
-      const order = ['1D', '1W', '1M', '3M']
-      const tf = order.find(o => tfs.includes(o)) ?? '1W'
+      const tf = pickTimeframeForStory(
+        Array.isArray(r.timeframes) ? r.timeframes : [],
+        (r.session_anchor ?? 'today').toLowerCase(),
+      )
 
       out.push({ ticker: t, timeframe: tf })
       if (out.length >= NEWS_PATH_LIMIT) break
@@ -280,6 +277,35 @@ async function fetchNewsCandidates(): Promise<Array<{ ticker: string; timeframe:
     console.warn('[auto-council-trigger] news fetch threw:', e instanceof Error ? e.message : e)
     return []
   }
+}
+
+/**
+ * Choose the timeframe to send to /api/analyze for an active story.
+ *
+ * Rules:
+ *   - sessionAnchor='today':    shortest tagged timeframe (1D > 1W > 1M > 3M)
+ *     Catalyst is unfolding NOW; a 1D play captures it tightest.
+ *
+ *   - sessionAnchor='tomorrow' or 'weekend': minimum 1W
+ *     Catalyst is dated for a future session. Same-day plays would expose
+ *     the trade to overnight gap risk + an unknown catalyst the position
+ *     wasn't sized for. Force the timeframe up to 1W so the trade is
+ *     a swing that brackets the catalyst.
+ *
+ *   - If the story has NO timeframes tagged: default to the safer choice
+ *     for the anchor ('1W' for today, '1W' for tomorrow/weekend).
+ */
+function pickTimeframeForStory(timeframes: string[], sessionAnchor: string): string {
+  const order = ['1D', '1W', '1M', '3M']
+
+  if (sessionAnchor === 'tomorrow' || sessionAnchor === 'weekend') {
+    // Force minimum 1W — pick the SHORTEST that is ≥ 1W
+    const minOrder = ['1W', '1M', '3M']
+    return minOrder.find(o => timeframes.includes(o)) ?? '1W'
+  }
+
+  // sessionAnchor='today' (default): shortest available
+  return order.find(o => timeframes.includes(o)) ?? '1W'
 }
 
 /**

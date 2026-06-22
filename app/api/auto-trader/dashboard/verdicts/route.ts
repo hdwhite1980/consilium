@@ -12,7 +12,7 @@
 // =============================================================
 
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@/app/lib/auth/server'
+import { createClient } from '@/app/lib/auth/server'
 import { getSupabaseAdmin } from '@/app/lib/admin/admin-auth'
 
 export const runtime = 'nodejs'
@@ -95,7 +95,7 @@ export async function GET(_req: NextRequest): Promise<NextResponse<VerdictsDashb
   // Auth: session user only — no service-level access here
   let userId: string | null = null
   try {
-    const supa = await createServerClient()
+    const supa = await createClient()
     const { data: { user } } = await supa.auth.getUser()
     userId = user?.id ?? null
   } catch {
