@@ -203,14 +203,37 @@ export async function POST(req: NextRequest) {
   }
   dlog(`START ticker=${symbol} tf=${tf} forceRefresh=${forceRefresh ?? false} persona=${persona ?? 'balanced'}`)
 
-  // Get user ID for track record logging — non-blocking, null if not authed
+  // Get user ID for track record logging — non-blocking, null if not authed.
+  //
+  // Two auth paths:
+  //   1. Service auth (cron callers): Authorization: Bearer <CRON_SECRET>
+  //      + x-service-trigger header + x-service-user-id header → use that user
+  //   2. Session auth (browser): falls through to Supabase auth.getUser()
+  //
+  // Service-auth path was added so the auto-council-trigger cron can produce
+  // verdicts attributed to a specific user without spoofing a session cookie.
+  // Mirrors the pattern used in /api/reeval-thesis-check.
   let currentUserId: string | null = null
-  try {
-    const authClient = await createAuthClient()
-    const { data: { user } } = await authClient.auth.getUser()
-    currentUserId = user?.id ?? null
-  } catch { /* not blocking */ }
-  dlog(`auth resolved userId=${currentUserId ?? '(anonymous)'}`)
+  const authHeader = req.headers.get('authorization') ?? ''
+  const serviceTrigger = req.headers.get('x-service-trigger')
+  const serviceUserId = req.headers.get('x-service-user-id')
+  const expectedServiceAuth = `Bearer ${process.env.CRON_SECRET ?? ''}`
+  if (
+    process.env.CRON_SECRET &&
+    authHeader === expectedServiceAuth &&
+    serviceTrigger &&
+    serviceUserId
+  ) {
+    currentUserId = serviceUserId
+    dlog(`auth resolved via SERVICE (trigger=${serviceTrigger}) userId=${currentUserId}`)
+  } else {
+    try {
+      const authClient = await createAuthClient()
+      const { data: { user } } = await authClient.auth.getUser()
+      currentUserId = user?.id ?? null
+    } catch { /* not blocking */ }
+    dlog(`auth resolved userId=${currentUserId ?? '(anonymous)'}`)
+  }
 
   const stream = new ReadableStream({
     async start(controller) {

@@ -1,0 +1,36 @@
+name: auto-council-trigger-cron
+
+on:
+  schedule:
+    # Hourly during US market hours.
+    # US market hours: 9:30 AM - 4:00 PM ET
+    #   EDT (Mar-Nov): 13:30-20:00 UTC → run at 14, 15, 16, 17, 18, 19, 20 UTC
+    #   EST (Nov-Mar): 14:30-21:00 UTC → run at 15, 16, 17, 18, 19, 20, 21 UTC
+    # We cover both with 14-21 UTC range Mon-Fri. The auto-trade cron picks up
+    # verdicts as they land; this cron just feeds the pipeline.
+    - cron: '0 14-21 * * 1-5'
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit auto-council-trigger endpoint
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -e
+          response=$(curl -s -L -w "\n%{http_code}" \
+            -X GET \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$APP_BASE_URL/api/cron/auto-council-trigger" \
+            --max-time 70)
+          status=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "Status: $status"
+          echo "Body: $body"
+          if [ "$status" -ne 200 ]; then
+            echo "::error::auto-council-trigger returned non-200 status: $status"
+            exit 1
+          fi
