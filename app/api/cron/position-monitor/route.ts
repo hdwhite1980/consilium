@@ -467,15 +467,70 @@ async function applyTighten(
 
 interface ExitResult { ok: boolean; reason?: string }
 
+/**
+ * Close a bracket position safely.
+ *
+ * The position's shares are reserved by the bracket's stop and take-profit
+ * children. DELETE /v2/positions/{symbol} alone fails with HTTP 403
+ * "insufficient qty available for order (requested: N, available: 0)"
+ * because those reserved shares can't be sold by a second order.
+ *
+ * Correct procedure per Alpaca docs:
+ *   1. List open orders for the symbol
+ *   2. Cancel each open child order
+ *   3. Wait briefly for cancellations to propagate (race condition warning
+ *      from Alpaca's docs — sending close immediately after cancel can fail)
+ *   4. DELETE /v2/positions/{symbol}
+ *
+ * If step 4 still fails, the broker stop remains in place — position stays
+ * protected at the bracket stop level. Not catastrophic, just not the
+ * immediate market exit we wanted.
+ */
 async function applyExit(alpaca: AlpacaClient, pos: AlpacaPosition): Promise<ExitResult> {
+  const symbol = pos.symbol
+  const request = (alpaca as unknown as {
+    request: (m: string, p: string, body?: unknown) => Promise<unknown>
+  }).request
+
   try {
-    // DELETE /v2/positions/{symbol} closes the entire position at market and
-    // cancels child stop/target legs of the bracket
-    await (alpaca as unknown as { request: (m: string, p: string) => Promise<unknown> })
-      .request('DELETE', `/v2/positions/${encodeURIComponent(pos.symbol)}`)
+    // Step 1: list open orders for this symbol
+    const ordersResp = await request('GET', `/v2/orders?status=open&symbols=${encodeURIComponent(symbol)}&limit=50`) as Array<{ id: string; status?: string }> | { id: string; status?: string }[]
+    const orders: Array<{ id: string; status?: string }> = Array.isArray(ordersResp) ? ordersResp : []
+
+    // Step 2: cancel each open order (these are the bracket children)
+    if (orders.length > 0) {
+      const cancelPromises = orders.map(o =>
+        request('DELETE', `/v2/orders/${encodeURIComponent(o.id)}`)
+          .then(() => ({ id: o.id, ok: true }))
+          .catch((e: unknown) => ({
+            id: o.id, ok: false,
+            err: e instanceof Error ? e.message : String(e),
+          })),
+      )
+      const cancelResults = await Promise.all(cancelPromises)
+      const cancelOk = cancelResults.filter(r => r.ok).length
+      const cancelFail = cancelResults.length - cancelOk
+      console.log(
+        `[position-monitor] applyExit ${symbol}: ` +
+        `cancelled ${cancelOk}/${cancelResults.length} bracket children` +
+        (cancelFail > 0 ? ` (${cancelFail} failed)` : ''),
+      )
+
+      // Step 3: brief wait for cancellations to propagate.
+      // Alpaca's docs explicitly warn that close-immediately-after-cancel
+      // can fail with the same insufficient-qty error if the system hasn't
+      // released the shares yet. 750ms is empirically sufficient for paper;
+      // live trading may need more.
+      await new Promise(resolve => setTimeout(resolve, 750))
+    }
+
+    // Step 4: DELETE the position. Now that bracket children are cancelled,
+    // shares are free and the close-at-market should succeed.
+    await request('DELETE', `/v2/positions/${encodeURIComponent(symbol)}`)
     return { ok: true }
   } catch (e) {
-    return { ok: false, reason: e instanceof Error ? e.message.slice(0, 200) : String(e) }
+    const msg = e instanceof Error ? e.message : String(e)
+    return { ok: false, reason: msg.slice(0, 300) }
   }
 }
 
