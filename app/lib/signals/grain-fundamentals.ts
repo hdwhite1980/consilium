@@ -145,6 +145,7 @@ async function fetchCropProgress(commodity: string, futuresRoot: string): Promis
   )
   console.log(`[grain-fundamentals] ${commodity} nationalProgress after filter: ${nationalProgress.length} rows`)
   const grouped = groupByShortDesc(nationalProgress)
+  console.log(`[grain-fundamentals] ${commodity} grouped short_desc keys: ${JSON.stringify(Object.keys(grouped).slice(0, 8))}`)
 
   for (const [shortDesc, rows] of Object.entries(grouped)) {
     const metric = parseProgressMetric(shortDesc)
@@ -234,6 +235,7 @@ async function fetchCropProgress(commodity: string, futuresRoot: string): Promis
   }
 
   void futuresRoot  // silence unused-param lint for now
+  console.log(`[grain-fundamentals] ${commodity} final metrics produced: ${metrics.length} (${metrics.map(m => `${m.metric}=${m.pctNational}%`).join(', ')})`)
   return metrics
 }
 
