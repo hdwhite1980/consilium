@@ -245,12 +245,15 @@ async function fetchNewVerdicts(userId: string, watermark: number): Promise<Verd
   const admin = await getSupabaseAdmin()
   // Look back 4 hours max; ignore older verdicts as too stale
   const cutoff = new Date(Date.now() - 4 * 3_600_000).toISOString()
+  // PASS bypass (June 22, 2026): we now fetch PASS verdicts too. decideForUser
+  // classifies them via classifyPassBypass — most still skip, but marginal-R:R
+  // and earnings-window passes become bypass placements at half size.
   const { data, error } = await admin
     .from('verdict_log')
-    .select('id, user_id, ticker, signal, confidence, entry_price, stop_loss, take_profit, timeframe, trader_decision, trader_grade, trader_position_size, trader_risk_reward, created_at')
+    .select('id, user_id, ticker, signal, confidence, entry_price, stop_loss, take_profit, timeframe, trader_decision, trader_grade, trader_position_size, trader_risk_reward, trader_pass_reasons, created_at')
     .eq('user_id', userId)
     .gt('id', watermark)
-    .eq('trader_decision', 'TAKE')
+    .in('trader_decision', ['TAKE', 'PASS'])
     .gte('created_at', cutoff)
     .order('id', { ascending: true })
     .limit(MAX_VERDICTS_PER_USER_PER_RUN)

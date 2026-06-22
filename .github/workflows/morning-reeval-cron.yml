@@ -1,23 +1,27 @@
-name: auto-trade-cron
+name: morning-reeval-cron
 
 on:
   schedule:
-    # Every 5 minutes during US market hours (9:30 AM - 4:00 PM ET = 13:30-20:00 UTC)
-    # Cron is in UTC. Trim to weekdays.
-    - cron: '*/5 13-21 * * 1-5'
+    # Once per market day at 13:35 UTC (5 min after the 9:30 AM ET bell, EDT).
+    # This is offset to let the auto-trade-cron's first run and overnight
+    # news settle before we ask the Council "is your thesis still intact?"
+    # During EST (Nov-Mar), the bell is at 14:30 UTC so this fires 55 min
+    # early; thesis-check still works pre-market because Alpaca returns
+    # current_price for closed sessions. Tighten/exit decisions just queue
+    # until the 9:30 EST open.
+    - cron: '35 13 * * 1-5'
   workflow_dispatch: {}
 
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      - name: Hit auto-trade endpoint
+      - name: Hit morning-reeval endpoint
         env:
           APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           set -e
-          # Normalize APP_BASE_URL: prepend https:// if scheme missing, strip trailing slash
           BASE="${APP_BASE_URL%/}"
           case "$BASE" in
             http://*|https://*) ;;
@@ -26,13 +30,13 @@ jobs:
           response=$(curl -s -L -w "\n%{http_code}" \
             -X GET \
             -H "Authorization: Bearer $CRON_SECRET" \
-            "$BASE/api/cron/auto-trade" \
-            --max-time 70)
+            "$BASE/api/cron/morning-reeval" \
+            --max-time 150)
           status=$(echo "$response" | tail -n1)
           body=$(echo "$response" | sed '$d')
           echo "Status: $status"
           echo "Body: $body"
           if [ "$status" -ne 200 ]; then
-            echo "::error::auto-trade returned non-200 status: $status"
+            echo "::error::morning-reeval returned non-200 status: $status"
             exit 1
           fi

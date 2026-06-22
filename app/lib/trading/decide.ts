@@ -32,6 +32,7 @@ export interface VerdictForTrade {
   trader_grade: string | null
   trader_position_size: number | string | null
   trader_risk_reward: number | string | null
+  trader_pass_reasons: string[] | null
   created_at: string
 }
 
@@ -87,6 +88,66 @@ function normalizeAlpacaSymbol(ticker: string): string {
 }
 
 /**
+ * Classify a Trader PASS verdict into a bypass category, or null if not eligible.
+ *
+ * Background (June 22, 2026 — user request):
+ * The Trader gates trades on R:R floors and timing constraints. Some PASSes are
+ * fundamentally bad math (R:R below 1.0; confidence floors); those stay PASS.
+ * But TWO categories are timing/management decisions where downstream systems
+ * (position-monitor, reeval, morning-reeval) can handle the risk:
+ *
+ *   - 'marginal_rr': R:R between 1.0 and 1.5. Math is positive but tight.
+ *     Position-monitor's bearish signal detection can EXIT early if it doesn't
+ *     work out, limiting damage. Take at HALF size to limit per-trade impact.
+ *
+ *   - 'earnings_window': Trader passed because earnings are within the block
+ *     window. The TRADE itself is solid; the timing is the issue. Position-
+ *     monitor manages overnight earnings volatility via EXIT on adverse move.
+ *     Take at HALF size to limit gap-risk impact.
+ *
+ * Returns null when the PASS doesn't fit either category — caller treats as
+ * normal skip.
+ */
+function classifyPassBypass(verdict: VerdictForTrade): {
+  category: 'marginal_rr' | 'earnings_window'
+  rationale: string
+} | null {
+  const reasons = Array.isArray(verdict.trader_pass_reasons) ? verdict.trader_pass_reasons : []
+  if (reasons.length === 0) return null
+
+  // ── marginal R:R ──
+  // Read the structured column rather than parsing the text — it's the
+  // numeric value the Trader computed. Range [1.0, 1.5).
+  const rr = verdict.trader_risk_reward !== null && verdict.trader_risk_reward !== undefined
+    ? Number(verdict.trader_risk_reward)
+    : null
+  const hasRrPass = reasons.some(r =>
+    typeof r === 'string' && /risk-to-reward|r:r|risk\/reward/i.test(r),
+  )
+  if (hasRrPass && rr !== null && Number.isFinite(rr) && rr >= 1.0 && rr < 1.5) {
+    return {
+      category: 'marginal_rr',
+      rationale: `marginal-R:R bypass: ${rr.toFixed(2)}:1 in [1.0, 1.5) — half size, monitor closely`,
+    }
+  }
+
+  // ── earnings window ──
+  // Pattern-match the reason text for 'earnings' keyword. The Trader's
+  // earnings rules block trades within an earnings proximity window.
+  const hasEarningsPass = reasons.some(r =>
+    typeof r === 'string' && /earnings/i.test(r),
+  )
+  if (hasEarningsPass) {
+    return {
+      category: 'earnings_window',
+      rationale: 'earnings-window bypass: timing block only, take at half size, monitor manages volatility',
+    }
+  }
+
+  return null
+}
+
+/**
  * Per-(verdict, user) decision. Pure function as much as possible —
  * the only side effect is the kill-switch DB reads.
  */
@@ -97,13 +158,33 @@ export async function decideForUser(args: {
 }): Promise<Decision> {
   const { verdict, settings, alpaca } = args
 
-  // 1. Verdict eligibility — TAKE only
-  if (verdict.trader_decision !== 'TAKE') {
-    return { kind: 'skip', reason: `trader_decision=${verdict.trader_decision} (not TAKE)`, shouldHalt: false }
+  // 1. Verdict eligibility — TAKE, or qualifying PASS bypass
+  let bypass: ReturnType<typeof classifyPassBypass> = null
+  if (verdict.trader_decision === 'TAKE') {
+    // Normal path
+  } else if (verdict.trader_decision === 'PASS') {
+    bypass = classifyPassBypass(verdict)
+    if (!bypass) {
+      return {
+        kind: 'skip',
+        reason: `trader_decision=PASS and not bypass-eligible`,
+        shouldHalt: false,
+      }
+    }
+    // Continue with bypass — will apply half-sizing at step 11
+  } else {
+    return {
+      kind: 'skip',
+      reason: `trader_decision=${verdict.trader_decision} (not TAKE or PASS)`,
+      shouldHalt: false,
+    }
   }
 
   // 2. Grade floor
-  const grade = verdict.trader_grade
+  // For TAKE verdicts the grade is required. For PASS bypass verdicts the
+  // Trader doesn't grade (since it didn't approve), so we treat them as if
+  // they were grade C (minimum) — the bypass itself is the qualification.
+  const grade = verdict.trader_grade ?? (bypass ? 'C' : null)
   if (!grade || !['A', 'B', 'C'].includes(grade)) {
     return { kind: 'skip', reason: `no grade set`, shouldHalt: false }
   }
@@ -214,6 +295,13 @@ export async function decideForUser(args: {
     ? Number(verdict.trader_position_size)
     : 1
 
+  // PASS bypass: halve the position size. The Trader gated for a reason
+  // (marginal R:R or earnings timing); we override that gate but cap our
+  // per-trade exposure at half normal so any single bypass loss has half
+  // the impact.
+  const sizeMultiplier = bypass ? 0.5 : 1.0
+  const effectiveTraderSize = Math.min(1, Math.max(0, traderSize * sizeMultiplier))
+
   // Per-trade bounds from user_trading_settings (Audit Phase 2).
   const sizing = computePositionSize({
     accountEquity: effectiveEquity,
@@ -221,7 +309,7 @@ export async function decideForUser(args: {
     maxPositionPct: settings.maxPositionPct,
     entryPrice,
     stopPrice,
-    traderPositionSizePct: traderSize > 0 ? Math.min(1, traderSize) : 1,
+    traderPositionSizePct: effectiveTraderSize > 0 ? effectiveTraderSize : 1,
     minDollarRiskPerTrade: settings.minDollarRiskPerTrade,
     maxDollarRiskPerTrade: settings.maxDollarRiskPerTrade,
     minTradeNotional: settings.minTradeNotional,
@@ -265,6 +353,8 @@ export async function decideForUser(args: {
     targetPrice,
     dollarRisk: sizing.dollarRisk,
     accountEquity: effectiveEquity,
-    rationale: sizing.rationale,
+    rationale: bypass
+      ? `[PASS_BYPASS:${bypass.category}] ${bypass.rationale} | ${sizing.rationale}`
+      : sizing.rationale,
   }
 }
