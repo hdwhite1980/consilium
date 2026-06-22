@@ -133,10 +133,31 @@ async function processUser(settings: UserTradingSettings, userSummary: PerUserSu
 
   // Fetch open stocks positions from broker (source of truth) plus their
   // trade_attempts metadata (for stop adjustment + cooldown tracking)
-  const positions = await alpaca.positions().catch(() => [] as AlpacaPosition[])
-  if (positions.length === 0) return
+  let positions: AlpacaPosition[] = []
+  try {
+    positions = await alpaca.positions()
+  } catch (e) {
+    console.error(
+      `[position-monitor] user=${settings.userId} alpaca.positions() THREW:`,
+      e instanceof Error ? `${e.message}\n${e.stack ?? ''}`.slice(0, 600) : String(e).slice(0, 300),
+    )
+    userSummary.errors++
+    return
+  }
+  if (positions.length === 0) {
+    console.log(`[position-monitor] user=${settings.userId} alpaca returned 0 open positions`)
+    return
+  }
+  console.log(
+    `[position-monitor] user=${settings.userId} alpaca returned ${positions.length} positions: ` +
+    positions.map(p => `${p.symbol}(qty=${p.qty})`).join(','),
+  )
 
   const attemptsByTicker = await fetchOpenAttempts(settings.userId)
+  console.log(
+    `[position-monitor] user=${settings.userId} trade_attempts has ${attemptsByTicker.size} open rows: ` +
+    Array.from(attemptsByTicker.keys()).join(','),
+  )
 
   for (const pos of positions) {
     const sym = pos.symbol.toUpperCase()
@@ -144,6 +165,9 @@ async function processUser(settings: UserTradingSettings, userSummary: PerUserSu
     if (!att) {
       // Position exists on broker but we have no trade_attempts record — can't
       // act safely (don't know the original stop, can't update). Skip silently.
+      console.warn(
+        `[position-monitor] user=${settings.userId} ${sym} has no matching trade_attempts row (broker has position but DB doesn't); skipping`,
+      )
       continue
     }
     userSummary.positionsChecked++
