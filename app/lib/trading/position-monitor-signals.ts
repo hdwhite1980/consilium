@@ -179,6 +179,13 @@ export interface DecisionResult {
  * across two timeframes. See spec in DEPLOY.md for the tiers.
  *
  * Returns the decision plus a one-line reason for the log.
+ *
+ * Rule order (first match wins):
+ *   1. EXIT  — overwhelming bearish (multi-TF or single-TF dominance)
+ *   2. BULLISH OVERRIDE — bullish signals dominate, hold regardless of bearish count
+ *   3. ESCALATE — mixed signals (one TF bearish, other TF bullish), ask Council
+ *   4. TIGHTEN_STOP — 15m bearish meets threshold, no override
+ *   5. HOLD — everything else
  */
 export function decide(inputs: DecisionInputs): DecisionResult {
   const {
@@ -192,7 +199,7 @@ export function decide(inputs: DecisionInputs): DecisionResult {
   const u5 = snap5m.bullishCount
   const u15 = snap15m.bullishCount
 
-  // EXIT — overwhelming bearish on one timeframe, or multi-TF confirmation
+  // ── EXIT — overwhelming bearish on one timeframe, or multi-TF confirmation ──
   if (b15 >= exitThreshold15m && b5 >= 2) {
     return { decision: 'EXIT', reason: `multi-TF bearish: 5m=${b5}, 15m=${b15}` }
   }
@@ -200,12 +207,32 @@ export function decide(inputs: DecisionInputs): DecisionResult {
     return { decision: 'EXIT', reason: `5m overwhelming bearish: ${b5} signals` }
   }
 
-  // ESCALATE — mixed signals across timeframes, ambiguous
-  // Definition of "mixed": one TF strongly bearish AND the other clearly bullish
+  // ── BULLISH OVERRIDE — bullish signals clearly dominate on 15m, hold ──
+  // The 15m chart is the primary timeframe for swing position management.
+  // If bullish count exceeds bearish by 2+ on 15m, the trend is intact and
+  // any bearish signals are likely normal pullback noise within strength.
+  // Skip the tighten/escalate paths entirely.
+  const dominance15m = u15 - b15
+  if (dominance15m >= 2) {
+    return {
+      decision: 'HOLD',
+      reason: `15m net bullish: ${u15} bullish vs ${b15} bearish (+${dominance15m})`,
+    }
+  }
+
+  // ── ESCALATE — mixed/ambiguous signals across timeframes ──
+  // After the bullish override, ambiguous = bearish meets threshold AND bullish
+  // is close behind (dominance is +1 or 0, not enough for override but enough
+  // to warrant Council reasoning instead of mechanical tighten).
   if (escalateOnConflict) {
+    // Case A: 15m bearish at threshold AND 5m clearly bullish — TFs disagree
     const fifteenBearishButFiveBullish = b15 >= tightenThreshold15m && u5 >= 3
+    // Case B: 5m strongly bearish AND 15m clearly bullish — TFs disagree
     const fiveBearishButFifteenBullish = b5 >= 3 && u15 >= 3
-    if (fifteenBearishButFiveBullish || fiveBearishButFifteenBullish) {
+    // Case C: 15m bearish meets threshold AND bullish nearly matches it on 15m
+    // (dominance is +1 or 0, escapes the >=2 override but still ambiguous)
+    const fifteenAmbiguous = b15 >= tightenThreshold15m && (u15 >= b15 || u15 === b15 - 1) && u15 >= 2
+    if (fifteenBearishButFiveBullish || fiveBearishButFifteenBullish || fifteenAmbiguous) {
       return {
         decision: 'ESCALATE',
         reason: `mixed signals: 5m b=${b5}/u=${u5}, 15m b=${b15}/u=${u15}`,
@@ -213,12 +240,15 @@ export function decide(inputs: DecisionInputs): DecisionResult {
     }
   }
 
-  // TIGHTEN_STOP — 15m showing weakness (2+) but not enough to exit
+  // ── TIGHTEN_STOP — 15m showing real weakness, no bullish counterweight ──
   if (b15 >= tightenThreshold15m) {
-    return { decision: 'TIGHTEN_STOP', reason: `15m weakening: ${b15} bearish signals` }
+    return {
+      decision: 'TIGHTEN_STOP',
+      reason: `15m weakening: ${b15} bearish vs ${u15} bullish (dominance ${dominance15m})`,
+    }
   }
 
-  // HOLD — everything else
+  // ── HOLD — everything else ──
   if (b5 >= 2) {
     return { decision: 'HOLD', reason: `5m noise (${b5} bearish), 15m fine (${b15})` }
   }
