@@ -168,7 +168,12 @@ async function fetchOpenAttempts(userId: string, assetClass: 'stocks' | 'crypto'
     .not('broker_order_id', 'is', null)
 
   if (assetClass === 'stocks') {
-    q = q.or('asset_class.is.null,asset_class.eq.stocks')
+    // trade_attempts stores asset_class='stock' (singular, matches the
+    // broker_credentials convention). Legacy rows may have NULL.
+    // We must accept both NULL and 'stock' singular; we leave the legacy
+    // 'stocks' plural in the OR list for any historical rows that may
+    // exist from before the convention was unified.
+    q = q.or('asset_class.is.null,asset_class.eq.stock,asset_class.eq.stocks')
   } else {
     q = q.eq('asset_class', assetClass)
   }
