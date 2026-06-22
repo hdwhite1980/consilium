@@ -1,42 +1,51 @@
 // =============================================================
-// app/api/cron/auto-trade-attach-stops/route.ts (Session 1)
+// app/api/cron/auto-trade-attach-stops/route.ts (Sessions 1+2)
 //
 // Stop-attachment worker. Runs every 1 minute, 24/7.
 //
-// PURPOSE: The auto-trade-crypto cron places market entries but
-// CANNOT place a stop in the same call (Alpaca crypto has no
-// bracket order support). Without this worker, crypto positions
-// run with no broker-side protective stop — a critical risk gap.
+// PURPOSE: Crypto and futures auto-trade crons place market entries
+// but CANNOT place a stop in the same call:
+//   - Alpaca crypto has no bracket order support (no OCO/OTO/bracket)
+//   - Tradovate doesn't expose OCO/OSO via the current REST client
+// Without this worker, those positions run with no broker-side
+// protective stop — a critical risk gap.
 //
 // HOW IT WORKS:
 //   1. Find trade_attempts rows where:
-//      - asset_class IN ('crypto')          (futures added in Session 2)
+//      - asset_class IN ('crypto', 'futures')
 //      - outcome IN ('placed','filled','partial_fill')
 //      - stop_order_id IS NULL              (not yet attached)
 //      - stop_attach_attempts < 5           (retry budget)
 //      - created_at > now() - 24h           (don't try stale orphans)
 //
-//   2. For each row, verify the parent entry has filled at Alpaca
-//      (the cron may run before fill completes; defer to next run).
+//   2. Per asset class, verify the parent entry has filled:
+//      - Crypto: check parent order status='filled' via Alpaca getOrder
+//      - Futures: check tradovate.positions() shows nonzero netPos
+//      If not yet filled, defer to next run.
 //
-//   3. Call alpacaCrypto.stopLimitSell() at the stop_price recorded
-//      on the attempt row, for the filled_qty.
+//   3. Place protective stop:
+//      - Crypto: alpacaCrypto.stopLimitSell() at council_stop, 0.5% slip
+//      - Futures: tradovate.placeOrder() Stop type (market on trigger),
+//        opposite side of entry, at council_stop
 //
 //   4. On success: write stop_order_id and stop_attached_at.
 //   5. On failure: increment stop_attach_attempts and log.
 //
-// SCOPE NOTES:
-//   - Crypto only this session. Futures wiring comes in Session 2.
-//   - No target attachment — crypto target is managed app-side via
-//     reeval (Session 3 will fix reeval for crypto/futures).
-//   - This route is idempotent: if a row already has stop_order_id,
-//     it won't be re-processed. Safe to run every minute.
+// SCOPE NOTES (Sessions 1+2):
+//   - Stop only — no target attachment. Target stays app-managed via
+//     reeval (Session 3 work).
+//   - For crypto: Alpaca crypto has no OCO so target can't be a sibling
+//   - For futures: Tradovate has no OCO so two children could BOTH fire
+//     in volatile conditions, leaving an unintended reverse position.
+//     Stop-only avoids this until Session 3 wires position-monitor cancel.
+//   - Idempotent: skip rows that already have stop_order_id.
 // =============================================================
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/app/lib/admin/admin-auth'
-import { loadBrokerCredentialForUse } from '@/app/lib/trading/credentials'
+import { loadBrokerCredentialForUse, loadTradovateSession, saveTradovateTokenCache } from '@/app/lib/trading/credentials'
 import { makeAlpacaCryptoClient, type AlpacaCryptoClient } from '@/app/lib/trading/alpaca-crypto-client'
+import { makeTradovateClient, type TradovateClient } from '@/app/lib/trading/tradovate-client'
 import { randomBytes } from 'crypto'
 
 export const runtime = 'nodejs'
@@ -46,6 +55,13 @@ export const maxDuration = 60
 const MAX_ATTEMPTS_PER_RUN = 50          // safety cap per run
 const MAX_ATTACH_ATTEMPTS = 5            // give up after N retries
 const LOOKBACK_HOURS = 24                // don't chase stale orphans
+
+// Futures stop slippage room — for future stop-limit upgrade when
+// Tradovate exposes StopLimit. Currently we use plain Stop (market
+// on trigger) so this is informational. Kept as a constant so it's
+// easy to switch when StopLimit support arrives.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const FUTURES_STOP_LIMIT_OFFSET_PCT = 0.005
 
 interface PendingAttachRow {
   id: string                              // trade_attempts.id (UUID)
@@ -88,7 +104,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const pending = await fetchPendingAttachments()
     summary.pending = pending.length
 
-    // Group by user_id so we can reuse one Alpaca client per user
+    // Group by user_id so we can reuse one broker client per user per asset class
     const byUser = new Map<string, PendingAttachRow[]>()
     for (const row of pending) {
       const list = byUser.get(row.user_id) ?? []
@@ -97,27 +113,77 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     }
 
     for (const [userId, rows] of byUser) {
-      // Same mode for all of a user's rows in practice; take from first
-      const mode = rows[0].mode
-      const credLoad = await loadBrokerCredentialForUse(userId, 'alpaca', mode, 'crypto')
-      if (!credLoad) {
-        console.warn(`[attach-stops] user=${userId} no alpaca crypto credential; skipping ${rows.length} attempts`)
-        continue
-      }
-      const alpaca = makeAlpacaCryptoClient(credLoad.keyId, credLoad.secret, mode)
+      // Split per asset class so each gets its own broker client
+      const cryptoRows = rows.filter(r => r.asset_class === 'crypto')
+      const futuresRows = rows.filter(r => r.asset_class === 'futures')
 
-      for (const row of rows) {
-        try {
-          const result = await processAttempt(row, alpaca)
-          switch (result.kind) {
-            case 'attached':  summary.attached++; break
-            case 'deferred':  summary.deferred++; break
-            case 'failed':    summary.failed++; break
-            case 'gave_up':   summary.gaveUp++; break
+      // ── Crypto ─────────────────────────────────────────────
+      if (cryptoRows.length > 0) {
+        // All crypto rows from one user use the same mode
+        const mode = cryptoRows[0].mode
+        const credLoad = await loadBrokerCredentialForUse(userId, 'alpaca', mode, 'crypto')
+        if (!credLoad) {
+          console.warn(`[attach-stops] user=${userId} no alpaca crypto credential; skipping ${cryptoRows.length} crypto attempts`)
+        } else {
+          const alpaca = makeAlpacaCryptoClient(credLoad.keyId, credLoad.secret, mode)
+          for (const row of cryptoRows) {
+            try {
+              const result = await processCryptoAttempt(row, alpaca)
+              countResult(summary, result)
+            } catch (e) {
+              summary.errors++
+              console.error(`[attach-stops] crypto attempt=${row.id} unexpected error:`, e instanceof Error ? e.message : e)
+            }
           }
-        } catch (e) {
-          summary.errors++
-          console.error(`[attach-stops] attempt=${row.id} unexpected error:`, e instanceof Error ? e.message : e)
+        }
+      }
+
+      // ── Futures ────────────────────────────────────────────
+      if (futuresRows.length > 0) {
+        const mode = futuresRows[0].mode
+        const session = await loadTradovateSession(userId, mode)
+        if (!session) {
+          console.warn(`[attach-stops] user=${userId} no tradovate session; skipping ${futuresRows.length} futures attempts`)
+        } else if (session.accountSpec === null || session.accountIntId === null) {
+          console.warn(`[attach-stops] user=${userId} tradovate session missing accountSpec/accountIntId`)
+        } else {
+          const tradovate = makeTradovateClient({
+            mode,
+            credentials: {
+              username: session.username,
+              password: session.password,
+              appId: session.appId,
+              appVersion: session.appVersion,
+              cid: session.cid,
+              sec: session.sec,
+            },
+            accountSpec: session.accountSpec,
+            accountIntId: session.accountIntId,
+            cachedAccessToken: session.cachedAccessToken,
+            cachedExpiresAt: session.cachedTokenExpiresAt,
+            onTokenRefreshed: async (token, expiresAt) => {
+              await saveTradovateTokenCache(session.credentialRowId, token, expiresAt)
+            },
+          })
+          // Pre-fetch positions ONCE for this user (instead of once per attempt)
+          let positions
+          try {
+            positions = await tradovate.positions()
+          } catch (e) {
+            console.warn(`[attach-stops] user=${userId} tradovate.positions() failed; deferring all futures attempts:`, e instanceof Error ? e.message : e)
+            positions = null
+          }
+          if (positions !== null) {
+            for (const row of futuresRows) {
+              try {
+                const result = await processFuturesAttempt(row, tradovate, positions)
+                countResult(summary, result)
+              } catch (e) {
+                summary.errors++
+                console.error(`[attach-stops] futures attempt=${row.id} unexpected error:`, e instanceof Error ? e.message : e)
+              }
+            }
+          }
         }
       }
     }
@@ -130,6 +196,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   return NextResponse.json(summary)
 }
 
+function countResult(summary: AttachSummary, result: ProcessResult): void {
+  switch (result.kind) {
+    case 'attached':  summary.attached++; break
+    case 'deferred':  summary.deferred++; break
+    case 'failed':    summary.failed++; break
+    case 'gave_up':   summary.gaveUp++; break
+  }
+}
+
 // ─────────────────────────────────────────────────────────────
 // Per-attempt processing
 // ─────────────────────────────────────────────────────────────
@@ -140,7 +215,7 @@ type ProcessResult =
   | { kind: 'failed'; reason: string }
   | { kind: 'gave_up'; reason: string }
 
-async function processAttempt(row: PendingAttachRow, alpaca: AlpacaCryptoClient): Promise<ProcessResult> {
+async function processCryptoAttempt(row: PendingAttachRow, alpaca: AlpacaCryptoClient): Promise<ProcessResult> {
   // Already past retry budget — mark gave_up and exit (loud)
   if (row.stop_attach_attempts >= MAX_ATTACH_ATTEMPTS) {
     return { kind: 'gave_up', reason: `at max attempts (${row.stop_attach_attempts})` }
@@ -215,6 +290,145 @@ async function processAttempt(row: PendingAttachRow, alpaca: AlpacaCryptoClient)
 }
 
 // ─────────────────────────────────────────────────────────────
+// Per-attempt processing — futures (Session 2)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Process one futures attempt.
+ *
+ * Differences from crypto:
+ *   - Verify fill via positions() (Tradovate client doesn't expose
+ *     getOrder by ID; positions list is the canonical state).
+ *   - Resolve contract: row.ticker stores the contract name (e.g. "ESH6"),
+ *     but Tradovate orders use integer contractId. We get contractId from
+ *     the matching position.
+ *   - Stop is plain `Stop` order (market on trigger). Tradovate client
+ *     doesn't expose StopLimit currently; when it does, switch to that
+ *     with FUTURES_STOP_LIMIT_OFFSET_PCT slippage cap.
+ *   - Sell-stop for long positions (qty>0 netPos), buy-stop for short (netPos<0).
+ *
+ * @param positions Pre-fetched positions for this user (one fetch per cron run)
+ */
+async function processFuturesAttempt(
+  row: PendingAttachRow,
+  tradovate: TradovateClient,
+  positions: Array<{ contractId: number; netPos: number; netPrice: number | null }>,
+): Promise<ProcessResult> {
+  if (row.stop_attach_attempts >= MAX_ATTACH_ATTEMPTS) {
+    return { kind: 'gave_up', reason: `at max attempts (${row.stop_attach_attempts})` }
+  }
+
+  const stopPrice = row.council_stop !== null && row.council_stop !== undefined
+    ? Number(row.council_stop) : null
+  if (stopPrice === null || !Number.isFinite(stopPrice) || stopPrice <= 0) {
+    await markFailed(row.id, row.stop_attach_attempts, `no valid stop_price (council_stop=${row.council_stop})`)
+    return { kind: 'failed', reason: 'no valid stop_price' }
+  }
+  if (!row.side || (row.side !== 'buy' && row.side !== 'sell')) {
+    await markFailed(row.id, row.stop_attach_attempts, `invalid side on row: ${row.side}`)
+    return { kind: 'failed', reason: 'invalid side' }
+  }
+
+  // Resolve contract by name → contractId
+  // We extract the root (e.g. "ESH6" → "ES", "MESH6" → "MES") by taking
+  // everything except the last 2 chars (1 month code + 1 year digit).
+  const contractName = row.ticker
+  if (!contractName || contractName.length < 3) {
+    await markFailed(row.id, row.stop_attach_attempts, `invalid contract name: ${contractName}`)
+    return { kind: 'failed', reason: 'invalid contract name' }
+  }
+  const root = contractName.slice(0, -2)  // "ESH6" → "ES", "MESH6" → "MES"
+
+  // Find front-month contract for this root, verify name matches our stored ticker
+  let contract
+  try {
+    contract = await tradovate.findFrontMonthContract(root)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    await markFailed(row.id, row.stop_attach_attempts, `findFrontMonthContract failed: ${msg.slice(0, 200)}`)
+    return { kind: 'failed', reason: `contract resolve: ${msg.slice(0, 100)}` }
+  }
+  if (!contract) {
+    await markFailed(row.id, row.stop_attach_attempts, `no front-month contract for root=${root}`)
+    return { kind: 'failed', reason: `no front-month for ${root}` }
+  }
+  // If the resolved contract name doesn't match what's on the row, the front-month
+  // has rolled since entry. The stored contract still has an open position but it's
+  // no longer the front month. Defer with a loud log — needs manual reconciliation.
+  if (contract.name !== contractName) {
+    console.warn(`[attach-stops] futures contract roll detected: row.ticker=${contractName} but front-month is now ${contract.name}. attempt=${row.id} skipped.`)
+    await markFailed(row.id, row.stop_attach_attempts, `contract roll: ${contractName} -> ${contract.name}`)
+    return { kind: 'failed', reason: `contract roll ${contractName} -> ${contract.name}` }
+  }
+
+  // Verify the position exists with nonzero netPos
+  const pos = positions.find(p => p.contractId === contract.id)
+  if (!pos || pos.netPos === 0) {
+    // Entry hasn't filled yet, OR closed already. Defer; don't burn an attempt.
+    return { kind: 'deferred', reason: `no open position on contractId=${contract.id}` }
+  }
+
+  // Sanity: position direction matches the side we placed
+  // Long position (netPos > 0) means we placed a Buy entry → stop is a Sell
+  // Short position (netPos < 0) means we placed a Sell entry → stop is a Buy
+  const stopAction: 'Buy' | 'Sell' = pos.netPos > 0 ? 'Sell' : 'Buy'
+  const expectedSide = pos.netPos > 0 ? 'buy' : 'sell'
+  if (row.side !== expectedSide) {
+    console.warn(`[attach-stops] futures side mismatch: row.side=${row.side} but netPos=${pos.netPos} implies ${expectedSide}. Using position direction. attempt=${row.id}`)
+    // Trust the position over the row, since the broker is the truth source
+  }
+
+  // Validate stop is on the protective side relative to the position
+  if (pos.netPrice !== null) {
+    if (pos.netPos > 0 && stopPrice >= pos.netPrice) {
+      // Long position with stop ABOVE entry — wrong side
+      await markFailed(row.id, row.stop_attach_attempts, `stop ${stopPrice} >= entry ${pos.netPrice} on long`)
+      return { kind: 'failed', reason: 'stop on wrong side of entry (long)' }
+    }
+    if (pos.netPos < 0 && stopPrice <= pos.netPrice) {
+      // Short position with stop BELOW entry — wrong side
+      await markFailed(row.id, row.stop_attach_attempts, `stop ${stopPrice} <= entry ${pos.netPrice} on short`)
+      return { kind: 'failed', reason: 'stop on wrong side of entry (short)' }
+    }
+  }
+
+  // Use absolute value of netPos as the stop qty. If a partial close happened
+  // between entry and now, this stops the remaining position — correct behavior.
+  const stopQty = Math.abs(pos.netPos)
+
+  // Place the stop
+  try {
+    const result = await tradovate.placeOrder({
+      contractId: contract.id,
+      action: stopAction,
+      qty: stopQty,
+      orderType: 'Stop',
+      price: stopPrice,
+      isAutomated: true,
+    })
+    if (result.failureReason || result.failureText) {
+      const msg = `${result.failureReason ?? 'unknown'}: ${result.failureText ?? ''}`
+      await markFailed(row.id, row.stop_attach_attempts, `Tradovate stop rejected: ${msg.slice(0, 200)}`)
+      console.warn(`[attach-stops] FAILED futures user=${row.user_id} ${contractName} attempt=${row.id}: ${msg.slice(0, 200)}`)
+      return { kind: 'failed', reason: msg.slice(0, 100) }
+    }
+    const stopOrderId = result.orderId ? String(result.orderId) : ''
+    if (!stopOrderId) {
+      await markFailed(row.id, row.stop_attach_attempts, `Tradovate returned no orderId`)
+      return { kind: 'failed', reason: 'no orderId returned' }
+    }
+    await markAttached(row.id, stopOrderId, row.stop_attach_attempts)
+    console.log(`[attach-stops] ATTACHED futures user=${row.user_id} ${contractName} ${stopAction} ${stopQty}× @ stop=${stopPrice} stopOrderId=${stopOrderId} attemptId=${row.id}`)
+    return { kind: 'attached', stopOrderId }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    await markFailed(row.id, row.stop_attach_attempts, `placeOrder Stop failed: ${msg.slice(0, 200)}`)
+    console.warn(`[attach-stops] FAILED futures user=${row.user_id} ${contractName} attempt=${row.id}: ${msg.slice(0, 200)}`)
+    return { kind: 'failed', reason: msg.slice(0, 100) }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // DB helpers
 // ─────────────────────────────────────────────────────────────
 
@@ -224,12 +438,12 @@ async function fetchPendingAttachments(): Promise<PendingAttachRow[]> {
   const { data, error } = await admin
     .from('trade_attempts')
     .select('id, user_id, asset_class, ticker, mode, broker, broker_order_id, side, qty, council_stop, filled_avg_price, outcome, stop_attach_attempts')
-    .eq('asset_class', 'crypto')                    // Session 1: crypto only
+    .in('asset_class', ['crypto', 'futures'])         // Sessions 1+2
     .in('outcome', ['placed', 'filled', 'partial_fill'])
     .is('stop_order_id', null)
     .lt('stop_attach_attempts', MAX_ATTACH_ATTEMPTS)
     .gte('created_at', cutoff)
-    .order('created_at', { ascending: true })       // oldest first — fairness
+    .order('created_at', { ascending: true })         // oldest first — fairness
     .limit(MAX_ATTEMPTS_PER_RUN)
   if (error) {
     console.error('[attach-stops] fetchPendingAttachments failed:', error.message)
