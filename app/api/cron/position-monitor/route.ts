@@ -179,6 +179,14 @@ async function processUser(settings: UserTradingSettings, userSummary: PerUserSu
     }
     userSummary.positionsChecked++
 
+    // Sync fill-back from broker BEFORE cooldown check, so cooldowned
+    // positions still get their entry/risk corrected to actual fill.
+    // Mutates `att` in-place if an update happens, so downstream logic
+    // sees the corrected values.
+    await syncFillBackFromBroker(att, pos).catch(e =>
+      console.warn(`[position-monitor] sync-fill ${sym} failed: ${e instanceof Error ? e.message : e}`),
+    )
+
     try {
       const handled = await processPosition(settings, pmSettings, alpaca, pos, att, userSummary)
       if (!handled) userSummary.errors++
@@ -193,6 +201,77 @@ async function processUser(settings: UserTradingSettings, userSummary: PerUserSu
       })
     }
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Fill-back sync — keep trade_attempts in sync with broker truth
+// ─────────────────────────────────────────────────────────────
+//
+// The Council recommends an entry price. The auto-trader places a market
+// order at that price. The actual fill is whatever the ask is when the
+// order hits Alpaca — often a few cents to a few dollars off.
+//
+// Before this sync, trade_attempts stored only the Council recommendation:
+//   filled_avg_price = null
+//   entry_price_est = council's number
+//   risk_dollar_amount = computed from council's number (wrong)
+//
+// After: filled_avg_price + entry_price_est track broker truth.
+// council_entry is preserved untouched for audit (Council's aspiration).
+// risk_dollar_amount is recalculated against the actual fill.
+//
+// Idempotent: skips if filled_avg_price already matches broker within 1c.
+
+async function syncFillBackFromBroker(
+  att: OpenAttempt,
+  pos: AlpacaPosition,
+): Promise<void> {
+  const brokerFill = pos.avg_entry_price
+  if (!Number.isFinite(brokerFill) || brokerFill <= 0) return
+
+  // Idempotency: skip if filled_avg_price is already accurate
+  if (att.filled_avg_price !== null &&
+      Math.abs(att.filled_avg_price - brokerFill) < 0.01) {
+    return
+  }
+
+  // Recompute risk based on actual fill and current stop
+  // (use att.stop_price which the cron knows about — broker may have a
+  // tightened stop we haven't updated yet, but the math here is for the
+  // recorded stop level)
+  const stop = att.stop_price
+  const qty = att.qty ?? Math.abs(pos.qty)
+  if (stop === null || qty === null || qty <= 0) {
+    console.warn(`[position-monitor] sync-fill ${att.ticker}: missing stop or qty, skipping risk recalc`)
+    return
+  }
+
+  const newRisk = Math.round(qty * Math.abs(brokerFill - stop) * 100) / 100
+
+  const admin = await getSupabaseAdmin()
+  const { error } = await admin
+    .from('trade_attempts')
+    .update({
+      filled_avg_price: brokerFill,
+      entry_price_est: brokerFill,
+      risk_dollar_amount: newRisk,
+    })
+    .eq('id', att.id)
+
+  if (error) {
+    console.warn(`[position-monitor] sync-fill ${att.ticker} update failed: ${error.message}`)
+    return
+  }
+
+  console.log(
+    `[position-monitor] sync-fill ${att.ticker}: ` +
+    `entry ${att.filled_avg_price ?? 'null'} -> ${brokerFill.toFixed(2)}, ` +
+    `risk $${newRisk.toFixed(2)} (qty ${qty} x |fill - stop ${stop.toFixed(2)}|)`,
+  )
+
+  // Mutate in-memory att so downstream code uses corrected values
+  att.filled_avg_price = brokerFill
+  att.entry_price_est = brokerFill
 }
 
 // ─────────────────────────────────────────────────────────────
