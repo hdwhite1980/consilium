@@ -126,9 +126,13 @@ async function processUser(settings: UserTradingSettings, userSummary: PerUserSu
   // columns; the settings loader may not surface them until we update it)
   const pmSettings = pmSettingsFrom(settings)
 
-  // Load broker
+  // Load broker — explicitly pass 'stock' (singular, matches DB) so we get
+  // the alpaca stocks credential row, not crypto or another asset class
   const credLoad = await loadBrokerCredentialForUse(settings.userId, settings.broker, settings.mode, 'stock')
-  if (!credLoad) return
+  if (!credLoad) {
+    console.warn(`[position-monitor] user=${settings.userId} no broker credentials for ${settings.broker}/${settings.mode}/stock`)
+    return
+  }
   const alpaca = makeAlpacaClient(credLoad.keyId, credLoad.secret, settings.mode)
 
   // Fetch open stocks positions from broker (source of truth) plus their
@@ -470,7 +474,7 @@ async function fetchOpenAttempts(userId: string): Promise<Map<string, OpenAttemp
     .from('trade_attempts')
     .select('id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, outcome, asset_class')
     .eq('user_id', userId)
-    .or('asset_class.is.null,asset_class.eq.stocks')
+    .or('asset_class.is.null,asset_class.eq.stocks,asset_class.eq.stock')
     .in('outcome', ['placed', 'filled', 'partial_fill'])
     .gte('created_at', cutoff)
 
@@ -531,7 +535,7 @@ async function logResult(
     user_id: settings.userId,
     trade_attempt_id: att.id,
     ticker,
-    asset_class: 'stocks',
+    asset_class: att.asset_class ?? 'stock',
     bearish_count_5m: payload.snap5m.bearishCount,
     bearish_count_15m: payload.snap15m.bearishCount,
     bullish_count_5m: payload.snap5m.bullishCount,
