@@ -1,0 +1,39 @@
+name: position-monitor-cron
+
+on:
+  schedule:
+    # Every 3 min during US market hours.
+    # 13-20 UTC covers EDT market hours; 14-21 UTC covers EST.
+    # We use 13-21 to safely cover both with a small buffer.
+    - cron: '*/3 13-21 * * 1-5'
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit position-monitor endpoint
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -e
+          # Normalize APP_BASE_URL: prepend https:// if scheme missing, strip trailing slash
+          BASE="${APP_BASE_URL%/}"
+          case "$BASE" in
+            http://*|https://*) ;;
+            *) BASE="https://$BASE" ;;
+          esac
+          response=$(curl -s -L -w "\n%{http_code}" \
+            -X GET \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$BASE/api/cron/position-monitor" \
+            --max-time 90)
+          status=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "Status: $status"
+          echo "Body: $body"
+          if [ "$status" -ne 200 ]; then
+            echo "::error::position-monitor returned non-200 status: $status"
+            exit 1
+          fi
