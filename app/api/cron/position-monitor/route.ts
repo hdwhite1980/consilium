@@ -52,6 +52,7 @@ interface OpenAttempt {
   stop_price: number | null
   target_price: number | null
   broker_order_id: string | null
+  verdict_log_id: number | null
   outcome: string
   asset_class: string | null
 }
@@ -85,8 +86,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   try {
     const users = (await listEnabledTradingUsers())
       .filter(s => isAssetClassEnabled(s, 'stock'))
-      // Master switch — position_monitor_enabled defaults true (see migration)
-      .filter(s => (s as UserTradingSettings & { positionMonitorEnabled?: boolean }).positionMonitorEnabled !== false)
+      // Master switch — position_monitor_enabled defaults true (see migration 14
+      // and settings.ts DEFAULT_TRADING_SETTINGS). Read directly now that settings.ts
+      // surfaces the column. Falls through if explicitly disabled.
+      .filter(s => s.positionMonitorEnabled !== false)
 
     for (const settings of users) {
       const userSummary: PerUserSummary = {
@@ -427,6 +430,20 @@ async function escalateToCouncil(
       ? rawBase.replace(/\/+$/, '')
       : `https://${rawBase.replace(/\/+$/, '')}`
 
+    // If we don't have a verdict_log_id, we can't call thesis-check (the endpoint
+    // requires verdictId to look up the original verdict). Skip to safe HOLD.
+    if (att.verdict_log_id === null || att.verdict_log_id === undefined) {
+      return { action: 'HOLD', rationale: 'no verdict_log_id on attempt; cannot escalate', confidence: 0 }
+    }
+
+    // Compute unrealized P/L % from entry to current
+    const entry = pos.avg_entry_price ?? att.filled_avg_price ?? att.entry_price_est ?? 0
+    let unrealizedPnlPct = 0
+    if (entry > 0) {
+      const dir = att.side === 'sell' ? -1 : 1
+      unrealizedPnlPct = ((pos.current_price - entry) / entry) * 100 * dir
+    }
+
     const res = await fetch(`${baseUrl}/api/reeval-thesis-check`, {
       method: 'POST',
       headers: {
@@ -435,23 +452,24 @@ async function escalateToCouncil(
         'x-service-trigger': 'position-monitor',
         'x-service-user-id': settings.userId,
       },
+      // Field names must match ThesisCheckRequest interface exactly:
+      //   verdictId (number), currentPrice, unrealizedPnlPct, triggersFired (array)
       body: JSON.stringify({
-        userId: settings.userId,
-        ticker: att.ticker,
-        side: att.side,
-        positionEntryPrice: pos.avg_entry_price,
+        verdictId: att.verdict_log_id,
         currentPrice: pos.current_price,
-        qty: pos.qty,
-        originalStop: att.stop_price,
-        originalTarget: att.target_price,
-        triggers: [`position_monitor: ${triggerReason}`],
-        verdictLogId: att.broker_order_id ? null : null,  // thesis-check looks up by ticker
+        unrealizedPnlPct,
+        triggersFired: [`position_monitor: ${triggerReason}`],
       }),
       signal: AbortSignal.timeout(30_000),
     })
 
     if (!res.ok) {
-      return { action: 'HOLD', rationale: `thesis-check returned ${res.status}`, confidence: 0 }
+      const errBody = await res.text().catch(() => '')
+      return {
+        action: 'HOLD',
+        rationale: `thesis-check returned ${res.status}: ${errBody.slice(0, 150)}`,
+        confidence: 0,
+      }
     }
     const data = await res.json() as { action?: string; rationale?: string; confidence?: number }
     const action = (data.action ?? 'hold').toLowerCase()
@@ -472,7 +490,7 @@ async function fetchOpenAttempts(userId: string): Promise<Map<string, OpenAttemp
   const cutoff = new Date(Date.now() - 30 * 86_400_000).toISOString()
   const { data } = await admin
     .from('trade_attempts')
-    .select('id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, outcome, asset_class')
+    .select('id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, outcome, asset_class')
     .eq('user_id', userId)
     .or('asset_class.is.null,asset_class.eq.stocks,asset_class.eq.stock')
     .in('outcome', ['placed', 'filled', 'partial_fill'])
@@ -491,6 +509,7 @@ async function fetchOpenAttempts(userId: string): Promise<Map<string, OpenAttemp
       stop_price: row.stop_price !== null && row.stop_price !== undefined ? Number(row.stop_price) : null,
       target_price: row.target_price !== null && row.target_price !== undefined ? Number(row.target_price) : null,
       broker_order_id: row.broker_order_id !== null && row.broker_order_id !== undefined ? String(row.broker_order_id) : null,
+      verdict_log_id: row.verdict_log_id !== null && row.verdict_log_id !== undefined ? Number(row.verdict_log_id) : null,
       outcome: String(row.outcome),
       asset_class: row.asset_class !== null && row.asset_class !== undefined ? String(row.asset_class) : null,
     }
@@ -566,19 +585,16 @@ interface PMSettings {
 }
 
 function pmSettingsFrom(s: UserTradingSettings): PMSettings {
-  const x = s as UserTradingSettings & {
-    pmExitThreshold15m?: number
-    pmExitThreshold5m?: number
-    pmTightenThreshold15m?: number
-    pmCooldownMin?: number
-    pmEscalateOnConflict?: boolean
-  }
+  // settings.ts surfaces the pm_* columns directly now (Migration 14 + the
+  // settings.ts update that landed alongside this fix). Read them as typed
+  // fields. The ?? fallbacks remain only for safety against stale settings
+  // shape during deploy-window race conditions.
   return {
-    exitThreshold15m: x.pmExitThreshold15m ?? 3,
-    exitThreshold5m: x.pmExitThreshold5m ?? 4,
-    tightenThreshold15m: x.pmTightenThreshold15m ?? 2,
-    cooldownMin: x.pmCooldownMin ?? 10,
-    escalateOnConflict: x.pmEscalateOnConflict ?? true,
+    exitThreshold15m: s.pmExitThreshold15m ?? 3,
+    exitThreshold5m: s.pmExitThreshold5m ?? 4,
+    tightenThreshold15m: s.pmTightenThreshold15m ?? 3,
+    cooldownMin: s.pmCooldownMin ?? 10,
+    escalateOnConflict: s.pmEscalateOnConflict ?? true,
   }
 }
 

@@ -63,6 +63,15 @@ export interface UserTradingSettings {
   minTradeNotional: number | null
   maxTradeNotional: number | null
 
+  // Position-monitor tuning (Migration 14). Defaults conservative.
+  // See migration 14 SQL comments for behavioral effect.
+  positionMonitorEnabled: boolean
+  pmExitThreshold15m: number
+  pmExitThreshold5m: number
+  pmTightenThreshold15m: number
+  pmCooldownMin: number
+  pmEscalateOnConflict: boolean
+
   createdAt: string
   updatedAt: string
 }
@@ -105,6 +114,12 @@ export const DEFAULT_TRADING_SETTINGS: Omit<UserTradingSettings, 'id' | 'userId'
   maxDollarRiskPerTrade: null,
   minTradeNotional: null,
   maxTradeNotional: null,
+  positionMonitorEnabled: true,
+  pmExitThreshold15m: 3,
+  pmExitThreshold5m: 4,
+  pmTightenThreshold15m: 3,
+  pmCooldownMin: 10,
+  pmEscalateOnConflict: true,
 }
 
 interface DbRow {
@@ -132,6 +147,12 @@ interface DbRow {
   max_dollar_risk_per_trade: string | number | null
   min_trade_notional: string | number | null
   max_trade_notional: string | number | null
+  position_monitor_enabled: boolean | null
+  pm_exit_threshold_15m: number | null
+  pm_exit_threshold_5m: number | null
+  pm_tighten_threshold_15m: number | null
+  pm_cooldown_min: number | null
+  pm_escalate_on_conflict: boolean | null
   created_at: string; updated_at: string
 }
 
@@ -181,6 +202,12 @@ function rowToSettings(row: DbRow): UserTradingSettings {
       ? Number(row.min_trade_notional) : null,
     maxTradeNotional: row.max_trade_notional !== null && row.max_trade_notional !== undefined
       ? Number(row.max_trade_notional) : null,
+    positionMonitorEnabled: row.position_monitor_enabled ?? true,
+    pmExitThreshold15m: row.pm_exit_threshold_15m ?? 3,
+    pmExitThreshold5m: row.pm_exit_threshold_5m ?? 4,
+    pmTightenThreshold15m: row.pm_tighten_threshold_15m ?? 3,
+    pmCooldownMin: row.pm_cooldown_min ?? 10,
+    pmEscalateOnConflict: row.pm_escalate_on_conflict ?? true,
     createdAt: row.created_at, updatedAt: row.updated_at,
   }
 }
@@ -225,6 +252,12 @@ export async function upsertUserTradingSettings(
     maxDollarRiskPerTrade: 'max_dollar_risk_per_trade',
     minTradeNotional: 'min_trade_notional',
     maxTradeNotional: 'max_trade_notional',
+    positionMonitorEnabled: 'position_monitor_enabled',
+    pmExitThreshold15m: 'pm_exit_threshold_15m',
+    pmExitThreshold5m: 'pm_exit_threshold_5m',
+    pmTightenThreshold15m: 'pm_tighten_threshold_15m',
+    pmCooldownMin: 'pm_cooldown_min',
+    pmEscalateOnConflict: 'pm_escalate_on_conflict',
     createdAt: 'created_at', updatedAt: 'updated_at',
   }
   const dbPatch: Record<string, unknown> = {}
@@ -270,6 +303,12 @@ export async function upsertUserTradingSettings(
     max_dollar_risk_per_trade: merged.maxDollarRiskPerTrade,
     min_trade_notional: merged.minTradeNotional,
     max_trade_notional: merged.maxTradeNotional,
+    position_monitor_enabled: merged.positionMonitorEnabled,
+    pm_exit_threshold_15m: merged.pmExitThreshold15m,
+    pm_exit_threshold_5m: merged.pmExitThreshold5m,
+    pm_tighten_threshold_15m: merged.pmTightenThreshold15m,
+    pm_cooldown_min: merged.pmCooldownMin,
+    pm_escalate_on_conflict: merged.pmEscalateOnConflict,
   }
   const { data, error } = await admin.from('user_trading_settings').insert(insertRow).select('*').single()
   if (error) throw new Error(`upsertUserTradingSettings insert failed: ${error.message}`)
