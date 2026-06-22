@@ -350,8 +350,11 @@ async function processPosition(
       newStopPrice: result.newStop,
       errorReason: result.ok ? undefined : result.reason,
     })
-    if (result.ok) {
-      console.log(`[position-monitor] ${ticker} TIGHTEN ${(att.stop_price ?? 0).toFixed(2)} → ${(result.newStop ?? 0).toFixed(2)} (${ruling.reason})`)
+    if (result.ok && result.newStop !== undefined) {
+      console.log(`[position-monitor] ${ticker} TIGHTEN ${(att.stop_price ?? 0).toFixed(2)} → ${result.newStop.toFixed(2)} (${ruling.reason})`)
+      // Persist new stop level to trade_attempts so future runs see correct level
+      await syncTightenedStop(att, result.newStop).catch(e =>
+        console.warn(`[position-monitor] sync-tighten ${ticker}: ${e instanceof Error ? e.message : e}`))
     }
     return result.ok
   }
@@ -367,6 +370,9 @@ async function processPosition(
     })
     if (result.ok) {
       console.log(`[position-monitor] ${ticker} EXIT @ ~${pos.current_price.toFixed(2)} (${ruling.reason})`)
+      // Persist closure to trade_attempts so lifecycle/dashboard see truth
+      await recordExitClosure(att, pos, 'monitor_exit').catch(e =>
+        console.warn(`[position-monitor] record-exit ${ticker}: ${e instanceof Error ? e.message : e}`))
     }
     return result.ok
   }
@@ -384,6 +390,10 @@ async function processPosition(
         escalationResult: escalation,
         errorReason: result.ok ? undefined : result.reason,
       })
+      if (result.ok) {
+        await recordExitClosure(att, pos, 'escalated_exit').catch(e =>
+          console.warn(`[position-monitor] record-exit ${ticker}: ${e instanceof Error ? e.message : e}`))
+      }
     } else if (escalation.action === 'TIGHTEN_STOP') {
       const result = await applyTighten(alpaca, att, pos)
       await logResult(settings, att, ticker, {
@@ -394,6 +404,10 @@ async function processPosition(
         escalationResult: escalation,
         errorReason: result.ok ? undefined : result.reason,
       })
+      if (result.ok && result.newStop !== undefined) {
+        await syncTightenedStop(att, result.newStop).catch(e =>
+          console.warn(`[position-monitor] sync-tighten ${ticker}: ${e instanceof Error ? e.message : e}`))
+      }
     } else {
       // Council said HOLD or returned ambiguously
       await logResult(settings, att, ticker, {
@@ -407,6 +421,100 @@ async function processPosition(
   }
 
   return false
+}
+
+// ─────────────────────────────────────────────────────────────
+// DB update helpers — close-out + stop-tighten persistence
+// ─────────────────────────────────────────────────────────────
+//
+// When position-monitor successfully tightens a stop or exits a position,
+// we need to update trade_attempts to reflect reality. Otherwise:
+//   - stop_price stays at the original Council recommendation forever
+//   - outcome stays 'placed' even after the position is closed
+//   - track record, dashboard, downstream crons see a lie
+//
+// Conventions follow the existing lifecycle cron (auto-trade-positions):
+//   - outcome: 'closed_win' | 'closed_loss' | 'closed_be' (by P&L sign with $0.005 eps)
+//   - realized_pnl: snapshot from (exit - entry) × qty × side_sign
+//   - closed_at: ISO timestamp now
+//   - closure_kind: 'monitor_exit' (new value, distinct from existing
+//     'stop_fired', 'target_hit', 'closed_external')
+//
+// Note: realized_pnl is computed from current_price snapshot, not the actual
+// market sell fill (which we don't have at this moment). It's approximate.
+// The actual fill may differ by a few cents. Lifecycle cron could later
+// refine this from the close_order_id if needed — a future enhancement.
+
+async function syncTightenedStop(att: OpenAttempt, newStop: number): Promise<void> {
+  if (!Number.isFinite(newStop) || newStop <= 0) return
+  const admin = await getSupabaseAdmin()
+  const { error } = await admin
+    .from('trade_attempts')
+    .update({ stop_price: newStop })
+    .eq('id', att.id)
+  if (error) {
+    console.warn(`[position-monitor] sync-tighten ${att.ticker} update failed: ${error.message}`)
+    return
+  }
+  console.log(`[position-monitor] sync-tighten ${att.ticker}: stop_price -> ${newStop.toFixed(2)}`)
+  // Mutate so downstream code sees correct value
+  att.stop_price = newStop
+}
+
+async function recordExitClosure(
+  att: OpenAttempt,
+  pos: AlpacaPosition,
+  closureKind: 'monitor_exit' | 'escalated_exit',
+): Promise<void> {
+  const entryFill = att.filled_avg_price ?? att.entry_price_est
+  const exitPrice = pos.current_price
+  const qty = att.qty ?? Math.abs(pos.qty)
+
+  if (entryFill === null || !Number.isFinite(exitPrice) || qty <= 0) {
+    console.warn(`[position-monitor] record-exit ${att.ticker}: missing entry/exit/qty, marking closed without P&L`)
+    const admin = await getSupabaseAdmin()
+    await admin
+      .from('trade_attempts')
+      .update({
+        outcome: 'closed_be',
+        closed_at: new Date().toISOString(),
+        closure_kind: closureKind,
+      })
+      .eq('id', att.id)
+    return
+  }
+
+  // P&L = (exit - entry) × qty × side_sign (buy=+1, sell=-1)
+  // Note: this is SNAPSHOT P&L from current_price, not actual fill price.
+  // The market sell from applyExit takes a moment to fill at whatever the bid is.
+  // For paper trading the difference is usually <$0.05/share. For real money,
+  // this is a known small error that lifecycle cron could later correct.
+  const sign = att.side === 'sell' ? -1 : 1
+  const pnl = (exitPrice - entryFill) * qty * sign
+  const eps = 0.005
+  let outcome: 'closed_win' | 'closed_loss' | 'closed_be'
+  if (pnl > eps) outcome = 'closed_win'
+  else if (pnl < -eps) outcome = 'closed_loss'
+  else outcome = 'closed_be'
+
+  const admin = await getSupabaseAdmin()
+  const { error } = await admin
+    .from('trade_attempts')
+    .update({
+      outcome,
+      realized_pnl: Math.round(pnl * 100) / 100,
+      closed_at: new Date().toISOString(),
+      closure_kind: closureKind,
+    })
+    .eq('id', att.id)
+  if (error) {
+    console.warn(`[position-monitor] record-exit ${att.ticker} update failed: ${error.message}`)
+    return
+  }
+  console.log(
+    `[position-monitor] record-exit ${att.ticker}: ` +
+    `${outcome}, pnl $${pnl.toFixed(2)} (entry ${entryFill.toFixed(2)} -> exit ${exitPrice.toFixed(2)}, qty ${qty})`,
+  )
 }
 
 // ─────────────────────────────────────────────────────────────
