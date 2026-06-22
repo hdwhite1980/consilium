@@ -160,15 +160,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             continue
           }
 
-          // Per-trade bounds from settings (Audit Phase 2). Read defensively.
-          // TODO: add to UserTradingSettings type + select in settings.ts loader.
-          const settingsAny = settings as UserTradingSettings & {
-            minDollarRiskPerTrade?: number | null
-            maxDollarRiskPerTrade?: number | null
-            minTradeNotional?: number | null
-            maxTradeNotional?: number | null
-          }
-
+          // Per-trade bounds from settings (Audit Phase 2).
           const traderSize = verdict.trader_position_size !== null
             ? Math.min(1, Math.max(0.1, Number(verdict.trader_position_size)))
             : 1
@@ -179,13 +171,25 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             entryPrice: entry,
             stopPrice: stop,
             traderPositionSizePct: traderSize,
-            minDollarRiskPerTrade: settingsAny.minDollarRiskPerTrade ?? null,
-            maxDollarRiskPerTrade: settingsAny.maxDollarRiskPerTrade ?? null,
-            minTradeNotional: settingsAny.minTradeNotional ?? null,
-            maxTradeNotional: settingsAny.maxTradeNotional ?? null,
+            minDollarRiskPerTrade: settings.minDollarRiskPerTrade,
+            maxDollarRiskPerTrade: settings.maxDollarRiskPerTrade,
+            minTradeNotional: settings.minTradeNotional,
+            maxTradeNotional: settings.maxTradeNotional,
           })
           if (!sizing.ok) {
             await logSkipped(verdict, settings, `crypto sizing: ${sizing.reason}`)
+            summary.skipped++
+            continue
+          }
+
+          // Pre-place buying-power gate (Audit Phase 3).
+          // For Alpaca crypto, available capital = account.cash (unmargined).
+          // 5% safety margin covers market fill slippage above entry estimate.
+          const CRYPTO_BUYING_POWER_SAFETY_MARGIN = 0.95
+          const cryptoSafeCash = account.cash * CRYPTO_BUYING_POWER_SAFETY_MARGIN
+          if (sizing.notionalUsd > cryptoSafeCash) {
+            await logSkipped(verdict, settings,
+              `pre-place gate: notional $${sizing.notionalUsd.toFixed(2)} > safe cash $${cryptoSafeCash.toFixed(2)} (raw: $${account.cash.toFixed(2)})`)
             summary.skipped++
             continue
           }

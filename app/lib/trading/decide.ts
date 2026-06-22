@@ -214,19 +214,7 @@ export async function decideForUser(args: {
     ? Number(verdict.trader_position_size)
     : 1
 
-  // Per-trade bounds from user_trading_settings (Audit Phase 2). Read
-  // defensively — the settings.ts loader may not yet expose these columns;
-  // when undefined we fall back to null (= unbounded, current behavior).
-  //
-  // TODO: add to UserTradingSettings type in app/lib/trading/settings.ts and
-  // include in the .select() of the settings loader so these read from DB.
-  const settingsAny = settings as UserTradingSettings & {
-    minDollarRiskPerTrade?: number | null
-    maxDollarRiskPerTrade?: number | null
-    minTradeNotional?: number | null
-    maxTradeNotional?: number | null
-  }
-
+  // Per-trade bounds from user_trading_settings (Audit Phase 2).
   const sizing = computePositionSize({
     accountEquity: effectiveEquity,
     riskPerTradePct: settings.riskPerTradePct,
@@ -234,13 +222,37 @@ export async function decideForUser(args: {
     entryPrice,
     stopPrice,
     traderPositionSizePct: traderSize > 0 ? Math.min(1, traderSize) : 1,
-    minDollarRiskPerTrade: settingsAny.minDollarRiskPerTrade ?? null,
-    maxDollarRiskPerTrade: settingsAny.maxDollarRiskPerTrade ?? null,
-    minTradeNotional: settingsAny.minTradeNotional ?? null,
-    maxTradeNotional: settingsAny.maxTradeNotional ?? null,
+    minDollarRiskPerTrade: settings.minDollarRiskPerTrade,
+    maxDollarRiskPerTrade: settings.maxDollarRiskPerTrade,
+    minTradeNotional: settings.minTradeNotional,
+    maxTradeNotional: settings.maxTradeNotional,
   })
   if (!sizing.ok) {
     return { kind: 'skip', reason: `sizing: ${sizing.reason}`, shouldHalt: false }
+  }
+
+  // Pre-place buying-power gate (Audit Phase 3).
+  //
+  // Defensive check: verify the computed position notional fits within current
+  // buying_power with safety headroom. With Phase 1 (using min(equity,
+  // buying_power) as the sizing input), broker rejection is unlikely, but this
+  // catches edge cases:
+  //   - Capital committed outside this system (user manually placed an order
+  //     on the broker site between cron runs)
+  //   - account.buying_power < account.equity due to PDT or margin call
+  //   - Phase 2 bounds pushed sizing to its limit and a stale buying_power
+  //     reading could now exceed actual
+  //
+  // 5% safety margin covers slippage between current bid and the market fill
+  // (Alpaca uses the asking price, not the entry estimate, for margin calc).
+  const BUYING_POWER_SAFETY_MARGIN = 0.95
+  const safeBuyingPower = account.buying_power * BUYING_POWER_SAFETY_MARGIN
+  if (sizing.positionDollar > safeBuyingPower) {
+    return {
+      kind: 'skip',
+      reason: `pre-place gate: position $${sizing.positionDollar.toFixed(2)} > safe buying_power $${safeBuyingPower.toFixed(2)} (raw: $${account.buying_power.toFixed(2)})`,
+      shouldHalt: false,
+    }
   }
 
   return {

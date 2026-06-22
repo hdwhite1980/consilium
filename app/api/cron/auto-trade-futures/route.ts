@@ -188,15 +188,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             summary.skipped++; continue
           }
 
-          // Per-trade bounds from settings (Audit Phase 2). Read defensively.
-          // TODO: add to UserTradingSettings type + select in settings.ts loader.
-          const settingsAny = settings as UserTradingSettings & {
-            minDollarRiskPerTrade?: number | null
-            maxDollarRiskPerTrade?: number | null
-            minTradeNotional?: number | null
-            maxTradeNotional?: number | null
-          }
-
+          // Per-trade bounds from settings (Audit Phase 2).
           // Sizing
           const traderSize = verdict.trader_position_size !== null
             ? Math.min(1, Math.max(0.1, Number(verdict.trader_position_size)))
@@ -209,13 +201,27 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             stopPrice: stop,
             rootSymbol: route.normalizedSymbol,
             traderPositionSizePct: traderSize,
-            minDollarRiskPerTrade: settingsAny.minDollarRiskPerTrade ?? null,
-            maxDollarRiskPerTrade: settingsAny.maxDollarRiskPerTrade ?? null,
-            minTradeNotional: settingsAny.minTradeNotional ?? null,
-            maxTradeNotional: settingsAny.maxTradeNotional ?? null,
+            minDollarRiskPerTrade: settings.minDollarRiskPerTrade,
+            maxDollarRiskPerTrade: settings.maxDollarRiskPerTrade,
+            minTradeNotional: settings.minTradeNotional,
+            maxTradeNotional: settings.maxTradeNotional,
           })
           if (!sizing.ok) {
             await logSkipped(verdict, settings, route.normalizedSymbol, `futures sizing: ${sizing.reason}`)
+            summary.skipped++; continue
+          }
+
+          // Pre-place buying-power gate (Audit Phase 3).
+          // For Tradovate futures, the relevant ceiling is availableLiquidity
+          // (what's actually free for new margin). The position "notional" for
+          // futures = estimatedMarginUsd. Apply 5% safety margin for slippage
+          // and the fact that initialMarginEst is itself an approximation.
+          const FUTURES_BUYING_POWER_SAFETY_MARGIN = 0.95
+          const futuresSafeLiq = (cash.availableLiquidity > 0 ? cash.availableLiquidity : cash.totalCashValue)
+            * FUTURES_BUYING_POWER_SAFETY_MARGIN
+          if (sizing.estimatedMarginUsd > futuresSafeLiq) {
+            await logSkipped(verdict, settings, route.normalizedSymbol,
+              `pre-place gate: estMargin $${sizing.estimatedMarginUsd.toFixed(2)} > safe liquidity $${futuresSafeLiq.toFixed(2)} (avail: $${cash.availableLiquidity.toFixed(2)})`)
             summary.skipped++; continue
           }
 

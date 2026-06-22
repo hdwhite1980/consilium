@@ -55,6 +55,14 @@ export interface UserTradingSettings {
   futuresRiskPerTradePct: number
   totalMaxConcurrent: number        // cross-asset hard cap
 
+  // Per-trade dollar bounds (Sizing Audit Phase 2). All nullable.
+  // When set, sizing libs apply these on top of percentage caps.
+  // See migration 12 for column comments.
+  minDollarRiskPerTrade: number | null
+  maxDollarRiskPerTrade: number | null
+  minTradeNotional: number | null
+  maxTradeNotional: number | null
+
   createdAt: string
   updatedAt: string
 }
@@ -93,6 +101,10 @@ export const DEFAULT_TRADING_SETTINGS: Omit<UserTradingSettings, 'id' | 'userId'
   futuresMaxConcurrent: 2,
   futuresRiskPerTradePct: 0.0050,
   totalMaxConcurrent: 10,
+  minDollarRiskPerTrade: null,
+  maxDollarRiskPerTrade: null,
+  minTradeNotional: null,
+  maxTradeNotional: null,
 }
 
 interface DbRow {
@@ -116,6 +128,10 @@ interface DbRow {
   futures_max_concurrent: number | null
   futures_risk_per_trade_pct: string | number | null
   total_max_concurrent: number | null
+  min_dollar_risk_per_trade: string | number | null
+  max_dollar_risk_per_trade: string | number | null
+  min_trade_notional: string | number | null
+  max_trade_notional: string | number | null
   created_at: string; updated_at: string
 }
 
@@ -157,6 +173,14 @@ function rowToSettings(row: DbRow): UserTradingSettings {
     futuresRiskPerTradePct: row.futures_risk_per_trade_pct !== null && row.futures_risk_per_trade_pct !== undefined
       ? Number(row.futures_risk_per_trade_pct) : 0.005,
     totalMaxConcurrent: row.total_max_concurrent ?? 10,
+    minDollarRiskPerTrade: row.min_dollar_risk_per_trade !== null && row.min_dollar_risk_per_trade !== undefined
+      ? Number(row.min_dollar_risk_per_trade) : null,
+    maxDollarRiskPerTrade: row.max_dollar_risk_per_trade !== null && row.max_dollar_risk_per_trade !== undefined
+      ? Number(row.max_dollar_risk_per_trade) : null,
+    minTradeNotional: row.min_trade_notional !== null && row.min_trade_notional !== undefined
+      ? Number(row.min_trade_notional) : null,
+    maxTradeNotional: row.max_trade_notional !== null && row.max_trade_notional !== undefined
+      ? Number(row.max_trade_notional) : null,
     createdAt: row.created_at, updatedAt: row.updated_at,
   }
 }
@@ -197,6 +221,10 @@ export async function upsertUserTradingSettings(
     forexMaxConcurrent: 'forex_max_concurrent', forexRiskPerTradePct: 'forex_risk_per_trade_pct',
     futuresMaxConcurrent: 'futures_max_concurrent', futuresRiskPerTradePct: 'futures_risk_per_trade_pct',
     totalMaxConcurrent: 'total_max_concurrent',
+    minDollarRiskPerTrade: 'min_dollar_risk_per_trade',
+    maxDollarRiskPerTrade: 'max_dollar_risk_per_trade',
+    minTradeNotional: 'min_trade_notional',
+    maxTradeNotional: 'max_trade_notional',
     createdAt: 'created_at', updatedAt: 'updated_at',
   }
   const dbPatch: Record<string, unknown> = {}
@@ -238,6 +266,10 @@ export async function upsertUserTradingSettings(
     futures_max_concurrent: merged.futuresMaxConcurrent,
     futures_risk_per_trade_pct: merged.futuresRiskPerTradePct,
     total_max_concurrent: merged.totalMaxConcurrent,
+    min_dollar_risk_per_trade: merged.minDollarRiskPerTrade,
+    max_dollar_risk_per_trade: merged.maxDollarRiskPerTrade,
+    min_trade_notional: merged.minTradeNotional,
+    max_trade_notional: merged.maxTradeNotional,
   }
   const { data, error } = await admin.from('user_trading_settings').insert(insertRow).select('*').single()
   if (error) throw new Error(`upsertUserTradingSettings insert failed: ${error.message}`)
