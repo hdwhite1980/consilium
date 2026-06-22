@@ -1,0 +1,32 @@
+name: auto-trade-attach-stops-cron
+on:
+  schedule:
+    # Every minute, 24/7 — crypto positions get placed around the clock
+    # and need stops attached ASAP after entry fills.
+    # GitHub Actions cron minimum is technically 5min for free tier reliability,
+    # but every-minute is generally honored. If you see drift, fall back to */2.
+    - cron: '* * * * *'
+  workflow_dispatch: {}
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit auto-trade-attach-stops endpoint
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -e
+          response=$(curl -s -L -w "\n%{http_code}" \
+            -X GET \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$APP_BASE_URL/api/cron/auto-trade-attach-stops" \
+            --max-time 70)
+          status=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "Status: $status"
+          echo "Body: $body"
+          if [ "$status" -ne 200 ]; then
+            echo "::error::auto-trade-attach-stops returned non-200 status: $status"
+            exit 1
+          fi
