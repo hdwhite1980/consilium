@@ -222,6 +222,30 @@ export class AlpacaCryptoClient {
     await this.request('DELETE', `/v2/positions/${encodeURIComponent(symbol)}`)
   }
 
+  /**
+   * Cancel a working order by its broker ID. Used by Session 3a positions
+   * worker to cancel the protective stop when a target is hit or reeval
+   * decides on early_exit.
+   *
+   * Idempotent: cancelling an already-filled or already-cancelled order
+   * returns the order's current state without error in most cases. We
+   * suppress HTTP 422 (order not cancellable) as a no-op since "not
+   * cancellable" usually means "already terminal" which is what we want.
+   */
+  async cancelOrder(orderId: string): Promise<{ ok: boolean; reason?: string }> {
+    try {
+      await this.request<unknown>('DELETE', `/v2/orders/${encodeURIComponent(orderId)}`)
+      return { ok: true }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      // 422 = not cancellable (already filled/cancelled). Treat as ok.
+      if (/HTTP 422|already (filled|cancel)/i.test(msg)) {
+        return { ok: true, reason: 'already terminal' }
+      }
+      return { ok: false, reason: msg.slice(0, 200) }
+    }
+  }
+
   private toOrder(raw: Record<string, unknown>): AlpacaCryptoOrder {
     return {
       id: String(raw.id ?? ''),

@@ -2,8 +2,11 @@ name: auto-trade-positions-cron
 
 on:
   schedule:
-    # Every 15 minutes during US market hours + after-hours buffer
-    - cron: '*/15 13-22 * * 1-5'
+    # Session 3a: tightened from 15 min → 5 min for target-hit responsiveness.
+    # Crypto runs 24/7; equity confined to market hours + after-hours buffer.
+    # We run 24/7 here so crypto positions get target/stop checks all the time;
+    # equity branch is a no-op outside market hours since no positions update.
+    - cron: '*/5 * * * *'
   workflow_dispatch: {}
 
 jobs:

@@ -80,6 +80,19 @@ export interface PlaceOrderResult {
   failureText?: string
 }
 
+export interface TradovateOrder {
+  id: number
+  accountId: number
+  contractId: number
+  action: 'Buy' | 'Sell'
+  orderType: string
+  ordStatus: string         // Tradovate's status enum: Working | Filled | Canceled | Rejected | Expired | etc.
+  status: string            // alias of ordStatus for compatibility
+  cumQty: number            // cumulative filled qty
+  avgPrice: number | null   // average fill price
+  timestamp: string | null  // last update time
+}
+
 export class TradovateClient {
   private mode: 'paper' | 'live'
   private baseUrl: string
@@ -260,6 +273,61 @@ export class TradovateClient {
       orderType: 'Market',
       isAutomated: true,
     })
+  }
+
+  /**
+   * Cancel a working order. Used by Session 3a positions worker to cancel
+   * a protective stop on target-hit or reeval-driven exit.
+   *
+   * Tradovate's /order/cancelorder accepts the integer orderId in the body.
+   * Returns ok=true on success OR if the order is already in a terminal
+   * state (already filled, already cancelled, expired).
+   */
+  async cancelOrder(orderId: number): Promise<{ ok: boolean; reason?: string }> {
+    try {
+      const result = await this.request<{ failureReason?: string; failureText?: string; orderId?: number }>(
+        'POST', '/order/cancelorder', { orderId }
+      )
+      if (result.failureReason || result.failureText) {
+        const msg = `${result.failureReason ?? 'unknown'}: ${result.failureText ?? ''}`
+        // "OrderNotInRefuseState" or similar terminal-state responses are no-ops for our purposes
+        if (/notinrefusestate|already|completed|terminal|filled|cancel/i.test(msg)) {
+          return { ok: true, reason: 'already terminal' }
+        }
+        return { ok: false, reason: msg.slice(0, 200) }
+      }
+      return { ok: true }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      return { ok: false, reason: msg.slice(0, 200) }
+    }
+  }
+
+  /**
+   * Fetch an order by ID. Used by Session 3a to check whether a stop
+   * order has filled (closure detection).
+   *
+   * Tradovate's /order/item returns the order with status, filledQty,
+   * avgPrice, and timestamps.
+   */
+  async getOrder(orderId: number): Promise<TradovateOrder | null> {
+    try {
+      const raw = await this.request<Record<string, unknown>>('GET', `/order/item?id=${orderId}`)
+      return {
+        id: Number(raw.id ?? 0),
+        accountId: Number(raw.accountId ?? 0),
+        contractId: Number(raw.contractId ?? 0),
+        action: String(raw.action ?? '') as 'Buy' | 'Sell',
+        orderType: String(raw.orderType ?? ''),
+        ordStatus: String(raw.ordStatus ?? ''),
+        status: String(raw.ordStatus ?? ''),
+        cumQty: Number(raw.cumQty ?? 0),
+        avgPrice: raw.avgPrice !== undefined && raw.avgPrice !== null ? Number(raw.avgPrice) : null,
+        timestamp: raw.timestamp ? String(raw.timestamp) : null,
+      }
+    } catch {
+      return null
+    }
   }
 }
 
