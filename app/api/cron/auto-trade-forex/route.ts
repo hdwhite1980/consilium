@@ -148,12 +148,47 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             break
           }
 
+          // Audit Finding 1: prefer OANDA's `marginAvailable` over raw equity.
+          // OANDA's accountSummary returns marginAvailable separately; the
+          // current OANDA client wrapper may or may not surface it. Read
+          // defensively and fall back to equity if not present.
+          //
+          // TODO: confirm OANDA client wrapper exposes marginAvailable; if
+          // not, add it. For now this gives the safer number when available.
+          const accountAny = account as typeof account & { marginAvailable?: number | string }
+          const marginAvailRaw = accountAny.marginAvailable
+          const marginAvail = typeof marginAvailRaw === 'number'
+            ? marginAvailRaw
+            : typeof marginAvailRaw === 'string'
+              ? Number(marginAvailRaw)
+              : NaN
+          const effectiveEquity = Number.isFinite(marginAvail) && marginAvail > 0
+            ? Math.min(account.equity, marginAvail)
+            : account.equity
+          if (effectiveEquity <= 0) {
+            await logSkipped(verdict, settings, route.normalizedSymbol, `forex effectiveEquity ${effectiveEquity} <= 0`)
+            summary.skipped++; continue
+          }
+
+          // Per-trade bounds from settings (Audit Phase 2). Read defensively.
+          // TODO: add to UserTradingSettings type + select in settings.ts loader.
+          // NOTE: computeForexSize may not yet accept these fields; cast keeps
+          // it forward-compatible. Forex sizing library was not in this audit
+          // scope, so bounds are passed but may be no-op until that lib is
+          // updated in a follow-up.
+          const settingsAny = settings as UserTradingSettings & {
+            minDollarRiskPerTrade?: number | null
+            maxDollarRiskPerTrade?: number | null
+            minTradeNotional?: number | null
+            maxTradeNotional?: number | null
+          }
+
           // Sizing
           const traderSize = verdict.trader_position_size !== null
             ? Math.min(1, Math.max(0.1, Number(verdict.trader_position_size)))
             : 1
           const sizing = computeForexSize({
-            accountEquity: account.equity,
+            accountEquity: effectiveEquity,
             accountCurrency: account.currency,
             riskPerTradePct: getRiskPerTradePctForAsset(settings, 'forex'),
             maxPositionPct: settings.maxPositionPct,
@@ -163,7 +198,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             pipLocation: instrument.pipLocation,
             minimumTradeSize: Number(instrument.minimumTradeSize),
             traderPositionSizePct: traderSize,
-          })
+            // Forward bounds — computeForexSize may ignore until lib is updated
+            minDollarRiskPerTrade: settingsAny.minDollarRiskPerTrade ?? null,
+            maxDollarRiskPerTrade: settingsAny.maxDollarRiskPerTrade ?? null,
+            minTradeNotional: settingsAny.minTradeNotional ?? null,
+            maxTradeNotional: settingsAny.maxTradeNotional ?? null,
+          } as Parameters<typeof computeForexSize>[0])
           if (!sizing.ok) {
             await logSkipped(verdict, settings, route.normalizedSymbol, `forex sizing: ${sizing.reason}`)
             summary.skipped++; continue
@@ -225,7 +265,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
               stopPrice: stop,
               targetPrice: target,
               dollarRisk: sizing.dollarRisk,
-              accountEquity: account.equity,
+              accountEquity: effectiveEquity,
             })
             summary.placed++
             console.log(`[auto-trade-forex] PLACED user=${settings.userId} ${longSide ? 'BUY' : 'SELL'} ${filledUnits} ${route.normalizedSymbol} @ ${filledPrice} stop=${stop} tp=${target} risk=$${sizing.dollarRisk.toFixed(2)}`)

@@ -26,6 +26,17 @@ export interface SizingInput {
   traderPositionSizePct?: number  // 0..1, defaults to 1
   minSharePrice?: number          // skip penny stocks; default $5
   minDollarRisk?: number          // skip if computed risk < this; default $1
+
+  // Per-trade dollar bounds (Audit Phase 2). All optional; null = unbounded.
+  //   minDollarRiskPerTrade   floor on dollarRisk (skip below)
+  //   maxDollarRiskPerTrade   ceiling on dollarRisk (scale qty down)
+  //   minTradeNotional        floor on qty*entryPrice (skip below)
+  //   maxTradeNotional        ceiling on qty*entryPrice (scale qty down)
+  // Applied AFTER risk-parity sizing and maxPositionPct cap.
+  minDollarRiskPerTrade?: number | null
+  maxDollarRiskPerTrade?: number | null
+  minTradeNotional?: number | null
+  maxTradeNotional?: number | null
 }
 
 export type SizingOutcome =
@@ -42,6 +53,10 @@ export function computePositionSize(input: SizingInput): SizingOutcome {
     traderPositionSizePct = 1,
     minSharePrice = 5,
     minDollarRisk = 1,
+    minDollarRiskPerTrade = null,
+    maxDollarRiskPerTrade = null,
+    minTradeNotional = null,
+    maxTradeNotional = null,
   } = input
 
   // Defensive validation — these should be caught upstream but we double-check
@@ -102,6 +117,7 @@ export function computePositionSize(input: SizingInput): SizingOutcome {
   const maxPositionDollar = accountEquity * maxPositionPct
 
   let capped = false
+  let cappedReason: string | null = null
   if (positionDollar > maxPositionDollar) {
     qty = Math.floor(maxPositionDollar / entryPrice)
     if (qty < 1) {
@@ -110,6 +126,45 @@ export function computePositionSize(input: SizingInput): SizingOutcome {
     positionDollar = qty * entryPrice
     dollarRisk = qty * perShareRisk
     capped = true
+    cappedReason = `${(maxPositionPct * 100).toFixed(0)}% max position`
+  }
+
+  // Per-trade dollar ceilings (Audit Phase 2) — scale qty down to honor these
+  if (maxDollarRiskPerTrade !== null && Number.isFinite(maxDollarRiskPerTrade) && maxDollarRiskPerTrade > 0) {
+    if (dollarRisk > maxDollarRiskPerTrade) {
+      qty = Math.floor(maxDollarRiskPerTrade / perShareRisk)
+      if (qty < 1) {
+        return { ok: false, reason: `max_dollar_risk_per_trade $${maxDollarRiskPerTrade.toFixed(2)} sizes to 0 shares (perShareRisk=$${perShareRisk.toFixed(2)})` }
+      }
+      positionDollar = qty * entryPrice
+      dollarRisk = qty * perShareRisk
+      capped = true
+      cappedReason = `max_dollar_risk_per_trade $${maxDollarRiskPerTrade.toFixed(2)}`
+    }
+  }
+  if (maxTradeNotional !== null && Number.isFinite(maxTradeNotional) && maxTradeNotional > 0) {
+    if (positionDollar > maxTradeNotional) {
+      qty = Math.floor(maxTradeNotional / entryPrice)
+      if (qty < 1) {
+        return { ok: false, reason: `max_trade_notional $${maxTradeNotional.toFixed(2)} sizes to 0 shares at $${entryPrice}` }
+      }
+      positionDollar = qty * entryPrice
+      dollarRisk = qty * perShareRisk
+      capped = true
+      cappedReason = `max_trade_notional $${maxTradeNotional.toFixed(2)}`
+    }
+  }
+
+  // Per-trade dollar floors — skip if below
+  if (minDollarRiskPerTrade !== null && Number.isFinite(minDollarRiskPerTrade) && minDollarRiskPerTrade > 0) {
+    if (dollarRisk < minDollarRiskPerTrade) {
+      return { ok: false, reason: `dollarRisk $${dollarRisk.toFixed(2)} below min_dollar_risk_per_trade $${minDollarRiskPerTrade.toFixed(2)}` }
+    }
+  }
+  if (minTradeNotional !== null && Number.isFinite(minTradeNotional) && minTradeNotional > 0) {
+    if (positionDollar < minTradeNotional) {
+      return { ok: false, reason: `positionDollar $${positionDollar.toFixed(2)} below min_trade_notional $${minTradeNotional.toFixed(2)}` }
+    }
   }
 
   return {
@@ -118,7 +173,7 @@ export function computePositionSize(input: SizingInput): SizingOutcome {
     dollarRisk,
     positionDollar,
     rationale: capped
-      ? `${qty} shares (capped at ${(maxPositionPct * 100).toFixed(0)}% max position, $${dollarRisk.toFixed(2)} risk)`
+      ? `${qty} shares (capped by ${cappedReason ?? 'cap'}, $${dollarRisk.toFixed(2)} risk)`
       : `${qty} shares ($${dollarRisk.toFixed(2)} risk at ${(stopWidthPct * 100).toFixed(2)}% stop)`,
   }
 }

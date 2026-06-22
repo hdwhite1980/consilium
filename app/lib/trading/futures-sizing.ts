@@ -133,6 +133,13 @@ export interface FuturesSizingInput {
   accountEquity: number; riskPerTradePct: number; maxPositionPct: number
   entryPrice: number; stopPrice: number; rootSymbol: string
   traderPositionSizePct?: number
+
+  // Per-trade dollar bounds (Audit Phase 2). NULL = unbounded.
+  // For futures, "notional" = estimated margin used (not market value of underlying).
+  minDollarRiskPerTrade?: number | null
+  maxDollarRiskPerTrade?: number | null
+  minTradeNotional?: number | null   // floor on estimated margin
+  maxTradeNotional?: number | null   // ceiling on estimated margin
 }
 
 export type FuturesSizingOutcome =
@@ -140,7 +147,13 @@ export type FuturesSizingOutcome =
   | { ok: false; reason: string }
 
 export function computeFuturesSize(input: FuturesSizingInput): FuturesSizingOutcome {
-  const { accountEquity, riskPerTradePct, maxPositionPct, entryPrice, stopPrice, rootSymbol, traderPositionSizePct = 1 } = input
+  const { accountEquity, riskPerTradePct, maxPositionPct, entryPrice, stopPrice, rootSymbol,
+    traderPositionSizePct = 1,
+    minDollarRiskPerTrade = null,
+    maxDollarRiskPerTrade = null,
+    minTradeNotional = null,
+    maxTradeNotional = null,
+  } = input
   if (!Number.isFinite(accountEquity) || accountEquity <= 0) return { ok: false, reason: `Invalid accountEquity: ${accountEquity}` }
   if (!Number.isFinite(riskPerTradePct) || riskPerTradePct <= 0 || riskPerTradePct > 0.05) return { ok: false, reason: `Invalid riskPerTradePct: ${riskPerTradePct}` }
   if (!Number.isFinite(maxPositionPct) || maxPositionPct <= 0 || maxPositionPct > 0.50) return { ok: false, reason: `Invalid maxPositionPct: ${maxPositionPct}` }
@@ -154,22 +167,63 @@ export function computeFuturesSize(input: FuturesSizingInput): FuturesSizingOutc
   const stopTicks = stopDistance / spec.tickSize
   if (stopTicks < 1) return { ok: false, reason: `Stop too tight: ${stopTicks.toFixed(2)} ticks` }
   const riskPerContract = stopTicks * spec.tickValueUsd
-  const dollarRisk = accountEquity * riskPerTradePct * traderPositionSizePct
-  let contracts = Math.floor(dollarRisk / riskPerContract)
-  if (contracts < 1) return { ok: false, reason: `Risk $${dollarRisk.toFixed(2)} below 1 contract of ${rootSymbol} ($${riskPerContract.toFixed(2)} per contract at ${stopTicks.toFixed(1)}-tick stop)` }
+  const baseDollarRisk = accountEquity * riskPerTradePct * traderPositionSizePct
+  let contracts = Math.floor(baseDollarRisk / riskPerContract)
+  if (contracts < 1) return { ok: false, reason: `Risk $${baseDollarRisk.toFixed(2)} below 1 contract of ${rootSymbol} ($${riskPerContract.toFixed(2)} per contract at ${stopTicks.toFixed(1)}-tick stop)` }
   const maxMargin = accountEquity * maxPositionPct
   const marginAllowedContracts = Math.floor(maxMargin / spec.initialMarginEst)
   let capped = false
+  let cappedReason: string | null = null
   if (contracts > marginAllowedContracts) {
     if (marginAllowedContracts < 1) return { ok: false, reason: `Initial margin $${spec.initialMarginEst} for 1 ${rootSymbol} exceeds maxPositionPct ${(maxPositionPct * 100).toFixed(0)}% of $${accountEquity.toFixed(0)} equity` }
     contracts = marginAllowedContracts
     capped = true
+    cappedReason = `${(maxPositionPct * 100).toFixed(0)}% margin cap`
   }
+
+  // Per-trade dollar ceilings (Audit Phase 2)
+  if (maxDollarRiskPerTrade !== null && Number.isFinite(maxDollarRiskPerTrade) && maxDollarRiskPerTrade > 0) {
+    const maxContractsByRisk = Math.floor(maxDollarRiskPerTrade / riskPerContract)
+    if (contracts > maxContractsByRisk) {
+      if (maxContractsByRisk < 1) {
+        return { ok: false, reason: `max_dollar_risk_per_trade $${maxDollarRiskPerTrade.toFixed(2)} below 1 contract risk ($${riskPerContract.toFixed(2)})` }
+      }
+      contracts = maxContractsByRisk
+      capped = true
+      cappedReason = `max_dollar_risk_per_trade $${maxDollarRiskPerTrade.toFixed(2)}`
+    }
+  }
+  if (maxTradeNotional !== null && Number.isFinite(maxTradeNotional) && maxTradeNotional > 0) {
+    // For futures, notional bound applies to estimated margin
+    const maxContractsByMargin = Math.floor(maxTradeNotional / spec.initialMarginEst)
+    if (contracts > maxContractsByMargin) {
+      if (maxContractsByMargin < 1) {
+        return { ok: false, reason: `max_trade_notional $${maxTradeNotional.toFixed(2)} below 1 contract margin (~$${spec.initialMarginEst})` }
+      }
+      contracts = maxContractsByMargin
+      capped = true
+      cappedReason = `max_trade_notional $${maxTradeNotional.toFixed(2)}`
+    }
+  }
+
   const totalDollarRisk = contracts * riskPerContract
   const estimatedMarginUsd = contracts * spec.initialMarginEst
+
+  // Per-trade dollar floors — skip if below
+  if (minDollarRiskPerTrade !== null && Number.isFinite(minDollarRiskPerTrade) && minDollarRiskPerTrade > 0) {
+    if (totalDollarRisk < minDollarRiskPerTrade) {
+      return { ok: false, reason: `totalDollarRisk $${totalDollarRisk.toFixed(2)} below min_dollar_risk_per_trade $${minDollarRiskPerTrade.toFixed(2)}` }
+    }
+  }
+  if (minTradeNotional !== null && Number.isFinite(minTradeNotional) && minTradeNotional > 0) {
+    if (estimatedMarginUsd < minTradeNotional) {
+      return { ok: false, reason: `estimatedMargin $${estimatedMarginUsd.toFixed(2)} below min_trade_notional $${minTradeNotional.toFixed(2)}` }
+    }
+  }
+
   return { ok: true, contracts, stopTicks, riskPerContract, totalDollarRisk, estimatedMarginUsd, spec,
     rationale: capped
-      ? `${contracts}× ${rootSymbol} (capped by margin: $${estimatedMarginUsd.toFixed(0)} of $${maxMargin.toFixed(0)} allowed, $${totalDollarRisk.toFixed(2)} risk)`
+      ? `${contracts}× ${rootSymbol} (capped by ${cappedReason ?? 'cap'}, $${estimatedMarginUsd.toFixed(0)} margin, $${totalDollarRisk.toFixed(2)} risk)`
       : `${contracts}× ${rootSymbol} ($${totalDollarRisk.toFixed(2)} risk at ${stopTicks.toFixed(1)} ticks, margin ~$${estimatedMarginUsd.toFixed(0)})` }
 }
 

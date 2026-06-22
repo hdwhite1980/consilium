@@ -21,6 +21,12 @@ export interface CryptoSizingInput {
   stopPrice: number
   traderPositionSizePct?: number
   minNotional?: number              // skip if computed notional below this
+
+  // Per-trade dollar bounds (Audit Phase 2). NULL = unbounded.
+  minDollarRiskPerTrade?: number | null
+  maxDollarRiskPerTrade?: number | null
+  minTradeNotional?: number | null
+  maxTradeNotional?: number | null
 }
 
 export type CryptoSizingOutcome =
@@ -32,6 +38,10 @@ export function computeCryptoSize(input: CryptoSizingInput): CryptoSizingOutcome
     accountEquity, riskPerTradePct, maxPositionPct,
     entryPrice, stopPrice,
     traderPositionSizePct = 1, minNotional = 10,
+    minDollarRiskPerTrade = null,
+    maxDollarRiskPerTrade = null,
+    minTradeNotional = null,
+    maxTradeNotional = null,
   } = input
 
   if (!Number.isFinite(accountEquity) || accountEquity <= 0) return { ok: false, reason: `Invalid accountEquity: ${accountEquity}` }
@@ -54,15 +64,49 @@ export function computeCryptoSize(input: CryptoSizingInput): CryptoSizingOutcome
   const maxNotional = accountEquity * maxPositionPct
 
   let capped = false
+  let cappedReason: string | null = null
   if (notionalUsd > maxNotional) {
     units = maxNotional / entryPrice
     notionalUsd = units * entryPrice
     dollarRisk = units * perUnitRisk
     capped = true
+    cappedReason = `${(maxPositionPct * 100).toFixed(0)}% notional`
+  }
+
+  // Per-trade dollar ceilings (Audit Phase 2)
+  if (maxDollarRiskPerTrade !== null && Number.isFinite(maxDollarRiskPerTrade) && maxDollarRiskPerTrade > 0) {
+    if (dollarRisk > maxDollarRiskPerTrade) {
+      units = maxDollarRiskPerTrade / perUnitRisk
+      notionalUsd = units * entryPrice
+      dollarRisk = units * perUnitRisk
+      capped = true
+      cappedReason = `max_dollar_risk_per_trade $${maxDollarRiskPerTrade.toFixed(2)}`
+    }
+  }
+  if (maxTradeNotional !== null && Number.isFinite(maxTradeNotional) && maxTradeNotional > 0) {
+    if (notionalUsd > maxTradeNotional) {
+      units = maxTradeNotional / entryPrice
+      notionalUsd = units * entryPrice
+      dollarRisk = units * perUnitRisk
+      capped = true
+      cappedReason = `max_trade_notional $${maxTradeNotional.toFixed(2)}`
+    }
   }
 
   if (notionalUsd < minNotional) {
     return { ok: false, reason: `Notional $${notionalUsd.toFixed(2)} below min $${minNotional}` }
+  }
+
+  // Per-trade dollar floors
+  if (minDollarRiskPerTrade !== null && Number.isFinite(minDollarRiskPerTrade) && minDollarRiskPerTrade > 0) {
+    if (dollarRisk < minDollarRiskPerTrade) {
+      return { ok: false, reason: `dollarRisk $${dollarRisk.toFixed(2)} below min_dollar_risk_per_trade $${minDollarRiskPerTrade.toFixed(2)}` }
+    }
+  }
+  if (minTradeNotional !== null && Number.isFinite(minTradeNotional) && minTradeNotional > 0) {
+    if (notionalUsd < minTradeNotional) {
+      return { ok: false, reason: `notional $${notionalUsd.toFixed(2)} below min_trade_notional $${minTradeNotional.toFixed(2)}` }
+    }
   }
 
   // Round units to 6 decimals (Alpaca min step for most coins is finer than this)
@@ -77,7 +121,7 @@ export function computeCryptoSize(input: CryptoSizingInput): CryptoSizingOutcome
     notionalUsd,
     dollarRisk,
     rationale: capped
-      ? `${units.toFixed(6)} units (capped at ${(maxPositionPct * 100).toFixed(0)}% notional, $${dollarRisk.toFixed(2)} risk)`
+      ? `${units.toFixed(6)} units (capped by ${cappedReason ?? 'cap'}, $${dollarRisk.toFixed(2)} risk)`
       : `${units.toFixed(6)} units ($${dollarRisk.toFixed(2)} risk at ${(stopWidthPct * 100).toFixed(2)}% stop)`,
   }
 }

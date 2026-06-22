@@ -173,20 +173,46 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             summary.errors++
             break
           }
-          const equity = cash.totalCashValue + cash.unrealizedPnL
+
+          // Audit Finding 1: previous code used `totalCashValue + unrealizedPnL`
+          // which OVER-counts available capital during winning streaks (paper
+          // gains haven't been realized but were being used as sizing fuel).
+          // `availableLiquidity` is what Tradovate says we can actually deploy
+          // after accounting for open margin requirements. Fall back to
+          // totalCashValue if availableLiquidity isn't set (older API responses).
+          const effectiveEquity = cash.availableLiquidity > 0
+            ? Math.min(cash.totalCashValue, cash.availableLiquidity)
+            : cash.totalCashValue
+          if (effectiveEquity <= 0) {
+            await logSkipped(verdict, settings, route.normalizedSymbol, `futures effectiveEquity ${effectiveEquity} <= 0`)
+            summary.skipped++; continue
+          }
+
+          // Per-trade bounds from settings (Audit Phase 2). Read defensively.
+          // TODO: add to UserTradingSettings type + select in settings.ts loader.
+          const settingsAny = settings as UserTradingSettings & {
+            minDollarRiskPerTrade?: number | null
+            maxDollarRiskPerTrade?: number | null
+            minTradeNotional?: number | null
+            maxTradeNotional?: number | null
+          }
 
           // Sizing
           const traderSize = verdict.trader_position_size !== null
             ? Math.min(1, Math.max(0.1, Number(verdict.trader_position_size)))
             : 1
           const sizing = computeFuturesSize({
-            accountEquity: equity,
+            accountEquity: effectiveEquity,
             riskPerTradePct: getRiskPerTradePctForAsset(settings, 'futures'),
             maxPositionPct: settings.maxPositionPct,
             entryPrice: entry,
             stopPrice: stop,
             rootSymbol: route.normalizedSymbol,
             traderPositionSizePct: traderSize,
+            minDollarRiskPerTrade: settingsAny.minDollarRiskPerTrade ?? null,
+            maxDollarRiskPerTrade: settingsAny.maxDollarRiskPerTrade ?? null,
+            minTradeNotional: settingsAny.minTradeNotional ?? null,
+            maxTradeNotional: settingsAny.maxTradeNotional ?? null,
           })
           if (!sizing.ok) {
             await logSkipped(verdict, settings, route.normalizedSymbol, `futures sizing: ${sizing.reason}`)
@@ -241,7 +267,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
               stopPrice: stop,
               targetPrice: target,
               dollarRisk: sizing.totalDollarRisk,
-              accountEquity: equity,
+              accountEquity: effectiveEquity,
               marginUsed: sizing.estimatedMarginUsd,
             })
             summary.placed++

@@ -200,16 +200,44 @@ export async function decideForUser(args: {
   }
 
   // 11. Compute size
+  //
+  // Use the CONSERVATIVE equity number — min(equity, buying_power).
+  // Audit Finding 1: Alpaca's `equity` includes unrealized P&L on open
+  // positions, which over-counts available capital. `buying_power` is
+  // what we can actually deploy. Taking the min defends against:
+  //   - Margin account in winning streak (equity > buying_power)
+  //   - Cash account near-empty (buying_power ≈ cash; equity may also
+  //     equal cash so min just returns the real number)
+  //   - Pattern Day Trader limits constraining buying_power < equity
+  const effectiveEquity = Math.min(account.equity, account.buying_power)
   const traderSize = verdict.trader_position_size !== null && verdict.trader_position_size !== undefined
     ? Number(verdict.trader_position_size)
     : 1
+
+  // Per-trade bounds from user_trading_settings (Audit Phase 2). Read
+  // defensively — the settings.ts loader may not yet expose these columns;
+  // when undefined we fall back to null (= unbounded, current behavior).
+  //
+  // TODO: add to UserTradingSettings type in app/lib/trading/settings.ts and
+  // include in the .select() of the settings loader so these read from DB.
+  const settingsAny = settings as UserTradingSettings & {
+    minDollarRiskPerTrade?: number | null
+    maxDollarRiskPerTrade?: number | null
+    minTradeNotional?: number | null
+    maxTradeNotional?: number | null
+  }
+
   const sizing = computePositionSize({
-    accountEquity: account.equity,
+    accountEquity: effectiveEquity,
     riskPerTradePct: settings.riskPerTradePct,
     maxPositionPct: settings.maxPositionPct,
     entryPrice,
     stopPrice,
     traderPositionSizePct: traderSize > 0 ? Math.min(1, traderSize) : 1,
+    minDollarRiskPerTrade: settingsAny.minDollarRiskPerTrade ?? null,
+    maxDollarRiskPerTrade: settingsAny.maxDollarRiskPerTrade ?? null,
+    minTradeNotional: settingsAny.minTradeNotional ?? null,
+    maxTradeNotional: settingsAny.maxTradeNotional ?? null,
   })
   if (!sizing.ok) {
     return { kind: 'skip', reason: `sizing: ${sizing.reason}`, shouldHalt: false }
@@ -224,7 +252,7 @@ export async function decideForUser(args: {
     stopPrice,
     targetPrice,
     dollarRisk: sizing.dollarRisk,
-    accountEquity: account.equity,
+    accountEquity: effectiveEquity,
     rationale: sizing.rationale,
   }
 }

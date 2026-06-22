@@ -141,22 +141,48 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           }
 
           // Sizing
+          //
+          // Audit Finding 1: Alpaca crypto's `equity` includes unrealized P&L
+          // on open crypto positions. `cash` is what we can actually deploy
+          // (crypto is unmargined for retail accounts on Alpaca). Using the
+          // min defends against both winning-streak inflation and the rare
+          // case where they diverge.
           const account = await alpaca.account().catch(() => null)
           if (!account || account.equity <= 0) {
             await haltUserAccount(settings.userId, `crypto account fetch failed or equity <= 0`)
             summary.errors++
             break
           }
+          const effectiveEquity = Math.min(account.equity, account.cash)
+          if (effectiveEquity <= 0) {
+            await logSkipped(verdict, settings, `crypto effectiveEquity ${effectiveEquity} <= 0`)
+            summary.skipped++
+            continue
+          }
+
+          // Per-trade bounds from settings (Audit Phase 2). Read defensively.
+          // TODO: add to UserTradingSettings type + select in settings.ts loader.
+          const settingsAny = settings as UserTradingSettings & {
+            minDollarRiskPerTrade?: number | null
+            maxDollarRiskPerTrade?: number | null
+            minTradeNotional?: number | null
+            maxTradeNotional?: number | null
+          }
+
           const traderSize = verdict.trader_position_size !== null
             ? Math.min(1, Math.max(0.1, Number(verdict.trader_position_size)))
             : 1
           const sizing = computeCryptoSize({
-            accountEquity: account.equity,
+            accountEquity: effectiveEquity,
             riskPerTradePct: getRiskPerTradePctForAsset(settings, 'crypto'),
             maxPositionPct: settings.maxPositionPct,
             entryPrice: entry,
             stopPrice: stop,
             traderPositionSizePct: traderSize,
+            minDollarRiskPerTrade: settingsAny.minDollarRiskPerTrade ?? null,
+            maxDollarRiskPerTrade: settingsAny.maxDollarRiskPerTrade ?? null,
+            minTradeNotional: settingsAny.minTradeNotional ?? null,
+            maxTradeNotional: settingsAny.maxTradeNotional ?? null,
           })
           if (!sizing.ok) {
             await logSkipped(verdict, settings, `crypto sizing: ${sizing.reason}`)
@@ -196,7 +222,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
               stopPrice: stop,
               targetPrice: target,
               dollarRisk: sizing.dollarRisk,
-              accountEquity: account.equity,
+              accountEquity: effectiveEquity,
               normalizedSymbol: route.normalizedSymbol,
             })
             summary.placed++
