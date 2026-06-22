@@ -127,7 +127,7 @@ async function processUser(settings: UserTradingSettings, userSummary: PerUserSu
   const pmSettings = pmSettingsFrom(settings)
 
   // Load broker
-  const credLoad = await loadBrokerCredentialForUse(settings.userId, settings.broker, settings.mode)
+  const credLoad = await loadBrokerCredentialForUse(settings.userId, settings.broker, settings.mode, 'stock')
   if (!credLoad) return
   const alpaca = makeAlpacaClient(credLoad.keyId, credLoad.secret, settings.mode)
 
