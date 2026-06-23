@@ -93,12 +93,18 @@ export interface CryptoStopInput {
 /**
  * Build the canonical URI claim used in Coinbase JWTs.
  * Format: "METHOD api.coinbase.com/api/v3/brokerage/<path>"
- * Note: no protocol, no leading slash on host.
+ * Note: no protocol, no leading slash on host, NO QUERY STRING.
+ *
+ * Coinbase's JWT validator computes the expected URI from request method,
+ * host, and path only — NOT including query parameters. If the JWT claim
+ * includes ?foo=bar, validation fails with 401. We strip it here.
  */
 function buildJwtUri(method: 'GET' | 'POST' | 'DELETE' | 'PUT', path: string): string {
   // path here is the segment under /api/v3/brokerage (e.g. "/orders")
+  // Strip query string — Coinbase signs path only, not full URL.
+  const pathOnly = path.split('?')[0]
+  const cleanPath = pathOnly.startsWith('/') ? pathOnly : '/' + pathOnly
   // Final form: "GET api.coinbase.com/api/v3/brokerage/orders"
-  const cleanPath = path.startsWith('/') ? path : '/' + path
   return `${method} ${COINBASE_HOST}${COINBASE_API_PATH}${cleanPath}`
 }
 
