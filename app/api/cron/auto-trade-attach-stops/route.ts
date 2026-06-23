@@ -324,7 +324,7 @@ async function processCryptoAttempt(row: PendingAttachRow, alpaca: AlpacaCryptoC
 async function processCoinbaseAttempt(
   row: PendingAttachRow,
   coinbase: CoinbaseClient,
-): Promise<AttachResult> {
+): Promise<ProcessResult> {
   if (row.stop_attach_attempts >= MAX_ATTACH_ATTEMPTS) {
     return { kind: 'gave_up', reason: `at max attempts (${row.stop_attach_attempts})` }
   }
