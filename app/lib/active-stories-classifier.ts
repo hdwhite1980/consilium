@@ -375,15 +375,129 @@ function validateOutput(
 }
 
 // ─────────────────────────────────────────────────────────────
-// JSON parser — robust to LLM occasionally wrapping in fences
+// JSON parser — robust to LLM glitches:
+//   - Markdown code fences (```json ... ```)
+//   - Leading/trailing prose
+//   - Trailing commas before } or ]
+//   - Truncated responses (token limit hit)
+//
+// On parse failure, logs a useful snippet showing what was tried and
+// throws with a clear message so the cron's outer catch logs context.
+// The previous version (June 22 2026) failed on Bug 24 (2026-06-23):
+// "Expected ',' or ']' after array element in JSON at position 18898"
+// when Claude returned a 6000-token response that hit the cap mid-array.
 // ─────────────────────────────────────────────────────────────
 
 function parseJSON<T>(text: string): T {
-  const cleaned = text.replace(/```json\s*|\s*```/g, '').trim()
+  // Strip markdown fences
+  let cleaned = text.replace(/```json\s*|\s*```/g, '').trim()
+
+  // Find outer object braces
   const start = cleaned.indexOf('{')
   const end = cleaned.lastIndexOf('}')
-  if (start === -1 || end === -1) throw new Error(`No JSON object in: ${cleaned.slice(0, 200)}`)
-  return JSON.parse(cleaned.slice(start, end + 1)) as T
+  if (start === -1 || end === -1) {
+    throw new Error(`No JSON object in response (length ${cleaned.length}, first 200 chars: ${cleaned.slice(0, 200)})`)
+  }
+  let candidate = cleaned.slice(start, end + 1)
+
+  // Repair: remove trailing commas before } or ] (common LLM glitch)
+  // e.g. {"a": 1,} → {"a": 1}, [1, 2, 3,] → [1, 2, 3]
+  candidate = candidate.replace(/,(\s*[}\]])/g, '$1')
+
+  // First parse attempt
+  try {
+    return JSON.parse(candidate) as T
+  } catch (e1) {
+    // Truncation recovery: if Claude's response was cut mid-array, try to
+    // close the structure at the last complete element.
+    const recovered = attemptTruncationRecovery(candidate)
+    if (recovered) {
+      try {
+        const parsed = JSON.parse(recovered) as T
+        console.warn(`[active-stories-classifier] parseJSON recovered from truncation; lost some content (response length ${cleaned.length} chars)`)
+        return parsed
+      } catch {
+        // fall through to throw
+      }
+    }
+    const errMsg = e1 instanceof Error ? e1.message : String(e1)
+    const aroundError = extractContextAroundError(candidate, errMsg)
+    throw new Error(
+      `parseJSON failed: ${errMsg}. Response length ${cleaned.length} chars. ` +
+      `Context: ${aroundError}`,
+    )
+  }
+}
+
+/**
+ * If JSON.parse failed because the response was truncated mid-array
+ * (token limit hit), try to find the last complete element and close
+ * the structure cleanly. Returns the repaired JSON string or null if
+ * recovery isn't possible.
+ *
+ * Strategy: walk backwards from the end looking for the last balanced
+ * closing bracket. Truncate there, then close any open arrays/objects.
+ */
+function attemptTruncationRecovery(text: string): string | null {
+  // Track bracket depth and find last "safe" position
+  let lastSafeIdx = -1
+  let curlyDepth = 0
+  let squareDepth = 0
+  let inString = false
+  let escape = false
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (escape) { escape = false; continue }
+    if (ch === '\\') { escape = true; continue }
+    if (ch === '"') { inString = !inString; continue }
+    if (inString) continue
+    if (ch === '{') curlyDepth++
+    else if (ch === '}') curlyDepth--
+    else if (ch === '[') squareDepth++
+    else if (ch === ']') squareDepth--
+    // Last position where we just closed an object/element cleanly inside an array
+    if (ch === '}' && curlyDepth >= 1 && squareDepth >= 1) {
+      lastSafeIdx = i
+    }
+  }
+  if (lastSafeIdx === -1) return null
+  // Truncate at last safe object close, then close all open brackets
+  let result = text.slice(0, lastSafeIdx + 1)
+  // Recount open brackets in result
+  let openCurly = 0
+  let openSquare = 0
+  inString = false
+  escape = false
+  for (let i = 0; i < result.length; i++) {
+    const ch = result[i]
+    if (escape) { escape = false; continue }
+    if (ch === '\\') { escape = true; continue }
+    if (ch === '"') { inString = !inString; continue }
+    if (inString) continue
+    if (ch === '{') openCurly++
+    else if (ch === '}') openCurly--
+    else if (ch === '[') openSquare++
+    else if (ch === ']') openSquare--
+  }
+  // Close brackets in the correct order — we don't know the exact nesting
+  // but closing arrays first then objects is the common pattern
+  while (openSquare > 0) { result += ']'; openSquare-- }
+  while (openCurly > 0) { result += '}'; openCurly-- }
+  return result
+}
+
+/**
+ * Extract a window around the position in the error message for logging.
+ * JSON.parse error messages typically include "at position N".
+ */
+function extractContextAroundError(text: string, errMsg: string): string {
+  const m = errMsg.match(/position (\d+)/)
+  if (!m) return text.slice(0, 200) + (text.length > 200 ? '...' : '')
+  const pos = parseInt(m[1], 10)
+  const wstart = Math.max(0, pos - 80)
+  const wend = Math.min(text.length, pos + 80)
+  return `...${text.slice(wstart, wend).replace(/\n/g, '\\n')}...`
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -446,7 +560,11 @@ export async function classifyActiveStories(
 
   const msg = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 6000,  // larger than the legacy 4000 because we may have many updates
+    // Bumped from 6000 → 12000 on 2026-06-23 after Bug 24:
+    // 6000-token response was being cut mid-array, breaking JSON.parse.
+    // 12000 gives Claude room for many story updates + new stories without
+    // truncating; parseJSON recovery handles edge cases beyond that.
+    max_tokens: 12000,
     system,
     messages: [{ role: 'user', content: user }],
   })
