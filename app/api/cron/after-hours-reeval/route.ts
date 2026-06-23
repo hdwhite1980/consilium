@@ -68,10 +68,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   const startedAt = Date.now()
-  const baseUrl = (process.env.APP_BASE_URL ?? '').replace(/\/$/, '')
-  if (!baseUrl) {
+  const rawBase = (process.env.APP_BASE_URL ?? '').replace(/\/$/, '')
+  if (!rawBase) {
     return NextResponse.json({ error: 'APP_BASE_URL not configured' }, { status: 500 })
   }
+  // Prepend https:// if scheme missing (see pre-market-reeval URL bug, 2026-06-23)
+  const baseUrl = /^https?:\/\//.test(rawBase) ? rawBase : `https://${rawBase}`
 
   const summary = {
     users: [] as UserSummary[],
