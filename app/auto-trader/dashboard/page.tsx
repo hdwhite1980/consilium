@@ -237,6 +237,53 @@ interface MonitorActivityData {
   error?: string
 }
 
+// ── Reeval activity (after-hours + pre-market + morning crons) ──
+interface ReevalKpis {
+  total: number
+  afterHoursChecks: number
+  preMarketChecks: number
+  morningChecks: number
+  materialChanges: number
+  councilEscalations: number
+  ordersCancelled: number
+  errors: number
+}
+
+interface RecentReeval {
+  id: number
+  trigger_source: string
+  ticker: string
+  kind: string
+  verdict_log_id: number | null
+  material: boolean
+  material_reasons: string[]
+  price_gap_pct: number | null
+  current_price: number | null
+  council_action: string | null
+  council_thesis_status: string | null
+  action_taken: string | null
+  cancel_ok: boolean | null
+  error_reason: string | null
+  created_at: string
+}
+
+interface PerTriggerSummary {
+  trigger_source: string
+  total_checks: number
+  material_count: number
+  council_count: number
+  cancel_count: number
+  last_run_at: string
+}
+
+interface ReevalActivityData {
+  ok: boolean
+  kpis: ReevalKpis
+  recent: RecentReeval[]
+  perTrigger: PerTriggerSummary[]
+  error?: string
+}
+
 const REFRESH_INTERVAL_MS = 30_000
 
 // ─────────────────────────────────────────────────────────────
@@ -250,6 +297,7 @@ export default function AutoTraderDashboardPage() {
   const [positions, setPositions] = useState<PositionsData | null>(null)
   const [verdicts, setVerdicts] = useState<VerdictsData | null>(null)
   const [monitor, setMonitor] = useState<MonitorActivityData | null>(null)
+  const [reeval, setReeval] = useState<ReevalActivityData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
@@ -277,11 +325,12 @@ export default function AutoTraderDashboardPage() {
   const fetchAll = useCallback(async () => {
     try {
       setError(null)
-      const [dashRes, posRes, verdRes, monRes] = await Promise.all([
+      const [dashRes, posRes, verdRes, monRes, reevalRes] = await Promise.all([
         fetch('/api/auto-trader/dashboard', { cache: 'no-store' }),
         fetch('/api/auto-trader/positions', { cache: 'no-store' }),
         fetch('/api/auto-trader/dashboard/verdicts', { cache: 'no-store' }),
         fetch('/api/auto-trader/dashboard/monitor-activity', { cache: 'no-store' }),
+        fetch('/api/auto-trader/dashboard/reeval-activity', { cache: 'no-store' }),
       ])
 
       if (!dashRes.ok) {
@@ -292,15 +341,17 @@ export default function AutoTraderDashboardPage() {
         const errBody = await posRes.json().catch(() => ({})) as { error?: string }
         throw new Error(errBody.error || `positions returned ${posRes.status}`)
       }
-      // verdicts/monitor are non-blocking — partial failure shouldn't break the page
+      // verdicts/monitor/reeval are non-blocking — partial failure shouldn't break the page
       const dashData = await dashRes.json() as DashboardData
       const posData = await posRes.json() as PositionsData
       const verdData = verdRes.ok ? await verdRes.json() as VerdictsData : null
       const monData = monRes.ok ? await monRes.json() as MonitorActivityData : null
+      const reevalData = reevalRes.ok ? await reevalRes.json() as ReevalActivityData : null
       setData(dashData)
       setPositions(posData)
       setVerdicts(verdData)
       setMonitor(monData)
+      setReeval(reevalData)
       setLastUpdated(new Date())
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -471,6 +522,17 @@ export default function AutoTraderDashboardPage() {
               count={monitor?.kpis.total ?? 0}
               color="#a78bfa">
               <MonitorActivityPanel data={monitor} />
+            </Section>
+
+            {/* Reeval activity (after-hours + pre-market + morning crons) */}
+            <Section
+              title="Reeval Activity"
+              icon={<Clock size={14} />}
+              expanded={expandedSection === 'reeval'}
+              onToggle={() => setExpandedSection(expandedSection === 'reeval' ? null : 'reeval')}
+              count={reeval?.kpis.total ?? 0}
+              color="#22d3ee">
+              <ReevalActivityPanel data={reeval} />
             </Section>
 
             {/* Recent activity */}
@@ -1174,4 +1236,194 @@ function MonitorDecisionBadge({ decision, action }: { decision: string; action: 
       {config.label}
     </span>
   )
+}
+
+// ─────────────────────────────────────────────────────────────
+// Reeval Activity (after-hours + pre-market + morning crons)
+// ─────────────────────────────────────────────────────────────
+
+function ReevalActivityPanel({ data }: { data: ReevalActivityData | null }) {
+  if (!data) {
+    return <div className="p-4 text-xs opacity-60" style={{ color: 'var(--text3)' }}>Loading reeval activity…</div>
+  }
+  if (!data.ok && data.error) {
+    return (
+      <div className="p-4 text-xs" style={{ color: '#f87171' }}>
+        Failed to load: {data.error}
+      </div>
+    )
+  }
+  if (data.kpis.total === 0) {
+    return (
+      <div className="p-4 text-xs opacity-60" style={{ color: 'var(--text3)' }}>
+        No reeval activity today yet.
+        <span className="block mt-1 opacity-75">
+          Crons fire at: 12:30 UTC (pre-market), 13:35 UTC (morning), 21:30 UTC (after-hours)
+        </span>
+      </div>
+    )
+  }
+  return (
+    <div className="space-y-3">
+      {/* KPI row */}
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 p-2">
+        <Stat label="Checks" value={String(data.kpis.total)} />
+        <Stat label="Pre-Market" value={String(data.kpis.preMarketChecks)} color="#60a5fa" />
+        <Stat label="Morning" value={String(data.kpis.morningChecks)} color="#34d399" />
+        <Stat label="After-Hours" value={String(data.kpis.afterHoursChecks)} color="#a78bfa" />
+        <Stat label="Material" value={String(data.kpis.materialChanges)} color="#fbbf24" />
+        <Stat label="Cancelled" value={String(data.kpis.ordersCancelled)} color={data.kpis.ordersCancelled > 0 ? '#f87171' : 'var(--text3)'} />
+      </div>
+
+      {/* Per-trigger summary */}
+      {data.perTrigger.length > 0 && (
+        <div className="p-2">
+          <div className="text-xs font-semibold mb-2 opacity-70" style={{ color: 'var(--text3)' }}>
+            Today by cron run
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            {data.perTrigger.map(t => (
+              <div key={t.trigger_source}
+                className="p-2 rounded-md flex flex-col gap-1"
+                style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}>
+                <div className="flex items-center justify-between">
+                  <ReevalTriggerBadge trigger={t.trigger_source} />
+                  <span className="text-xs opacity-70 font-mono" style={{ color: 'var(--text3)' }}>
+                    {new Date(t.last_run_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+                <div className="text-xs opacity-70 font-mono" style={{ color: 'var(--text3)' }}>
+                  {t.total_checks} checks
+                  {t.material_count > 0 ? ` · ${t.material_count} material` : ''}
+                  {t.council_count > 0 ? ` · ${t.council_count} council` : ''}
+                  {t.cancel_count > 0 ? ` · ${t.cancel_count} cancelled` : ''}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Recent reeval checks table */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr style={{ borderBottom: '1px solid var(--border)' }}>
+              <Th>Time</Th>
+              <Th>Cron</Th>
+              <Th>Ticker</Th>
+              <Th>Kind</Th>
+              <Th>Material?</Th>
+              <Th>Gap %</Th>
+              <Th>Council</Th>
+              <Th>Action</Th>
+              <Th>Note</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.recent.map(r => (
+              <tr key={r.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                <Td>
+                  <span className="font-mono opacity-70" style={{ color: 'var(--text3)' }}>
+                    {new Date(r.created_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </Td>
+                <Td><ReevalTriggerBadge trigger={r.trigger_source} /></Td>
+                <Td><span className="font-bold">{r.ticker}</span></Td>
+                <Td>
+                  <span className="text-xs opacity-80 font-mono">
+                    {r.kind === 'open_position' ? 'POS' : 'HELD'}
+                  </span>
+                </Td>
+                <Td>
+                  {r.material
+                    ? <span className="text-xs px-1.5 py-0.5 rounded font-mono font-bold"
+                        style={{ background: 'rgba(251,191,36,0.2)', color: '#fbbf24' }}>YES</span>
+                    : <span className="text-xs opacity-60" style={{ color: 'var(--text3)' }}>no</span>}
+                </Td>
+                <Td>
+                  <span className="font-mono" style={{
+                    color: r.price_gap_pct !== null && Math.abs(r.price_gap_pct) > 2
+                      ? '#fbbf24' : 'var(--text)',
+                  }}>
+                    {r.price_gap_pct !== null ? `${r.price_gap_pct > 0 ? '+' : ''}${r.price_gap_pct.toFixed(2)}%` : '—'}
+                  </span>
+                </Td>
+                <Td><ReevalCouncilBadge action={r.council_action} thesis={r.council_thesis_status} /></Td>
+                <Td><ReevalActionBadge action={r.action_taken} cancelOk={r.cancel_ok} /></Td>
+                <Td>
+                  <span className="text-xs opacity-70" style={{ color: r.error_reason ? '#f87171' : 'var(--text3)' }}>
+                    {r.error_reason ?? (r.material_reasons.length > 0 ? r.material_reasons.join('; ').slice(0, 80) : '')}
+                  </span>
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function ReevalTriggerBadge({ trigger }: { trigger: string }) {
+  const config = (() => {
+    if (trigger === 'pre_market_reeval') return { bg: 'rgba(96,165,250,0.2)', color: '#60a5fa', label: 'PRE-MKT' }
+    if (trigger === 'morning_reeval') return { bg: 'rgba(52,211,153,0.2)', color: '#34d399', label: 'MORNING' }
+    if (trigger === 'after_hours_reeval') return { bg: 'rgba(167,139,250,0.2)', color: '#a78bfa', label: 'AFTER-HRS' }
+    return { bg: 'var(--surface)', color: 'var(--text)', label: trigger.slice(0, 8) }
+  })()
+  return (
+    <span className="text-xs px-1.5 py-0.5 rounded font-mono font-bold"
+      style={{ background: config.bg, color: config.color }}>
+      {config.label}
+    </span>
+  )
+}
+
+function ReevalCouncilBadge({ action, thesis }: { action: string | null; thesis: string | null }) {
+  if (!action) return <span className="opacity-50">—</span>
+  const a = action.toUpperCase()
+  const config = (() => {
+    if (a === 'EARLY_EXIT' || a === 'EXIT') return { bg: 'rgba(248,113,113,0.2)', color: '#f87171' }
+    if (a === 'TIGHTEN_STOP' || a === 'TIGHTEN') return { bg: 'rgba(251,191,36,0.2)', color: '#fbbf24' }
+    if (a === 'HOLD') return { bg: 'rgba(52,211,153,0.15)', color: '#34d399' }
+    return { bg: 'var(--surface)', color: 'var(--text)' }
+  })()
+  const thesisShort = thesis ? ` · ${thesis.slice(0, 12)}` : ''
+  return (
+    <span className="text-xs px-1.5 py-0.5 rounded font-mono"
+      style={{ background: config.bg, color: config.color }}
+      title={thesis ?? ''}>
+      {a}{thesisShort}
+    </span>
+  )
+}
+
+function ReevalActionBadge({ action, cancelOk }: { action: string | null; cancelOk: boolean | null }) {
+  if (!action) return <span className="opacity-50">—</span>
+  if (action === 'cancelled' && cancelOk === true) {
+    return (
+      <span className="text-xs px-1.5 py-0.5 rounded font-mono font-bold"
+        style={{ background: 'rgba(248,113,113,0.3)', color: '#f87171' }}>
+        CANCELLED
+      </span>
+    )
+  }
+  if (action === 'cancelled' && cancelOk === false) {
+    return (
+      <span className="text-xs px-1.5 py-0.5 rounded font-mono"
+        style={{ background: 'rgba(248,113,113,0.15)', color: '#f87171' }}>
+        cancel_failed
+      </span>
+    )
+  }
+  if (action === 'logged') {
+    return (
+      <span className="text-xs px-1.5 py-0.5 rounded font-mono opacity-70"
+        style={{ background: 'var(--bg)', color: 'var(--text3)' }}>
+        logged
+      </span>
+    )
+  }
+  return <span className="text-xs opacity-60" style={{ color: 'var(--text3)' }}>{action}</span>
 }
