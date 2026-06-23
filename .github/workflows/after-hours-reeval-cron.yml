@@ -1,0 +1,38 @@
+name: after-hours-reeval-cron
+
+on:
+  schedule:
+    # 21:30 UTC = 4:30 PM ET (EDT) — 30 min after market close.
+    # During EST (Nov-Mar), this is 5:30 PM ET. Still after close, still valid.
+    # Mon-Fri only.
+    - cron: '30 21 * * 1-5'
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit after-hours-reeval endpoint
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -e
+          BASE="${APP_BASE_URL%/}"
+          case "$BASE" in
+            http://*|https://*) ;;
+            *) BASE="https://$BASE" ;;
+          esac
+          response=$(curl -s -L -w "\n%{http_code}" \
+            -X GET \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$BASE/api/cron/after-hours-reeval" \
+            --max-time 200)
+          status=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "Status: $status"
+          echo "Body: $body"
+          if [ "$status" -ne 200 ]; then
+            echo "::error::after-hours-reeval returned non-200 status: $status"
+            exit 1
+          fi

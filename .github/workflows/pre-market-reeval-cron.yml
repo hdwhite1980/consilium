@@ -1,0 +1,43 @@
+name: pre-market-reeval-cron
+
+on:
+  schedule:
+    # 12:30 UTC = 8:30 AM ET (EDT) — 1 hour before US market open (9:30 ET).
+    # During EST (Nov-Mar), this is 7:30 AM ET. Still pre-market, still valid
+    # (US pre-market trading starts 4 AM ET so news has been flowing for hours).
+    # Mon-Fri only.
+    #
+    # This is the cron with authority to cancel held orders. Runs the same
+    # material-change check as after-hours-reeval, but acts on EARLY_EXIT
+    # recommendations for held orders by cancelling them.
+    - cron: '30 12 * * 1-5'
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit pre-market-reeval endpoint
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -e
+          BASE="${APP_BASE_URL%/}"
+          case "$BASE" in
+            http://*|https://*) ;;
+            *) BASE="https://$BASE" ;;
+          esac
+          response=$(curl -s -L -w "\n%{http_code}" \
+            -X GET \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$BASE/api/cron/pre-market-reeval" \
+            --max-time 200)
+          status=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "Status: $status"
+          echo "Body: $body"
+          if [ "$status" -ne 200 ]; then
+            echo "::error::pre-market-reeval returned non-200 status: $status"
+            exit 1
+          fi
