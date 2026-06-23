@@ -64,10 +64,19 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   try {
-    // Fetch positions and open orders in parallel
-    const [posRes, orderRes] = await Promise.all([
+    // Fetch positions, open orders, AND closed orders from today
+    const today = new Date()
+    today.setUTCHours(0, 0, 0, 0)
+    const todayMidnight = today.toISOString()
+    // Also look back 7 days for context
+    const weekAgo = new Date()
+    weekAgo.setUTCDate(weekAgo.getUTCDate() - 7)
+    const weekAgoIso = weekAgo.toISOString()
+
+    const [posRes, openRes, closedRes] = await Promise.all([
       fetch(`${baseUrl}/v2/positions`, { headers }),
-      fetch(`${baseUrl}/v2/orders?status=open&limit=200`, { headers }),
+      fetch(`${baseUrl}/v2/orders?status=open&limit=200&nested=true`, { headers }),
+      fetch(`${baseUrl}/v2/orders?status=closed&after=${encodeURIComponent(weekAgoIso)}&limit=500&nested=true`, { headers }),
     ])
 
     if (!posRes.ok) {
@@ -77,16 +86,24 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         body: text.slice(0, 300),
       }, { status: 500 })
     }
-    if (!orderRes.ok) {
-      const text = await orderRes.text()
+    if (!openRes.ok) {
+      const text = await openRes.text()
       return NextResponse.json({
-        error: `Alpaca /orders failed: HTTP ${orderRes.status}`,
+        error: `Alpaca /orders (open) failed: HTTP ${openRes.status}`,
+        body: text.slice(0, 300),
+      }, { status: 500 })
+    }
+    if (!closedRes.ok) {
+      const text = await closedRes.text()
+      return NextResponse.json({
+        error: `Alpaca /orders (closed) failed: HTTP ${closedRes.status}`,
         body: text.slice(0, 300),
       }, { status: 500 })
     }
 
     const rawPositions = await posRes.json() as Array<Record<string, unknown>>
-    const rawOrders = await orderRes.json() as Array<Record<string, unknown>>
+    const rawOpenOrders = await openRes.json() as Array<Record<string, unknown>>
+    const rawClosedOrders = await closedRes.json() as Array<Record<string, unknown>>
 
     const positions = rawPositions
       .filter(p => String(p.asset_class ?? 'us_equity') === 'us_equity')
@@ -100,19 +117,38 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         market_value: Number(p.market_value),
       }))
 
-    const openOrders = rawOrders.map(o => ({
-      id: String(o.id),
-      client_order_id: String(o.client_order_id ?? ''),
-      symbol: String(o.symbol),
-      side: String(o.side),
-      order_type: String(o.order_type ?? o.type ?? ''),
-      qty: o.qty !== null && o.qty !== undefined ? Number(o.qty) : null,
-      stop_price: o.stop_price !== null && o.stop_price !== undefined ? Number(o.stop_price) : null,
-      limit_price: o.limit_price !== null && o.limit_price !== undefined ? Number(o.limit_price) : null,
-      status: String(o.status),
-      order_class: String(o.order_class ?? ''),
-      submitted_at: String(o.submitted_at ?? ''),
-    }))
+    function mapOrder(o: Record<string, unknown>) {
+      const legs = Array.isArray(o.legs) ? o.legs as Array<Record<string, unknown>> : null
+      return {
+        id: String(o.id),
+        client_order_id: String(o.client_order_id ?? ''),
+        symbol: String(o.symbol),
+        side: String(o.side),
+        order_type: String(o.order_type ?? o.type ?? ''),
+        qty: o.qty !== null && o.qty !== undefined ? Number(o.qty) : null,
+        stop_price: o.stop_price !== null && o.stop_price !== undefined ? Number(o.stop_price) : null,
+        limit_price: o.limit_price !== null && o.limit_price !== undefined ? Number(o.limit_price) : null,
+        status: String(o.status),
+        order_class: String(o.order_class ?? ''),
+        submitted_at: String(o.submitted_at ?? ''),
+        filled_at: o.filled_at ? String(o.filled_at) : null,
+        canceled_at: o.canceled_at ? String(o.canceled_at) : null,
+        legs_count: legs ? legs.length : 0,
+        legs: legs ? legs.map(l => ({
+          id: String(l.id),
+          symbol: String(l.symbol),
+          side: String(l.side),
+          order_type: String(l.order_type ?? l.type ?? ''),
+          stop_price: l.stop_price !== null && l.stop_price !== undefined ? Number(l.stop_price) : null,
+          limit_price: l.limit_price !== null && l.limit_price !== undefined ? Number(l.limit_price) : null,
+          status: String(l.status),
+          canceled_at: l.canceled_at ? String(l.canceled_at) : null,
+        })) : null,
+      }
+    }
+
+    const openOrders = rawOpenOrders.map(mapOrder)
+    const closedOrders = rawClosedOrders.map(mapOrder)
 
     // Compute stop coverage: for each position, find an open stop order on same symbol
     const stopCoverage: Record<string, {
@@ -122,6 +158,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       stopOrderId: string | null
       hasTarget: boolean
       targetPrice: number | null
+      historicalStops: Array<{ id: string; status: string; stop_price: number | null; canceled_at: string | null; submitted_at: string }>
     }> = {}
     for (const pos of positions) {
       const stops = openOrders.filter(o =>
@@ -134,6 +171,20 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         o.side === 'sell' &&
         o.order_type === 'limit'
       )
+      // Look for historical stop orders for this symbol (canceled, filled, etc.)
+      const historicalStops = closedOrders
+        .filter(o =>
+          o.symbol === pos.symbol &&
+          o.side === 'sell' &&
+          (o.order_type === 'stop' || o.order_type === 'stop_limit')
+        )
+        .map(o => ({
+          id: o.id,
+          status: o.status,
+          stop_price: o.stop_price,
+          canceled_at: o.canceled_at,
+          submitted_at: o.submitted_at,
+        }))
       stopCoverage[pos.symbol] = {
         qty: pos.qty,
         hasStop: stops.length > 0,
@@ -141,14 +192,43 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         stopOrderId: stops[0]?.id ?? null,
         hasTarget: targets.length > 0,
         targetPrice: targets[0]?.limit_price ?? null,
+        historicalStops,
       }
+    }
+
+    // Also look at the parent BUY orders for each position to see legs
+    const parentBuyOrders: Record<string, Array<{
+      id: string
+      client_order_id: string
+      order_class: string
+      status: string
+      filled_at: string | null
+      legs_count: number
+      legs: unknown
+    }>> = {}
+    for (const pos of positions) {
+      const buyOrders = [...openOrders, ...closedOrders].filter(o =>
+        o.symbol === pos.symbol &&
+        o.side === 'buy'
+      ).map(o => ({
+        id: o.id,
+        client_order_id: o.client_order_id,
+        order_class: o.order_class,
+        status: o.status,
+        filled_at: o.filled_at,
+        legs_count: o.legs_count,
+        legs: o.legs,
+      }))
+      parentBuyOrders[pos.symbol] = buyOrders
     }
 
     return NextResponse.json({
       mode,
       positions,
       openOrders,
+      closedOrdersCount: closedOrders.length,
       stopCoverage,
+      parentBuyOrders,
       summary: {
         positionsCount: positions.length,
         openOrdersCount: openOrders.length,
