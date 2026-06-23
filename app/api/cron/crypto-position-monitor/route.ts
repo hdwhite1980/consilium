@@ -184,10 +184,21 @@ async function monitorCoinbasePosition(
   const bull5 = signals5m?.bullishCount ?? 0
   const bear15 = signals15m?.bearishCount ?? 0
   const bull15 = signals15m?.bullishCount ?? 0
+  const score5 = signals5m?.technicalScore ?? 0
+  const score15 = signals15m?.technicalScore ?? 0
+  const bias5 = signals5m?.technicalBias ?? 'NEUTRAL'
+  const bias15 = signals15m?.technicalBias ?? 'NEUTRAL'
 
-  // Bullish override: if 15m unanimous bullish, hold even if 5m wobbles
-  const strongBullish15m = bull15 >= 4
-  const sustainedBearish = !strongBullish15m && (bear5 >= 3 || bear15 >= 4)
+  // Bullish override: if 15m is strongly bullish (score >= 50 OR bias=BULLISH with bull15>=7),
+  // hold even if 5m wobbles
+  const strongBullish15m = score15 >= 50 || (bias15 === 'BULLISH' && bull15 >= 7)
+  // Sustained bearish: technical score deeply negative OR many bearish signals on either timeframe
+  // Thresholds: score <= -30 on 15m (significant bearish bias) OR bear15 >= 7 (many indicators agree)
+  //   OR rapid 5m deterioration (score5 <= -40, bear5 >= 6)
+  const sustainedBearish = !strongBullish15m && (
+    score15 <= -30 || bear15 >= 7 ||
+    score5 <= -40 || bear5 >= 7
+  )
 
   if (sustainedBearish) {
     // EXIT: market sell the entire position via Coinbase
@@ -196,8 +207,8 @@ async function monitorCoinbasePosition(
         await client.cancelOrder(att.stop_order_id).catch(() => null)
       }
       await client.closePosition(att.ticker)
-      await logResult(att, 'EXIT', `signal_exit: bear5=${bear5} bear15=${bear15} bull5=${bull5} bull15=${bull15}`, currentPrice, null)
-      console.log(`[crypto-position-monitor] coinbase SIGNAL EXIT ${att.ticker} bear5=${bear5} bear15=${bear15}`)
+      await logResult(att, 'EXIT', `signal_exit: score5=${score5} score15=${score15} bear5=${bear5} bear15=${bear15} bull15=${bull15}`, currentPrice, null)
+      console.log(`[crypto-position-monitor] coinbase SIGNAL EXIT ${att.ticker} score5=${score5} score15=${score15} bear5=${bear5} bear15=${bear15}`)
       summary.signalExits++
       return
     } catch (e) {
@@ -211,7 +222,7 @@ async function monitorCoinbasePosition(
   // ── Trailing stop check ───────────────────────────────────
   const trailing = computeTrailing(att, currentPrice)
   if (!trailing) {
-    await logResult(att, 'HOLD', `no_milestone bear5=${bear5} bear15=${bear15} bull5=${bull5} bull15=${bull15}`, currentPrice, null)
+    await logResult(att, 'HOLD', `no_milestone score5=${score5} score15=${score15} bias=${bias5}/${bias15}`, currentPrice, null)
     summary.noChange++
     return
   }
@@ -292,8 +303,16 @@ async function monitorAlpacaPosition(
   const bull5 = signals5m?.bullishCount ?? 0
   const bear15 = signals15m?.bearishCount ?? 0
   const bull15 = signals15m?.bullishCount ?? 0
-  const strongBullish15m = bull15 >= 4
-  const sustainedBearish = !strongBullish15m && (bear5 >= 3 || bear15 >= 4)
+  const score5 = signals5m?.technicalScore ?? 0
+  const score15 = signals15m?.technicalScore ?? 0
+  const bias5 = signals5m?.technicalBias ?? 'NEUTRAL'
+  const bias15 = signals15m?.technicalBias ?? 'NEUTRAL'
+
+  const strongBullish15m = score15 >= 50 || (bias15 === 'BULLISH' && bull15 >= 7)
+  const sustainedBearish = !strongBullish15m && (
+    score15 <= -30 || bear15 >= 7 ||
+    score5 <= -40 || bear5 >= 7
+  )
 
   if (sustainedBearish) {
     try {
@@ -301,8 +320,8 @@ async function monitorAlpacaPosition(
         await client.cancelOrder(att.stop_order_id).catch(() => null)
       }
       await client.closePosition(att.ticker)
-      await logResult(att, 'EXIT', `signal_exit: bear5=${bear5} bear15=${bear15} bull5=${bull5} bull15=${bull15}`, currentPrice, null)
-      console.log(`[crypto-position-monitor] alpaca SIGNAL EXIT ${att.ticker} bear5=${bear5} bear15=${bear15}`)
+      await logResult(att, 'EXIT', `signal_exit: score5=${score5} score15=${score15} bear5=${bear5} bear15=${bear15} bull15=${bull15}`, currentPrice, null)
+      console.log(`[crypto-position-monitor] alpaca SIGNAL EXIT ${att.ticker} score5=${score5} score15=${score15}`)
       summary.signalExits++
       return
     } catch (e) {
@@ -316,7 +335,7 @@ async function monitorAlpacaPosition(
   // ── Trailing stop check ───────────────────────────────────
   const trailing = computeTrailing(att, currentPrice)
   if (!trailing) {
-    await logResult(att, 'HOLD', `no_milestone bear5=${bear5} bear15=${bear15} bull5=${bull5} bull15=${bull15}`, currentPrice, null)
+    await logResult(att, 'HOLD', `no_milestone score5=${score5} score15=${score15} bias=${bias5}/${bias15}`, currentPrice, null)
     summary.noChange++
     return
   }

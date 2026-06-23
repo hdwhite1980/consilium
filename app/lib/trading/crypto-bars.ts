@@ -1,23 +1,31 @@
 // =============================================================
 // app/lib/trading/crypto-bars.ts
 //
-// Fetches OHLCV candles from Coinbase Advanced Trade API.
+// Fetches OHLCV candles from Coinbase Advanced Trade API and
+// converts them to the SAME Bar shape used by the stocks pipeline,
+// so the existing `calculateTechnicals()` engine in technicals.ts
+// works identically on crypto.
 //
-// Endpoint: GET /api/v3/brokerage/products/{product_id}/candles
-//   Requires auth.
-//   Query: start, end, granularity
+// This gives crypto FULL signal parity with stocks:
+//   - SMA 20/50/200, EMA 9/20/12/26
+//   - MACD (12, 26, 9)
+//   - RSI(14), Stochastic(14,3,3), Williams %R, CCI
+//   - Bollinger Bands (20, 2σ)
+//   - VWAP, OBV (with divergence)
+//   - Volume ratio
+//   - Support/Resistance, Fibonacci, Golden Zone
+//   - ATR(14), ROC, Ichimoku, Williams %R, CCI
+//   - Candle patterns, chart patterns, gap detection, trend lines
+//   - Composite technicalScore -100..+100 and technicalBias
+//
+// Coinbase endpoint:
+//   GET /api/v3/brokerage/market/products/{product_id}/candles
+//   Granularity: ONE_MINUTE, FIVE_MINUTE, FIFTEEN_MINUTE, THIRTY_MINUTE,
+//                ONE_HOUR, TWO_HOUR, SIX_HOUR, ONE_DAY
 //   Max 300 candles per call.
-//
-// Public alternative: /api/v3/brokerage/market/products/{product_id}/candles
-//   No auth required (per Coinbase docs June 2026).
-//
-// Granularity values accepted by Coinbase:
-//   ONE_MINUTE, FIVE_MINUTE, FIFTEEN_MINUTE, THIRTY_MINUTE,
-//   ONE_HOUR, TWO_HOUR, SIX_HOUR, ONE_DAY
-//
-// Output Bar shape matches stocks bars where possible so signal/pattern
-// code can consume crypto data without branching.
 // =============================================================
+
+import { calculateTechnicals, type Bar, type TechnicalSignals } from '@/app/lib/trading/technicals'
 
 const COINBASE_PUBLIC_BASE = 'https://api.coinbase.com/api/v3/brokerage'
 
@@ -25,21 +33,11 @@ export type CryptoGranularity =
   | 'ONE_MINUTE' | 'FIVE_MINUTE' | 'FIFTEEN_MINUTE' | 'THIRTY_MINUTE'
   | 'ONE_HOUR' | 'TWO_HOUR' | 'SIX_HOUR' | 'ONE_DAY'
 
-export interface CryptoBar {
-  timestamp: string           // ISO 8601
-  unixSeconds: number         // raw epoch seconds
-  open: number
-  high: number
-  low: number
-  close: number
-  volume: number              // base volume
-}
-
 export interface FetchBarsOptions {
   symbol: string              // e.g. "BTC-USD"
   granularity: CryptoGranularity
   limit?: number              // default 100, max 300
-  startUnix?: number          // epoch seconds; if omitted, end-now lookback
+  startUnix?: number          // epoch seconds
   endUnix?: number            // epoch seconds; default now
 }
 
@@ -55,12 +53,12 @@ const GRANULARITY_SECONDS: Record<CryptoGranularity, number> = {
 }
 
 /**
- * Fetch OHLCV bars for a symbol/granularity. Uses public unauth endpoint.
+ * Fetch OHLCV bars from Coinbase. Returns bars in the SAME shape as
+ * stocks Bar interface so calculateTechnicals() consumes them directly.
  *
- * Coinbase returns candles oldest-first or newest-first depending on
- * params — we normalize to oldest-first (ascending by time).
+ * Bars are returned oldest-first (ascending by time).
  */
-export async function fetchCryptoBars(opts: FetchBarsOptions): Promise<CryptoBar[]> {
+export async function fetchCryptoBars(opts: FetchBarsOptions): Promise<Bar[]> {
   const limit = Math.min(300, Math.max(1, opts.limit ?? 100))
   const granSec = GRANULARITY_SECONDS[opts.granularity]
   const endUnix = opts.endUnix ?? Math.floor(Date.now() / 1000)
@@ -84,214 +82,226 @@ export async function fetchCryptoBars(opts: FetchBarsOptions): Promise<CryptoBar
     if (!data.candles || !Array.isArray(data.candles)) {
       throw new Error(`Coinbase candles malformed response`)
     }
-    // Coinbase v3 returns candle objects with named fields:
-    //   { start, low, high, open, close, volume }
-    // start is unix-seconds-as-string. Normalize to our Bar shape.
-    const bars: CryptoBar[] = data.candles.map(c => {
+    // Coinbase v3 candles: { start: "1697040000", low, high, open, close, volume } — strings
+    // Convert to stocks Bar shape: { t (ISO), o, h, l, c, v }
+    const bars: Bar[] = data.candles.map(c => {
       const unixSeconds = Number(c.start ?? 0)
       return {
-        timestamp: new Date(unixSeconds * 1000).toISOString(),
-        unixSeconds,
-        open: Number(c.open ?? 0),
-        high: Number(c.high ?? 0),
-        low: Number(c.low ?? 0),
-        close: Number(c.close ?? 0),
-        volume: Number(c.volume ?? 0),
+        t: new Date(unixSeconds * 1000).toISOString(),
+        o: Number(c.open ?? 0),
+        h: Number(c.high ?? 0),
+        l: Number(c.low ?? 0),
+        c: Number(c.close ?? 0),
+        v: Number(c.volume ?? 0),
       }
     })
-    // Sort oldest-first (Coinbase commonly returns newest-first)
-    bars.sort((a, b) => a.unixSeconds - b.unixSeconds)
+    // Sort oldest-first (Coinbase typically returns newest-first)
+    bars.sort((a, b) => new Date(a.t).getTime() - new Date(b.t).getTime())
     return bars
   } finally {
     clearTimeout(timer)
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Indicators — basic versions for signal counting
-// ─────────────────────────────────────────────────────────────
-
 /**
- * Simple Moving Average (SMA).
+ * One-call helper: fetch bars + compute full technicals.
+ * Identical signal output to stocks.
  */
-export function sma(values: number[], period: number): (number | null)[] {
-  const out: (number | null)[] = new Array(values.length).fill(null)
-  let sum = 0
-  for (let i = 0; i < values.length; i++) {
-    sum += values[i]
-    if (i >= period) sum -= values[i - period]
-    if (i >= period - 1) out[i] = sum / period
-  }
-  return out
-}
-
-/**
- * Exponential Moving Average (EMA).
- */
-export function ema(values: number[], period: number): (number | null)[] {
-  const out: (number | null)[] = new Array(values.length).fill(null)
-  if (values.length === 0) return out
-  const k = 2 / (period + 1)
-  // Seed with SMA of first `period` values
-  if (values.length < period) return out
-  let seed = 0
-  for (let i = 0; i < period; i++) seed += values[i]
-  seed = seed / period
-  out[period - 1] = seed
-  for (let i = period; i < values.length; i++) {
-    const prev = out[i - 1] as number
-    out[i] = values[i] * k + prev * (1 - k)
-  }
-  return out
-}
-
-/**
- * Relative Strength Index (Wilder smoothing). Period default 14.
- * Returns array of RSI values (null for the first `period` bars).
- */
-export function rsi(closes: number[], period = 14): (number | null)[] {
-  const out: (number | null)[] = new Array(closes.length).fill(null)
-  if (closes.length <= period) return out
-
-  let gainSum = 0
-  let lossSum = 0
-  for (let i = 1; i <= period; i++) {
-    const diff = closes[i] - closes[i - 1]
-    if (diff > 0) gainSum += diff
-    else lossSum += -diff
-  }
-  let avgGain = gainSum / period
-  let avgLoss = lossSum / period
-  out[period] = 100 - 100 / (1 + (avgLoss === 0 ? Infinity : avgGain / avgLoss))
-
-  for (let i = period + 1; i < closes.length; i++) {
-    const diff = closes[i] - closes[i - 1]
-    const gain = diff > 0 ? diff : 0
-    const loss = diff < 0 ? -diff : 0
-    avgGain = (avgGain * (period - 1) + gain) / period
-    avgLoss = (avgLoss * (period - 1) + loss) / period
-    out[i] = 100 - 100 / (1 + (avgLoss === 0 ? Infinity : avgGain / avgLoss))
-  }
-  return out
-}
-
-/**
- * MACD: returns { macd, signal, histogram }
- * Defaults: fast=12, slow=26, signal=9.
- */
-export function macd(
-  closes: number[],
-  fast = 12,
-  slow = 26,
-  signalPeriod = 9,
-): { macd: (number | null)[]; signal: (number | null)[]; histogram: (number | null)[] } {
-  const fastEma = ema(closes, fast)
-  const slowEma = ema(closes, slow)
-  const macdLine: (number | null)[] = closes.map((_, i) =>
-    fastEma[i] !== null && slowEma[i] !== null
-      ? (fastEma[i] as number) - (slowEma[i] as number)
-      : null
-  )
-  // Signal line = EMA of macd line where both are defined
-  const macdDefined: number[] = macdLine.filter((v): v is number => v !== null)
-  const sigDefined = ema(macdDefined, signalPeriod)
-  const signal: (number | null)[] = new Array(closes.length).fill(null)
-  let definedIdx = 0
-  for (let i = 0; i < macdLine.length; i++) {
-    if (macdLine[i] !== null) {
-      if (sigDefined[definedIdx] !== null) signal[i] = sigDefined[definedIdx]
-      definedIdx++
-    }
-  }
-  const histogram: (number | null)[] = closes.map((_, i) =>
-    macdLine[i] !== null && signal[i] !== null
-      ? (macdLine[i] as number) - (signal[i] as number)
-      : null
-  )
-  return { macd: macdLine, signal, histogram }
+export async function fetchCryptoTechnicals(
+  opts: FetchBarsOptions,
+): Promise<{ bars: Bar[]; technicals: TechnicalSignals }> {
+  const bars = await fetchCryptoBars(opts)
+  const technicals = calculateTechnicals(bars)
+  return { bars, technicals }
 }
 
 // ─────────────────────────────────────────────────────────────
-// Signal counting (parallels stock position-monitor logic)
+// Signal counting wrapper for position-monitor compatibility.
+//
+// Returns a simple bullish/bearish count for quick exit decisions,
+// derived from the FULL technicals signals. This mirrors the
+// counting approach used in the stock position-monitor v3.
 // ─────────────────────────────────────────────────────────────
 
 export interface CryptoSignalCounts {
   bullishCount: number
   bearishCount: number
-  unanimousBullish: number      // both EMA-up and RSI-bullish and MACD-bullish
-  signals: Array<{ name: string; direction: 'bullish' | 'bearish' | 'neutral'; detail: string }>
+  unanimousBullish: boolean
+  technicalScore: number       // -100 to +100
+  technicalBias: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
+  individualSignals: Array<{ name: string; direction: 'bullish' | 'bearish' | 'neutral'; detail: string }>
 }
 
 /**
- * Compute basic signal counts on a bar series. Used by crypto-position-monitor
- * to detect when a position should be exited based on price action weakness,
- * similar to how stock position-monitor counts bearish 5m/15m signals.
+ * Convert TechnicalSignals into bullish/bearish counts.
  *
- * Returns counts and individual signal directions for logging.
+ * Each of these is counted as a single bullish or bearish signal:
+ *   - EMA9 vs EMA20 alignment + cross
+ *   - MACD histogram direction + crossover
+ *   - RSI overbought/oversold/momentum
+ *   - Stochastic + crossover
+ *   - Bollinger position
+ *   - VWAP relationship
+ *   - OBV trend + divergence
+ *   - Volume confirmation
+ *   - Williams %R
+ *   - CCI
+ *   - Ichimoku cloud position + TK cross
+ *   - ROC momentum acceleration
+ *
+ * "Unanimous bullish" requires technicalScore >= 50 (very strong bull).
  */
-export function computeCryptoSignals(bars: CryptoBar[]): CryptoSignalCounts {
+export function computeCryptoSignals(bars: Bar[]): CryptoSignalCounts {
+  if (bars.length < 20) {
+    return {
+      bullishCount: 0, bearishCount: 0, unanimousBullish: false,
+      technicalScore: 0, technicalBias: 'NEUTRAL', individualSignals: [],
+    }
+  }
+  const t = calculateTechnicals(bars)
   const signals: Array<{ name: string; direction: 'bullish' | 'bearish' | 'neutral'; detail: string }> = []
-  if (bars.length < 30) {
-    return { bullishCount: 0, bearishCount: 0, unanimousBullish: 0, signals }
-  }
-  const closes = bars.map(b => b.close)
-  const lastClose = closes[closes.length - 1]
-  const lastIdx = closes.length - 1
 
-  // EMA20 vs EMA50 trend
-  const ema20 = ema(closes, 20)
-  const ema50 = ema(closes, 50)
-  const e20 = ema20[lastIdx]
-  const e50 = ema50[lastIdx]
-  if (e20 !== null && e50 !== null) {
-    if (e20 > e50 && lastClose > e20) {
-      signals.push({ name: 'ema_trend', direction: 'bullish', detail: `close ${lastClose.toFixed(2)} > EMA20 ${e20.toFixed(2)} > EMA50 ${e50.toFixed(2)}` })
-    } else if (e20 < e50 && lastClose < e20) {
-      signals.push({ name: 'ema_trend', direction: 'bearish', detail: `close ${lastClose.toFixed(2)} < EMA20 ${e20.toFixed(2)} < EMA50 ${e50.toFixed(2)}` })
-    } else {
-      signals.push({ name: 'ema_trend', direction: 'neutral', detail: 'mixed EMA configuration' })
-    }
+  // 1. EMA stack
+  if (t.ema9CrossEma20 === 'bullish') {
+    signals.push({ name: 'ema_cross', direction: 'bullish', detail: 'EMA9 crossed above EMA20' })
+  } else if (t.ema9CrossEma20 === 'bearish') {
+    signals.push({ name: 'ema_cross', direction: 'bearish', detail: 'EMA9 crossed below EMA20' })
+  } else if (t.ema9 > t.ema20 && t.currentPrice > t.ema9) {
+    signals.push({ name: 'ema_stack', direction: 'bullish', detail: `Price > EMA9 > EMA20 (bull stack)` })
+  } else if (t.ema9 < t.ema20 && t.currentPrice < t.ema9) {
+    signals.push({ name: 'ema_stack', direction: 'bearish', detail: `Price < EMA9 < EMA20 (bear stack)` })
+  } else {
+    signals.push({ name: 'ema_stack', direction: 'neutral', detail: 'mixed EMA alignment' })
   }
 
-  // RSI(14)
-  const rsiVals = rsi(closes, 14)
-  const lastRsi = rsiVals[lastIdx]
-  if (lastRsi !== null) {
-    if (lastRsi > 55) {
-      signals.push({ name: 'rsi', direction: 'bullish', detail: `RSI=${lastRsi.toFixed(1)} > 55` })
-    } else if (lastRsi < 45) {
-      signals.push({ name: 'rsi', direction: 'bearish', detail: `RSI=${lastRsi.toFixed(1)} < 45` })
-    } else {
-      signals.push({ name: 'rsi', direction: 'neutral', detail: `RSI=${lastRsi.toFixed(1)} neutral` })
-    }
+  // 2. MACD
+  if (t.macdCrossover === 'bullish' || (t.macdHistogram > 0 && t.macdLine > t.macdSignal)) {
+    signals.push({ name: 'macd', direction: 'bullish', detail: `MACD bullish (hist=${t.macdHistogram.toFixed(3)})` })
+  } else if (t.macdCrossover === 'bearish' || (t.macdHistogram < 0 && t.macdLine < t.macdSignal)) {
+    signals.push({ name: 'macd', direction: 'bearish', detail: `MACD bearish (hist=${t.macdHistogram.toFixed(3)})` })
+  } else {
+    signals.push({ name: 'macd', direction: 'neutral', detail: 'MACD mixed' })
   }
 
-  // MACD histogram
-  const macdResult = macd(closes)
-  const lastHist = macdResult.histogram[lastIdx]
-  const prevHist = macdResult.histogram[lastIdx - 1]
-  if (lastHist !== null && prevHist !== null) {
-    if (lastHist > 0 && lastHist > prevHist) {
-      signals.push({ name: 'macd', direction: 'bullish', detail: `MACD hist=${lastHist.toFixed(3)} positive & rising` })
-    } else if (lastHist < 0 && lastHist < prevHist) {
-      signals.push({ name: 'macd', direction: 'bearish', detail: `MACD hist=${lastHist.toFixed(3)} negative & falling` })
-    } else {
-      signals.push({ name: 'macd', direction: 'neutral', detail: `MACD hist=${lastHist.toFixed(3)} mixed` })
-    }
+  // 3. RSI
+  if (t.rsi > 55 && t.rsi < 70) {
+    signals.push({ name: 'rsi', direction: 'bullish', detail: `RSI=${t.rsi.toFixed(1)} bullish momentum` })
+  } else if (t.rsi < 45 && t.rsi > 30) {
+    signals.push({ name: 'rsi', direction: 'bearish', detail: `RSI=${t.rsi.toFixed(1)} bearish momentum` })
+  } else if (t.rsi >= 70) {
+    signals.push({ name: 'rsi', direction: 'bearish', detail: `RSI=${t.rsi.toFixed(1)} overbought (fade)` })
+  } else if (t.rsi <= 30) {
+    signals.push({ name: 'rsi', direction: 'bullish', detail: `RSI=${t.rsi.toFixed(1)} oversold (bounce)` })
+  } else {
+    signals.push({ name: 'rsi', direction: 'neutral', detail: `RSI=${t.rsi.toFixed(1)} neutral` })
   }
 
-  // Recent momentum: last 5 bars net move
-  if (bars.length >= 5) {
-    const prevClose = closes[lastIdx - 4]
-    const pct = ((lastClose - prevClose) / prevClose) * 100
-    if (pct > 0.5) signals.push({ name: 'short_momentum', direction: 'bullish', detail: `last 5 bars +${pct.toFixed(2)}%` })
-    else if (pct < -0.5) signals.push({ name: 'short_momentum', direction: 'bearish', detail: `last 5 bars ${pct.toFixed(2)}%` })
-    else signals.push({ name: 'short_momentum', direction: 'neutral', detail: `last 5 bars ${pct.toFixed(2)}%` })
+  // 4. Stochastic
+  if (t.stochCrossover === 'bullish') {
+    signals.push({ name: 'stoch', direction: 'bullish', detail: `Stoch bullish cross %K=${t.stochK.toFixed(1)}` })
+  } else if (t.stochCrossover === 'bearish') {
+    signals.push({ name: 'stoch', direction: 'bearish', detail: `Stoch bearish cross %K=${t.stochK.toFixed(1)}` })
+  } else if (t.stochSignal === 'oversold') {
+    signals.push({ name: 'stoch', direction: 'bullish', detail: `Stoch oversold %K=${t.stochK.toFixed(1)}` })
+  } else if (t.stochSignal === 'overbought') {
+    signals.push({ name: 'stoch', direction: 'bearish', detail: `Stoch overbought %K=${t.stochK.toFixed(1)}` })
+  } else {
+    signals.push({ name: 'stoch', direction: 'neutral', detail: `Stoch neutral %K=${t.stochK.toFixed(1)}` })
+  }
+
+  // 5. Bollinger Bands
+  if (t.bbPosition > 0.8) {
+    signals.push({ name: 'bb', direction: 'bearish', detail: `Price near upper band (${(t.bbPosition*100).toFixed(0)}%)` })
+  } else if (t.bbPosition < 0.2) {
+    signals.push({ name: 'bb', direction: 'bullish', detail: `Price near lower band (${(t.bbPosition*100).toFixed(0)}%)` })
+  } else if (t.bbSignal === 'squeeze') {
+    signals.push({ name: 'bb', direction: 'neutral', detail: 'BB squeeze (consolidation)' })
+  } else {
+    signals.push({ name: 'bb', direction: 'neutral', detail: `BB position ${(t.bbPosition*100).toFixed(0)}%` })
+  }
+
+  // 6. VWAP
+  if (t.vwapSignal === 'above' && t.priceVsVwap > 0.2) {
+    signals.push({ name: 'vwap', direction: 'bullish', detail: `Price ${t.priceVsVwap.toFixed(2)}% above VWAP` })
+  } else if (t.vwapSignal === 'below' && t.priceVsVwap < -0.2) {
+    signals.push({ name: 'vwap', direction: 'bearish', detail: `Price ${t.priceVsVwap.toFixed(2)}% below VWAP` })
+  } else {
+    signals.push({ name: 'vwap', direction: 'neutral', detail: 'Near VWAP' })
+  }
+
+  // 7. OBV
+  if (t.obvDivergence === 'bullish' || (t.obvTrend === 'rising' && t.obvDivergence === 'none')) {
+    signals.push({ name: 'obv', direction: 'bullish', detail: `OBV ${t.obvTrend}${t.obvDivergence !== 'none' ? ' + divergence' : ''}` })
+  } else if (t.obvDivergence === 'bearish' || (t.obvTrend === 'falling' && t.obvDivergence === 'none')) {
+    signals.push({ name: 'obv', direction: 'bearish', detail: `OBV ${t.obvTrend}${t.obvDivergence !== 'none' ? ' + divergence' : ''}` })
+  } else {
+    signals.push({ name: 'obv', direction: 'neutral', detail: `OBV ${t.obvTrend}` })
+  }
+
+  // 8. Williams %R (Wilder's overbought/oversold)
+  if (t.williamsSignal === 'oversold') {
+    signals.push({ name: 'williamsR', direction: 'bullish', detail: `Williams %R=${t.williamsR.toFixed(1)} oversold` })
+  } else if (t.williamsSignal === 'overbought') {
+    signals.push({ name: 'williamsR', direction: 'bearish', detail: `Williams %R=${t.williamsR.toFixed(1)} overbought` })
+  } else {
+    signals.push({ name: 'williamsR', direction: 'neutral', detail: `Williams %R=${t.williamsR.toFixed(1)}` })
+  }
+
+  // 9. CCI
+  if (t.cci > 100) {
+    signals.push({ name: 'cci', direction: 'bullish', detail: `CCI=${t.cci.toFixed(0)} strong momentum` })
+  } else if (t.cci < -100) {
+    signals.push({ name: 'cci', direction: 'bearish', detail: `CCI=${t.cci.toFixed(0)} weak momentum` })
+  } else {
+    signals.push({ name: 'cci', direction: 'neutral', detail: `CCI=${t.cci.toFixed(0)}` })
+  }
+
+  // 10. Ichimoku
+  if (t.ichimokuCross === 'bullish' || (t.ichimokuSignal === 'above_cloud' && t.ichimokuTenkan > t.ichimokuKijun)) {
+    signals.push({ name: 'ichimoku', direction: 'bullish', detail: `Ichimoku ${t.ichimokuSignal}` })
+  } else if (t.ichimokuCross === 'bearish' || (t.ichimokuSignal === 'below_cloud' && t.ichimokuTenkan < t.ichimokuKijun)) {
+    signals.push({ name: 'ichimoku', direction: 'bearish', detail: `Ichimoku ${t.ichimokuSignal}` })
+  } else {
+    signals.push({ name: 'ichimoku', direction: 'neutral', detail: `Ichimoku ${t.ichimokuSignal}` })
+  }
+
+  // 11. ROC momentum
+  if (t.rocSignal === 'accelerating' && t.roc10 > 0) {
+    signals.push({ name: 'roc', direction: 'bullish', detail: `ROC accelerating (10p=${t.roc10.toFixed(2)}%)` })
+  } else if (t.rocSignal === 'decelerating' || t.roc10 < -1) {
+    signals.push({ name: 'roc', direction: 'bearish', detail: `ROC weakening (10p=${t.roc10.toFixed(2)}%)` })
+  } else {
+    signals.push({ name: 'roc', direction: 'neutral', detail: `ROC=${t.roc10.toFixed(2)}%` })
+  }
+
+  // 12. Candle pattern
+  if (t.candlePattern) {
+    signals.push({
+      name: 'candle_pattern',
+      direction: t.candlePattern.type === 'bullish' ? 'bullish' : t.candlePattern.type === 'bearish' ? 'bearish' : 'neutral',
+      detail: `${t.candlePattern.name} (${t.candlePattern.strength})`,
+    })
+  }
+
+  // 13. Chart pattern
+  if (t.chartPattern) {
+    signals.push({
+      name: 'chart_pattern',
+      direction: t.chartPattern.type === 'bullish' ? 'bullish' : t.chartPattern.type === 'bearish' ? 'bearish' : 'neutral',
+      detail: `${t.chartPattern.name} (${t.chartPattern.confidence})`,
+    })
   }
 
   const bullishCount = signals.filter(s => s.direction === 'bullish').length
   const bearishCount = signals.filter(s => s.direction === 'bearish').length
-  const unanimousBullish = bullishCount >= 4 ? 1 : 0
+  const unanimousBullish = t.technicalScore >= 50
 
-  return { bullishCount, bearishCount, unanimousBullish, signals }
+  return {
+    bullishCount,
+    bearishCount,
+    unanimousBullish,
+    technicalScore: t.technicalScore,
+    technicalBias: t.technicalBias,
+    individualSignals: signals,
+  }
 }
