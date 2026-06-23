@@ -180,6 +180,56 @@ function classifyPassBypass(verdict: VerdictForTrade): {
 }
 
 /**
+ * Classify a Trader WAIT verdict into a bypass category, or null if not eligible.
+ *
+ * Background (June 23, 2026 — user request):
+ * The Trader returns WAIT when the setup is reasonable but the system wants
+ * confirmation before entering — typically because confidence is moderate or
+ * the entry timing is uncertain. Some WAITs represent real opportunity we miss
+ * by waiting (e.g., DELL today: WAIT at 38% conf 1.33 R:R closed +3.41%).
+ *
+ * WAIT bypass takes a WAIT verdict at HALF size if it meets BOTH quality bars:
+ *   - confidence >= 65% (Council has moderate-or-better conviction)
+ *   - risk-to-reward >= 1.3 (asymmetric math at least slightly favorable)
+ *
+ * These thresholds are deliberately stricter than the PASS bypass marginal R:R
+ * window because WAIT means "Council was leaning yes but held off" — we want
+ * higher conviction signals before overriding that hold.
+ *
+ * Position-monitor (with new trailing stops) manages downside post-entry.
+ * Trailing stops compensate for the lower-conviction entry by locking in
+ * gains aggressively if the WAIT thesis plays out.
+ *
+ * Returns null if WAIT doesn't meet both thresholds — caller treats as normal
+ * skip (no trade).
+ */
+function classifyWaitBypass(verdict: VerdictForTrade): {
+  category: 'wait_high_quality'
+  rationale: string
+} | null {
+  const conf = verdict.confidence !== null && verdict.confidence !== undefined
+    ? Number(verdict.confidence)
+    : null
+  const rr = verdict.trader_risk_reward !== null && verdict.trader_risk_reward !== undefined
+    ? Number(verdict.trader_risk_reward)
+    : null
+
+  if (conf === null || !Number.isFinite(conf)) return null
+  if (rr === null || !Number.isFinite(rr)) return null
+
+  // Both thresholds must be met
+  const MIN_CONFIDENCE = 65
+  const MIN_RR = 1.3
+  if (conf < MIN_CONFIDENCE) return null
+  if (rr < MIN_RR) return null
+
+  return {
+    category: 'wait_high_quality',
+    rationale: `wait-bypass: conf=${conf}% >= ${MIN_CONFIDENCE}% AND R:R=${rr.toFixed(2)} >= ${MIN_RR} — half size, trailing stops manage downside`,
+  }
+}
+
+/**
  * Per-(verdict, user) decision. Pure function as much as possible —
  * the only side effect is the kill-switch DB reads.
  */
@@ -190,8 +240,18 @@ export async function decideForUser(args: {
 }): Promise<Decision> {
   const { verdict, settings, alpaca } = args
 
-  // 1. Verdict eligibility — TAKE, or qualifying PASS bypass
-  let bypass: ReturnType<typeof classifyPassBypass> = null
+  // 1. Verdict eligibility — TAKE, qualifying PASS bypass, or qualifying WAIT bypass
+  //
+  // Bypass union type captures all three flavors:
+  //   - PASS bypass (marginal R:R or earnings window, all pass-reasons bypassable)
+  //   - WAIT bypass (conf >= 65 AND R:R >= 1.3)
+  // Both apply half-size sizing (sizeMultiplier = 0.5) and rely on position-monitor
+  // (with trailing stops) to manage downside.
+  type BypassInfo =
+    | { category: 'marginal_rr' | 'earnings_window'; rationale: string }
+    | { category: 'wait_high_quality'; rationale: string }
+  let bypass: BypassInfo | null = null
+
   if (verdict.trader_decision === 'TAKE') {
     // Normal path
   } else if (verdict.trader_decision === 'PASS') {
@@ -204,10 +264,20 @@ export async function decideForUser(args: {
       }
     }
     // Continue with bypass — will apply half-sizing at step 11
+  } else if (verdict.trader_decision === 'WAIT') {
+    bypass = classifyWaitBypass(verdict)
+    if (!bypass) {
+      return {
+        kind: 'skip',
+        reason: `trader_decision=WAIT and not bypass-eligible (need conf>=65 AND R:R>=1.3)`,
+        shouldHalt: false,
+      }
+    }
+    // Continue with WAIT bypass — will apply half-sizing at step 11
   } else {
     return {
       kind: 'skip',
-      reason: `trader_decision=${verdict.trader_decision} (not TAKE or PASS)`,
+      reason: `trader_decision=${verdict.trader_decision} (not TAKE, PASS, or WAIT)`,
       shouldHalt: false,
     }
   }
@@ -327,10 +397,10 @@ export async function decideForUser(args: {
     ? Number(verdict.trader_position_size)
     : 1
 
-  // PASS bypass: halve the position size. The Trader gated for a reason
-  // (marginal R:R or earnings timing); we override that gate but cap our
-  // per-trade exposure at half normal so any single bypass loss has half
-  // the impact.
+  // PASS/WAIT bypass: halve the position size. The Trader gated for a reason
+  // (marginal R:R, earnings timing, or WAIT quality concerns); we override
+  // that gate but cap our per-trade exposure at half normal so any single
+  // bypass loss has half the impact.
   const sizeMultiplier = bypass ? 0.5 : 1.0
   const effectiveTraderSize = Math.min(1, Math.max(0, traderSize * sizeMultiplier))
 
@@ -394,7 +464,7 @@ export async function decideForUser(args: {
     dollarRisk: sizing.dollarRisk,
     accountEquity: effectiveEquity,
     rationale: bypass
-      ? `[PASS_BYPASS:${bypass.category}] ${bypass.rationale} | ${sizing.rationale}`
+      ? `[${bypass.category === 'wait_high_quality' ? 'WAIT_BYPASS' : 'PASS_BYPASS'}:${bypass.category}] ${bypass.rationale} | ${sizing.rationale}`
       : sizing.rationale,
   }
 }
