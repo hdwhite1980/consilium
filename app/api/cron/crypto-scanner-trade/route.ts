@@ -40,13 +40,29 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .filter(s => isAssetClassEnabled(s, 'crypto'))
 
     // Run scanner per-user so the authenticated path activates when creds
-    // are available (3x rate limit). The module-level cache means repeat
-    // users share fetched data within the 60s window.
+    // are available (single Coinbase list call, then filter client-side).
+    // STRICTER thresholds for trading vs discovery:
+    //   - minComposite: 65 (was a guess but matches prior threshold)
+    //   - minMovement: 2.0 (% — only meaningful movers)
+    //   - minVolume: 1_000_000 ($1M+ daily — quality liquidity)
     let scan
     if (enabledUsers.length > 0) {
-      scan = await runCryptoScan({ minComposite: 65, limit: 10, userId: enabledUsers[0].userId })
+      scan = await runCryptoScan({
+        userId: enabledUsers[0].userId,
+        minComposite: 65,
+        minMovement: 2.0,
+        minVolume: 1_000_000,
+        limit: 10,
+        direction: 'bullish',
+      })
     } else {
-      scan = await runCryptoScan({ minComposite: 65, limit: 10 })
+      scan = await runCryptoScan({
+        minComposite: 65,
+        minMovement: 2.0,
+        minVolume: 1_000_000,
+        limit: 10,
+        direction: 'bullish',
+      })
     }
 
     for (const settings of enabledUsers) {

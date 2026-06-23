@@ -1,17 +1,20 @@
 // =============================================================
-// app/lib/trading/crypto-scanner.ts (v3 — June 23 2026)
+// app/lib/trading/crypto-scanner.ts (v4 — June 23 2026)
 //
-// Fixes 429 rate-limit issues from v2:
-//   - Authenticated path preferred (30 req/sec vs 10/sec public)
-//   - Module-level cache (60s TTL) eliminates repeat fetches
-//   - Lower concurrency (3 parallel instead of 6)
-//   - Inter-batch delay (250ms) to stay under per-second budget
-//   - Retry-with-backoff on 429
-//   - Per-symbol error logging
+// Dynamic-universe scanner with pre-filters.
 //
-// Auth path uses loadCoinbaseCredential to get the user's CDP key
-// and signs JWTs via the existing CoinbaseClient. Falls back to
-// the public /market/products/{id} endpoint when no creds available.
+// v4 changes from v3:
+//   - Hits Coinbase /products list ONCE per scan (vs 30+ per-symbol calls)
+//   - Filters: quote=USD, status=online, not disabled/cancel-only
+//   - Volume floor (configurable, default $500K for discovery / $1M trading)
+//   - Movement floor (|24h change| ≥ threshold OR volume spike)
+//   - Detects new listings via Coinbase's `new` flag
+//   - 1-hour cache for the product list (changes rarely)
+//   - Composite scoring + ranking still applies
+//
+// Result: a single fast scan over the entire Coinbase USD universe,
+// returning only quality movers. Top picks can then be sent through
+// the bars+technicals pipeline for Council analysis.
 // =============================================================
 
 import { loadCoinbaseCredential } from './credentials'
@@ -19,85 +22,69 @@ import { makeCoinbaseClient, type CoinbaseClient } from './coinbase-client'
 
 const COINBASE_PUBLIC_BASE = 'https://api.coinbase.com/api/v3/brokerage'
 
-// Curated USD universe on Coinbase.
-const DEFAULT_CRYPTO_UNIVERSE = [
-  'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD', 'AVAX-USD',
-  'DOGE-USD', 'LINK-USD', 'DOT-USD', 'LTC-USD', 'BCH-USD',
-  'UNI-USD', 'ATOM-USD', 'XLM-USD', 'ETC-USD', 'FIL-USD', 'NEAR-USD',
-  'APT-USD', 'ARB-USD', 'OP-USD', 'SUI-USD', 'INJ-USD', 'AAVE-USD',
-  'MKR-USD', 'GRT-USD', 'CRV-USD', 'COMP-USD',
-  'POL-USD', 'SHIB-USD', 'PEPE-USD',
-] as const
-
 export interface CryptoTickerStats {
-  symbol: string
+  symbol: string                // product_id, e.g. "BTC-USD"
   price: number
-  priceChange24h: number
-  high24h: number
-  low24h: number
-  volume24h: number
-  volumeUsd24h: number
-  composite: number
+  priceChange24h: number        // %
+  volumeChange24h: number       // % (may be 0 if not provided)
+  volume24h: number             // base volume
+  volumeUsd24h: number          // approx USD volume
+  composite: number             // 0-100
   liquidityTier: 'mega' | 'large' | 'mid' | 'small'
   direction: 'bullish' | 'bearish' | 'neutral'
-  rangePositionPct: number
+  isNew: boolean                // Coinbase's `new` flag
+  highVolumeSpike: boolean      // volumeChange24h >= 100%
+  baseDisplaySymbol?: string    // e.g. "BTC" if Coinbase provides it
 }
 
 export interface ScanResult {
   picks: CryptoTickerStats[]
   fetchedAt: string
-  universeSize: number
-  symbolsFetched: number
+  universeSize: number          // total USD products discovered
+  postFilterSize: number        // surviving filters
   errors: number
   failedSymbols: string[]
   authedPath: boolean
   fromCache: boolean
+  universeAgeMs: number         // age of cached universe in ms
 }
 
 export interface ScanOptions {
-  universe?: readonly string[]
-  minComposite?: number
-  limit?: number
   userId?: string
+  minComposite?: number         // default 0
+  minMovement?: number          // default 0.5 (% absolute)
+  minVolume?: number            // default 500_000 (USD)
+  limit?: number                // default 50
+  direction?: 'bullish' | 'bearish' | 'all'   // default 'all'
+  onlyNew?: boolean             // default false; if true, returns only new listings
 }
 
 // ─────────────────────────────────────────────────────────────
-// Module-level cache (per-symbol)
+// Module-level cache for the full product list (1 hour TTL)
 //
-// Avoids re-fetching the same product within the cache window. Both
-// the scanner cron and the movers API endpoint benefit — multiple
-// callers within 60s share the same fetch.
+// The /products list response is identical across all users — caching
+// here means all callers within an hour share one Coinbase API call.
 // ─────────────────────────────────────────────────────────────
 
-interface CachedStats {
-  stats: CryptoTickerStats
+interface CachedUniverse {
+  products: Array<Record<string, unknown>>
   fetchedAt: number
+  authed: boolean
 }
-const statsCache = new Map<string, CachedStats>()
-const CACHE_TTL_MS = 60_000
-
-function getCached(symbol: string): CryptoTickerStats | null {
-  const c = statsCache.get(symbol)
-  if (!c) return null
-  if (Date.now() - c.fetchedAt > CACHE_TTL_MS) {
-    statsCache.delete(symbol)
-    return null
-  }
-  return c.stats
-}
-
-function setCached(symbol: string, stats: CryptoTickerStats): void {
-  statsCache.set(symbol, { stats, fetchedAt: Date.now() })
-}
+let universeCache: CachedUniverse | null = null
+const UNIVERSE_TTL_MS = 60 * 60 * 1000
 
 // ─────────────────────────────────────────────────────────────
-// Main scan entry point
+// Main entry point
 // ─────────────────────────────────────────────────────────────
 
 export async function runCryptoScan(options: ScanOptions = {}): Promise<ScanResult> {
-  const universe = options.universe ?? DEFAULT_CRYPTO_UNIVERSE
-  const minComposite = options.minComposite ?? 60
-  const limit = options.limit ?? 20
+  const minComposite = options.minComposite ?? 0
+  const minMovement = options.minMovement ?? 0.5
+  const minVolume = options.minVolume ?? 500_000
+  const limit = options.limit ?? 50
+  const direction = options.direction ?? 'all'
+  const onlyNew = options.onlyNew ?? false
 
   // Try authenticated path first
   let authClient: CoinbaseClient | null = null
@@ -108,162 +95,162 @@ export async function runCryptoScan(options: ScanOptions = {}): Promise<ScanResu
     }
   }
 
-  const results: CryptoTickerStats[] = []
+  // Load universe (cached or fresh)
+  let universe: Array<Record<string, unknown>>
+  let fromCache = false
+  let universeAgeMs = 0
+
+  const now = Date.now()
+  if (universeCache && (now - universeCache.fetchedAt) < UNIVERSE_TTL_MS) {
+    universe = universeCache.products
+    fromCache = true
+    universeAgeMs = now - universeCache.fetchedAt
+  } else {
+    try {
+      universe = authClient
+        ? await authClient.listProducts('SPOT')
+        : await fetchProductsListPublic()
+      universeCache = { products: universe, fetchedAt: now, authed: authClient !== null }
+    } catch (e) {
+      console.error('[crypto-scanner] listProducts failed:', e instanceof Error ? e.message : e)
+      // Fall back to stale cache if available, otherwise empty
+      if (universeCache) {
+        universe = universeCache.products
+        fromCache = true
+        universeAgeMs = now - universeCache.fetchedAt
+      } else {
+        return {
+          picks: [], fetchedAt: new Date(now).toISOString(),
+          universeSize: 0, postFilterSize: 0, errors: 1, failedSymbols: [],
+          authedPath: authClient !== null, fromCache: false, universeAgeMs: 0,
+        }
+      }
+    }
+  }
+
+  // Filter + score
+  const candidates: CryptoTickerStats[] = []
   const failedSymbols: string[] = []
   let errors = 0
-  let cacheHits = 0
 
-  // Concurrency: 3 in parallel, 250ms delay between batches.
-  // Authenticated: 30 req/sec ≈ batches of 3 every 100ms is fine.
-  // Public: 10 req/sec ≈ batches of 3 every 300ms is safer.
-  const CONCURRENCY = 3
-  const BATCH_DELAY_MS = authClient ? 150 : 300
+  // Apply relaxed filters for onlyNew mode (new listings often have tiny volume)
+  const effectiveMinVolume = onlyNew ? Math.min(minVolume, 50_000) : minVolume
+  const effectiveMinMovement = onlyNew ? 0 : minMovement
 
-  for (let i = 0; i < universe.length; i += CONCURRENCY) {
-    const batch = universe.slice(i, i + CONCURRENCY)
+  for (const product of universe) {
+    try {
+      // Quote currency filter (USD only)
+      const quote = String(product.quote_currency_id ?? '').toUpperCase()
+      if (quote !== 'USD') continue
 
-    const settled = await Promise.allSettled(batch.map(async sym => {
-      // Check cache first
-      const cached = getCached(sym)
-      if (cached) {
-        cacheHits++
-        return { sym, stats: cached }
-      }
-      // Fetch with retry-on-429
-      const stats = await fetchWithRetry(sym, authClient)
-      if (stats) setCached(sym, stats)
-      return { sym, stats }
-    }))
+      // Status filter (must be online)
+      const status = String(product.status ?? '').toLowerCase()
+      if (status !== 'online') continue
 
-    for (const r of settled) {
-      if (r.status === 'fulfilled') {
-        if (r.value.stats !== null) {
-          results.push(r.value.stats)
-        } else {
-          errors++
-          failedSymbols.push(r.value.sym)
-        }
-      } else {
-        errors++
-        failedSymbols.push('?')
-      }
-    }
+      // Tradability filter
+      if (product.trading_disabled === true) continue
+      if (product.cancel_only === true) continue
+      if (product.limit_only === true) continue
+      if (product.auction_mode === true) continue
+      if (product.post_only === true) continue
 
-    // Delay between batches (skip if we got everything from cache)
-    if (i + CONCURRENCY < universe.length) {
-      await sleep(BATCH_DELAY_MS)
+      // Product type filter (spot only; skip futures even if returned)
+      const productType = String(product.product_type ?? 'SPOT').toUpperCase()
+      if (productType !== 'SPOT' && productType !== 'UNKNOWN_PRODUCT_TYPE') continue
+
+      // New listing filter (if requested)
+      const isNew = product.new === true
+      if (onlyNew && !isNew) continue
+
+      const stats = computeStats(product)
+      if (!stats) continue
+
+      // Volume filter
+      if (stats.volumeUsd24h < effectiveMinVolume) continue
+
+      // Movement filter (|change| ≥ threshold OR volume spike)
+      const sustainedMove = Math.abs(stats.priceChange24h) >= effectiveMinMovement
+      const volumeSpike = stats.volumeChange24h >= 100
+      if (!onlyNew && !sustainedMove && !volumeSpike) continue
+
+      // Composite floor
+      if (stats.composite < minComposite) continue
+
+      // Direction filter
+      if (direction === 'bullish' && stats.direction !== 'bullish') continue
+      if (direction === 'bearish' && stats.direction !== 'bearish') continue
+
+      candidates.push(stats)
+    } catch (e) {
+      errors++
+      const sym = String(product.product_id ?? '?')
+      failedSymbols.push(sym)
+      console.warn(`[crypto-scanner] ${sym} failed scoring:`, e instanceof Error ? e.message : e)
     }
   }
 
-  if (failedSymbols.length > 0) {
-    console.warn(`[crypto-scanner] ${failedSymbols.length}/${universe.length} failed (authed=${authClient !== null}, cacheHits=${cacheHits}): ${failedSymbols.join(',')}`)
-  }
+  // Sort by composite descending
+  candidates.sort((a, b) => b.composite - a.composite)
+  const picks = candidates.slice(0, limit)
 
-  const filtered = results
-    .filter(r => r.composite >= minComposite)
-    .sort((a, b) => b.composite - a.composite)
-    .slice(0, limit)
+  if (errors > 0) {
+    console.warn(`[crypto-scanner] ${errors} symbols failed during scoring`)
+  }
 
   return {
-    picks: filtered,
-    fetchedAt: new Date().toISOString(),
+    picks,
+    fetchedAt: new Date(now).toISOString(),
     universeSize: universe.length,
-    symbolsFetched: results.length,
+    postFilterSize: candidates.length,
     errors,
     failedSymbols,
     authedPath: authClient !== null,
-    fromCache: cacheHits === universe.length,
+    fromCache,
+    universeAgeMs,
   }
 }
 
 // ─────────────────────────────────────────────────────────────
-// Fetch with retry-on-429 (exponential backoff)
+// Public list fetcher (fallback when no auth)
 // ─────────────────────────────────────────────────────────────
 
-async function fetchWithRetry(symbol: string, authClient: CoinbaseClient | null): Promise<CryptoTickerStats | null> {
-  const MAX_ATTEMPTS = 3
-  let lastErrorWas429 = false
-
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    try {
-      const product = authClient
-        ? await authClient.getProduct(symbol)
-        : await fetchProductPublic(symbol)
-      if (!product) return null
-      return computeStats(symbol, product)
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      const is429 = /HTTP 429|too many requests/i.test(msg)
-      lastErrorWas429 = is429
-      if (is429 && attempt < MAX_ATTEMPTS) {
-        // Exponential backoff: 500ms, 1500ms, 4500ms
-        const delay = 500 * Math.pow(3, attempt - 1)
-        console.warn(`[crypto-scanner] ${symbol}: 429 attempt ${attempt}, retry in ${delay}ms`)
-        await sleep(delay)
-        continue
-      }
-      // Non-retryable error or out of retries
-      if (!is429) {
-        console.warn(`[crypto-scanner] ${symbol} failed (attempt ${attempt}): ${msg.slice(0, 200)}`)
-      }
-      return null
-    }
-  }
-
-  if (lastErrorWas429) {
-    console.warn(`[crypto-scanner] ${symbol}: gave up after ${MAX_ATTEMPTS} 429s`)
-  }
-  return null
-}
-
-// ─────────────────────────────────────────────────────────────
-// Public fallback path
-// ─────────────────────────────────────────────────────────────
-
-async function fetchProductPublic(symbol: string): Promise<Record<string, unknown> | null> {
+async function fetchProductsListPublic(): Promise<Array<Record<string, unknown>>> {
   const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), 8_000)
+  const timer = setTimeout(() => ctrl.abort(), 15_000)
   try {
-    const res = await fetch(`${COINBASE_PUBLIC_BASE}/market/products/${encodeURIComponent(symbol)}`, {
+    const res = await fetch(`${COINBASE_PUBLIC_BASE}/market/products?product_type=SPOT&limit=500`, {
       signal: ctrl.signal,
       headers: { 'cache-control': 'no-cache' },
     })
     if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`)
+      throw new Error(`Coinbase /market/products HTTP ${res.status}`)
     }
-    return await res.json() as Record<string, unknown>
+    const data = await res.json() as { products?: Array<Record<string, unknown>> }
+    return data.products ?? []
   } finally {
     clearTimeout(timer)
   }
 }
 
 // ─────────────────────────────────────────────────────────────
-// Stats computation (shared by both paths)
+// Stats computation
 // ─────────────────────────────────────────────────────────────
 
-function computeStats(symbol: string, product: Record<string, unknown>): CryptoTickerStats | null {
-  const currentPrice = Number(product.price ?? 0)
-  if (!currentPrice || !Number.isFinite(currentPrice)) {
-    console.warn(`[crypto-scanner] ${symbol}: missing/invalid price; keys: ${Object.keys(product).slice(0, 10).join(',')}`)
-    return null
-  }
+function computeStats(product: Record<string, unknown>): CryptoTickerStats | null {
+  const symbol = String(product.product_id ?? '')
+  if (!symbol) return null
 
-  let change24hPct = 0
-  const rawChange = product.price_percentage_change_24h
-  if (typeof rawChange === 'string') {
-    change24hPct = Number(rawChange.replace('%', '').trim())
-  } else if (typeof rawChange === 'number') {
-    change24hPct = rawChange
-  }
+  const currentPrice = Number(product.price ?? 0)
+  if (!currentPrice || !Number.isFinite(currentPrice)) return null
+
+  let change24hPct = parsePct(product.price_percentage_change_24h)
   if (!Number.isFinite(change24hPct)) change24hPct = 0
+
+  let volumeChange24hPct = parsePct(product.volume_percentage_change_24h)
+  if (!Number.isFinite(volumeChange24hPct)) volumeChange24hPct = 0
 
   const baseVolume = Number(product.volume_24h ?? 0)
   const volumeUsd = baseVolume * currentPrice
-
-  const high24h = currentPrice * (1 + Math.max(0, change24hPct) / 100 + 0.01)
-  const low24h = currentPrice * (1 - Math.max(0, -change24hPct) / 100 - 0.01)
-  const rangeSize = high24h - low24h
-  const rangePosition = rangeSize > 0 ? ((currentPrice - low24h) / rangeSize) * 100 : 50
 
   const liquidityTier: 'mega' | 'large' | 'mid' | 'small' =
     volumeUsd >= 1_000_000_000 ? 'mega'
@@ -276,32 +263,48 @@ function computeStats(symbol: string, product: Record<string, unknown>): CryptoT
     : change24hPct <= -1.5 ? 'bearish'
     : 'neutral'
 
+  // Composite scoring (same idea as v3, slightly extended)
   let composite = 0
   composite += Math.min(40, Math.abs(change24hPct) * 4)
   composite += liquidityTier === 'mega' ? 30
             : liquidityTier === 'large' ? 22
             : liquidityTier === 'mid' ? 15
             : 5
-  if (direction === 'bullish' && rangePosition > 50) composite += (rangePosition - 50) / 50 * 20
-  else if (direction === 'bearish' && rangePosition < 50) composite += (50 - rangePosition) / 50 * 20
-  if (liquidityTier === 'mega' && direction !== 'neutral') composite += 10
-  else if (liquidityTier === 'large' && direction !== 'neutral') composite += 5
+  if (liquidityTier !== 'small' && direction !== 'neutral') composite += 10
+  // Volume spike bonus
+  if (volumeChange24hPct >= 100) composite += 8
+  // Optional new listing bonus
+  if (product.new === true) composite += 5
   composite = Math.min(100, Math.max(0, Math.round(composite)))
+
+  const baseDisplay = product.base_display_symbol ? String(product.base_display_symbol) : undefined
 
   return {
     symbol,
     price: currentPrice,
     priceChange24h: change24hPct,
-    high24h, low24h,
+    volumeChange24h: volumeChange24hPct,
     volume24h: baseVolume,
     volumeUsd24h: volumeUsd,
     composite,
     liquidityTier,
     direction,
-    rangePositionPct: Math.round(rangePosition),
+    isNew: product.new === true,
+    highVolumeSpike: volumeChange24hPct >= 100,
+    baseDisplaySymbol: baseDisplay,
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
+/**
+ * Parse a Coinbase pct field. Comes as "1.23" string, "1.23%" string,
+ * or 1.23 number. Returns NaN on bad input.
+ */
+function parsePct(raw: unknown): number {
+  if (typeof raw === 'number') return raw
+  if (typeof raw === 'string') {
+    const trimmed = raw.replace('%', '').trim()
+    if (trimmed === '') return 0
+    return Number(trimmed)
+  }
+  return 0
 }

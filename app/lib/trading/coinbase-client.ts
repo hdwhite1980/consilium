@@ -364,6 +364,27 @@ export class CoinbaseClient {
   }
 
   /**
+   * List ALL products in one call. Returns up to ~500 products with full
+   * stats (price, 24h change, volume, new flag, status, increments).
+   *
+   * Used by the dynamic-universe scanner: one call replaces 30+ per-symbol
+   * calls, then we filter client-side by USD quote, status, volume, movement.
+   *
+   * The response shape:
+   *   { products: [ { product_id, price, price_percentage_change_24h,
+   *                   volume_24h, volume_percentage_change_24h,
+   *                   quote_currency_id, base_currency_id,
+   *                   status, trading_disabled, cancel_only, limit_only,
+   *                   new, base_min_size, quote_increment, ... } ] }
+   */
+  async listProducts(productType: 'SPOT' | 'FUTURE' = 'SPOT'): Promise<Array<Record<string, unknown>>> {
+    const raw = await this.request<{ products?: Array<Record<string, unknown>> }>(
+      'GET', `/products?product_type=${productType}&limit=500`,
+    )
+    return raw.products ?? []
+  }
+
+  /**
    * Get candles via authenticated endpoint. Same as the public
    * /market/products/{id}/candles but with 30 req/sec rate limit.
    */
