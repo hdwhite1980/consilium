@@ -107,6 +107,14 @@ function normalizeAlpacaSymbol(ticker: string): string {
  *
  * Returns null when the PASS doesn't fit either category — caller treats as
  * normal skip.
+ *
+ * Bug fix (June 23, 2026 — LRCX case):
+ * The previous version checked "any reason matches bypassable" which was wrong.
+ * LRCX was PASSed for TWO reasons: marginal R:R 1.04 AND strong insider sell
+ * contradicting BULLISH thesis. The bypass took it as marginal_rr and placed
+ * the trade, ignoring the insider signal. Fix: bypass ONLY when ALL pass
+ * reasons fall into bypassable categories. A single non-bypassable reason
+ * (insider contradiction, confidence floor, missing data, etc.) blocks bypass.
  */
 function classifyPassBypass(verdict: VerdictForTrade): {
   category: 'marginal_rr' | 'earnings_window'
@@ -115,36 +123,60 @@ function classifyPassBypass(verdict: VerdictForTrade): {
   const reasons = Array.isArray(verdict.trader_pass_reasons) ? verdict.trader_pass_reasons : []
   if (reasons.length === 0) return null
 
-  // ── marginal R:R ──
-  // Read the structured column rather than parsing the text — it's the
-  // numeric value the Trader computed. Range [1.0, 1.5).
+  // Pre-compute R:R for use in marginal_rr classification
   const rr = verdict.trader_risk_reward !== null && verdict.trader_risk_reward !== undefined
     ? Number(verdict.trader_risk_reward)
     : null
-  const hasRrPass = reasons.some(r =>
-    typeof r === 'string' && /risk-to-reward|r:r|risk\/reward/i.test(r),
-  )
-  if (hasRrPass && rr !== null && Number.isFinite(rr) && rr >= 1.0 && rr < 1.5) {
+
+  // Categorize each reason as one of: 'marginal_rr' | 'earnings_window' | null (non-bypassable)
+  // A reason is non-bypassable if it can't be safely overridden by downstream
+  // management — insider contradictions, confidence floors, missing data,
+  // bear-market regime warnings, etc.
+  const categorize = (reason: string): 'marginal_rr' | 'earnings_window' | null => {
+    if (typeof reason !== 'string') return null
+    // marginal R:R reason — only counts as bypassable if RR is in [1.0, 1.5)
+    if (/risk-to-reward|r:r|risk\/reward/i.test(reason)) {
+      if (rr !== null && Number.isFinite(rr) && rr >= 1.0 && rr < 1.5) {
+        return 'marginal_rr'
+      }
+      // R:R reason but RR is outside bypassable range → non-bypassable
+      return null
+    }
+    // earnings-window reason
+    if (/earnings/i.test(reason)) {
+      return 'earnings_window'
+    }
+    // Everything else is non-bypassable:
+    //   - insider signals contradicting verdict
+    //   - confidence below floor
+    //   - no valid entry/stop/target
+    //   - bear-market regime / VIX spikes
+    //   - news catalyst risk
+    //   - liquidity / spread concerns
+    return null
+  }
+
+  const categorized = reasons.map(categorize)
+
+  // ALL reasons must be bypassable; one non-bypassable reason blocks the entire bypass.
+  if (categorized.some(c => c === null)) {
+    return null
+  }
+  if (categorized.length === 0) return null
+
+  // All reasons are bypassable. Pick the dominant category for the rationale.
+  // marginal_rr takes precedence over earnings_window when both are present
+  // (R:R math is the deeper concern; earnings is just timing).
+  if (categorized.includes('marginal_rr')) {
     return {
       category: 'marginal_rr',
-      rationale: `marginal-R:R bypass: ${rr.toFixed(2)}:1 in [1.0, 1.5) — half size, monitor closely`,
+      rationale: `marginal-R:R bypass: ${rr?.toFixed(2) ?? '?'}:1 in [1.0, 1.5), all pass reasons bypassable — half size, monitor closely`,
     }
   }
-
-  // ── earnings window ──
-  // Pattern-match the reason text for 'earnings' keyword. The Trader's
-  // earnings rules block trades within an earnings proximity window.
-  const hasEarningsPass = reasons.some(r =>
-    typeof r === 'string' && /earnings/i.test(r),
-  )
-  if (hasEarningsPass) {
-    return {
-      category: 'earnings_window',
-      rationale: 'earnings-window bypass: timing block only, take at half size, monitor manages volatility',
-    }
+  return {
+    category: 'earnings_window',
+    rationale: 'earnings-window bypass: all pass reasons bypassable (timing only), take at half size, monitor manages volatility',
   }
-
-  return null
 }
 
 /**
