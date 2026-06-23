@@ -84,7 +84,7 @@ export const DEFAULT_TRADING_SETTINGS: Omit<UserTradingSettings, 'id' | 'userId'
   riskPerTradePct: 0.0100,
   maxPositionPct: 0.1500,
   maxDailyLossPct: 0.0300,
-  maxConcurrentPos: 5,
+  maxConcurrentPos: 10,
   maxConsecLosses: 3,
   tradeStocks: true,
   tradeCrypto: false,
@@ -94,7 +94,7 @@ export const DEFAULT_TRADING_SETTINGS: Omit<UserTradingSettings, 'id' | 'userId'
   minGrade: 'B',
   lastProcessedVerdictId: null,
   scannerEnabled: false,
-  scannerMaxConcurrent: 3,
+  scannerMaxConcurrent: 8,
   scannerMinComposite: 70,
   scannerMaxPositionPct: 0.2000,
   activeMgmtEnabled: false,
@@ -173,7 +173,7 @@ function rowToSettings(row: DbRow): UserTradingSettings {
     lastProcessedVerdictId: row.last_processed_verdict_id !== null && row.last_processed_verdict_id !== undefined
       ? Number(row.last_processed_verdict_id) : null,
     scannerEnabled: row.scanner_enabled ?? false,
-    scannerMaxConcurrent: row.scanner_max_concurrent ?? 3,
+    scannerMaxConcurrent: row.scanner_max_concurrent ?? 8,
     scannerMinComposite: row.scanner_min_composite ?? 70,
     scannerMaxPositionPct: row.scanner_max_position_pct !== null && row.scanner_max_position_pct !== undefined
       ? Number(row.scanner_max_position_pct) : 0.20,
