@@ -14,7 +14,7 @@ import { getSupabaseAdmin } from '@/app/lib/admin/admin-auth'
 import { encrypt, decrypt } from './encryption'
 import type { AssetClass } from './settings'
 
-export type BrokerName = 'alpaca' | 'oanda' | 'tradovate'
+export type BrokerName = 'alpaca' | 'oanda' | 'tradovate' | 'coinbase'
 
 export interface BrokerCredentialRow {
   id: string
@@ -200,6 +200,38 @@ export interface TradovateSessionLoad {
   cachedTokenExpiresAt: string | null
   accountSpec: string | null
   accountIntId: number | null
+}
+
+/**
+ * Coinbase-specific credential loader.
+ *
+ * Coinbase has no paper/sandbox mode — all trading is live. We store
+ * Coinbase credentials with mode='live', asset_class='crypto'.
+ *
+ *   key_id           = full CDP key name "organizations/{org}/apiKeys/{key}"
+ *   encrypted_secret = Ed25519 private key (PEM or base64 raw seed format)
+ *
+ * Returns null if no Coinbase credential is configured for this user.
+ */
+export async function loadCoinbaseCredential(
+  userId: string,
+): Promise<{ credentialRowId: string; keyName: string; privateKey: string } | null> {
+  const admin = await getSupabaseAdmin()
+  const { data, error } = await admin
+    .from('user_broker_credentials')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('broker', 'coinbase')
+    .eq('mode', 'live')
+    .eq('asset_class', 'crypto')
+    .maybeSingle()
+  if (error || !data) return null
+  const dbRow = data as DbRow
+  return {
+    credentialRowId: dbRow.id,
+    keyName: dbRow.key_id,
+    privateKey: decrypt(dbRow.encrypted_secret),
+  }
 }
 
 export async function loadTradovateSession(
