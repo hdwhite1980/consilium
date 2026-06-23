@@ -27,11 +27,52 @@ export interface CryptoSizingInput {
   maxDollarRiskPerTrade?: number | null
   minTradeNotional?: number | null
   maxTradeNotional?: number | null
+
+  // Quality-based sizing inputs (June 23, 2026) — parallels stock sizing.
+  // Skipped when traderPositionSizePct < 0.99 (PASS/WAIT bypass exemption).
+  qualityGrade?: 'A' | 'B' | 'C' | null
+  qualityConfidence?: number | null
+  qualityRiskReward?: number | null
 }
 
 export type CryptoSizingOutcome =
-  | { ok: true; units: number; notionalUsd: number; dollarRisk: number; rationale: string }
+  | { ok: true; units: number; notionalUsd: number; dollarRisk: number; rationale: string; qualityMultiplier?: number }
   | { ok: false; reason: string }
+
+/**
+ * Quality multiplier for crypto sizing — mirrors the stock implementation.
+ * Returns null if any input is missing (caller treats as 1.0 = no scaling).
+ * Clamped to [0.25, 1.5] like stocks.
+ */
+function computeQualityMultiplier(args: {
+  grade: 'A' | 'B' | 'C' | null | undefined
+  confidence: number | null | undefined
+  riskReward: number | null | undefined
+}): { multiplier: number; rationale: string } | null {
+  const { grade, confidence, riskReward } = args
+  if (!grade || confidence === null || confidence === undefined ||
+      riskReward === null || riskReward === undefined) {
+    return null
+  }
+  if (!Number.isFinite(confidence) || !Number.isFinite(riskReward)) {
+    return null
+  }
+  const gradeMult = grade === 'A' ? 1.0 : grade === 'B' ? 0.75 : 0.5
+  const confMult = confidence >= 80 ? 1.0
+                 : confidence >= 70 ? 0.85
+                 : confidence >= 60 ? 0.70
+                 : 0.55
+  const rrMult = riskReward >= 3.0 ? 1.2
+               : riskReward >= 2.0 ? 1.0
+               : riskReward >= 1.5 ? 0.75
+               : 0.5
+  const raw = gradeMult * confMult * rrMult
+  const multiplier = Math.max(0.25, Math.min(1.5, raw))
+  return {
+    multiplier,
+    rationale: `quality ${multiplier.toFixed(2)}x (grade=${grade}:${gradeMult}, conf=${confidence}%:${confMult}, R:R=${riskReward.toFixed(1)}:${rrMult.toFixed(2)})`,
+  }
+}
 
 export function computeCryptoSize(input: CryptoSizingInput): CryptoSizingOutcome {
   const {
@@ -42,6 +83,9 @@ export function computeCryptoSize(input: CryptoSizingInput): CryptoSizingOutcome
     maxDollarRiskPerTrade = null,
     minTradeNotional = null,
     maxTradeNotional = null,
+    qualityGrade = null,
+    qualityConfidence = null,
+    qualityRiskReward = null,
   } = input
 
   if (!Number.isFinite(accountEquity) || accountEquity <= 0) return { ok: false, reason: `Invalid accountEquity: ${accountEquity}` }
@@ -59,6 +103,24 @@ export function computeCryptoSize(input: CryptoSizingInput): CryptoSizingOutcome
   if (stopWidthPct > 0.30) return { ok: false, reason: `Stop too wide: ${(stopWidthPct * 100).toFixed(1)}%` }
 
   let dollarRisk = accountEquity * riskPerTradePct * traderPositionSizePct
+
+  // Quality multiplier (June 23 2026): scale by setup quality.
+  // SKIPPED when traderPositionSizePct < 0.99 (PASS/WAIT bypass exemption).
+  let qualityMultiplierApplied: number | undefined = undefined
+  let qualityRationale: string | null = null
+  if (traderPositionSizePct >= 0.99) {
+    const qm = computeQualityMultiplier({
+      grade: qualityGrade,
+      confidence: qualityConfidence,
+      riskReward: qualityRiskReward,
+    })
+    if (qm !== null) {
+      dollarRisk *= qm.multiplier
+      qualityMultiplierApplied = qm.multiplier
+      qualityRationale = qm.rationale
+    }
+  }
+
   let units = dollarRisk / perUnitRisk
   let notionalUsd = units * entryPrice
   const maxNotional = accountEquity * maxPositionPct
@@ -120,8 +182,9 @@ export function computeCryptoSize(input: CryptoSizingInput): CryptoSizingOutcome
     units,
     notionalUsd,
     dollarRisk,
+    qualityMultiplier: qualityMultiplierApplied,
     rationale: capped
-      ? `${units.toFixed(6)} units (capped by ${cappedReason ?? 'cap'}, $${dollarRisk.toFixed(2)} risk)`
-      : `${units.toFixed(6)} units ($${dollarRisk.toFixed(2)} risk at ${(stopWidthPct * 100).toFixed(2)}% stop)`,
+      ? `${units.toFixed(6)} units (capped by ${cappedReason ?? 'cap'}, $${dollarRisk.toFixed(2)} risk${qualityRationale ? `, ${qualityRationale}` : ''})`
+      : `${units.toFixed(6)} units ($${dollarRisk.toFixed(2)} risk at ${(stopWidthPct * 100).toFixed(2)}% stop${qualityRationale ? `, ${qualityRationale}` : ''})`,
   }
 }

@@ -43,8 +43,9 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/app/lib/admin/admin-auth'
-import { loadBrokerCredentialForUse, loadTradovateSession, saveTradovateTokenCache } from '@/app/lib/trading/credentials'
+import { loadBrokerCredentialForUse, loadTradovateSession, saveTradovateTokenCache, loadCoinbaseCredential } from '@/app/lib/trading/credentials'
 import { makeAlpacaCryptoClient, type AlpacaCryptoClient } from '@/app/lib/trading/alpaca-crypto-client'
+import { makeCoinbaseClient, type CoinbaseClient } from '@/app/lib/trading/coinbase-client'
 import { makeTradovateClient, type TradovateClient } from '@/app/lib/trading/tradovate-client'
 import { randomBytes } from 'crypto'
 
@@ -67,9 +68,9 @@ interface PendingAttachRow {
   id: string                              // trade_attempts.id (UUID)
   user_id: string
   asset_class: string
-  ticker: string                          // normalized symbol e.g. "BTC/USD"
+  ticker: string                          // normalized symbol e.g. "BTC/USD" (alpaca) or "BTC-USD" (coinbase)
   mode: 'paper' | 'live'
-  broker: 'alpaca'
+  broker: 'alpaca' | 'coinbase'           // crypto can be alpaca OR coinbase
   broker_order_id: string | null          // the parent entry order
   side: string | null
   qty: number | string | null
@@ -117,22 +118,43 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       const cryptoRows = rows.filter(r => r.asset_class === 'crypto')
       const futuresRows = rows.filter(r => r.asset_class === 'futures')
 
-      // ── Crypto ─────────────────────────────────────────────
-      if (cryptoRows.length > 0) {
+      // ── Crypto: Alpaca ─────────────────────────────────────
+      const cryptoAlpacaRows = cryptoRows.filter(r => r.broker === 'alpaca')
+      if (cryptoAlpacaRows.length > 0) {
         // All crypto rows from one user use the same mode
-        const mode = cryptoRows[0].mode
+        const mode = cryptoAlpacaRows[0].mode
         const credLoad = await loadBrokerCredentialForUse(userId, 'alpaca', mode, 'crypto')
         if (!credLoad) {
-          console.warn(`[attach-stops] user=${userId} no alpaca crypto credential; skipping ${cryptoRows.length} crypto attempts`)
+          console.warn(`[attach-stops] user=${userId} no alpaca crypto credential; skipping ${cryptoAlpacaRows.length} alpaca crypto attempts`)
         } else {
           const alpaca = makeAlpacaCryptoClient(credLoad.keyId, credLoad.secret, mode)
-          for (const row of cryptoRows) {
+          for (const row of cryptoAlpacaRows) {
             try {
               const result = await processCryptoAttempt(row, alpaca)
               countResult(summary, result)
             } catch (e) {
               summary.errors++
-              console.error(`[attach-stops] crypto attempt=${row.id} unexpected error:`, e instanceof Error ? e.message : e)
+              console.error(`[attach-stops] alpaca crypto attempt=${row.id} unexpected error:`, e instanceof Error ? e.message : e)
+            }
+          }
+        }
+      }
+
+      // ── Crypto: Coinbase ───────────────────────────────────
+      const cryptoCoinbaseRows = cryptoRows.filter(r => r.broker === 'coinbase')
+      if (cryptoCoinbaseRows.length > 0) {
+        const credLoad = await loadCoinbaseCredential(userId)
+        if (!credLoad) {
+          console.warn(`[attach-stops] user=${userId} no coinbase credential; skipping ${cryptoCoinbaseRows.length} coinbase attempts`)
+        } else {
+          const coinbase = makeCoinbaseClient(credLoad.keyName, credLoad.privateKey)
+          for (const row of cryptoCoinbaseRows) {
+            try {
+              const result = await processCoinbaseAttempt(row, coinbase)
+              countResult(summary, result)
+            } catch (e) {
+              summary.errors++
+              console.error(`[attach-stops] coinbase attempt=${row.id} unexpected error:`, e instanceof Error ? e.message : e)
             }
           }
         }
@@ -285,6 +307,84 @@ async function processCryptoAttempt(row: PendingAttachRow, alpaca: AlpacaCryptoC
     const msg = e instanceof Error ? e.message : String(e)
     await markFailed(row.id, row.stop_attach_attempts, `stopLimitSell failed: ${msg.slice(0, 200)}`)
     console.warn(`[attach-stops] FAILED user=${row.user_id} ${row.ticker} attempt=${row.id}: ${msg.slice(0, 200)}`)
+    return { kind: 'failed', reason: msg.slice(0, 100) }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Per-attempt processing — Coinbase crypto
+//
+// Mirrors processCryptoAttempt but uses CoinbaseClient. Differences:
+//   - getOrder uses Coinbase's historical endpoint
+//   - Status values: 'FILLED'/'OPEN'/'CANCELLED' (uppercase) vs Alpaca's lowercase
+//   - Ticker format in DB is BTC-USD (dash) for Coinbase rows
+//   - stopLimitSell submits Coinbase stop_limit_stop_limit_gtc with STOP_DOWN
+// ─────────────────────────────────────────────────────────────
+
+async function processCoinbaseAttempt(
+  row: PendingAttachRow,
+  coinbase: CoinbaseClient,
+): Promise<AttachResult> {
+  if (row.stop_attach_attempts >= MAX_ATTACH_ATTEMPTS) {
+    return { kind: 'gave_up', reason: `at max attempts (${row.stop_attach_attempts})` }
+  }
+
+  const stopPrice = row.council_stop !== null && row.council_stop !== undefined
+    ? Number(row.council_stop) : null
+  if (stopPrice === null || !Number.isFinite(stopPrice) || stopPrice <= 0) {
+    await markFailed(row.id, row.stop_attach_attempts, `no valid stop_price (council_stop=${row.council_stop})`)
+    return { kind: 'failed', reason: 'no valid stop_price' }
+  }
+  if (!row.broker_order_id) {
+    await markFailed(row.id, row.stop_attach_attempts, 'no broker_order_id on row')
+    return { kind: 'failed', reason: 'no broker_order_id' }
+  }
+
+  // Check parent entry status — Coinbase uses FILLED/OPEN/CANCELLED uppercase
+  let parentOrder
+  try {
+    parentOrder = await coinbase.getOrder(row.broker_order_id)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    await markFailed(row.id, row.stop_attach_attempts, `coinbase getOrder failed: ${msg.slice(0, 200)}`)
+    return { kind: 'failed', reason: `getOrder failed: ${msg.slice(0, 100)}` }
+  }
+
+  const status = (parentOrder.status ?? '').toUpperCase()
+  if (status !== 'FILLED' && status !== 'PARTIALLY_FILLED') {
+    return { kind: 'deferred', reason: `coinbase parent status=${status}` }
+  }
+
+  const filledQty = parentOrder.filled_qty ?? 0
+  if (filledQty <= 0) {
+    return { kind: 'deferred', reason: `coinbase parent status=${status} but filled_qty=${filledQty}` }
+  }
+
+  const stopClientId = `wos-cbstop-${row.id.slice(0, 8)}-${randomBytes(3).toString('hex')}`
+
+  // Idempotency: look up by client_order_id first
+  try {
+    const existing = await coinbase.getOrderByClientId(stopClientId).catch(() => null)
+    if (existing) {
+      await markAttached(row.id, existing.id, row.stop_attach_attempts)
+      return { kind: 'attached', stopOrderId: existing.id }
+    }
+  } catch { /* fall through to place */ }
+
+  try {
+    const stopOrder = await coinbase.stopLimitSell({
+      symbol: row.ticker,                  // already normalized e.g. "BTC-USD"
+      qty: filledQty,
+      stopPrice,
+      clientOrderId: stopClientId,
+    })
+    await markAttached(row.id, stopOrder.id, row.stop_attach_attempts)
+    console.log(`[attach-stops] COINBASE ATTACHED user=${row.user_id} ${row.ticker} stop=${stopPrice} stopOrderId=${stopOrder.id} attemptId=${row.id}`)
+    return { kind: 'attached', stopOrderId: stopOrder.id }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    await markFailed(row.id, row.stop_attach_attempts, `coinbase stopLimitSell failed: ${msg.slice(0, 200)}`)
+    console.warn(`[attach-stops] COINBASE FAILED user=${row.user_id} ${row.ticker} attempt=${row.id}: ${msg.slice(0, 200)}`)
     return { kind: 'failed', reason: msg.slice(0, 100) }
   }
 }
