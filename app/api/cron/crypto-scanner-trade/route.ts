@@ -12,18 +12,28 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/app/lib/admin/admin-auth'
 import { listEnabledTradingUsers, isAssetClassEnabled, type UserTradingSettings } from '@/app/lib/trading/settings'
-import { runCryptoScan } from '@/app/lib/trading/crypto-scanner'
+import { runCryptoScan, type CryptoTickerStats } from '@/app/lib/trading/crypto-scanner'
+import { fetchCryptoBars } from '@/app/lib/trading/crypto-bars'
+import { calculateTechnicals, type TechnicalSignals } from '@/app/lib/signals/technicals'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
+
+// Quality thresholds. Picks must clear ALL of these to trigger Council analysis.
+// These are deliberately strict so we don't burn Council tokens on overbought
+// blow-offs (e.g. RSI 71 + CCI 358 on a 10% down day) or low-volume meme spikes.
+const MIN_TECHNICAL_SCORE = 50      // -100..+100 scale; need clearly bullish bias
+const REQUIRE_BIAS = 'BULLISH' as const  // technicalBias must equal this
+const MAX_RSI = 78                  // skip if RSI extreme (overbought blow-off risk)
+const MIN_VOLUME_USD_FOR_TRADING = 10_000_000  // $10M+ — quality liquidity for real money
 
 interface UserResult {
   userId: string
   picksConsidered: number
   picksTriggered: number
   skipped: Array<{ ticker: string; reason: string }>
-  triggered: Array<{ ticker: string; composite: number }>
+  triggered: Array<{ ticker: string; composite: number; techScore: number; bias: string }>
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
@@ -89,14 +99,87 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         const fresh = scan.picks.filter(p => !recent.has(p.symbol.toUpperCase()))
         // Bullish only (we don't short crypto)
         const directional = fresh.filter(p => p.direction === 'bullish')
-        const toTrigger = directional.slice(0, Math.max(0, settings.maxConcurrentPos - openCount))
+
+        // Volume gate for trading (separate from discovery $1M floor in scan)
+        const liquid = directional.filter(p => {
+          if (p.volumeUsd24h < MIN_VOLUME_USD_FOR_TRADING) {
+            result.skipped.push({
+              ticker: p.symbol,
+              reason: `volume $${(p.volumeUsd24h / 1e6).toFixed(1)}M < $${MIN_VOLUME_USD_FOR_TRADING / 1e6}M trading floor`,
+            })
+            return false
+          }
+          return true
+        })
+
+        // ── Technical-score gate ──────────────────────────────────
+        // For each remaining pick, fetch 15m bars and compute full technicals.
+        // Reject if technicalScore < threshold, bias != BULLISH, or RSI extreme.
+        // This prevents triggering Council on overbought blow-offs, fading
+        // dead-cat bounces, or thin-volume parabolic spikes.
+        const technicallyValid: Array<CryptoTickerStats & { techScore: number; bias: string }> = []
+        for (const pick of liquid) {
+          try {
+            const bars = await fetchCryptoBars({
+              symbol: pick.symbol,
+              granularity: 'FIFTEEN_MINUTE',
+              limit: 200,
+            })
+            if (bars.length < 30) {
+              result.skipped.push({
+                ticker: pick.symbol,
+                reason: `only ${bars.length} bars (need 30+ for technicals)`,
+              })
+              continue
+            }
+            const t = calculateTechnicals(bars)
+            if (t.technicalScore < MIN_TECHNICAL_SCORE) {
+              result.skipped.push({
+                ticker: pick.symbol,
+                reason: `techScore ${t.technicalScore} < ${MIN_TECHNICAL_SCORE}`,
+              })
+              continue
+            }
+            if (t.technicalBias !== REQUIRE_BIAS) {
+              result.skipped.push({
+                ticker: pick.symbol,
+                reason: `bias ${t.technicalBias} != ${REQUIRE_BIAS}`,
+              })
+              continue
+            }
+            if (t.rsi > MAX_RSI) {
+              result.skipped.push({
+                ticker: pick.symbol,
+                reason: `RSI ${t.rsi.toFixed(1)} > ${MAX_RSI} (overbought blow-off risk)`,
+              })
+              continue
+            }
+            technicallyValid.push({
+              ...pick,
+              techScore: t.technicalScore,
+              bias: t.technicalBias,
+            })
+          } catch (e) {
+            result.skipped.push({
+              ticker: pick.symbol,
+              reason: `technicals fetch failed: ${e instanceof Error ? e.message.slice(0, 80) : 'unknown'}`,
+            })
+          }
+        }
+
+        const toTrigger = technicallyValid.slice(0, Math.max(0, settings.maxConcurrentPos - openCount))
 
         for (const pick of toTrigger) {
           try {
             const triggered = await triggerAnalyze(settings.userId, pick.symbol)
             if (triggered) {
               result.picksTriggered++
-              result.triggered.push({ ticker: pick.symbol, composite: pick.composite })
+              result.triggered.push({
+                ticker: pick.symbol,
+                composite: pick.composite,
+                techScore: pick.techScore,
+                bias: pick.bias,
+              })
             } else {
               result.skipped.push({ ticker: pick.symbol, reason: 'analyze trigger failed' })
             }
