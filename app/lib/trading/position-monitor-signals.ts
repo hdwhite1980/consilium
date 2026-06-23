@@ -181,11 +181,25 @@ export interface DecisionResult {
  * Returns the decision plus a one-line reason for the log.
  *
  * Rule order (first match wins):
- *   1. EXIT  — overwhelming bearish (multi-TF or single-TF dominance)
- *   2. BULLISH OVERRIDE — bullish signals dominate, hold regardless of bearish count
- *   3. ESCALATE — mixed signals (one TF bearish, other TF bullish), ask Council
- *   4. TIGHTEN_STOP — 15m bearish meets threshold, no override
- *   5. HOLD — everything else
+ *   1. STRONG BULLISH OVERRIDE — if 15m has u15-b15 >= 2 AND u15 >= 4, the
+ *      trend is fundamentally intact on the swing-trade timeframe. Bearish
+ *      5m signals are noise within a strong uptrend. HOLD regardless of
+ *      ANY bearish counts. This is checked BEFORE EXIT paths.
+ *   2. EXIT  — overwhelming bearish (multi-TF or single-TF dominance)
+ *   3. WEAK BULLISH OVERRIDE — 15m dominance >= 2 but u15 < 4 (decent but
+ *      not strong). Holds if no EXIT fired above.
+ *   4. ESCALATE — mixed signals (one TF bearish, other TF bullish), ask Council
+ *   5. TIGHTEN_STOP — 15m bearish meets threshold, no override
+ *   6. HOLD — everything else
+ *
+ * History (June 22, 2026 — KLAC bug):
+ * v2 of this rule engine had bullish-override AFTER both EXIT paths. KLAC at
+ * b15=1, u15=5, b5=4, u5=3 hit the b5 >= exitThreshold5m branch and fired
+ * EXIT, even though the 15m was overwhelmingly bullish (5 vs 1, dominance +4).
+ * Result: position was exited 6 minutes after market close, queueing a market
+ * sell for Monday open and cancelling protective brackets. v3 fixes this by
+ * checking strong bullish override BEFORE the single-TF 5m EXIT path. The
+ * cron also adds a "no EXIT actions in last 5 min of trading" guard.
  */
 export function decide(inputs: DecisionInputs): DecisionResult {
   const {
@@ -199,20 +213,36 @@ export function decide(inputs: DecisionInputs): DecisionResult {
   const u5 = snap5m.bullishCount
   const u15 = snap15m.bullishCount
 
+  // ── STRONG BULLISH OVERRIDE — check FIRST, before any EXIT path ──
+  // The 15m is the primary swing-trade timeframe. If it shows strong bullish
+  // structure (dominance >= 2 AND at least 4 bullish signals in absolute terms),
+  // the trend is intact and a 5m bearish flurry is noise, not signal.
+  // Don't let single-TF 5m exits fire under these conditions.
+  //
+  // The "u15 >= 4" guard prevents false override on low-volume periods where
+  // dominance might be high in relative terms but the absolute bullish signal
+  // count is weak (e.g. u15=3, b15=1, dominance=2 — not really strong, just
+  // quiet).
+  const dominance15m = u15 - b15
+  const strongBullish15m = dominance15m >= 2 && u15 >= 4
+  if (strongBullish15m) {
+    return {
+      decision: 'HOLD',
+      reason: `15m strongly bullish: ${u15} bullish vs ${b15} bearish (dom +${dominance15m}); 5m noise (b=${b5}, u=${u5}) ignored`,
+    }
+  }
+
   // ── EXIT — overwhelming bearish on one timeframe, or multi-TF confirmation ──
   if (b15 >= exitThreshold15m && b5 >= 2) {
     return { decision: 'EXIT', reason: `multi-TF bearish: 5m=${b5}, 15m=${b15}` }
   }
   if (b5 >= exitThreshold5m) {
-    return { decision: 'EXIT', reason: `5m overwhelming bearish: ${b5} signals` }
+    return { decision: 'EXIT', reason: `5m overwhelming bearish: ${b5} signals (15m: ${b15}b/${u15}u — not strong enough to override)` }
   }
 
-  // ── BULLISH OVERRIDE — bullish signals clearly dominate on 15m, hold ──
-  // The 15m chart is the primary timeframe for swing position management.
-  // If bullish count exceeds bearish by 2+ on 15m, the trend is intact and
-  // any bearish signals are likely normal pullback noise within strength.
-  // Skip the tighten/escalate paths entirely.
-  const dominance15m = u15 - b15
+  // ── WEAK BULLISH OVERRIDE — dominance >= 2 but u15 < 4 ──
+  // Decent bullish but not strong. Still holds (no EXIT fired above means
+  // bearish wasn't overwhelming either).
   if (dominance15m >= 2) {
     return {
       decision: 'HOLD',

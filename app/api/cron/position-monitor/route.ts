@@ -74,6 +74,32 @@ interface CronSummary {
   totalActions: number
 }
 
+/**
+ * Returns true if "now" is within 5 minutes of US market close (21:00 UTC).
+ *
+ * Used to gate EXIT actions: a market sell placed in the last 5 min may not
+ * fill before close, queueing as a held order for the next session's open
+ * with no protective stop in place (bracket children get cancelled by
+ * applyExit). The KLAC bug (June 22, 2026) was caused by EXIT firing at
+ * 21:06 UTC — past close. The pre-market-reeval cron handles such cases
+ * with fresh data instead.
+ *
+ * Time zones: US market close is 4 PM ET = 21:00 UTC during EDT (Mar-Nov).
+ * During EST (Nov-Mar) market close is 4 PM ET = 21:00 UTC also (since EST
+ * is UTC-5 and the bell still rings at 4 PM ET). UTC math works in both.
+ *
+ * Window is [20:55 UTC, 21:00 UTC). After 21:00 UTC, position-monitor cron
+ * shouldn't even be running (workflow schedule is `*\/3 13-21`) but defensive
+ * check still kicks in if the run was late.
+ */
+function isWithinMarketCloseWindow(): boolean {
+  const now = new Date()
+  const totalMinutesUtc = now.getUTCHours() * 60 + now.getUTCMinutes()
+  const MARKET_CLOSE_MIN_UTC = 21 * 60      // 21:00 UTC = 1260
+  const GUARD_WINDOW_MIN = 5
+  return totalMinutesUtc >= MARKET_CLOSE_MIN_UTC - GUARD_WINDOW_MIN
+}
+
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const auth = req.headers.get('authorization') ?? ''
   if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -360,6 +386,21 @@ async function processPosition(
   }
 
   if (ruling.decision === 'EXIT') {
+    // KLAC bug guard (June 22, 2026): refuse EXIT actions in the last 5 minutes
+    // of trading. After-hours fills don't work for bracket orders — applyExit
+    // would cancel the protective children and place a market sell that just
+    // queues for the next session's open, leaving the position unprotected
+    // overnight. Pre-market-reeval cron picks up these cases at next open.
+    if (isWithinMarketCloseWindow()) {
+      console.log(`[position-monitor] ${ticker} EXIT deferred — within 5 min of market close (${ruling.reason})`)
+      await logResult(settings, att, ticker, {
+        ok: true, decision: 'EXIT', actionTaken: 'exit_deferred_close_window',
+        snap5m, snap15m,
+        currentPrice: pos.current_price, currentStop: att.stop_price,
+        errorReason: `deferred: within market-close window; pre-market-reeval will handle`,
+      })
+      return true
+    }
     const result = await applyExit(alpaca, pos)
     userSummary.exits++
     await logResult(settings, att, ticker, {
@@ -382,6 +423,18 @@ async function processPosition(
     const escalation = await escalateToCouncil(settings, att, pos, ruling.reason)
     // Apply the council's decision via the same machinery
     if (escalation.action === 'EXIT') {
+      // Same market-close guard for escalated exits
+      if (isWithinMarketCloseWindow()) {
+        console.log(`[position-monitor] ${ticker} ESCALATED EXIT deferred — within 5 min of market close`)
+        await logResult(settings, att, ticker, {
+          ok: true, decision: 'ESCALATE', actionTaken: 'escalated_exit_deferred_close_window',
+          snap5m, snap15m,
+          currentPrice: pos.current_price, currentStop: att.stop_price,
+          escalationResult: escalation,
+          errorReason: 'deferred: within market-close window',
+        })
+        return true
+      }
       const result = await applyExit(alpaca, pos)
       await logResult(settings, att, ticker, {
         ok: result.ok, decision: 'ESCALATE', actionTaken: result.ok ? 'escalated_exit' : 'escalated_exit_failed',
