@@ -30,6 +30,7 @@ import { loadBrokerCredentialForUse, loadCoinbaseCredential } from '@/app/lib/tr
 import { makeAlpacaCryptoClient, type AlpacaCryptoClient } from '@/app/lib/trading/alpaca-crypto-client'
 import { makeCoinbaseClient, type CoinbaseClient } from '@/app/lib/trading/coinbase-client'
 import { computeTrailingStop, type TrailingStopResult } from '@/app/lib/trading/position-monitor-signals'
+import { fetchCryptoBars, computeCryptoSignals, type CryptoSignalCounts } from '@/app/lib/trading/crypto-bars'
 import { randomBytes } from 'crypto'
 
 export const runtime = 'nodejs'
@@ -65,6 +66,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     users: 0,
     positions: 0,
     trailingAdvanced: 0,
+    signalExits: 0,
     noChange: 0,
     errors: 0,
     durationMs: 0,
@@ -87,13 +89,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   summary.durationMs = Date.now() - startedAt
-  console.log(`[crypto-position-monitor cron] done in ${summary.durationMs}ms, trailing=${summary.trailingAdvanced} hold=${summary.noChange}`)
+  console.log(`[crypto-position-monitor cron] done in ${summary.durationMs}ms, trailing=${summary.trailingAdvanced} signalExits=${summary.signalExits} hold=${summary.noChange}`)
   return NextResponse.json(summary)
 }
 
 async function processUser(
   settings: UserTradingSettings,
-  summary: { positions: number; trailingAdvanced: number; noChange: number; errors: number },
+  summary: { positions: number; trailingAdvanced: number; signalExits: number; noChange: number; errors: number },
 ): Promise<void> {
   const attempts = await fetchOpenCryptoAttempts(settings.userId)
   if (attempts.length === 0) return
@@ -149,7 +151,7 @@ async function processUser(
 async function monitorCoinbasePosition(
   att: CryptoOpenAttempt,
   client: CoinbaseClient,
-  summary: { trailingAdvanced: number; noChange: number },
+  summary: { trailingAdvanced: number; noChange: number; signalExits: number },
 ): Promise<void> {
   // Get current spot price
   const currentPrice = await client.getSpotPrice(att.ticker).catch(() => null)
@@ -159,9 +161,57 @@ async function monitorCoinbasePosition(
     return
   }
 
+  // ── Signal check ──────────────────────────────────────────
+  // Fetch 5m and 15m bars, count bearish signals on each. If 3+ bearish
+  // on 5m OR 4+ bearish on 15m, EXIT the position. This parallels the
+  // stock position-monitor's signal-based exit logic.
+  let signals5m: CryptoSignalCounts | null = null
+  let signals15m: CryptoSignalCounts | null = null
+  try {
+    const bars5m = await fetchCryptoBars({ symbol: att.ticker, granularity: 'FIVE_MINUTE', limit: 100 })
+    signals5m = computeCryptoSignals(bars5m)
+  } catch (e) {
+    console.warn(`[crypto-position-monitor] coinbase 5m signals ${att.ticker} failed:`, e instanceof Error ? e.message : e)
+  }
+  try {
+    const bars15m = await fetchCryptoBars({ symbol: att.ticker, granularity: 'FIFTEEN_MINUTE', limit: 100 })
+    signals15m = computeCryptoSignals(bars15m)
+  } catch (e) {
+    console.warn(`[crypto-position-monitor] coinbase 15m signals ${att.ticker} failed:`, e instanceof Error ? e.message : e)
+  }
+
+  const bear5 = signals5m?.bearishCount ?? 0
+  const bull5 = signals5m?.bullishCount ?? 0
+  const bear15 = signals15m?.bearishCount ?? 0
+  const bull15 = signals15m?.bullishCount ?? 0
+
+  // Bullish override: if 15m unanimous bullish, hold even if 5m wobbles
+  const strongBullish15m = bull15 >= 4
+  const sustainedBearish = !strongBullish15m && (bear5 >= 3 || bear15 >= 4)
+
+  if (sustainedBearish) {
+    // EXIT: market sell the entire position via Coinbase
+    try {
+      if (att.stop_order_id) {
+        await client.cancelOrder(att.stop_order_id).catch(() => null)
+      }
+      await client.closePosition(att.ticker)
+      await logResult(att, 'EXIT', `signal_exit: bear5=${bear5} bear15=${bear15} bull5=${bull5} bull15=${bull15}`, currentPrice, null)
+      console.log(`[crypto-position-monitor] coinbase SIGNAL EXIT ${att.ticker} bear5=${bear5} bear15=${bear15}`)
+      summary.signalExits++
+      return
+    } catch (e) {
+      console.error(`[crypto-position-monitor] coinbase SIGNAL EXIT FAILED ${att.ticker}:`, e instanceof Error ? e.message : e)
+      await logResult(att, 'EXIT', `signal_exit_failed: ${e instanceof Error ? e.message.slice(0, 100) : 'unknown'}`, currentPrice, null)
+      summary.noChange++
+      return
+    }
+  }
+
+  // ── Trailing stop check ───────────────────────────────────
   const trailing = computeTrailing(att, currentPrice)
   if (!trailing) {
-    await logResult(att, 'HOLD', 'no_milestone', currentPrice, null)
+    await logResult(att, 'HOLD', `no_milestone bear5=${bear5} bear15=${bear15} bull5=${bull5} bull15=${bull15}`, currentPrice, null)
     summary.noChange++
     return
   }
@@ -172,8 +222,6 @@ async function monitorCoinbasePosition(
     const cancelResult = await client.cancelOrder(att.stop_order_id)
     if (!cancelResult.ok) {
       console.warn(`[crypto-position-monitor] coinbase cancel stop ${att.stop_order_id} failed: ${cancelResult.reason}`)
-      // Try placing new stop anyway — if old one is somehow still active
-      // we might get a 'INSUFFICIENT_FUND' error which we'll catch.
     }
   }
 
@@ -210,7 +258,7 @@ async function monitorCoinbasePosition(
 async function monitorAlpacaPosition(
   att: CryptoOpenAttempt,
   client: AlpacaCryptoClient,
-  summary: { trailingAdvanced: number; noChange: number },
+  summary: { trailingAdvanced: number; noChange: number; signalExits: number },
 ): Promise<void> {
   // Get current price from the positions list (Alpaca returns current_price)
   const positions = await client.positions().catch(() => [])
@@ -222,9 +270,53 @@ async function monitorAlpacaPosition(
     return
   }
 
+  // ── Signal check (use Coinbase bars; same instruments) ────
+  // Convert Alpaca BTC/USD → BTC-USD for bar fetch
+  const barSymbol = att.ticker.replace('/', '-')
+  let signals5m: CryptoSignalCounts | null = null
+  let signals15m: CryptoSignalCounts | null = null
+  try {
+    const bars5m = await fetchCryptoBars({ symbol: barSymbol, granularity: 'FIVE_MINUTE', limit: 100 })
+    signals5m = computeCryptoSignals(bars5m)
+  } catch (e) {
+    console.warn(`[crypto-position-monitor] alpaca 5m signals ${att.ticker} failed:`, e instanceof Error ? e.message : e)
+  }
+  try {
+    const bars15m = await fetchCryptoBars({ symbol: barSymbol, granularity: 'FIFTEEN_MINUTE', limit: 100 })
+    signals15m = computeCryptoSignals(bars15m)
+  } catch (e) {
+    console.warn(`[crypto-position-monitor] alpaca 15m signals ${att.ticker} failed:`, e instanceof Error ? e.message : e)
+  }
+
+  const bear5 = signals5m?.bearishCount ?? 0
+  const bull5 = signals5m?.bullishCount ?? 0
+  const bear15 = signals15m?.bearishCount ?? 0
+  const bull15 = signals15m?.bullishCount ?? 0
+  const strongBullish15m = bull15 >= 4
+  const sustainedBearish = !strongBullish15m && (bear5 >= 3 || bear15 >= 4)
+
+  if (sustainedBearish) {
+    try {
+      if (att.stop_order_id) {
+        await client.cancelOrder(att.stop_order_id).catch(() => null)
+      }
+      await client.closePosition(att.ticker)
+      await logResult(att, 'EXIT', `signal_exit: bear5=${bear5} bear15=${bear15} bull5=${bull5} bull15=${bull15}`, currentPrice, null)
+      console.log(`[crypto-position-monitor] alpaca SIGNAL EXIT ${att.ticker} bear5=${bear5} bear15=${bear15}`)
+      summary.signalExits++
+      return
+    } catch (e) {
+      console.error(`[crypto-position-monitor] alpaca SIGNAL EXIT FAILED ${att.ticker}:`, e instanceof Error ? e.message : e)
+      await logResult(att, 'EXIT', `signal_exit_failed: ${e instanceof Error ? e.message.slice(0, 100) : 'unknown'}`, currentPrice, null)
+      summary.noChange++
+      return
+    }
+  }
+
+  // ── Trailing stop check ───────────────────────────────────
   const trailing = computeTrailing(att, currentPrice)
   if (!trailing) {
-    await logResult(att, 'HOLD', 'no_milestone', currentPrice, null)
+    await logResult(att, 'HOLD', `no_milestone bear5=${bear5} bear15=${bear15} bull5=${bull5} bull15=${bull15}`, currentPrice, null)
     summary.noChange++
     return
   }

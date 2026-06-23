@@ -1,87 +1,94 @@
 // =============================================================
-// app/lib/trading/crypto-scanner.ts
+// app/lib/trading/crypto-scanner.ts (v2 — June 23 2026)
 //
-// Crypto scanner. Fetches 24h ticker stats for a curated universe
-// of liquid USD pairs and scores them by composite signal:
-//   - Price change 24h (directional)
-//   - Volume in USD (liquidity tier)
-//   - Price action: short-term momentum vs daily range
+// FIX (v2): The previous version used /market/products/{id}/ticker
+// which doesn't exist as a public endpoint. Only 12/30 symbols
+// returned data. Plus MATIC renamed to POL, dropping more.
 //
-// Output picks feed two places:
-//   1. /api/cron/crypto-scanner-trade — triggers /api/analyze on top picks
-//   2. /api/movers/crypto             — returns the ranked list for UI
-//
-// Universe: top crypto by market cap with liquid USD pairs on Coinbase.
-// Hardcoded to start; can move to dynamic discovery once stable.
+// v2 changes:
+//   - Hits /market/products/{id} only (one call per symbol)
+//   - Per-symbol error logging so failures aren't silent
+//   - Universe pruned: MATIC removed (now POL), added POL/SHIB/PEPE
+//   - cache-control: no-cache header for fresher data
+//   - Returns failedSymbols in result for diagnostics
 // =============================================================
 
 const COINBASE_PUBLIC_BASE = 'https://api.coinbase.com/api/v3/brokerage'
 
 // Curated universe of mainstream USD-quoted crypto on Coinbase.
-// Ordered by market cap rank (mid-2026 approximate).
 const DEFAULT_CRYPTO_UNIVERSE = [
   'BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD', 'AVAX-USD',
-  'DOGE-USD', 'LINK-USD', 'DOT-USD', 'MATIC-USD', 'LTC-USD', 'BCH-USD',
+  'DOGE-USD', 'LINK-USD', 'DOT-USD', 'LTC-USD', 'BCH-USD',
   'UNI-USD', 'ATOM-USD', 'XLM-USD', 'ETC-USD', 'FIL-USD', 'NEAR-USD',
   'APT-USD', 'ARB-USD', 'OP-USD', 'SUI-USD', 'INJ-USD', 'AAVE-USD',
-  'MKR-USD', 'GRT-USD', 'CRV-USD', 'COMP-USD', 'SAND-USD', 'MANA-USD',
+  'MKR-USD', 'GRT-USD', 'CRV-USD', 'COMP-USD',
+  'POL-USD', 'SHIB-USD', 'PEPE-USD',
 ] as const
 
 export interface CryptoTickerStats {
-  symbol: string             // e.g. "BTC-USD"
-  price: number              // current spot
-  priceChange24h: number     // last 24h % change
+  symbol: string
+  price: number
+  priceChange24h: number     // % change last 24h
   high24h: number
   low24h: number
   volume24h: number          // base volume
-  volumeUsd24h: number       // approximate dollar volume
+  volumeUsd24h: number       // approximate USD volume
   composite: number          // 0-100 score
   liquidityTier: 'mega' | 'large' | 'mid' | 'small'
   direction: 'bullish' | 'bearish' | 'neutral'
-  rangePositionPct: number   // where in 24h range (0 = at low, 100 = at high)
+  rangePositionPct: number
 }
 
 export interface ScanResult {
   picks: CryptoTickerStats[]
   fetchedAt: string
   universeSize: number
+  symbolsFetched: number
   errors: number
+  failedSymbols: string[]
 }
 
 export interface ScanOptions {
-  universe?: readonly string[]   // override the default universe
-  minComposite?: number          // filter picks below this score (default 60)
-  limit?: number                 // max picks returned (default 20)
+  universe?: readonly string[]
+  minComposite?: number
+  limit?: number
 }
 
-/**
- * Scan a list of crypto products via Coinbase public ticker endpoint.
- * Public endpoints don't require JWT auth so this works without credentials.
- */
 export async function runCryptoScan(options: ScanOptions = {}): Promise<ScanResult> {
   const universe = options.universe ?? DEFAULT_CRYPTO_UNIVERSE
   const minComposite = options.minComposite ?? 60
   const limit = options.limit ?? 20
 
   const results: CryptoTickerStats[] = []
+  const failedSymbols: string[] = []
   let errors = 0
 
-  // Coinbase public stats endpoint: /products/{product_id}/stats
-  // Fetch all in parallel with a concurrency cap.
-  const CONCURRENCY = 10
+  const CONCURRENCY = 6
   for (let i = 0; i < universe.length; i += CONCURRENCY) {
     const batch = universe.slice(i, i + CONCURRENCY)
-    const settled = await Promise.allSettled(batch.map(sym => fetchProductStats(sym)))
+    const settled = await Promise.allSettled(
+      batch.map(sym => fetchProductStats(sym).then(stats => ({ sym, stats })))
+    )
     for (const r of settled) {
-      if (r.status === 'fulfilled' && r.value !== null) {
-        results.push(r.value)
+      if (r.status === 'fulfilled') {
+        if (r.value.stats !== null) {
+          results.push(r.value.stats)
+        } else {
+          errors++
+          failedSymbols.push(r.value.sym)
+        }
       } else {
         errors++
+        // Settled with rejection — we lost the symbol context
+        failedSymbols.push('?')
       }
     }
   }
 
-  // Filter and sort by composite
+  if (failedSymbols.length > 0) {
+    console.warn(`[crypto-scanner] ${failedSymbols.length}/${universe.length} symbols failed: ${failedSymbols.join(',')}`)
+  }
+
   const filtered = results
     .filter(r => r.composite >= minComposite)
     .sort((a, b) => b.composite - a.composite)
@@ -91,68 +98,71 @@ export async function runCryptoScan(options: ScanOptions = {}): Promise<ScanResu
     picks: filtered,
     fetchedAt: new Date().toISOString(),
     universeSize: universe.length,
+    symbolsFetched: results.length,
     errors,
+    failedSymbols,
   }
 }
 
 /**
- * Fetch ticker + 24h stats from Coinbase public endpoints (no auth required).
- * Returns null on failure.
+ * Fetch product info from Coinbase public endpoint.
+ *
+ * Endpoint: GET /api/v3/brokerage/market/products/{product_id}
+ * Returns price, price_percentage_change_24h, volume_24h, and other fields
+ * in a single call. No auth required.
  */
 async function fetchProductStats(symbol: string): Promise<CryptoTickerStats | null> {
   try {
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), 8_000)
-    const [productRes, statsRes] = await Promise.all([
-      fetch(`${COINBASE_PUBLIC_BASE}/market/products/${encodeURIComponent(symbol)}`, { signal: ctrl.signal }),
-      fetch(`${COINBASE_PUBLIC_BASE}/market/products/${encodeURIComponent(symbol)}/ticker?limit=1`, { signal: ctrl.signal }),
-    ])
+    const res = await fetch(`${COINBASE_PUBLIC_BASE}/market/products/${encodeURIComponent(symbol)}`, {
+      signal: ctrl.signal,
+      headers: { 'cache-control': 'no-cache' },
+    })
     clearTimeout(timer)
-    if (!productRes.ok || !statsRes.ok) return null
-
-    const product = await productRes.json() as {
-      price?: string
-      price_percentage_change_24h?: string
-      volume_24h?: string
-      volume_percentage_change_24h?: string
-      base_increment?: string
-      quote_increment?: string
+    if (!res.ok) {
+      console.warn(`[crypto-scanner] ${symbol}: HTTP ${res.status}`)
+      return null
     }
-    const ticker = await statsRes.json() as {
-      trades?: Array<{ price?: string; size?: string }>
-      price?: string
+    const product = await res.json() as Record<string, unknown>
+
+    const currentPrice = Number(product.price ?? 0)
+    if (!currentPrice || !Number.isFinite(currentPrice)) {
+      console.warn(`[crypto-scanner] ${symbol}: missing/invalid price; product keys: ${Object.keys(product).slice(0, 10).join(',')}`)
+      return null
     }
 
-    const currentPrice = Number(product.price ?? ticker.price ?? (ticker.trades?.[0]?.price ?? 0))
-    if (!currentPrice || !Number.isFinite(currentPrice)) return null
+    // price_percentage_change_24h may come as "1.23" or "1.23%" string, or number
+    let change24hPct = 0
+    const rawChange = product.price_percentage_change_24h
+    if (typeof rawChange === 'string') {
+      change24hPct = Number(rawChange.replace('%', '').trim())
+    } else if (typeof rawChange === 'number') {
+      change24hPct = rawChange
+    }
+    if (!Number.isFinite(change24hPct)) change24hPct = 0
 
-    const change24hPct = Number(product.price_percentage_change_24h ?? 0)
     const baseVolume = Number(product.volume_24h ?? 0)
     const volumeUsd = baseVolume * currentPrice
 
-    // Range position approx: without explicit high/low24h from this endpoint,
-    // we approximate using current vs assumed range. If unavailable, use 50.
-    // (Full bar data would be better but adds another API call per ticker.)
+    // Approximate 24h high/low using % change (the products endpoint doesn't expose
+    // explicit 24h_high/24h_low — these come from candles or stats endpoints).
     const high24h = currentPrice * (1 + Math.max(0, change24hPct) / 100 + 0.01)
     const low24h = currentPrice * (1 - Math.max(0, -change24hPct) / 100 - 0.01)
     const rangeSize = high24h - low24h
     const rangePosition = rangeSize > 0 ? ((currentPrice - low24h) / rangeSize) * 100 : 50
 
-    const liquidityTier = volumeUsd >= 1_000_000_000 ? 'mega'
-                        : volumeUsd >= 100_000_000  ? 'large'
-                        : volumeUsd >= 10_000_000   ? 'mid'
-                        : 'small'
+    const liquidityTier: 'mega' | 'large' | 'mid' | 'small' =
+      volumeUsd >= 1_000_000_000 ? 'mega'
+      : volumeUsd >= 100_000_000  ? 'large'
+      : volumeUsd >= 10_000_000   ? 'mid'
+      : 'small'
 
-    const direction: 'bullish' | 'bearish' | 'neutral' = 
+    const direction: 'bullish' | 'bearish' | 'neutral' =
       change24hPct >= 1.5 ? 'bullish'
       : change24hPct <= -1.5 ? 'bearish'
       : 'neutral'
 
-    // Composite score 0-100:
-    //   Strong directional move (40 pts max)
-    //   Volume tier (30 pts max)
-    //   Range position aligned with direction (20 pts max)
-    //   Bonus for liquid + directional (10 pts)
     let composite = 0
     composite += Math.min(40, Math.abs(change24hPct) * 4)
     composite += liquidityTier === 'mega' ? 30
@@ -178,7 +188,8 @@ async function fetchProductStats(symbol: string): Promise<CryptoTickerStats | nu
       direction,
       rangePositionPct: Math.round(rangePosition),
     }
-  } catch {
+  } catch (e) {
+    console.warn(`[crypto-scanner] ${symbol} threw:`, e instanceof Error ? e.message : e)
     return null
   }
 }
