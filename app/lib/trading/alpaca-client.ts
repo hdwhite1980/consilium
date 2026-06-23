@@ -35,8 +35,14 @@ export interface AlpacaAccount {
   cash: number
   equity: number
   buying_power: number
-  daytrade_count: number
-  pattern_day_trader: boolean
+  // Note (2026-06-22): PDT-related fields removed.
+  // FINRA eliminated the Pattern Day Trader designation effective June 4, 2026
+  // (SR-FINRA-2025-017, SEC approved April 14, 2026). Alpaca will remove
+  // pattern_day_trader, daytrade_count, last_daytrade_count,
+  // last_daytrading_buying_power, and daytrading_buying_power from the
+  // /v2/account response by July 6, 2026. These fields had no consumers
+  // in our codebase, so they're dropped entirely rather than maintained as
+  // always-zero / always-false stubs.
 }
 
 export interface AlpacaPosition {
@@ -132,8 +138,6 @@ export class AlpacaClient {
       cash: Number(raw.cash ?? 0),
       equity: Number(raw.equity ?? 0),
       buying_power: Number(raw.buying_power ?? 0),
-      daytrade_count: Number(raw.daytrade_count ?? 0),
-      pattern_day_trader: Boolean(raw.pattern_day_trader),
     }
   }
 
