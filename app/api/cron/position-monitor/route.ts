@@ -28,7 +28,7 @@ import { loadBrokerCredentialForUse } from '@/app/lib/trading/credentials'
 import { makeAlpacaClient, type AlpacaClient, type AlpacaPosition } from '@/app/lib/trading/alpaca-client'
 import { fetchBars } from '@/app/lib/data/alpaca'
 import { calculateTechnicals } from '@/app/lib/signals/technicals'
-import { countSignals, decide, type SignalSnapshot, type Decision } from '@/app/lib/trading/position-monitor-signals'
+import { countSignals, decide, computeTrailingStop, type SignalSnapshot, type Decision, type TrailingStopResult } from '@/app/lib/trading/position-monitor-signals'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -55,6 +55,9 @@ interface OpenAttempt {
   verdict_log_id: number | null
   outcome: string
   asset_class: string | null
+  // Original Council stop from verdict_log.stop_loss — immutable reference
+  // for trailing-stop R-unit math. populated via JOIN in fetchOpenAttempts.
+  original_stop_loss: number | null
 }
 
 interface PerUserSummary {
@@ -355,8 +358,60 @@ async function processPosition(
     escalateOnConflict: pm.escalateOnConflict,
   })
 
+  // ── Trailing stop check (June 23, 2026) ──
+  // Compute milestone-based trailing stop BEFORE acting on rule engine ruling.
+  // R-unit math uses Council's original stop (att.original_stop_loss) as the
+  // immutable reference for "1R" — entry-to-original-stop distance.
+  //
+  // Coordination with rule engine:
+  //   - rule engine wants EXIT or ESCALATE → those win (stronger than trailing)
+  //   - rule engine wants TIGHTEN_STOP AND trailing wants tighter → take MAX
+  //     of the two target stops, single Alpaca call
+  //   - rule engine wants HOLD AND trailing wants tighter → apply trailing alone
+  //   - rule engine wants HOLD AND trailing wants nothing → HOLD as normal
+  //
+  // We skip trailing entirely if att.original_stop_loss is null (old positions
+  // pre-trailing or missing verdict link) or if filled price is unavailable.
+  const entryForTrailing = att.filled_avg_price ?? att.entry_price_est
+  const trailing: TrailingStopResult | null = (
+    att.original_stop_loss !== null &&
+    entryForTrailing !== null &&
+    att.stop_price !== null &&
+    side === 'buy'
+  )
+    ? computeTrailingStop({
+        side: 'buy',
+        entryPrice: entryForTrailing,
+        currentPrice: pos.current_price,
+        currentStop: att.stop_price,
+        originalStop: att.original_stop_loss,
+      })
+    : null
+
   // Execute
   if (ruling.decision === 'HOLD') {
+    // Even on HOLD, apply trailing if a milestone was crossed
+    if (trailing !== null) {
+      const result = await applyTightenToTarget(alpaca, att, pos, trailing.newStop)
+      userSummary.tightens++
+      await logResult(settings, att, ticker, {
+        ok: result.ok,
+        decision: 'TIGHTEN_STOP',
+        actionTaken: result.ok ? 'trailing_stop_advanced' : 'trailing_stop_failed',
+        snap5m, snap15m,
+        currentPrice: pos.current_price, currentStop: att.stop_price,
+        newStopPrice: result.newStop,
+        errorReason: result.ok
+          ? `${trailing.reason} (rule engine said HOLD)`
+          : result.reason,
+      })
+      if (result.ok && result.newStop !== undefined) {
+        console.log(`[position-monitor] ${ticker} TRAILING ${(att.stop_price ?? 0).toFixed(2)} → ${result.newStop.toFixed(2)} (${trailing.milestone} at +${trailing.gainR.toFixed(2)}R)`)
+        await syncTightenedStop(att, result.newStop).catch(e =>
+          console.warn(`[position-monitor] sync-trailing ${ticker}: ${e instanceof Error ? e.message : e}`))
+      }
+      return result.ok
+    }
     userSummary.holds++
     await logResult(settings, att, ticker, {
       ok: true, decision: 'HOLD', actionTaken: 'hold',
@@ -367,18 +422,43 @@ async function processPosition(
   }
 
   if (ruling.decision === 'TIGHTEN_STOP') {
-    const result = await applyTighten(alpaca, att, pos)
+    // If trailing ALSO wants tighter, take the MAX of the two target stops.
+    // Otherwise apply normal midpoint-based tighten.
+    let result: TightenResult
+    let tightenSource: 'rule_engine' | 'trailing' | 'combined' = 'rule_engine'
+
+    if (trailing !== null) {
+      // Both want to tighten. Get the rule-engine midpoint target by calling
+      // applyTighten's math directly. Then take MAX of trailing.newStop and
+      // the midpoint, and execute once at the higher target via applyTightenToTarget.
+      const current = pos.current_price
+      const oldStop = att.stop_price ?? (att.entry_price_est ?? current) * 0.97
+      const ruleMidpoint = (current + oldStop) / 2
+      const minDistance = current * 0.003
+      const ruleAdjusted = Math.min(ruleMidpoint, current - minDistance)
+      const combinedTarget = Math.max(trailing.newStop, ruleAdjusted)
+      tightenSource = combinedTarget > trailing.newStop ? 'rule_engine' : 'combined'
+      result = await applyTightenToTarget(alpaca, att, pos, combinedTarget)
+    } else {
+      result = await applyTighten(alpaca, att, pos)
+    }
+
     userSummary.tightens++
+    const reasonForLog = trailing !== null
+      ? `${ruling.reason} | trailing: ${trailing.reason} | combined source=${tightenSource}`
+      : ruling.reason
     await logResult(settings, att, ticker, {
-      ok: result.ok, decision: 'TIGHTEN_STOP', actionTaken: result.ok ? 'tightened' : 'tighten_failed',
+      ok: result.ok, decision: 'TIGHTEN_STOP',
+      actionTaken: result.ok
+        ? (trailing !== null ? 'tightened_combined' : 'tightened')
+        : 'tighten_failed',
       snap5m, snap15m,
       currentPrice: pos.current_price, currentStop: att.stop_price,
       newStopPrice: result.newStop,
       errorReason: result.ok ? undefined : result.reason,
     })
     if (result.ok && result.newStop !== undefined) {
-      console.log(`[position-monitor] ${ticker} TIGHTEN ${(att.stop_price ?? 0).toFixed(2)} → ${result.newStop.toFixed(2)} (${ruling.reason})`)
-      // Persist new stop level to trade_attempts so future runs see correct level
+      console.log(`[position-monitor] ${ticker} TIGHTEN ${(att.stop_price ?? 0).toFixed(2)} → ${result.newStop.toFixed(2)} (${reasonForLog})`)
       await syncTightenedStop(att, result.newStop).catch(e =>
         console.warn(`[position-monitor] sync-tighten ${ticker}: ${e instanceof Error ? e.message : e}`))
     }
@@ -626,6 +706,68 @@ async function applyTighten(
   }
 }
 
+/**
+ * Apply a TIGHTEN to a specific target stop level (vs applyTighten which computes
+ * its own midpoint). Used by trailing stop where the new level comes from R-unit
+ * milestone math instead of the rule engine's midpoint heuristic.
+ *
+ * Same PATCH-stop-leg machinery as applyTighten; differs only in how new_stop
+ * is determined. Still enforces "only move stop up for longs" and 0.3% buffer
+ * below current price.
+ */
+async function applyTightenToTarget(
+  alpaca: AlpacaClient,
+  att: OpenAttempt,
+  pos: AlpacaPosition,
+  targetStop: number,
+): Promise<TightenResult> {
+  if (!att.broker_order_id) {
+    return { ok: false, reason: 'no broker_order_id on attempt' }
+  }
+  const current = pos.current_price
+  const oldStop = att.stop_price ?? (att.entry_price_est ?? current) * 0.97
+
+  // Enforce "only move stop up" for longs
+  if (att.side === 'buy' && targetStop <= oldStop) {
+    return { ok: false, reason: `target stop ${targetStop.toFixed(2)} not tighter than current ${oldStop.toFixed(2)}` }
+  }
+  if (att.side === 'sell' && targetStop >= oldStop) {
+    return { ok: false, reason: `target stop ${targetStop.toFixed(2)} not tighter than current ${oldStop.toFixed(2)} (short)` }
+  }
+
+  // 0.3% buffer from current price (matches applyTighten's minDistance)
+  const minDistance = current * 0.003
+  const adjustedNewStop = att.side === 'buy'
+    ? Math.min(targetStop, current - minDistance)
+    : Math.max(targetStop, current + minDistance)
+
+  // Re-check tightening after buffer clamp
+  if ((att.side === 'buy' && adjustedNewStop <= oldStop) ||
+      (att.side === 'sell' && adjustedNewStop >= oldStop)) {
+    return { ok: false, reason: `buffer-clamped stop ${adjustedNewStop.toFixed(2)} not tighter than ${oldStop.toFixed(2)}` }
+  }
+
+  try {
+    const parent = await alpaca.getOrder(att.broker_order_id) as unknown as {
+      legs?: Array<{ id: string; type?: string; order_type?: string; status?: string }>
+    }
+    const legs = parent.legs ?? []
+    const stopLeg = legs.find(l => {
+      const t = (l.type ?? l.order_type ?? '').toLowerCase()
+      const s = (l.status ?? '').toLowerCase()
+      return (t === 'stop' || t === 'stop_limit') && (s === 'new' || s === 'accepted' || s === 'held' || s === 'pending_new')
+    })
+    if (!stopLeg) return { ok: false, reason: 'no active stop leg found on parent', newStop: adjustedNewStop }
+
+    await (alpaca as unknown as { request: (m: string, p: string, body?: unknown) => Promise<unknown> })
+      .request('PATCH', `/v2/orders/${encodeURIComponent(stopLeg.id)}`, { stop_price: adjustedNewStop.toFixed(2) })
+
+    return { ok: true, newStop: adjustedNewStop }
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message.slice(0, 200) : String(e), newStop: adjustedNewStop }
+  }
+}
+
 interface ExitResult { ok: boolean; reason?: string }
 
 /**
@@ -789,9 +931,17 @@ async function escalateToCouncil(
 async function fetchOpenAttempts(userId: string): Promise<Map<string, OpenAttempt>> {
   const admin = await getSupabaseAdmin()
   const cutoff = new Date(Date.now() - 30 * 86_400_000).toISOString()
+  // JOIN verdict_log to bring in the original Council stop (immutable reference
+  // for trailing-stop R-unit math). Use Supabase's foreign-key relationship
+  // notation rather than raw SQL. Failures on the join (missing verdict_log_id
+  // or no matching row) just leave original_stop_loss = null and trailing skips.
   const { data } = await admin
     .from('trade_attempts')
-    .select('id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, outcome, asset_class')
+    .select(`
+      id, user_id, ticker, side, qty, filled_avg_price, entry_price_est,
+      stop_price, target_price, broker_order_id, verdict_log_id, outcome, asset_class,
+      verdict_log:verdict_log_id ( stop_loss )
+    `)
     .eq('user_id', userId)
     .or('asset_class.is.null,asset_class.eq.stocks,asset_class.eq.stock')
     .in('outcome', ['placed', 'filled', 'partial_fill'])
@@ -799,6 +949,12 @@ async function fetchOpenAttempts(userId: string): Promise<Map<string, OpenAttemp
 
   const map = new Map<string, OpenAttempt>()
   for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+    // Extract joined verdict_log.stop_loss if present
+    const verdictJoin = row.verdict_log as { stop_loss?: number | string | null } | null | undefined
+    const originalStopLoss = verdictJoin?.stop_loss !== null && verdictJoin?.stop_loss !== undefined
+      ? Number(verdictJoin.stop_loss)
+      : null
+
     const att: OpenAttempt = {
       id: String(row.id),
       user_id: String(row.user_id),
@@ -813,6 +969,7 @@ async function fetchOpenAttempts(userId: string): Promise<Map<string, OpenAttemp
       verdict_log_id: row.verdict_log_id !== null && row.verdict_log_id !== undefined ? Number(row.verdict_log_id) : null,
       outcome: String(row.outcome),
       asset_class: row.asset_class !== null && row.asset_class !== undefined ? String(row.asset_class) : null,
+      original_stop_loss: originalStopLoss !== null && Number.isFinite(originalStopLoss) ? originalStopLoss : null,
     }
     map.set(att.ticker.toUpperCase(), att)
   }

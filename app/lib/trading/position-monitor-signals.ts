@@ -284,3 +284,117 @@ export function decide(inputs: DecisionInputs): DecisionResult {
   }
   return { decision: 'HOLD', reason: `quiet: 5m=${b5}, 15m=${b15}` }
 }
+
+// ─────────────────────────────────────────────────────────────
+// Trailing stop — milestone-based gain locking
+// ─────────────────────────────────────────────────────────────
+
+export interface TrailingStopInputs {
+  side: 'buy' | 'sell'
+  entryPrice: number      // filled_avg_price or entry_price_est
+  currentPrice: number    // live broker price
+  currentStop: number     // current stop (may have been tightened previously)
+  originalStop: number    // verdict's original stop (immutable reference)
+}
+
+export interface TrailingStopResult {
+  newStop: number
+  milestone: '1R_breakeven' | '2R_lock_half' | '3R_lock_1_5R' | '4R_trail_1R'
+  gainR: number
+  reason: string
+}
+
+/**
+ * Compute milestone-based trailing stop.
+ *
+ * Uses R-unit math where R = entryPrice - originalStop (per share risk taken
+ * when entering). Milestones:
+ *
+ *   +1R gain → stop to breakeven (entry)
+ *   +2R gain → stop to entry + 0.5R (lock half the gain)
+ *   +3R gain → stop to entry + 1.5R (lock most of the gain)
+ *   +4R+gain → trail by 1R below current (true trailing)
+ *
+ * Only moves stop UP (longs) or DOWN (shorts) — never the other direction.
+ * Returns null when no milestone is crossed OR when the milestone's stop
+ * isn't tighter than current.
+ *
+ * Defensive checks: skip if originalStop is invalid, riskPerShare is <0.1%
+ * of entry (would cause noisy/runaway behavior), or any math goes NaN.
+ */
+export function computeTrailingStop(inputs: TrailingStopInputs): TrailingStopResult | null {
+  const { side, entryPrice, currentPrice, currentStop, originalStop } = inputs
+
+  if (side !== 'buy') {
+    // Trailing for short positions is the mirror; we don't currently trade shorts,
+    // so skip rather than risk wrong math. Future: implement sell-side mirror.
+    return null
+  }
+
+  if (!Number.isFinite(entryPrice) || entryPrice <= 0 ||
+      !Number.isFinite(currentPrice) || currentPrice <= 0 ||
+      !Number.isFinite(currentStop) || currentStop <= 0 ||
+      !Number.isFinite(originalStop) || originalStop <= 0) {
+    return null
+  }
+
+  const riskPerShare = entryPrice - originalStop
+  if (riskPerShare <= 0) {
+    // Original stop wasn't below entry — broken data or short position miscoded
+    return null
+  }
+  const riskPctOfEntry = riskPerShare / entryPrice
+  if (riskPctOfEntry < 0.001) {
+    // Stop too tight to entry — math would amplify noise into runaway trailing
+    return null
+  }
+
+  const gainDollars = currentPrice - entryPrice
+  if (gainDollars <= 0) {
+    // Position not in profit yet — nothing to trail
+    return null
+  }
+  const gainR = gainDollars / riskPerShare
+
+  let proposedStop: number
+  let milestone: TrailingStopResult['milestone']
+
+  if (gainR >= 4) {
+    // True trailing — stop sits 1R below current price
+    proposedStop = currentPrice - riskPerShare
+    milestone = '4R_trail_1R'
+  } else if (gainR >= 3) {
+    // Lock +1.5R gain
+    proposedStop = entryPrice + (riskPerShare * 1.5)
+    milestone = '3R_lock_1_5R'
+  } else if (gainR >= 2) {
+    // Lock +0.5R gain
+    proposedStop = entryPrice + (riskPerShare * 0.5)
+    milestone = '2R_lock_half'
+  } else if (gainR >= 1) {
+    // Move to breakeven
+    proposedStop = entryPrice
+    milestone = '1R_breakeven'
+  } else {
+    return null
+  }
+
+  // Only move stop UP — never widen
+  if (proposedStop <= currentStop) return null
+
+  // Sanity: don't propose a stop above current price minus a tiny buffer
+  // (would be an instant-fill). 0.3% buffer matches applyTighten's minDistance.
+  const maxAllowedStop = currentPrice * 0.997
+  if (proposedStop >= maxAllowedStop) {
+    proposedStop = maxAllowedStop
+    // Recheck after clamp
+    if (proposedStop <= currentStop) return null
+  }
+
+  return {
+    newStop: proposedStop,
+    milestone,
+    gainR,
+    reason: `trailing ${milestone} at +${gainR.toFixed(2)}R gain: stop ${currentStop.toFixed(2)} → ${proposedStop.toFixed(2)}`,
+  }
+}
