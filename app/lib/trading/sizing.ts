@@ -37,11 +37,85 @@ export interface SizingInput {
   maxDollarRiskPerTrade?: number | null
   minTradeNotional?: number | null
   maxTradeNotional?: number | null
+
+  // Quality-based sizing inputs (June 23, 2026).
+  // Stronger setups get bigger size; weaker setups get smaller size.
+  // Inputs come from the Trader's verdict (grade, confidence, R:R).
+  //
+  // If qualityGrade/qualityConfidence/qualityRiskReward are provided, the
+  // computed multiplier scales dollarRisk between [0.25, 1.5] of base.
+  //
+  // PASS bypass interaction: when traderPositionSizePct is already <1.0
+  // (e.g. 0.5 for PASS bypass), the quality multiplier is SKIPPED so the
+  // bypass's reduced size doesn't get compounded into near-zero.
+  qualityGrade?: 'A' | 'B' | 'C' | null
+  qualityConfidence?: number | null
+  qualityRiskReward?: number | null
 }
 
 export type SizingOutcome =
-  | { ok: true; qty: number; dollarRisk: number; positionDollar: number; rationale: string }
+  | { ok: true; qty: number; dollarRisk: number; positionDollar: number; rationale: string; qualityMultiplier?: number }
   | { ok: false; reason: string }
+
+/**
+ * Quality-based sizing multiplier. Stronger setups get bigger size.
+ *
+ * Inputs:
+ *   grade        — Trader's quality grade (A best, C worst)
+ *   confidence   — Council confidence percent (0-100)
+ *   riskReward   — Council's R:R (e.g. 2.5 for 2.5:1)
+ *
+ * Returns a multiplier in [0.25, 1.5] applied to base dollarRisk.
+ *
+ * Calibration target (June 2026):
+ *   A-grade × high-conf × high-RR → ~1.2 (120% normal size)
+ *   B-grade × mid-conf × decent-RR → ~0.85
+ *   C-grade × marginal-conf × marginal-RR → ~0.25 (floor)
+ *
+ * Returns null if any input is missing — caller treats as 1.0 (no scaling).
+ */
+export function computeQualityMultiplier(args: {
+  grade: 'A' | 'B' | 'C' | null | undefined
+  confidence: number | null | undefined
+  riskReward: number | null | undefined
+}): { multiplier: number; rationale: string } | null {
+  const { grade, confidence, riskReward } = args
+  if (!grade || confidence === null || confidence === undefined ||
+      riskReward === null || riskReward === undefined) {
+    return null
+  }
+  if (!Number.isFinite(confidence) || !Number.isFinite(riskReward)) {
+    return null
+  }
+
+  // Grade factor — A is canonical 1.0, B and C step down
+  const gradeMult = grade === 'A' ? 1.0
+                  : grade === 'B' ? 0.75
+                  : 0.5
+
+  // Confidence factor — high conviction gets full size
+  const confMult = confidence >= 80 ? 1.0
+                 : confidence >= 70 ? 0.85
+                 : confidence >= 60 ? 0.70
+                 : 0.55
+
+  // R:R factor — better risk/reward earns size, marginal R:R shrinks size
+  const rrMult = riskReward >= 3.0 ? 1.2
+               : riskReward >= 2.0 ? 1.0
+               : riskReward >= 1.5 ? 0.75
+               : 0.5
+
+  const raw = gradeMult * confMult * rrMult
+  // Clamp to defensible bounds — keeps a Grade-C trade from going below 25%
+  // of normal (still meaningful) and an A-grade from going above 150%
+  // (avoid overconcentration when stars align).
+  const multiplier = Math.max(0.25, Math.min(1.5, raw))
+
+  return {
+    multiplier,
+    rationale: `quality ${multiplier.toFixed(2)}x (grade=${grade}:${gradeMult}, conf=${confidence}%:${confMult}, R:R=${riskReward.toFixed(1)}:${rrMult.toFixed(2)})`,
+  }
+}
 
 export function computePositionSize(input: SizingInput): SizingOutcome {
   const {
@@ -57,6 +131,9 @@ export function computePositionSize(input: SizingInput): SizingOutcome {
     maxDollarRiskPerTrade = null,
     minTradeNotional = null,
     maxTradeNotional = null,
+    qualityGrade = null,
+    qualityConfidence = null,
+    qualityRiskReward = null,
   } = input
 
   // Defensive validation — these should be caught upstream but we double-check
@@ -104,8 +181,27 @@ export function computePositionSize(input: SizingInput): SizingOutcome {
     return { ok: false, reason: `Account too small: $${dollarRisk.toFixed(2)} risk below $${minDollarRisk}` }
   }
 
-  // Apply Trader's positionSizePct scaling
+  // Apply Trader's positionSizePct scaling (e.g. PASS bypass uses 0.5)
   dollarRisk *= traderPositionSizePct
+
+  // Quality multiplier (June 23 2026): scale by setup quality.
+  // SKIPPED when traderPositionSizePct < 1 — that's a PASS bypass case and
+  // the bypass's reduced size shouldn't be compounded with quality math.
+  // PASS bypass trades are weak by definition; the 0.5x is the cap.
+  let qualityMultiplierApplied: number | undefined = undefined
+  let qualityRationale: string | null = null
+  if (traderPositionSizePct >= 0.99) {
+    const qm = computeQualityMultiplier({
+      grade: qualityGrade,
+      confidence: qualityConfidence,
+      riskReward: qualityRiskReward,
+    })
+    if (qm !== null) {
+      dollarRisk *= qm.multiplier
+      qualityMultiplierApplied = qm.multiplier
+      qualityRationale = qm.rationale
+    }
+  }
 
   // Risk-parity qty (whole shares)
   let qty = Math.floor(dollarRisk / perShareRisk)
@@ -172,8 +268,9 @@ export function computePositionSize(input: SizingInput): SizingOutcome {
     qty,
     dollarRisk,
     positionDollar,
+    qualityMultiplier: qualityMultiplierApplied,
     rationale: capped
-      ? `${qty} shares (capped by ${cappedReason ?? 'cap'}, $${dollarRisk.toFixed(2)} risk)`
-      : `${qty} shares ($${dollarRisk.toFixed(2)} risk at ${(stopWidthPct * 100).toFixed(2)}% stop)`,
+      ? `${qty} shares (capped by ${cappedReason ?? 'cap'}, $${dollarRisk.toFixed(2)} risk${qualityRationale ? `, ${qualityRationale}` : ''})`
+      : `${qty} shares ($${dollarRisk.toFixed(2)} risk at ${(stopWidthPct * 100).toFixed(2)}% stop${qualityRationale ? `, ${qualityRationale}` : ''})`,
   }
 }

@@ -303,6 +303,10 @@ export async function decideForUser(args: {
   const effectiveTraderSize = Math.min(1, Math.max(0, traderSize * sizeMultiplier))
 
   // Per-trade bounds from user_trading_settings (Audit Phase 2).
+  // Quality-based sizing (June 23 2026): pass grade, confidence, R:R so
+  // sizing can scale dollarRisk by setup quality. Skipped automatically
+  // for PASS bypass (traderPositionSizePct < 1) — the bypass's reduced
+  // size shouldn't be compounded with quality math.
   const sizing = computePositionSize({
     accountEquity: effectiveEquity,
     riskPerTradePct: settings.riskPerTradePct,
@@ -314,6 +318,10 @@ export async function decideForUser(args: {
     maxDollarRiskPerTrade: settings.maxDollarRiskPerTrade,
     minTradeNotional: settings.minTradeNotional,
     maxTradeNotional: settings.maxTradeNotional,
+    qualityGrade: (grade === 'A' || grade === 'B' || grade === 'C') ? grade : null,
+    qualityConfidence: verdict.confidence !== null ? Number(verdict.confidence) : null,
+    qualityRiskReward: verdict.trader_risk_reward !== null && verdict.trader_risk_reward !== undefined
+      ? Number(verdict.trader_risk_reward) : null,
   })
   if (!sizing.ok) {
     return { kind: 'skip', reason: `sizing: ${sizing.reason}`, shouldHalt: false }
