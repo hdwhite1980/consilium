@@ -350,6 +350,30 @@ export class CoinbaseClient {
   }
 
   /**
+   * Get the full product details for a symbol. Returns the raw object from
+   * Coinbase's /products/{id} endpoint, which includes price,
+   * price_percentage_change_24h, volume_24h, base_increment, etc.
+   *
+   * Used by crypto-scanner to compute composite scores via authenticated
+   * endpoint (30 req/sec rate limit vs 10/sec public).
+   */
+  async getProduct(symbol: string): Promise<Record<string, unknown>> {
+    return await this.request<Record<string, unknown>>(
+      'GET', `/products/${encodeURIComponent(symbol)}`,
+    )
+  }
+
+  /**
+   * Get candles via authenticated endpoint. Same as the public
+   * /market/products/{id}/candles but with 30 req/sec rate limit.
+   */
+  async getCandles(symbol: string, granularity: string, startUnix: number, endUnix: number): Promise<Array<Record<string, unknown>>> {
+    const path = `/products/${encodeURIComponent(symbol)}/candles?start=${startUnix}&end=${endUnix}&granularity=${granularity}`
+    const raw = await this.request<{ candles?: Array<Record<string, unknown>> }>('GET', path)
+    return raw.candles ?? []
+  }
+
+  /**
    * Check if a product (e.g. "BTC-USD") is tradable on Coinbase.
    */
   async assetTradable(symbol: string): Promise<{ tradable: boolean; reason?: string }> {

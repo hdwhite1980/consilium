@@ -36,11 +36,18 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const users: UserResult[] = []
 
   try {
-    // Run scanner once (no per-user variation since universe is shared)
-    const scan = await runCryptoScan({ minComposite: 65, limit: 10 })
-
     const enabledUsers = (await listEnabledTradingUsers())
       .filter(s => isAssetClassEnabled(s, 'crypto'))
+
+    // Run scanner per-user so the authenticated path activates when creds
+    // are available (3x rate limit). The module-level cache means repeat
+    // users share fetched data within the 60s window.
+    let scan
+    if (enabledUsers.length > 0) {
+      scan = await runCryptoScan({ minComposite: 65, limit: 10, userId: enabledUsers[0].userId })
+    } else {
+      scan = await runCryptoScan({ minComposite: 65, limit: 10 })
+    }
 
     for (const settings of enabledUsers) {
       const result: UserResult = {

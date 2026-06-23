@@ -25,7 +25,7 @@
 //   Max 300 candles per call.
 // =============================================================
 
-import { calculateTechnicals, type Bar, type TechnicalSignals } from '@/app/lib/trading/technicals'
+import { calculateTechnicals, type Bar, type TechnicalSignals } from '@/app/lib/signals/technicals'
 
 const COINBASE_PUBLIC_BASE = 'https://api.coinbase.com/api/v3/brokerage'
 
