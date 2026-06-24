@@ -114,16 +114,42 @@ export function repairJSON(raw: string): string {
   return result
 }
 
+// Walk forward from an opening brace, tracking string state + escapes, and
+// return the index of the brace that closes it (depth back to 0), or -1 if
+// the object is never closed. Used to extract the FIRST complete JSON object
+// so trailing prose the model may append (e.g. a "**CORRECTION ...**" note)
+// is ignored instead of poisoning the slice.
+function findMatchingBraceEnd(s: string, openIdx: number): number {
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let i = openIdx; i < s.length; i++) {
+    const ch = s[i]
+    if (escaped) { escaped = false; continue }
+    if (ch === '\\') { escaped = true; continue }
+    if (ch === '"') { inString = !inString; continue }
+    if (inString) continue
+    if (ch === '{') depth++
+    else if (ch === '}') {
+      depth--
+      if (depth === 0) return i
+    }
+  }
+  return -1
+}
+
 export function parseJSON<T>(text: string): T {
   if (!text || typeof text !== 'string') throw new Error('No JSON in response --- empty or non-string input')
   const clean = text.replace(/```json|```/g, '').trim()
   const start = clean.indexOf('{')
-  const end = clean.lastIndexOf('}')
-  if (start === -1 || end === -1) {
+  if (start === -1) {
     console.error('[parseJSON] No JSON found in:', clean.slice(0, 200))
     throw new Error('No JSON in response')
   }
-  const slice = clean.slice(start, end + 1)
+  // First complete object via balanced braces; fall back to the tail (from
+  // the first brace) if it never closes, so the repair pass below still runs.
+  const matchEnd = findMatchingBraceEnd(clean, start)
+  const slice = matchEnd !== -1 ? clean.slice(start, matchEnd + 1) : clean.slice(start)
   try {
     return JSON.parse(slice) as T
   } catch {

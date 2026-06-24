@@ -388,17 +388,47 @@ function validateOutput(
 // when Claude returned a 6000-token response that hit the cap mid-array.
 // ─────────────────────────────────────────────────────────────
 
+// Walk forward from an opening brace, tracking string state + escapes, and
+// return the index of the brace that closes it (depth back to 0), or -1 if
+// the object is never closed (truncated response).
+function findMatchingBraceEnd(s: string, openIdx: number): number {
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let i = openIdx; i < s.length; i++) {
+    const ch = s[i]
+    if (escaped) { escaped = false; continue }
+    if (ch === '\\') { escaped = true; continue }
+    if (ch === '"') { inString = !inString; continue }
+    if (inString) continue
+    if (ch === '{') depth++
+    else if (ch === '}') {
+      depth--
+      if (depth === 0) return i
+    }
+  }
+  return -1
+}
+
 function parseJSON<T>(text: string): T {
   // Strip markdown fences
   let cleaned = text.replace(/```json\s*|\s*```/g, '').trim()
 
-  // Find outer object braces
+  // Find the FIRST complete JSON object via balanced-brace matching.
+  // Using lastIndexOf('}') breaks when the model appends trailing prose
+  // that contains braces (e.g. a "**CORRECTION — ...**" note after a valid
+  // object, runId=233 2026-06-24): the slice then spans the real JSON plus
+  // the trailing text and JSON.parse fails with "non-whitespace character
+  // after JSON at position N". Walking brace depth (string-aware) stops at
+  // the first object's real close and ignores anything after it.
   const start = cleaned.indexOf('{')
-  const end = cleaned.lastIndexOf('}')
-  if (start === -1 || end === -1) {
+  if (start === -1) {
     throw new Error(`No JSON object in response (length ${cleaned.length}, first 200 chars: ${cleaned.slice(0, 200)})`)
   }
-  let candidate = cleaned.slice(start, end + 1)
+  const matchEnd = findMatchingBraceEnd(cleaned, start)
+  // If no matching close was found the response is truncated; keep the tail
+  // so attemptTruncationRecovery() below can close it at the last element.
+  let candidate = matchEnd !== -1 ? cleaned.slice(start, matchEnd + 1) : cleaned.slice(start)
 
   // Repair: remove trailing commas before } or ] (common LLM glitch)
   // e.g. {"a": 1,} → {"a": 1}, [1, 2, 3,] → [1, 2, 3]
