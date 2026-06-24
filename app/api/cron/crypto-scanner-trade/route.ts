@@ -79,6 +79,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       })
     }
 
+    // Loose probe over the SAME (now-cached) universe with all filters off.
+    // Decisive diagnostic: if this ALSO returns 0 with zeroed stats, the field
+    // mapping in computeStats is broken; if it returns real movers, the strict
+    // scan thresholds (bullish + composite 65 + 2% move) are simply too high
+    // for the current tape.
+    const probe = await runCryptoScan({ minComposite: 0, minMovement: 0, minVolume: 0, limit: 8 })
+
     scanDiag = {
       universeSize: scan.universeSize,
       postFilterSize: scan.postFilterSize,
@@ -94,6 +101,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         change24h: Number(p.priceChange24h.toFixed(2)),
         volUsdM: Number((p.volumeUsd24h / 1e6).toFixed(1)),
       })),
+      probe: {
+        survived: probe.postFilterSize,
+        topByComposite: probe.picks.map(p => ({
+          symbol: p.symbol,
+          composite: p.composite,
+          direction: p.direction,
+          change24h: Number(p.priceChange24h.toFixed(2)),
+          volUsdM: Number((p.volumeUsd24h / 1e6).toFixed(1)),
+        })),
+      },
     }
 
     for (const settings of enabledUsers) {
