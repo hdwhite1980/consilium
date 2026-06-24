@@ -1334,13 +1334,24 @@ interface AlpacaBarRaw {
 
 async function fetchBarsForTimeframe(
   ticker: string,
-  timeframe: '5Min' | '15Min',
+  timeframe: '5Min' | '15Min' | '1H' | '1D',
   limit: number,
 ): Promise<AlpacaBarRaw[]> {
-  // For 15Min we can use the existing fetchBars('1D') which returns 15-min
-  // bars. Sliced to last N. Cleaner: it already handles SIP/IEX fallback.
+  // 15Min / 1H / 1D map onto the existing fetchBars() ranges, which already
+  // handle SIP/IEX fallback and pagination:
+  //   '1D' range  → 15-minute bars
+  //   '1W' range  → 1-hour bars
+  //   '1M' range  → daily bars
   if (timeframe === '15Min') {
     const bars = await fetchBars(ticker, '1D').catch(() => [])
+    return bars.slice(-limit) as AlpacaBarRaw[]
+  }
+  if (timeframe === '1H') {
+    const bars = await fetchBars(ticker, '1W').catch(() => [])
+    return bars.slice(-limit) as AlpacaBarRaw[]
+  }
+  if (timeframe === '1D') {
+    const bars = await fetchBars(ticker, '1M').catch(() => [])
     return bars.slice(-limit) as AlpacaBarRaw[]
   }
 
