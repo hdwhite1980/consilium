@@ -112,7 +112,7 @@ CORE PRINCIPLES:
 
 9. MAGNITUDE: high = expecting 5%+ move, medium = 2-5%, low = <2%.
 
-10. STRICT JSON OUTPUT. No markdown fences, no preamble, no explanatory text outside JSON. Use plain numbers (no $ signs, no commas).
+10. STRICT JSON OUTPUT. No markdown fences, no preamble, no explanatory text outside JSON. Use plain numbers (no $ signs, no commas). Your ENTIRE response is ONE JSON object. Emit nothing after the final closing brace — no corrections, no "CORRECTION" addenda, no notes, no commentary. If an entry is wrong or you change your mind, fix it INLINE before you write the closing brace. Once the closing brace is written, you are done — stop immediately.
 
 11. SCHEDULED CATALYSTS DRIVE TOMORROW STORIES. The third input — "SCHEDULED CATALYSTS" — lists earnings reports, economic events (FOMC, CPI, NFP, jobs), and after-hours moves expected to be in focus the next trading session. When this input is non-empty, create stories anchored to sessionAnchor='tomorrow' (or 'weekend' if next trading day is Mon and we're currently Fri after-hours, Sat, or Sun) for the most notable scheduled events. Tomorrow stories must explicitly reference the SCHEDULED nature: "MSFT reports earnings tomorrow after close, options pricing ±3.8% move into the print" — NOT "MSFT had a strong day today."
 
@@ -214,7 +214,7 @@ Now produce your classification. Walk through these steps in order:
 
   STEP 4 — PRODUCE METADATA. marketTheme is the single dominant theme this run (today's news AND tomorrow's setup). marketStatus is one sentence on overall mood. summary is 2-3 sentences on the most important takeaways INCLUDING what's on the docket for next session.
 
-OUTPUT JSON ONLY (no preamble, no markdown):
+OUTPUT EXACTLY ONE JSON OBJECT — nothing before the opening brace, nothing after the closing brace (no corrections, notes, or commentary):
 {
   "storyUpdates": [
     {
@@ -590,6 +590,10 @@ export async function classifyActiveStories(
 
   const msg = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
+    // Low temperature: this is a classification task, not creative writing.
+    // At the SDK default (1.0) the model was prone to ramble and append
+    // self-corrections after the JSON (runId=233). 0.2 keeps it disciplined.
+    temperature: 0.2,
     // Bumped from 6000 → 12000 on 2026-06-23 after Bug 24:
     // 6000-token response was being cut mid-array, breaking JSON.parse.
     // 12000 gives Claude room for many story updates + new stories without
