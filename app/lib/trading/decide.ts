@@ -347,9 +347,11 @@ export async function decideForUser(args: {
     return { kind: 'skip', reason: 'user has tradeStocks=false', shouldHalt: false }
   }
 
-  // 7. Sell-short check (we don't short in v1 — user would need margin + locate)
-  if (side === 'sell') {
-    return { kind: 'skip', reason: 'short-sell BEARISH trades not supported in v1 (no margin/locate flow)', shouldHalt: false }
+  // 7. Short gating. BEARISH trades are short (sell-to-open) and stay OFF
+  // unless the user opted in. Broker-side gates (shortable symbol, margin
+  // account) are enforced at steps 8-9 once we have the asset + account.
+  if (side === 'sell' && !settings.allowShorts) {
+    return { kind: 'skip', reason: 'short trades disabled (set allowShorts=true to enable BEARISH/short entries)', shouldHalt: false }
   }
 
   // 8. Symbol normalization + Alpaca tradability
@@ -357,6 +359,11 @@ export async function decideForUser(args: {
   const tradable = await alpaca.assetTradable(symbol)
   if (!tradable.tradable) {
     return { kind: 'skip', reason: `Alpaca: ${tradable.reason ?? 'not tradable'}`, shouldHalt: false }
+  }
+  // Short locate: the broker must flag the symbol shortable. (Hard-to-borrow
+  // names — easyToBorrow=false — are still allowed; only non-shortable blocks.)
+  if (side === 'sell' && tradable.shortable === false) {
+    return { kind: 'skip', reason: `${symbol} is not shortable on Alpaca (no locate available)`, shouldHalt: false }
   }
 
   // 9. Sizing
@@ -367,6 +374,17 @@ export async function decideForUser(args: {
     positions = await alpaca.positions()
   } catch (e) {
     return { kind: 'halt', reason: `Alpaca account fetch failed: ${e instanceof Error ? e.message.slice(0, 200) : String(e)}`, shouldHalt: true }
+  }
+
+  // Short account capability: cash accounts (multiplier 1) cannot short, and
+  // the account must have shorting enabled. Skip (not halt) — it's a per-trade
+  // config issue, not an account-wide emergency.
+  if (side === 'sell' && (!account.shorting_enabled || account.multiplier <= 1)) {
+    return {
+      kind: 'skip',
+      reason: `account cannot short (shorting_enabled=${account.shorting_enabled}, multiplier=${account.multiplier}); needs a margin account with shorting enabled`,
+      shouldHalt: false,
+    }
   }
 
   // 10. Kill switches

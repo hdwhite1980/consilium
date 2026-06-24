@@ -31,6 +31,10 @@ export interface UserTradingSettings {
   tradeForex: boolean
   // (futures has no enable flag prior; tradeFutures introduced below)
   tradeFutures: boolean
+  // Shorting (per-user opt-in). When true, BEARISH verdicts may place short
+  // (sell-to-open) bracket orders. Gated again at decide-time on a margin
+  // account with shorting enabled and a shortable symbol. Default false.
+  allowShorts: boolean
   // Council grade floor
   minGrade: 'A' | 'B' | 'C'
   lastProcessedVerdictId: number | null
@@ -91,6 +95,7 @@ export const DEFAULT_TRADING_SETTINGS: Omit<UserTradingSettings, 'id' | 'userId'
   tradeOptions: false,
   tradeForex: false,
   tradeFutures: false,
+  allowShorts: false,
   minGrade: 'B',
   lastProcessedVerdictId: null,
   scannerEnabled: false,
@@ -130,6 +135,7 @@ interface DbRow {
   max_daily_loss_pct: string | number; max_concurrent_pos: number; max_consec_losses: number
   trade_stocks: boolean; trade_crypto: boolean; trade_options: boolean; trade_forex: boolean
   trade_futures: boolean | null
+  allow_shorts: boolean | null
   min_grade: string | null; last_processed_verdict_id: number | string | null
   scanner_enabled: boolean; scanner_max_concurrent: number; scanner_min_composite: number
   scanner_max_position_pct: string | number | null
@@ -169,6 +175,7 @@ function rowToSettings(row: DbRow): UserTradingSettings {
     tradeStocks: row.trade_stocks, tradeCrypto: row.trade_crypto,
     tradeOptions: row.trade_options, tradeForex: row.trade_forex,
     tradeFutures: row.trade_futures ?? false,
+    allowShorts: row.allow_shorts ?? false,
     minGrade: (row.min_grade ?? 'B') as 'A' | 'B' | 'C',
     lastProcessedVerdictId: row.last_processed_verdict_id !== null && row.last_processed_verdict_id !== undefined
       ? Number(row.last_processed_verdict_id) : null,
@@ -237,6 +244,7 @@ export async function upsertUserTradingSettings(
     tradeStocks: 'trade_stocks', tradeCrypto: 'trade_crypto',
     tradeOptions: 'trade_options', tradeForex: 'trade_forex',
     tradeFutures: 'trade_futures',
+    allowShorts: 'allow_shorts',
     minGrade: 'min_grade', lastProcessedVerdictId: 'last_processed_verdict_id',
     scannerEnabled: 'scanner_enabled', scannerMaxConcurrent: 'scanner_max_concurrent',
     scannerMinComposite: 'scanner_min_composite',

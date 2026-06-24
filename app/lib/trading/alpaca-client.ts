@@ -35,6 +35,11 @@ export interface AlpacaAccount {
   cash: number
   equity: number
   buying_power: number
+  // Shorting support. shorting_enabled is Alpaca's account-level flag;
+  // multiplier > 1 indicates a margin account (cash accounts are 1 and
+  // cannot short). Both must hold before we place a sell-to-open order.
+  shorting_enabled: boolean
+  multiplier: number
   // Note (2026-06-22): PDT-related fields removed.
   // FINRA eliminated the Pattern Day Trader designation effective June 4, 2026
   // (SR-FINRA-2025-017, SEC approved April 14, 2026). Alpaca will remove
@@ -138,6 +143,8 @@ export class AlpacaClient {
       cash: Number(raw.cash ?? 0),
       equity: Number(raw.equity ?? 0),
       buying_power: Number(raw.buying_power ?? 0),
+      shorting_enabled: Boolean(raw.shorting_enabled ?? false),
+      multiplier: Number(raw.multiplier ?? 1),
     }
   }
 
@@ -158,15 +165,19 @@ export class AlpacaClient {
    * Verify an asset is tradable on Alpaca. Catches symbol normalization
    * issues (BRK.B vs BRK-B vs BRKB) before order placement.
    */
-  async assetTradable(symbol: string): Promise<{ tradable: boolean; reason?: string }> {
+  async assetTradable(symbol: string): Promise<{ tradable: boolean; shortable?: boolean; easyToBorrow?: boolean; reason?: string }> {
     try {
-      const raw = await this.request<{ tradable?: boolean; status?: string }>(
+      const raw = await this.request<{ tradable?: boolean; status?: string; shortable?: boolean; easy_to_borrow?: boolean }>(
         'GET', `/v2/assets/${encodeURIComponent(symbol)}`
       )
       if (raw.tradable !== true) {
         return { tradable: false, reason: `Asset not tradable (status: ${raw.status})` }
       }
-      return { tradable: true }
+      return {
+        tradable: true,
+        shortable: raw.shortable === true,
+        easyToBorrow: raw.easy_to_borrow === true,
+      }
     } catch (e) {
       return {
         tradable: false,
