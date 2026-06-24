@@ -41,6 +41,16 @@ const MIN_BARS = 30
 const BARS_TO_FETCH_5MIN = 80
 const BARS_TO_FETCH_15MIN = 80
 
+// ── Re-entry config ──
+// After the monitor EXITs a position, the ticker stays on a re-entry watch for
+// this many calendar days (~5 trading days). Within the window, if the original
+// DIRECTIONAL setup returns (bullish signals for a long thesis, bearish for a
+// short), the monitor re-enters at the same size and same stop distance.
+const REENTRY_WINDOW_DAYS = 7
+const MAX_REENTRIES = 2
+// Minimum directional 5m signals required to call it a fresh entry setup.
+const REENTRY_MIN_SIGNALS = 2
+
 interface OpenAttempt {
   id: string
   user_id: string
@@ -180,6 +190,10 @@ async function processUser(settings: UserTradingSettings, userSummary: PerUserSu
   }
   if (positions.length === 0) {
     console.log(`[position-monitor] user=${settings.userId} alpaca returned 0 open positions`)
+    // Don't return early — exited tickers may still be on the re-entry watch,
+    // which is scanned below regardless of whether anything is open right now.
+    await runReentryPass(settings, alpaca, new Set<string>()).catch(e =>
+      console.warn(`[position-monitor] reentry pass user=${settings.userId}: ${e instanceof Error ? e.message : e}`))
     return
   }
   console.log(
@@ -228,6 +242,12 @@ async function processUser(settings: UserTradingSettings, userSummary: PerUserSu
       })
     }
   }
+
+  // Re-entry pass: scan watched (exited) tickers for a returning setup. Pass the
+  // currently-open tickers so we never re-enter something we already hold.
+  const openTickers = new Set(positions.map(p => p.symbol.toUpperCase()))
+  await runReentryPass(settings, alpaca, openTickers).catch(e =>
+    console.warn(`[position-monitor] reentry pass user=${settings.userId}: ${e instanceof Error ? e.message : e}`))
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -431,6 +451,10 @@ async function processPosition(
       // Persist closure to trade_attempts so lifecycle/dashboard see truth
       await recordExitClosure(att, pos, 'monitor_exit').catch(e =>
         console.warn(`[position-monitor] record-exit ${ticker}: ${e instanceof Error ? e.message : e}`))
+      // Add to the re-entry watch: if the original directional setup returns
+      // within the window, the monitor can re-enter (dip-then-recover).
+      await recordReentryWatch(att, pos).catch(e =>
+        console.warn(`[position-monitor] reentry-watch ${ticker}: ${e instanceof Error ? e.message : e}`))
     }
     return result.ok
   }
@@ -463,6 +487,8 @@ async function processPosition(
       if (result.ok) {
         await recordExitClosure(att, pos, 'escalated_exit').catch(e =>
           console.warn(`[position-monitor] record-exit ${ticker}: ${e instanceof Error ? e.message : e}`))
+        await recordReentryWatch(att, pos).catch(e =>
+          console.warn(`[position-monitor] reentry-watch ${ticker}: ${e instanceof Error ? e.message : e}`))
       }
     } else if (escalation.action === 'TIGHTEN_STOP') {
       const result = await applyTighten(alpaca, att, pos)
@@ -585,6 +611,247 @@ async function recordExitClosure(
     `[position-monitor] record-exit ${att.ticker}: ` +
     `${outcome}, pnl $${pnl.toFixed(2)} (entry ${entryFill.toFixed(2)} -> exit ${exitPrice.toFixed(2)}, qty ${qty})`,
   )
+}
+
+// ─────────────────────────────────────────────────────────────
+// Re-entry — watch exited tickers, re-enter if the directional setup returns
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Record an exited ticker on the re-entry watch. Read-first upsert keyed on
+ * (user_id, verdict_log_id): a re-exit of a re-entered position updates the same
+ * row and never resets reentry_count or revives an exhausted thesis.
+ */
+async function recordReentryWatch(att: OpenAttempt, pos: AlpacaPosition): Promise<void> {
+  if (att.verdict_log_id === null) return                      // need a thesis to re-enter on
+  if (att.original_stop_loss === null) return                  // need a stop distance
+  const side = att.side === 'sell' ? 'sell' : 'buy'
+  const entry = att.filled_avg_price ?? att.entry_price_est
+  if (entry === null || !Number.isFinite(entry)) return
+
+  const admin = await getSupabaseAdmin()
+  const nowIso = new Date().toISOString()
+
+  const { data: existing } = await admin
+    .from('reentry_watch')
+    .select('id, reentry_count')
+    .eq('user_id', att.user_id)
+    .eq('verdict_log_id', att.verdict_log_id)
+    .maybeSingle()
+
+  if (existing) {
+    const status = Number(existing.reentry_count) >= MAX_REENTRIES ? 'exhausted' : 'watching'
+    await admin.from('reentry_watch').update({
+      ticker: att.ticker.toUpperCase(),
+      side,
+      original_entry: entry,
+      original_stop: att.original_stop_loss,
+      original_target: att.target_price,
+      original_qty: att.qty,
+      exit_price: pos.current_price,
+      exit_at: nowIso,
+      status,
+      updated_at: nowIso,
+    }).eq('id', existing.id)
+  } else {
+    await admin.from('reentry_watch').insert({
+      user_id: att.user_id,
+      ticker: att.ticker.toUpperCase(),
+      verdict_log_id: att.verdict_log_id,
+      side,
+      asset_class: att.asset_class ?? 'stock',
+      original_entry: entry,
+      original_stop: att.original_stop_loss,
+      original_target: att.target_price,
+      original_qty: att.qty,
+      exit_price: pos.current_price,
+      exit_at: nowIso,
+      reentry_count: 0,
+      status: 'watching',
+    })
+  }
+  console.log(`[position-monitor] ${att.ticker} on re-entry watch (side=${side})`)
+}
+
+interface ReentryWatchRow {
+  id: string
+  ticker: string
+  verdict_log_id: number | null
+  side: string
+  asset_class: string | null
+  original_entry: number | null
+  original_stop: number | null
+  original_target: number | null
+  original_qty: number | null
+  exit_price: number | null
+  exit_at: string
+  reentry_count: number
+}
+
+/**
+ * Re-entry pass: for each watched ticker (within window, under the re-entry cap)
+ * that we DON'T currently hold, recompute the directional signal snapshot. If a
+ * fresh entry setup is present — bullish signals for a long thesis, bearish for
+ * a short — and a 5m bar has closed since the exit (no same-bar rebuy), re-enter
+ * at the same size and same stop distance.
+ */
+async function runReentryPass(
+  settings: UserTradingSettings,
+  alpaca: AlpacaClient,
+  openTickers: Set<string>,
+): Promise<void> {
+  const admin = await getSupabaseAdmin()
+  const cutoff = new Date(Date.now() - REENTRY_WINDOW_DAYS * 86_400_000).toISOString()
+
+  // Expire stale watches (past the window) so they stop being scanned.
+  await admin.from('reentry_watch')
+    .update({ status: 'expired', updated_at: new Date().toISOString() })
+    .eq('user_id', settings.userId)
+    .eq('status', 'watching')
+    .lt('exit_at', cutoff)
+
+  const { data, error } = await admin
+    .from('reentry_watch')
+    .select('id, ticker, verdict_log_id, side, asset_class, original_entry, original_stop, original_target, original_qty, exit_price, exit_at, reentry_count')
+    .eq('user_id', settings.userId)
+    .eq('status', 'watching')
+    .lt('reentry_count', MAX_REENTRIES)
+    .gte('exit_at', cutoff)
+
+  if (error) {
+    console.warn(`[position-monitor] reentry fetch failed user=${settings.userId}: ${error.message}`)
+    return
+  }
+  const rows = (data ?? []) as ReentryWatchRow[]
+  if (rows.length === 0) return
+  console.log(`[position-monitor] reentry pass user=${settings.userId}: ${rows.length} watched ticker(s)`)
+
+  for (const w of rows) {
+    const ticker = String(w.ticker).toUpperCase()
+    if (openTickers.has(ticker)) continue                       // already holding it — never double-enter
+    const side = w.side === 'sell' ? 'sell' : 'buy'
+
+    const [bars5m, bars15m] = await Promise.all([
+      fetchBarsForTimeframe(ticker, '5Min', BARS_TO_FETCH_5MIN),
+      fetchBarsForTimeframe(ticker, '15Min', BARS_TO_FETCH_15MIN),
+    ])
+    if (bars5m.length < MIN_BARS || bars15m.length < MIN_BARS) continue
+
+    const t5 = calculateTechnicals(bars5m)
+    const t15 = calculateTechnicals(bars15m)
+    const snap5 = countSignals(t5, side)
+    const snap15 = countSignals(t15, side)
+
+    // Directional entry signal: for a long thesis we want BULLISH signals; for a
+    // short thesis we want BEARISH. countSignals already frames bullish/bearish
+    // relative to the side, so we read the matching directional count.
+    const dir5 = side === 'buy' ? snap5.bullishCount : snap5.bearishCount
+    const opp5 = side === 'buy' ? snap5.bearishCount : snap5.bullishCount
+    const dir15 = side === 'buy' ? snap15.bullishCount : snap15.bearishCount
+
+    const freshSetup = dir5 >= REENTRY_MIN_SIGNALS && dir5 > opp5 && dir15 >= 1
+    if (!freshSetup) {
+      await admin.from('reentry_watch').update({ last_checked_at: new Date().toISOString() }).eq('id', w.id)
+      continue
+    }
+
+    // Rebuy guard: the newest 5m bar must have CLOSED after the exit, so we never
+    // re-buy on the same bar we just sold. (The directional setup above is the
+    // "indicators/patterns determine a new entry" condition.)
+    const lastBarMs = new Date(bars5m[bars5m.length - 1].t).getTime()
+    const exitMs = new Date(w.exit_at).getTime()
+    if (!Number.isFinite(lastBarMs) || lastBarMs <= exitMs) continue
+
+    await placeReentry(settings, alpaca, w, ticker, side, t5.currentPrice).catch(e =>
+      console.warn(`[position-monitor] reentry place ${ticker}: ${e instanceof Error ? e.message : e}`))
+  }
+}
+
+/**
+ * Place a re-entry bracket at the current price using the original size and the
+ * SAME stop distance / reward geometry as the original verdict. Inserts a
+ * trade_attempts row (so the monitor manages it, including trailing) with an
+ * immutable initial_stop so R-multiple trailing is correct for the new entry.
+ */
+async function placeReentry(
+  settings: UserTradingSettings,
+  alpaca: AlpacaClient,
+  w: ReentryWatchRow,
+  ticker: string,
+  side: 'buy' | 'sell',
+  currentPrice: number,
+): Promise<void> {
+  const origEntry = w.original_entry !== null ? Number(w.original_entry) : NaN
+  const origStop = w.original_stop !== null ? Number(w.original_stop) : NaN
+  const origTarget = w.original_target !== null ? Number(w.original_target) : null
+  const qty = w.original_qty !== null ? Math.floor(Number(w.original_qty)) : 0
+
+  if (qty <= 0 || !Number.isFinite(origEntry) || !Number.isFinite(origStop) || !Number.isFinite(currentPrice) || currentPrice <= 0) return
+  const stopDistance = Math.abs(origEntry - origStop)
+  if (stopDistance <= 0) return
+  const targetDistance = origTarget !== null && Number.isFinite(origTarget) ? Math.abs(origTarget - origEntry) : stopDistance * 2
+
+  const newStop = side === 'buy' ? currentPrice - stopDistance : currentPrice + stopDistance
+  const newTarget = side === 'buy' ? currentPrice + targetDistance : currentPrice - targetDistance
+  if (newStop <= 0 || newTarget <= 0) return
+  if ((side === 'buy' && newStop >= currentPrice) || (side === 'sell' && newStop <= currentPrice)) return
+
+  const nextCount = Number(w.reentry_count) + 1
+  const clientOrderId = `wos-${w.verdict_log_id}-re${nextCount}`
+
+  // Idempotency: if a bracket with this client id already exists, don't re-place.
+  const existingOrder = await alpaca.getOrderByClientId(clientOrderId).catch(() => null)
+  let orderId: string
+  if (existingOrder) {
+    orderId = existingOrder.id
+  } else {
+    const order = await alpaca.bracketOrder({
+      symbol: ticker,
+      qty,
+      side,
+      takeProfitPrice: newTarget,
+      stopLossPrice: newStop,
+      clientOrderId,
+    })
+    orderId = order.id
+  }
+
+  const admin = await getSupabaseAdmin()
+  // trade_attempts row so the monitor tracks (and trails) the re-entered position.
+  // initial_stop is immutable and drives R-multiple trailing for THIS entry.
+  const { error: insErr } = await admin.from('trade_attempts').insert({
+    user_id: settings.userId,
+    verdict_log_id: w.verdict_log_id,
+    ticker,
+    outcome: 'placed',
+    council_signal: side === 'buy' ? 'BULLISH' : 'BEARISH',
+    mode: settings.mode,
+    broker: settings.broker,
+    broker_order_id: orderId,
+    broker_client_id: clientOrderId,
+    side,
+    qty,
+    entry_price_est: currentPrice,
+    stop_price: newStop,
+    target_price: newTarget,
+    initial_stop: newStop,
+    council_stop: newStop,
+    council_target: newTarget,
+    asset_class: w.asset_class ?? 'stock',
+  })
+  if (insErr) {
+    console.warn(`[position-monitor] reentry trade_attempts insert ${ticker}: ${insErr.message}`)
+  }
+
+  const status = nextCount >= MAX_REENTRIES ? 'exhausted' : 'watching'
+  await admin.from('reentry_watch').update({
+    reentry_count: nextCount,
+    status,
+    last_reentry_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }).eq('id', w.id)
+
+  console.log(`[position-monitor] ${ticker} RE-ENTRY #${nextCount} ${side} qty=${qty} @ ~${currentPrice.toFixed(2)} stop=${newStop.toFixed(2)} target=${newTarget.toFixed(2)}`)
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -873,7 +1140,7 @@ async function fetchOpenAttempts(userId: string): Promise<Map<string, OpenAttemp
   // legacy NULL rows. Both errors are now logged explicitly.
   const { data, error } = await admin
     .from('trade_attempts')
-    .select('id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, outcome, asset_class')
+    .select('id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, initial_stop, outcome, asset_class')
     .eq('user_id', userId)
     .in('asset_class', ['stock', 'stocks'])
     .in('outcome', ['placed', 'filled', 'partial_fill'])
@@ -888,7 +1155,7 @@ async function fetchOpenAttempts(userId: string): Promise<Map<string, OpenAttemp
   // Quick second query — if it errors we just skip the legacy rows.
   const { data: legacyData, error: legacyError } = await admin
     .from('trade_attempts')
-    .select('id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, outcome, asset_class')
+    .select('id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, initial_stop, outcome, asset_class')
     .eq('user_id', userId)
     .is('asset_class', null)
     .in('outcome', ['placed', 'filled', 'partial_fill'])
@@ -916,7 +1183,12 @@ async function fetchOpenAttempts(userId: string): Promise<Map<string, OpenAttemp
       target_price: row.target_price !== null && row.target_price !== undefined ? Number(row.target_price) : null,
       broker_order_id: row.broker_order_id !== null && row.broker_order_id !== undefined ? String(row.broker_order_id) : null,
       verdict_log_id: row.verdict_log_id !== null && row.verdict_log_id !== undefined ? Number(row.verdict_log_id) : null,
-      original_stop_loss: null,
+      // Prefer the per-attempt immutable initial_stop (set on re-entries, whose
+      // stop sits at a new price). Falls back to verdict_log.stop_loss below for
+      // original entries that don't carry it. (council_stop is NOT used — reeval
+      // overwrites it when it moves the stop, so it isn't immutable.)
+      original_stop_loss: row.initial_stop !== null && row.initial_stop !== undefined && Number.isFinite(Number(row.initial_stop))
+        ? Number(row.initial_stop) : null,
       outcome: String(row.outcome),
       asset_class: row.asset_class !== null && row.asset_class !== undefined ? String(row.asset_class) : null,
     }
@@ -929,7 +1201,10 @@ async function fetchOpenAttempts(userId: string): Promise<Map<string, OpenAttemp
   // rather than a PostgREST embedded join: this file was previously bitten by
   // the .or().in() silent-empty bug, so we avoid adding joins to that path.
   const verdictIds = Array.from(
-    new Set(Array.from(map.values()).map(a => a.verdict_log_id).filter((v): v is number => v !== null))
+    new Set(Array.from(map.values())
+      .filter(a => a.original_stop_loss === null)
+      .map(a => a.verdict_log_id)
+      .filter((v): v is number => v !== null))
   )
   if (verdictIds.length > 0) {
     const { data: vData, error: vError } = await admin
@@ -945,7 +1220,7 @@ async function fetchOpenAttempts(userId: string): Promise<Map<string, OpenAttemp
         if (sl !== null && Number.isFinite(sl)) stopById.set(Number(r.id), sl)
       }
       for (const att of map.values()) {
-        if (att.verdict_log_id !== null && stopById.has(att.verdict_log_id)) {
+        if (att.original_stop_loss === null && att.verdict_log_id !== null && stopById.has(att.verdict_log_id)) {
           att.original_stop_loss = stopById.get(att.verdict_log_id)!
         }
       }
