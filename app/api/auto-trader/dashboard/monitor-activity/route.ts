@@ -22,6 +22,7 @@ interface MonitorRow {
   id: number
   trade_attempt_id: string | null
   ticker: string
+  asset_class: string | null
   decision: string
   action_taken: string
   current_price: number | null
@@ -48,6 +49,7 @@ interface MonitorKpis {
 interface RecentMonitorCheck {
   id: number
   ticker: string
+  assetClass: 'stock' | 'crypto'
   decision: string
   action_taken: string
   current_price: number | null
@@ -106,7 +108,7 @@ export async function GET(_req: NextRequest): Promise<NextResponse<MonitorActivi
 
     const { data, error } = await admin
       .from('position_monitor_log')
-      .select('id, trade_attempt_id, ticker, decision, action_taken, current_price, current_stop, new_stop_price, bearish_count_5m, bullish_count_5m, bearish_count_15m, bullish_count_15m, error_reason, escalation_result, created_at')
+      .select('id, trade_attempt_id, ticker, asset_class, decision, action_taken, current_price, current_stop, new_stop_price, bearish_count_5m, bullish_count_5m, bearish_count_15m, bullish_count_15m, error_reason, escalation_result, created_at')
       .eq('user_id', userId)
       .gte('created_at', cutoffIso)
       .order('id', { ascending: false })
@@ -137,6 +139,7 @@ export async function GET(_req: NextRequest): Promise<NextResponse<MonitorActivi
     const recent: RecentMonitorCheck[] = rows.slice(0, 30).map(r => ({
       id: r.id,
       ticker: r.ticker,
+      assetClass: r.asset_class === 'crypto' ? 'crypto' : 'stock',
       decision: r.decision,
       action_taken: r.action_taken,
       current_price: r.current_price !== null ? Number(r.current_price) : null,

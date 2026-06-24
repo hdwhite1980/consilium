@@ -455,6 +455,7 @@ async function logResult(
     user_id: att.user_id,
     trade_attempt_id: att.id,
     ticker: att.ticker,
+    asset_class: 'crypto',
     decision,
     action_taken: actionTaken,
     current_price: currentPrice,

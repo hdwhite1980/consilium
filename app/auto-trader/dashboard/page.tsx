@@ -226,6 +226,7 @@ interface MonitorKpis {
 interface RecentMonitorCheck {
   id: number
   ticker: string
+  assetClass?: 'stock' | 'crypto'
   decision: string
   action_taken: string
   current_price: number | null
@@ -1275,7 +1276,15 @@ function MonitorActivityPanel({ data }: { data: MonitorActivityData | null }) {
                     {new Date(c.created_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
                   </span>
                 </Td>
-                <Td><span className="font-bold">{c.ticker}</span></Td>
+                <Td>
+                  <span className="font-bold">{c.ticker}</span>
+                  {c.assetClass === 'crypto' && (
+                    <span className="ml-1.5 text-[9px] px-1 py-0.5 rounded font-semibold align-middle"
+                      style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>
+                      CRYPTO
+                    </span>
+                  )}
+                </Td>
                 <Td><MonitorDecisionBadge decision={c.decision} action={c.action_taken} /></Td>
                 <Td>
                   <span className="font-mono">{c.current_price !== null ? `$${c.current_price.toFixed(2)}` : '—'}</span>
