@@ -23,9 +23,11 @@ import {
   isAssetClassEnabled,
   type UserTradingSettings,
 } from '@/app/lib/trading/settings'
-import { loadBrokerCredentialForUse } from '@/app/lib/trading/credentials'
-import { makeAlpacaCryptoClient } from '@/app/lib/trading/alpaca-crypto-client'
+import { loadBrokerCredentialForUse, loadCoinbaseCredential } from '@/app/lib/trading/credentials'
+import { makeAlpacaCryptoClient, type AlpacaCryptoClient, type AlpacaCryptoPosition } from '@/app/lib/trading/alpaca-crypto-client'
+import { makeCoinbaseClient, type CoinbaseClient, type CoinbasePosition } from '@/app/lib/trading/coinbase-client'
 import { computeCryptoSize } from '@/app/lib/trading/crypto-sizing'
+import { sizeCryptoTradeForCoinbase } from '@/app/lib/trading/crypto-product-sizing'
 import { routeTicker } from '@/app/lib/trading/asset-router'
 import { haltUserAccount } from '@/app/lib/trading/kill-switches'
 import { randomBytes } from 'crypto'
@@ -43,7 +45,174 @@ interface VerdictRow {
   entry_price: number | string | null; stop_loss: number | string | null; take_profit: number | string | null
   trader_decision: string | null; trader_grade: string | null
   trader_position_size: number | string | null
+  trader_risk_reward: number | string | null
+  trader_pass_reasons: string[] | null
   created_at: string
+}
+
+// ─────────────────────────────────────────────────────────────
+// Bypass classifiers (mirrors decideForUser stock pipeline)
+// ─────────────────────────────────────────────────────────────
+
+type BypassInfo =
+  | { category: 'marginal_rr' | 'earnings_window'; rationale: string }
+  | { category: 'wait_high_quality'; rationale: string }
+
+/**
+ * PASS bypass: marginal R:R [1.0, 1.5) AND/OR earnings_window.
+ * Requires ALL reasons be bypassable (no insider/liquidity/confidence-floor blocks).
+ */
+function classifyPassBypassCrypto(verdict: VerdictRow): BypassInfo | null {
+  const reasons = Array.isArray(verdict.trader_pass_reasons) ? verdict.trader_pass_reasons : []
+  if (reasons.length === 0) return null
+  const rr = verdict.trader_risk_reward !== null && verdict.trader_risk_reward !== undefined
+    ? Number(verdict.trader_risk_reward) : null
+
+  const categorize = (r: string): 'marginal_rr' | 'earnings_window' | null => {
+    if (typeof r !== 'string') return null
+    if (/risk-to-reward|r:r|risk\/reward/i.test(r)) {
+      if (rr !== null && Number.isFinite(rr) && rr >= 1.0 && rr < 1.5) return 'marginal_rr'
+      return null
+    }
+    if (/earnings/i.test(r)) return 'earnings_window'
+    return null
+  }
+  const cats = reasons.map(categorize)
+  if (cats.some(c => c === null)) return null
+  if (cats.includes('marginal_rr')) {
+    return {
+      category: 'marginal_rr',
+      rationale: `marginal-R:R bypass: ${rr?.toFixed(2) ?? '?'}:1 in [1.0, 1.5), half size`,
+    }
+  }
+  return {
+    category: 'earnings_window',
+    rationale: 'earnings-window bypass: timing only, half size',
+  }
+}
+
+/**
+ * WAIT bypass: take WAIT verdicts at half size when conf >= 65 AND R:R >= 1.3.
+ */
+function classifyWaitBypassCrypto(verdict: VerdictRow): BypassInfo | null {
+  const conf = verdict.confidence !== null && verdict.confidence !== undefined
+    ? Number(verdict.confidence) : null
+  const rr = verdict.trader_risk_reward !== null && verdict.trader_risk_reward !== undefined
+    ? Number(verdict.trader_risk_reward) : null
+  if (conf === null || !Number.isFinite(conf)) return null
+  if (rr === null || !Number.isFinite(rr)) return null
+  const MIN_CONF = 65
+  const MIN_RR = 1.3
+  if (conf < MIN_CONF) return null
+  if (rr < MIN_RR) return null
+  return {
+    category: 'wait_high_quality',
+    rationale: `wait-bypass: conf=${conf}% >= ${MIN_CONF}% AND R:R=${rr.toFixed(2)} >= ${MIN_RR}, half size`,
+  }
+}
+
+
+// ─────────────────────────────────────────────────────────────
+// Broker abstraction
+//
+// Both Alpaca and Coinbase crypto clients support a common set of methods
+// (account, positions, assetTradable, marketEntry, getOrder, cancelOrder).
+// CryptoBroker is the union we route through so the cron is broker-agnostic.
+//
+// Selection logic per user (see selectCryptoBroker):
+//   1. If user has Coinbase credential → use Coinbase (single broker, live only)
+//   2. Else if user has Alpaca crypto credential → use Alpaca
+//   3. Else → no broker, skip user
+// ─────────────────────────────────────────────────────────────
+
+type BrokerKind = 'alpaca' | 'coinbase'
+
+interface CryptoBrokerHandle {
+  kind: BrokerKind
+  brokerName: 'alpaca' | 'coinbase'
+  effectiveMode: 'paper' | 'live'
+  symbolFor(canonicalSymbol: string): string
+  client: AlpacaCryptoClient | CoinbaseClient
+  account: () => Promise<{ status: string; cash: number; equity: number }>
+  positions: () => Promise<Array<{ symbol: string; qty: number }>>
+  assetTradable: (sym: string) => Promise<{ tradable: boolean; reason?: string }>
+  marketEntry: (input: { symbol: string; notionalUsd: number; side: 'buy'; clientOrderId: string }) => Promise<{ id: string; client_order_id: string }>
+}
+
+/**
+ * Select the crypto broker for a user. Coinbase takes precedence if
+ * configured because it's the user's explicit opt-in to live crypto
+ * trading; Alpaca crypto is the legacy default. Returns null if no
+ * crypto broker is configured.
+ *
+ * Coinbase mode override: Coinbase has no paper environment. If a user's
+ * settings.mode is 'paper' but they're using Coinbase, we still trade
+ * LIVE — but we explicitly require tradeCrypto AND a present Coinbase
+ * credential to confirm intent. The mode reported in trade_attempts.mode
+ * is set to 'live' for Coinbase trades regardless of settings.mode.
+ */
+async function selectCryptoBroker(settings: UserTradingSettings): Promise<CryptoBrokerHandle | null> {
+  const coinbase = await loadCoinbaseCredential(settings.userId)
+  if (coinbase) {
+    const client = makeCoinbaseClient(coinbase.keyName, coinbase.privateKey)
+    return {
+      kind: 'coinbase',
+      brokerName: 'coinbase',
+      effectiveMode: 'live',  // Coinbase is always live
+      symbolFor: (canonical: string) => canonical.replace('/', '-'),  // BTC/USD → BTC-USD
+      client,
+      account: async () => {
+        const a = await client.account()
+        return { status: a.status, cash: a.cash, equity: a.equity }
+      },
+      positions: async () => {
+        const pos = await client.positions()
+        return pos.map(p => ({ symbol: p.symbol, qty: p.qty }))
+      },
+      assetTradable: (sym: string) => client.assetTradable(sym),
+      marketEntry: async (input) => {
+        const order = await client.marketEntry({
+          symbol: input.symbol,
+          notionalUsd: input.notionalUsd,
+          side: 'buy',
+          clientOrderId: input.clientOrderId,
+        })
+        return { id: order.id, client_order_id: order.client_order_id }
+      },
+    }
+  }
+
+  const alpacaCred = await loadBrokerCredentialForUse(settings.userId, 'alpaca', settings.mode, 'crypto')
+  if (alpacaCred) {
+    const client = makeAlpacaCryptoClient(alpacaCred.keyId, alpacaCred.secret, settings.mode)
+    return {
+      kind: 'alpaca',
+      brokerName: 'alpaca',
+      effectiveMode: settings.mode,
+      symbolFor: (canonical: string) => canonical,  // BTC/USD stays BTC/USD on Alpaca
+      client,
+      account: async () => {
+        const a = await client.account()
+        return { status: a.status, cash: a.cash, equity: a.equity }
+      },
+      positions: async () => {
+        const pos = await client.positions()
+        return pos.map((p: AlpacaCryptoPosition) => ({ symbol: p.symbol, qty: p.qty }))
+      },
+      assetTradable: (sym: string) => client.assetTradable(sym),
+      marketEntry: async (input) => {
+        const order = await client.marketEntry({
+          symbol: input.symbol,
+          notionalUsd: input.notionalUsd,
+          side: 'buy',
+          clientOrderId: input.clientOrderId,
+        })
+        return { id: order.id, client_order_id: order.client_order_id }
+      },
+    }
+  }
+
+  return null
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
@@ -62,13 +231,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
     for (const settings of users) {
       try {
-        // Find this user's crypto credentials (separate from stocks)
-        const credLoad = await loadBrokerCredentialForUse(settings.userId, 'alpaca', settings.mode, 'crypto')
-        if (!credLoad) {
-          console.warn(`[auto-trade-crypto] user=${settings.userId} no alpaca crypto credential; skipping`)
+        // Select crypto broker (Coinbase preferred if configured, else Alpaca crypto)
+        const broker = await selectCryptoBroker(settings)
+        if (!broker) {
+          // Quiet log — this is expected when user hasn't enabled crypto trading
+          // (no need to scream every cycle; warn was creating noise per memory)
           continue
         }
-        const alpaca = makeAlpacaCryptoClient(credLoad.keyId, credLoad.secret, settings.mode)
+        console.log(`[auto-trade-crypto] user=${settings.userId} broker=${broker.brokerName} mode=${broker.effectiveMode}`)
 
         // Check concurrent crypto positions
         const openCount = await countOpenCryptoAttempts(settings.userId)
@@ -88,13 +258,35 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           // Route + filter
           const route = routeTicker(verdict.ticker)
           if (route.assetClass !== 'crypto') continue   // someone else's job
-          if (verdict.trader_decision !== 'TAKE') {
-            await logSkipped(verdict, settings, `not a TAKE (${verdict.trader_decision})`)
+
+          // ── Verdict eligibility: TAKE / PASS bypass / WAIT bypass
+          let bypass: BypassInfo | null = null
+          if (verdict.trader_decision === 'TAKE') {
+            // Normal path
+          } else if (verdict.trader_decision === 'PASS') {
+            bypass = classifyPassBypassCrypto(verdict)
+            if (!bypass) {
+              await logSkipped(verdict, settings, `PASS and not bypass-eligible`)
+              summary.skipped++
+              continue
+            }
+          } else if (verdict.trader_decision === 'WAIT') {
+            bypass = classifyWaitBypassCrypto(verdict)
+            if (!bypass) {
+              await logSkipped(verdict, settings, `WAIT and not bypass-eligible (need conf>=65 AND R:R>=1.3)`)
+              summary.skipped++
+              continue
+            }
+          } else {
+            await logSkipped(verdict, settings, `not a TAKE/PASS/WAIT (${verdict.trader_decision})`)
             summary.skipped++
             continue
           }
-          if (!verdict.trader_grade || gradeRank(verdict.trader_grade) < gradeRank(settings.minGrade)) {
-            await logSkipped(verdict, settings, `grade ${verdict.trader_grade} below floor ${settings.minGrade}`)
+
+          // Grade floor — bypassed verdicts default to C (the bypass IS the qualification)
+          const effGrade = verdict.trader_grade ?? (bypass ? 'C' : null)
+          if (!effGrade || gradeRank(effGrade) < gradeRank(settings.minGrade)) {
+            await logSkipped(verdict, settings, `grade ${effGrade ?? 'null'} below floor ${settings.minGrade}`)
             summary.skipped++
             continue
           }
@@ -132,55 +324,91 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             continue
           }
 
-          // Verify Alpaca tradability
-          const tradable = await alpaca.assetTradable(route.normalizedSymbol)
+          // Convert symbol to broker-specific form (BTC/USD → BTC-USD for Coinbase)
+          const brokerSymbol = broker.symbolFor(route.normalizedSymbol)
+
+          // Verify tradability via the active broker
+          const tradable = await broker.assetTradable(brokerSymbol)
           if (!tradable.tradable) {
-            await logSkipped(verdict, settings, `Alpaca crypto: ${tradable.reason ?? 'not tradable'}`)
+            await logSkipped(verdict, settings, `${broker.brokerName} crypto: ${tradable.reason ?? 'not tradable'}`)
             summary.skipped++
             continue
           }
 
           // Sizing
           //
-          // Audit Finding 1: Alpaca crypto's `equity` includes unrealized P&L
-          // on open crypto positions. `cash` is what we can actually deploy
-          // (crypto is unmargined for retail accounts on Alpaca). Using the
-          // min defends against both winning-streak inflation and the rare
-          // case where they diverge.
-          const account = await alpaca.account().catch(() => null)
+          // Audit Finding 1: account.equity may include unrealized P&L on
+          // open crypto positions. cash is deployable capital (crypto is
+          // unmargined for retail). min() defends against winning-streak
+          // inflation. Coinbase returns equity = cash for simplicity so
+          // the min is just cash; Alpaca differs when positions are open.
+          const account = await broker.account().catch(() => null)
           if (!account || account.equity <= 0) {
-            await haltUserAccount(settings.userId, `crypto account fetch failed or equity <= 0`)
+            await haltUserAccount(settings.userId, `${broker.brokerName} crypto account fetch failed or equity <= 0`)
             summary.errors++
             break
           }
           const effectiveEquity = Math.min(account.equity, account.cash)
           if (effectiveEquity <= 0) {
-            await logSkipped(verdict, settings, `crypto effectiveEquity ${effectiveEquity} <= 0`)
+            await logSkipped(verdict, settings, `${broker.brokerName} crypto effectiveEquity ${effectiveEquity} <= 0`)
             summary.skipped++
             continue
           }
 
           // Per-trade bounds from settings (Audit Phase 2).
+          // Bypass: halve the position size when this is a PASS/WAIT bypass.
           const traderSize = verdict.trader_position_size !== null
             ? Math.min(1, Math.max(0.1, Number(verdict.trader_position_size)))
             : 1
-          const sizing = computeCryptoSize({
+          const sizeMultiplier = bypass ? 0.5 : 1.0
+          const effectiveTraderSize = Math.min(1, Math.max(0.05, traderSize * sizeMultiplier))
+
+          const sizingInput = {
             accountEquity: effectiveEquity,
             riskPerTradePct: getRiskPerTradePctForAsset(settings, 'crypto'),
             maxPositionPct: settings.maxPositionPct,
             entryPrice: entry,
             stopPrice: stop,
-            traderPositionSizePct: traderSize,
+            traderPositionSizePct: effectiveTraderSize > 0 ? effectiveTraderSize : 1,
             minDollarRiskPerTrade: settings.minDollarRiskPerTrade,
             maxDollarRiskPerTrade: settings.maxDollarRiskPerTrade,
             minTradeNotional: settings.minTradeNotional,
             maxTradeNotional: settings.maxTradeNotional,
-          })
+            qualityGrade: (effGrade === 'A' || effGrade === 'B' || effGrade === 'C') ? effGrade as 'A' | 'B' | 'C' : null,
+            qualityConfidence: verdict.confidence !== null ? Number(verdict.confidence) : null,
+            qualityRiskReward: verdict.trader_risk_reward !== null && verdict.trader_risk_reward !== undefined
+              ? Number(verdict.trader_risk_reward) : null,
+          }
+
+          // Use Coinbase-product-aware sizing when broker is Coinbase.
+          // This pre-flights against base_increment, base_min_size, quote_min_size,
+          // and rounds quantities to valid increments. For Alpaca crypto, fall
+          // back to generic sizing (Alpaca handles increments server-side).
+          let sizing
+          let coinbaseAdjustedStop: number | undefined
+          if (broker.kind === 'coinbase') {
+            const coinbaseSizing = await sizeCryptoTradeForCoinbase({
+              ...sizingInput,
+              symbol: broker.symbolFor(verdict.ticker),
+              coinbaseClient: broker.client as CoinbaseClient,
+            })
+            sizing = coinbaseSizing
+            if (coinbaseSizing.ok) {
+              coinbaseAdjustedStop = coinbaseSizing.adjustedStop
+            }
+          } else {
+            sizing = computeCryptoSize(sizingInput)
+          }
+
           if (!sizing.ok) {
             await logSkipped(verdict, settings, `crypto sizing: ${sizing.reason}`)
             summary.skipped++
             continue
           }
+
+          // If Coinbase adjusted the stop to a valid quote_increment, use the
+          // adjusted value going forward instead of the verdict's raw stop.
+          const effectiveStop = coinbaseAdjustedStop ?? stop
 
           // Pre-place buying-power gate (Audit Phase 3).
           // For Alpaca crypto, available capital = account.cash (unmargined).
@@ -208,11 +436,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             continue
           }
 
-          // Place market entry
+          // Place market entry via the active broker
           const clientOrderId = `wos-c-${verdict.id}-${randomBytes(4).toString('hex')}`
           try {
-            const order = await alpaca.marketEntry({
-              symbol: route.normalizedSymbol,
+            const order = await broker.marketEntry({
+              symbol: brokerSymbol,
               notionalUsd: sizing.notionalUsd,
               side: 'buy',
               clientOrderId,
@@ -223,16 +451,18 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
               units: sizing.units,
               notionalUsd: sizing.notionalUsd,
               entryPrice: entry,
-              stopPrice: stop,
+              stopPrice: effectiveStop,
               targetPrice: target,
               dollarRisk: sizing.dollarRisk,
               accountEquity: effectiveEquity,
-              normalizedSymbol: route.normalizedSymbol,
+              normalizedSymbol: brokerSymbol,
+              brokerName: broker.brokerName,
+              effectiveMode: broker.effectiveMode,
             })
             summary.placed++
-            console.log(`[auto-trade-crypto] PLACED user=${settings.userId} BUY $${sizing.notionalUsd.toFixed(2)} ${route.normalizedSymbol} stop=${stop} tp=${target} mode=${settings.mode}`)
+            console.log(`[auto-trade-crypto] PLACED user=${settings.userId} broker=${broker.brokerName} BUY $${sizing.notionalUsd.toFixed(2)} ${brokerSymbol} stop=${effectiveStop} tp=${target} mode=${broker.effectiveMode}`)
           } catch (e) {
-            await logRejected(verdict, settings, clientOrderId, e instanceof Error ? e.message : String(e))
+            await logRejected(verdict, settings, clientOrderId, e instanceof Error ? e.message : String(e), broker.brokerName)
             summary.errors++
           }
         }
@@ -267,10 +497,10 @@ async function fetchNewCryptoVerdicts(userId: string, watermark: number): Promis
   const cutoff = new Date(Date.now() - VERDICT_AGE_HOURS * 3_600_000).toISOString()
   const { data, error } = await admin
     .from('verdict_log')
-    .select('id, user_id, ticker, signal, confidence, entry_price, stop_loss, take_profit, trader_decision, trader_grade, trader_position_size, created_at')
+    .select('id, user_id, ticker, signal, confidence, entry_price, stop_loss, take_profit, trader_decision, trader_grade, trader_position_size, trader_risk_reward, trader_pass_reasons, created_at')
     .eq('user_id', userId)
     .gt('id', watermark)
-    .eq('trader_decision', 'TAKE')
+    .in('trader_decision', ['TAKE', 'PASS', 'WAIT'])
     .gte('created_at', cutoff)
     .order('id', { ascending: true })
     .limit(MAX_VERDICTS_PER_USER)
@@ -323,6 +553,8 @@ async function logPlaced(
     units: number; notionalUsd: number
     entryPrice: number; stopPrice: number; targetPrice: number
     dollarRisk: number; accountEquity: number; normalizedSymbol: string
+    brokerName: 'alpaca' | 'coinbase'
+    effectiveMode: 'paper' | 'live'
   },
 ): Promise<void> {
   const admin = await getSupabaseAdmin()
@@ -337,8 +569,8 @@ async function logPlaced(
     council_stop: details.stopPrice,
     council_target: details.targetPrice,
     outcome: 'placed',
-    mode: settings.mode,
-    broker: 'alpaca',
+    mode: details.effectiveMode,
+    broker: details.brokerName,
     broker_order_id: details.brokerOrderId,
     broker_client_id: details.clientOrderId,
     side: 'buy',
@@ -353,7 +585,11 @@ async function logPlaced(
 }
 
 async function logRejected(
-  verdict: VerdictRow, settings: UserTradingSettings, clientOrderId: string, msg: string,
+  verdict: VerdictRow,
+  settings: UserTradingSettings,
+  clientOrderId: string,
+  msg: string,
+  brokerName: 'alpaca' | 'coinbase' = 'alpaca',
 ): Promise<void> {
   const admin = await getSupabaseAdmin()
   await admin.from('trade_attempts').insert({
@@ -364,8 +600,8 @@ async function logRejected(
     council_signal: verdict.signal,
     outcome: 'rejected',
     reject_reason: msg.slice(0, 500),
-    mode: settings.mode,
-    broker: 'alpaca',
+    mode: brokerName === 'coinbase' ? 'live' : settings.mode,
+    broker: brokerName,
     broker_client_id: clientOrderId,
     signal_source: 'council',
   })

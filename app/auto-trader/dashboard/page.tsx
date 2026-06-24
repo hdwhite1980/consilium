@@ -3,8 +3,8 @@
 // app/auto-trader/dashboard/page.tsx
 //
 // Auto-trader monitoring dashboard. Shows live state, today's KPIs,
-// open positions (joined Alpaca + our overlay), recent activity,
-// skip reason breakdown, 30-day track record.
+// open positions (joined Alpaca + Coinbase + our overlay), recent
+// activity, skip reason breakdown, 30-day track record.
 //
 // Auto-refresh every 30s + manual refresh button.
 // =============================================================
@@ -137,6 +137,9 @@ interface PositionRow {
   reevalCount?: number
   lastReevalAt?: string
   filledAt?: string
+  // ADDED: asset-class discrimination so the table can show CRYPTO vs STOCK
+  assetClass?: 'stock' | 'crypto'
+  brokerName?: 'alpaca' | 'coinbase'
 }
 
 interface PositionsData {
@@ -148,6 +151,16 @@ interface PositionsData {
     cash: number
     buyingPower: number
   } | null
+  // ADDED: per-broker breakdown when both Alpaca and Coinbase are connected
+  brokers?: Array<{
+    broker: 'alpaca' | 'coinbase'
+    account: {
+      status: string
+      equity: number
+      cash: number
+      buyingPower: number
+    }
+  }>
   message?: string
 }
 
@@ -486,9 +499,13 @@ export default function AutoTraderDashboardPage() {
               <KpiRow kpis={data.todayKpis} mode={data.settings.mode} />
             )}
 
-            {/* Account snapshot */}
+            {/* Account snapshot — now shows per-broker when multiple connected */}
             {positions?.account && (
-              <AccountSnapshot account={positions.account} mode={data.settings.mode} />
+              <AccountSnapshot
+                account={positions.account}
+                brokers={positions.brokers}
+                mode={data.settings.mode}
+              />
             )}
 
             {/* Open positions */}
@@ -676,29 +693,71 @@ function KpiRow({ kpis, mode }: { kpis: DashboardKpis; mode: 'paper' | 'live' })
   )
 }
 
-function AccountSnapshot({ account, mode }: { account: { status: string; equity: number; cash: number; buyingPower: number }; mode: string }) {
+function AccountSnapshot({
+  account, brokers, mode,
+}: {
+  account: { status: string; equity: number; cash: number; buyingPower: number }
+  brokers?: PositionsData['brokers']
+  mode: string
+}) {
+  const hasMultipleBrokers = brokers && brokers.length > 1
+
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
-      <div className="p-3 rounded-lg" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-        <div className="text-xs opacity-60 mb-1" style={{ color: 'var(--text3)' }}>Status</div>
-        <div className="text-sm font-bold" style={{ color: account.status === 'ACTIVE' ? '#34d399' : '#f87171' }}>
-          {account.status}
+    <>
+      {/* Combined snapshot — same as before, slight relabel when multiple brokers */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
+        <div className="p-3 rounded-lg" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+          <div className="text-xs opacity-60 mb-1" style={{ color: 'var(--text3)' }}>Status</div>
+          <div className="text-sm font-bold" style={{ color: account.status === 'ACTIVE' ? '#34d399' : '#f87171' }}>
+            {account.status}
+          </div>
+          <div className="text-xs opacity-70 mt-0.5" style={{ color: 'var(--text3)' }}>{mode}</div>
         </div>
-        <div className="text-xs opacity-70 mt-0.5" style={{ color: 'var(--text3)' }}>{mode}</div>
+        <div className="p-3 rounded-lg" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+          <div className="text-xs opacity-60 mb-1" style={{ color: 'var(--text3)' }}>
+            {hasMultipleBrokers ? 'Total Equity' : 'Equity'}
+          </div>
+          <div className="text-sm font-bold" style={{ color: 'var(--text)' }}>${account.equity.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+        </div>
+        <div className="p-3 rounded-lg" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+          <div className="text-xs opacity-60 mb-1" style={{ color: 'var(--text3)' }}>
+            {hasMultipleBrokers ? 'Total Cash' : 'Cash'}
+          </div>
+          <div className="text-sm font-bold" style={{ color: 'var(--text)' }}>${account.cash.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+        </div>
+        <div className="p-3 rounded-lg" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+          <div className="text-xs opacity-60 mb-1" style={{ color: 'var(--text3)' }}>Buying power</div>
+          <div className="text-sm font-bold" style={{ color: 'var(--text)' }}>${account.buyingPower.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+        </div>
       </div>
-      <div className="p-3 rounded-lg" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-        <div className="text-xs opacity-60 mb-1" style={{ color: 'var(--text3)' }}>Equity</div>
-        <div className="text-sm font-bold" style={{ color: 'var(--text)' }}>${account.equity.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
-      </div>
-      <div className="p-3 rounded-lg" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-        <div className="text-xs opacity-60 mb-1" style={{ color: 'var(--text3)' }}>Cash</div>
-        <div className="text-sm font-bold" style={{ color: 'var(--text)' }}>${account.cash.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
-      </div>
-      <div className="p-3 rounded-lg" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-        <div className="text-xs opacity-60 mb-1" style={{ color: 'var(--text3)' }}>Buying power</div>
-        <div className="text-sm font-bold" style={{ color: 'var(--text)' }}>${account.buyingPower.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
-      </div>
-    </div>
+
+      {/* Per-broker breakdown — only shown when both Alpaca and Coinbase connected */}
+      {hasMultipleBrokers && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-4">
+          {brokers!.map(b => (
+            <div key={b.broker}
+              className="p-3 rounded-lg flex items-center justify-between"
+              style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+              <div>
+                <div className="text-xs opacity-60 mb-1" style={{ color: 'var(--text3)' }}>
+                  {b.broker === 'coinbase' ? 'Coinbase (live)' : 'Alpaca (paper)'}
+                </div>
+                <div className="text-sm font-bold" style={{ color: 'var(--text)' }}>
+                  ${b.account.cash.toFixed(2)} cash · ${b.account.equity.toFixed(2)} equity
+                </div>
+              </div>
+              <span className="text-xs px-2 py-0.5 rounded-md font-mono"
+                style={{
+                  background: b.account.status === 'ACTIVE' ? 'rgba(52,211,153,0.15)' : 'rgba(248,113,113,0.15)',
+                  color: b.account.status === 'ACTIVE' ? '#34d399' : '#f87171',
+                }}>
+                {b.account.status}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   )
 }
 
@@ -749,6 +808,7 @@ function OpenPositionsTable({ positions }: { positions: PositionRow[] }) {
         <thead>
           <tr style={{ borderBottom: '1px solid var(--border)' }}>
             <Th>Ticker</Th>
+            <Th>Asset</Th>
             <Th>Side</Th>
             <Th>Qty</Th>
             <Th>Entry</Th>
@@ -763,8 +823,22 @@ function OpenPositionsTable({ positions }: { positions: PositionRow[] }) {
         </thead>
         <tbody>
           {positions.map(p => (
-            <tr key={p.ticker} style={{ borderBottom: '1px solid var(--border)' }}>
+            <tr key={`${p.ticker}-${p.brokerName ?? 'unknown'}`} style={{ borderBottom: '1px solid var(--border)' }}>
               <Td><strong>{p.ticker}</strong></Td>
+              <Td>
+                {p.assetClass && p.brokerName ? (
+                  <span className="text-xs px-1.5 py-0.5 rounded font-mono"
+                    style={{
+                      background: p.assetClass === 'crypto' ? 'rgba(251,191,36,0.15)' : 'rgba(96,165,250,0.15)',
+                      color: p.assetClass === 'crypto' ? '#fbbf24' : '#60a5fa',
+                    }}>
+                    {p.assetClass === 'crypto' ? 'CRYPTO' : 'STOCK'}
+                    {p.brokerName === 'coinbase' && <span className="opacity-60"> · CB</span>}
+                  </span>
+                ) : (
+                  <span style={{ color: 'var(--text3)' }}>—</span>
+                )}
+              </Td>
               <Td>
                 <span style={{ color: p.side === 'long' ? '#34d399' : '#f87171' }}>
                   {p.side.toUpperCase()}
