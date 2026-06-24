@@ -188,7 +188,15 @@ async function callOnce(
 export async function generateWithFallback(
   opts: GeminiCallOptions
 ): Promise<GeminiCallResult> {
-  const models = opts.models ?? ['gemini-2.5-pro', 'gemini-2.5-flash']
+  // Env-overridable so the Scout/verifier model can be upgraded (e.g. to
+  // gemini-3.1-pro) from Railway without a code change. Default stays on the
+  // known-good 2.5 chain; set GEMINI_PRO_MODEL / GEMINI_FLASH_MODEL to move up
+  // once the exact API id is confirmed in Google AI Studio.
+  const defaultChain = [
+    process.env.GEMINI_PRO_MODEL ?? 'gemini-2.5-pro',
+    process.env.GEMINI_FLASH_MODEL ?? 'gemini-2.5-flash',
+  ]
+  const models = opts.models ?? defaultChain
   const retryFirstModel = opts.retryFirstModel ?? true
   const retryDelayMs = opts.retryDelayMs ?? 1500
 

@@ -24,7 +24,7 @@
 
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import {
-  anthropic, openai,
+  anthropic, openaiChat,
   COUNCIL_MODELS, COUNCIL_TEMPS,
   callClaudeJSON, callGPTJSON,
 } from './pipeline/llm'
@@ -2125,10 +2125,10 @@ export async function runCounter(
     `"${q}" → ${(rebuttal.researchAnswers ?? [])[i] ?? '(no answer)'}`
   ).join('; ')
 
-  const researchAsk = await openai().chat.completions.create({
+  const researchAsk = await openaiChat({
     model: COUNCIL_MODELS.researchGpt,
     temperature: COUNCIL_TEMPS.researchGpt,
-    max_tokens: 250,
+    maxTokens: 250,
     messages: [
       { role: 'system', content: `You are the Devil's Advocate in a stock debate about ${bundle.ticker}. You can send TWO research questions to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before firing back at the Lead Analyst. Choose two questions that strengthen your challenges from DIFFERENT angles --- do not ask variations of the same thing. Return them as a numbered list, ONE QUESTION PER LINE: "1. <question>\\n2. <question>". Nothing else.${forexGuidance}` },
       { role: 'user', content: `LEAD ANALYST'S REBUTTAL: ${rebuttal.rebuttal}
@@ -2158,10 +2158,10 @@ What TWO questions should the News Scout research right now to help you counter?
 
 CALIBRATION: Yield on a challenge ONLY if the Lead Analyst directly refuted it AND your fresh research confirms their refutation. Mitigation is not refutation --- if the Lead's rebuttal merely softened a challenge by adding an offsetting factor, your challenge still stands. Defensive admissions about risk do not count as resolution. The Judge weighs argument QUALITY. Yielding on weakly-pressured challenges is fine; yielding on points the Lead failed to actually refute is dishonest. If your strongest challenges remain materially unresolved, say so plainly and press them with the fresh research.`
 
-  const completion = await openai().chat.completions.create({
+  const completion = await openaiChat({
     model: COUNCIL_MODELS.counter,
     temperature: COUNCIL_TEMPS.counter,
-    max_tokens: 1200,
+    maxTokens: 1200,
     messages: [
       { role: 'system', content: counterSystem },
       { role: 'user', content: `YOUR ORIGINAL CHALLENGES: ${gpt.challenges.join('; ')}

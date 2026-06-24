@@ -37,28 +37,37 @@ export type CouncilRole =
 // Model IDs are env-overridable so a model deprecation, or an account/key that
 // lacks a given model, can be fixed by setting ONE Railway env var — no code
 // change, no redeploy of model strings. Defaults are the current canonical IDs.
+// Model IDs are env-overridable so a model deprecation, or an account/key that
+// lacks a given model, can be fixed by setting ONE Railway env var — no code
+// change, no redeploy of model strings. Defaults are the current canonical IDs.
 //   ANTHROPIC_SONNET_MODEL  → lead / rebuttal / research
 //   ANTHROPIC_OPUS_MODEL    → judge / reviewer / calibrator
-// (devil / counter / researchGpt use OpenAI gpt-4o and are unaffected.)
+//   OPENAI_GPT_MODEL        → devil / counter
+//   OPENAI_GPT_MINI_MODEL   → researchGpt (GPT-side lookup)
+// Rollback is instant: set the env var back to the old id (e.g. gpt-4o,
+// claude-opus-4-7) and redeploy is not required for the value to take effect
+// on the next cold start.
 //
 // IMPORTANT: 'research' is the CLAUDE-side research ask. The GPT-side research
-// ask has its OWN key, 'researchGpt' (gpt-4o). They are deliberately separate
-// so an OpenAI call can never accidentally grab a Claude model id (that caused
-// a 404 'model claude-sonnet-4-6 does not exist' from OpenAI). Every key below
-// names exactly one provider's model — never reuse a Claude key on a GPT call.
-const SONNET_MODEL = process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6'
-const OPUS_MODEL   = process.env.ANTHROPIC_OPUS_MODEL   ?? 'claude-opus-4-7'
+// ask has its OWN key, 'researchGpt'. They are deliberately separate so an
+// OpenAI call can never accidentally grab a Claude model id (that caused a 404
+// 'model claude-sonnet-4-6 does not exist' from OpenAI). Every key below names
+// exactly one provider's model — never reuse a Claude key on a GPT call.
+const SONNET_MODEL   = process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6'
+const OPUS_MODEL     = process.env.ANTHROPIC_OPUS_MODEL   ?? 'claude-opus-4-8'
+const GPT_MODEL      = process.env.OPENAI_GPT_MODEL       ?? 'gpt-5.5'
+const GPT_MINI_MODEL = process.env.OPENAI_GPT_MINI_MODEL  ?? 'gpt-5.4-mini'
 
 export const COUNCIL_MODELS: Record<CouncilRole, string> = {
   lead:        SONNET_MODEL,
-  devil:       'gpt-4o',
+  devil:       GPT_MODEL,
   rebuttal:    SONNET_MODEL,
-  counter:     'gpt-4o',
+  counter:     GPT_MODEL,
   judge:       OPUS_MODEL,
   reviewer:    OPUS_MODEL,
   calibrator:  OPUS_MODEL,
-  research:    SONNET_MODEL,   // Claude-side research ask
-  researchGpt: 'gpt-4o',       // GPT-side research ask — MUST stay an OpenAI model
+  research:    SONNET_MODEL,    // Claude-side research ask
+  researchGpt: GPT_MINI_MODEL,  // GPT-side research ask — MUST stay an OpenAI model
 }
 
 // Temperature pinned per role. Debate roles (lead/devil/rebuttal/
@@ -108,6 +117,37 @@ export function openai(): OpenAI {
     })
   }
   return _openai
+}
+
+// Single OpenAI chat entry point. Normalizes the parameter differences between
+// the GPT-4 era and the GPT-5 family so every Council OpenAI call works on any
+// model id without each call site re-implementing the rules:
+//   • GPT-5 family REJECTS `max_tokens` → must use `max_completion_tokens`.
+//   • GPT-5 reasoning models REJECT a custom `temperature` (only the default is
+//     accepted) → we omit it rather than risk a 400.
+//   • GPT-5 reasoning tokens count against the completion budget, so we give
+//     generous headroom to avoid starving the visible JSON output to empty.
+// gpt-4o and earlier keep the classic `max_tokens` + `temperature` shape.
+export async function openaiChat(opts: {
+  model: string
+  messages: OpenAI.Chat.ChatCompletionMessageParam[]
+  maxTokens: number
+  temperature: number
+}): Promise<OpenAI.Chat.ChatCompletion> {
+  const isGpt5 = /^gpt-5/i.test(opts.model)
+  if (isGpt5) {
+    return openai().chat.completions.create({
+      model: opts.model,
+      messages: opts.messages,
+      max_completion_tokens: Math.max(opts.maxTokens + 2000, 4000),
+    })
+  }
+  return openai().chat.completions.create({
+    model: opts.model,
+    messages: opts.messages,
+    max_tokens: opts.maxTokens,
+    temperature: opts.temperature,
+  })
 }
 
 // ── JSON parsing helpers (moved verbatim from pipeline.ts) ──
@@ -249,9 +289,9 @@ export async function callGPTJSON<T>(opts: JSONCallOpts): Promise<T> {
   let lastErr: unknown
   for (let attempt = 0; attempt < 2; attempt++) {
     const user = attempt === 0 ? opts.user : opts.user + JSON_REPROMPT
-    const completion = await openai().chat.completions.create({
+    const completion = await openaiChat({
       model,
-      max_tokens: opts.maxTokens,
+      maxTokens: opts.maxTokens,
       temperature: attempt === 0 ? temperature : 0,
       messages: [
         { role: 'system', content: opts.system },
