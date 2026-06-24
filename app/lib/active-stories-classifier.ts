@@ -588,8 +588,33 @@ export async function classifyActiveStories(
     now: params.now ?? new Date(),
   })
 
+  // Provider switch: classify Active Stories through Perplexity Sonar when
+  // ACTIVE_STORIES_PROVIDER=sonar. Sonar grounds the classification against the
+  // live web (lower hallucination on catalysts/headlines vs classifying a
+  // pre-fetched feed alone). Falls through to Claude on any failure or
+  // unparseable/invalid output, so it's safe to flip on. Unset to revert.
+  if (process.env.ACTIVE_STORIES_PROVIDER === 'sonar' && process.env.PERPLEXITY_API_KEY) {
+    try {
+      const { searchWithSonar } = await import('./perplexity-helper')
+      const r = await searchWithSonar({
+        prompt: `${system}\n\n${user}`,
+        caller: 'active-stories:classify',
+        maxOutputTokens: 12000,
+        temperature: 0.2,
+        useGoogleSearchGrounding: true,
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sonarRaw = parseJSON<any>(r.text)
+      const sonarActiveIds = new Set(params.activeStories.map(s => s.id))
+      console.log(`[active-stories] classified via Perplexity Sonar (${r.modelUsed})`)
+      return validateOutput(sonarRaw, sonarActiveIds)
+    } catch (e) {
+      console.warn(`[active-stories] Sonar classify failed, falling back to Claude: ${e instanceof Error ? e.message : e}`)
+    }
+  }
+
   const msg = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
     // Low temperature: this is a classification task, not creative writing.
     // At the SDK default (1.0) the model was prone to ramble and append
     // self-corrections after the JSON (runId=233). 0.2 keeps it disciplined.

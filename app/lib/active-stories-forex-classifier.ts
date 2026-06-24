@@ -552,8 +552,31 @@ export async function classifyForexActiveStories(
     now: params.now ?? new Date(),
   })
 
+  // Provider switch: classify forex Active Stories through Perplexity Sonar when
+  // ACTIVE_STORIES_PROVIDER=sonar (live-web grounded, lower hallucination).
+  // Falls through to Claude on any failure or invalid output. Unset to revert.
+  if (process.env.ACTIVE_STORIES_PROVIDER === 'sonar' && process.env.PERPLEXITY_API_KEY) {
+    try {
+      const { searchWithSonar } = await import('./perplexity-helper')
+      const r = await searchWithSonar({
+        prompt: `${system}\n\n${user}`,
+        caller: 'active-stories-forex:classify',
+        maxOutputTokens: 4000,
+        temperature: 0.2,
+        useGoogleSearchGrounding: true,
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sonarRaw = parseJSON<any>(r.text)
+      const sonarActiveIds = new Set(params.activeStories.map(s => s.id))
+      console.log(`[active-stories-forex] classified via Perplexity Sonar (${r.modelUsed})`)
+      return validateOutput(sonarRaw, sonarActiveIds)
+    } catch (e) {
+      console.warn(`[active-stories-forex] Sonar classify failed, falling back to Claude: ${e instanceof Error ? e.message : e}`)
+    }
+  }
+
   const msg = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
     max_tokens: 4000,
     system,
     messages: [{ role: 'user', content: user }],
