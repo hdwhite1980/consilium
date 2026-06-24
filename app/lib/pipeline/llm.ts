@@ -32,17 +32,33 @@ import OpenAI from 'openai'
 // Single source of truth for the whole Council.
 export type CouncilRole =
   | 'lead' | 'devil' | 'rebuttal' | 'counter'
-  | 'judge' | 'reviewer' | 'calibrator' | 'research'
+  | 'judge' | 'reviewer' | 'calibrator' | 'research' | 'researchGpt'
+
+// Model IDs are env-overridable so a model deprecation, or an account/key that
+// lacks a given model, can be fixed by setting ONE Railway env var — no code
+// change, no redeploy of model strings. Defaults are the current canonical IDs.
+//   ANTHROPIC_SONNET_MODEL  → lead / rebuttal / research
+//   ANTHROPIC_OPUS_MODEL    → judge / reviewer / calibrator
+// (devil / counter / researchGpt use OpenAI gpt-4o and are unaffected.)
+//
+// IMPORTANT: 'research' is the CLAUDE-side research ask. The GPT-side research
+// ask has its OWN key, 'researchGpt' (gpt-4o). They are deliberately separate
+// so an OpenAI call can never accidentally grab a Claude model id (that caused
+// a 404 'model claude-sonnet-4-6 does not exist' from OpenAI). Every key below
+// names exactly one provider's model — never reuse a Claude key on a GPT call.
+const SONNET_MODEL = process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6'
+const OPUS_MODEL   = process.env.ANTHROPIC_OPUS_MODEL   ?? 'claude-opus-4-7'
 
 export const COUNCIL_MODELS: Record<CouncilRole, string> = {
-  lead:       'claude-sonnet-4-6',
-  devil:      'gpt-4o',
-  rebuttal:   'claude-sonnet-4-6',
-  counter:    'gpt-4o',
-  judge:      'claude-opus-4-7',
-  reviewer:   'claude-opus-4-7',
-  calibrator: 'claude-opus-4-7',
-  research:   'claude-sonnet-4-6',
+  lead:        SONNET_MODEL,
+  devil:       'gpt-4o',
+  rebuttal:    SONNET_MODEL,
+  counter:     'gpt-4o',
+  judge:       OPUS_MODEL,
+  reviewer:    OPUS_MODEL,
+  calibrator:  OPUS_MODEL,
+  research:    SONNET_MODEL,   // Claude-side research ask
+  researchGpt: 'gpt-4o',       // GPT-side research ask — MUST stay an OpenAI model
 }
 
 // Temperature pinned per role. Debate roles (lead/devil/rebuttal/
@@ -59,6 +75,7 @@ export const COUNCIL_TEMPS: Record<CouncilRole, number> = {
   reviewer:   0.10,
   calibrator: 0.10,
   research:   0.30,
+  researchGpt: 0.30,
 }
 
 // ── Reliability knobs (override via env if needed) ──────────
@@ -191,6 +208,12 @@ export interface JSONCallOpts {
 export async function callClaudeJSON<T>(opts: JSONCallOpts): Promise<T> {
   const model = COUNCIL_MODELS[opts.role]
   const temperature = COUNCIL_TEMPS[opts.role]
+  // Provider guard: this path hits the Anthropic SDK. A non-Claude model here
+  // means a role was mis-wired; fail loud with the role name instead of letting
+  // Anthropic return a confusing error.
+  if (!/^claude/i.test(model)) {
+    throw new Error(`callClaudeJSON: role '${opts.role}' resolves to non-Claude model '${model}'. Route GPT roles through callGPTJSON.`)
+  }
   let lastErr: unknown
   for (let attempt = 0; attempt < 2; attempt++) {
     const user = attempt === 0 ? opts.user : opts.user + JSON_REPROMPT
@@ -217,6 +240,12 @@ export async function callClaudeJSON<T>(opts: JSONCallOpts): Promise<T> {
 export async function callGPTJSON<T>(opts: JSONCallOpts): Promise<T> {
   const model = COUNCIL_MODELS[opts.role]
   const temperature = COUNCIL_TEMPS[opts.role]
+  // Provider guard: this path hits the OpenAI SDK. A Claude model here is the
+  // exact bug that produced the OpenAI 404 'model claude-sonnet-4-6 does not
+  // exist'. Fail loud with the role name instead of round-tripping to OpenAI.
+  if (/^claude/i.test(model)) {
+    throw new Error(`callGPTJSON: role '${opts.role}' resolves to Claude model '${model}'. Use 'researchGpt'/'devil'/'counter' for OpenAI, or route via callClaudeJSON.`)
+  }
   let lastErr: unknown
   for (let attempt = 0; attempt < 2; attempt++) {
     const user = attempt === 0 ? opts.user : opts.user + JSON_REPROMPT

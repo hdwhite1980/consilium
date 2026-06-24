@@ -2126,8 +2126,8 @@ export async function runCounter(
   ).join('; ')
 
   const researchAsk = await openai().chat.completions.create({
-    model: COUNCIL_MODELS.research,
-    temperature: COUNCIL_TEMPS.research,
+    model: COUNCIL_MODELS.researchGpt,
+    temperature: COUNCIL_TEMPS.researchGpt,
     max_tokens: 250,
     messages: [
       { role: 'system', content: `You are the Devil's Advocate in a stock debate about ${bundle.ticker}. You can send TWO research questions to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before firing back at the Lead Analyst. Choose two questions that strengthen your challenges from DIFFERENT angles --- do not ask variations of the same thing. Return them as a numbered list, ONE QUESTION PER LINE: "1. <question>\\n2. <question>". Nothing else.${forexGuidance}` },
