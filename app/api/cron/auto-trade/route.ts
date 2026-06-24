@@ -23,13 +23,21 @@ import { loadBrokerCredentialForUse } from '@/app/lib/trading/credentials'
 import { makeAlpacaClient } from '@/app/lib/trading/alpaca-client'
 import { decideForUser, type VerdictForTrade, type Decision } from '@/app/lib/trading/decide'
 import { haltUserAccount } from '@/app/lib/trading/kill-switches'
-import { randomBytes } from 'crypto'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
 const MAX_VERDICTS_PER_USER_PER_RUN = 20  // safety cap
+// Cap how many NEW positions a single cron run may open per user. Stops one
+// run from churning a burst of verdicts into many correlated entries at once;
+// remaining verdicts defer to the next run (re-decided, deterministic id so no
+// duplicate). Concurrent-position cap (kill switch) still applies on top.
+const MAX_NEW_POSITIONS_PER_RUN = 5
+// How many times a verdict that keeps ERRORING (transient throw / broker 5xx)
+// may be retried across runs before we give up and advance past it, so one bad
+// verdict can never wedge the watermark for everything newer than it.
+const MAX_ATTEMPT_RETRIES = 3
 
 interface UserSummary {
   userId: string
@@ -103,10 +111,18 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         const verdicts = await fetchNewVerdicts(settings.userId, watermark)
         userSummary.verdictsConsidered = verdicts.length
 
-        let maxIdProcessed = watermark
-        for (const verdict of verdicts) {
-          maxIdProcessed = Math.max(maxIdProcessed, verdict.id)
+        // Watermark advancement model (#4): advance only PAST verdicts that
+        // reached a terminal state (placed / skipped / halt / already-placed /
+        // rejected, or an error that exhausted its retries). The first
+        // RETRYABLE error blocks further advancement so that verdict — and the
+        // ones after it — get reprocessed next run instead of being silently
+        // dropped. Deterministic client_order_ids make reprocessing safe.
+        let advanceTo = watermark
+        let blocked = false
+        let placedThisRun = 0
+        const resolve = (id: number) => { if (!blocked) advanceTo = id }
 
+        for (const verdict of verdicts) {
           let decision: Decision
           try {
             decision = await decideForUser({ verdict, settings, alpaca })
@@ -120,6 +136,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
               verdictId: verdict.id, ticker: verdict.ticker, outcome: 'error',
               reason: e instanceof Error ? e.message.slice(0, 200) : String(e),
             })
+            // Retryable error: block the watermark so this verdict retries next
+            // run — unless it has already failed MAX_ATTEMPT_RETRIES times, in
+            // which case give up and advance past it.
+            const priorErrors = await countErrorAttempts(settings.userId, verdict.id)
+            if (priorErrors + 1 >= MAX_ATTEMPT_RETRIES) resolve(verdict.id)
+            else blocked = true
             continue
           }
 
@@ -133,6 +155,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
               verdictId: verdict.id, ticker: verdict.ticker, outcome: 'skipped',
               reason: decision.reason,
             })
+            resolve(verdict.id)
             continue
           }
 
@@ -149,19 +172,39 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
               verdictId: verdict.id, ticker: verdict.ticker, outcome: 'halt',
               reason: decision.reason,
             })
+            resolve(verdict.id)
             // Stop processing this user's remaining verdicts
             break
           }
 
-          // decision.kind === 'place' — actually place the order
-          const clientOrderId = `wos-${verdict.id}-${randomBytes(4).toString('hex')}`
+          // Per-run new-position cap (#9): stop opening positions once we hit
+          // the cap and defer the rest to the next run (do NOT advance past
+          // them, so they get reconsidered). break is safe: deterministic ids
+          // mean a re-decided verdict can't double-place.
+          if (placedThisRun >= MAX_NEW_POSITIONS_PER_RUN) {
+            blocked = true
+            userSummary.decisions.push({
+              verdictId: verdict.id, ticker: verdict.ticker, outcome: 'deferred',
+              reason: `per-run cap reached (${MAX_NEW_POSITIONS_PER_RUN}); deferring to next run`,
+            })
+            break
+          }
+
+          // decision.kind === 'place' — actually place the order.
+          // Deterministic client_order_id (#2): keyed only on verdict id so the
+          // broker's own duplicate-client_order_id rejection is a hard backstop
+          // against double-placement if a run crashes after placing but before
+          // the watermark is persisted.
+          const clientOrderId = `wos-${verdict.id}`
           try {
-            // Idempotency: check if we've already placed this clientOrderId
+            // Idempotency: with a deterministic id this actually finds a prior
+            // placement for the same verdict and skips re-placing it.
             const existing = await alpaca.getOrderByClientId(clientOrderId).catch(() => null)
             if (existing) {
               userSummary.decisions.push({
                 verdictId: verdict.id, ticker: verdict.ticker, outcome: 'already_placed',
               })
+              resolve(verdict.id)
               continue
             }
 
@@ -176,6 +219,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
             userSummary.placed++
             summary.totalPlaced++
+            placedThisRun++
             await logTradeAttempt(verdict, settings, {
               outcome: 'placed',
               brokerOrderId: order.id,
@@ -192,6 +236,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
               verdictId: verdict.id, ticker: verdict.ticker, outcome: 'placed',
               reason: decision.rationale,
             })
+            resolve(verdict.id)
             console.log(`[auto-trade] PLACED user=${settings.userId} ${decision.side} ${decision.qty} ${decision.ticker} @ ${decision.entryPrice} stop=${decision.stopPrice} tp=${decision.targetPrice} risk=$${decision.dollarRisk.toFixed(2)} mode=${settings.mode}`)
           } catch (e) {
             userSummary.errors++
@@ -212,13 +257,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
               verdictId: verdict.id, ticker: verdict.ticker, outcome: 'rejected',
               reason: msg.slice(0, 200),
             })
+            // Broker rejection is terminal (bad price, market closed, not
+            // tradable) — retrying rarely helps and would wedge the watermark.
+            resolve(verdict.id)
             console.error(`[auto-trade] REJECTED user=${settings.userId} ${decision.ticker}:`, msg.slice(0, 300))
           }
         }
 
-        // Update watermark to highest verdict id processed
-        if (maxIdProcessed > watermark) {
-          await setWorkerWatermark(settings.userId, maxIdProcessed)
+        // Persist the watermark up to the last fully-resolved verdict.
+        if (advanceTo > watermark) {
+          await setWorkerWatermark(settings.userId, advanceTo)
         }
       } catch (e) {
         userSummary.errors++
@@ -240,6 +288,21 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 // ─────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────
+
+async function countErrorAttempts(userId: string, verdictId: number): Promise<number> {
+  const admin = await getSupabaseAdmin()
+  const { count, error } = await admin
+    .from('trade_attempts')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .eq('verdict_log_id', verdictId)
+    .eq('outcome', 'error')
+  if (error) {
+    console.warn('[auto-trade] countErrorAttempts failed:', error.message)
+    return 0
+  }
+  return count ?? 0
+}
 
 async function fetchNewVerdicts(userId: string, watermark: number): Promise<VerdictForTrade[]> {
   const admin = await getSupabaseAdmin()

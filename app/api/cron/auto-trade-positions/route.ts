@@ -210,11 +210,27 @@ async function processEquityAttempts(
   if (!credLoad) return
   const alpaca = makeAlpacaClient(credLoad.keyId, credLoad.secret, settings.mode)
 
+  // Reconciliation snapshot: read the broker's open positions ONCE so we can
+  // verify a position is actually flat before recording any closed_* outcome.
+  // This is the guard the lifecycle was missing — a bracket leg showing
+  // 'filled' was previously enough to mark closed_win/loss even when the
+  // broker still reported the position open (KLAC / APGE / LRCX recurrences).
+  // null = positions read failed → skip close detection this run (still do
+  // fill transitions), so a transient API blip can never cause a false close.
+  let openSymbols: Set<string> | null = null
+  try {
+    const positions = await alpaca.positions()
+    openSymbols = new Set(positions.filter(p => Number(p.qty) !== 0).map(p => p.symbol.toUpperCase()))
+  } catch (e) {
+    console.warn('[auto-trade-positions] equity positions() read failed; updating fills but skipping close reconciliation this run:', e instanceof Error ? e.message : e)
+    openSymbols = null
+  }
+
   for (const att of attempts) {
     if (!att.broker_order_id) continue
     try {
       const order = await alpaca.getOrder(att.broker_order_id)
-      const update = await deriveEquityUpdate(att, order as unknown as EquityOrderShape)
+      const update = await deriveEquityUpdate(att, order as unknown as EquityOrderShape, openSymbols)
       if (update) {
         await applyUpdate(att.id, update)
         if (update.outcome === 'filled' || update.outcome === 'partial_fill') summary.equityFillsUpdated++
@@ -227,7 +243,7 @@ async function processEquityAttempts(
   }
 }
 
-async function deriveEquityUpdate(att: AttemptRow, order: EquityOrderShape): Promise<UpdatePayload | null> {
+async function deriveEquityUpdate(att: AttemptRow, order: EquityOrderShape, openSymbols: Set<string> | null): Promise<UpdatePayload | null> {
   const s = (order.status ?? '').toLowerCase()
 
   if ((s === 'filled' || s === 'partially_filled') && att.outcome === 'placed') {
@@ -250,8 +266,25 @@ async function deriveEquityUpdate(att: AttemptRow, order: EquityOrderShape): Pro
   const legs = order.legs ?? []
   const filledLeg = legs.find(l => (l.status ?? '').toLowerCase() === 'filled' && l.filled_avg_price !== null)
   if (filledLeg && (att.outcome === 'filled' || att.outcome === 'partial_fill')) {
-    const entryFill = att.filled_avg_price !== null && att.filled_avg_price !== undefined
-      ? Number(att.filled_avg_price) : null
+    const symbolUpper = att.ticker.toUpperCase()
+
+    // RECONCILIATION GUARD: never record a close while the broker still shows
+    // the position open. A null snapshot means we couldn't read positions this
+    // run, so we also refuse to close (we can't verify) and retry next run.
+    if (openSymbols === null) {
+      return null
+    }
+    if (openSymbols.has(symbolUpper)) {
+      console.warn(`[auto-trade-positions] DISCREPANCY ${att.ticker} attempt=${att.id}: bracket leg reports filled but broker still shows an OPEN position — NOT recording close this run`)
+      return null
+    }
+
+    // Entry fill: prefer the stored fill, fall back to the parent order's
+    // filled_avg_price. Fixes positions that got stuck in 'filled' forever
+    // when the entry fill price wasn't captured at placed→filled time.
+    const entryFill = (att.filled_avg_price !== null && att.filled_avg_price !== undefined)
+      ? Number(att.filled_avg_price)
+      : (order.filled_avg_price !== null && order.filled_avg_price !== undefined ? Number(order.filled_avg_price) : null)
     const exitFill = filledLeg.filled_avg_price
     const qty = att.qty !== null && att.qty !== undefined ? Number(att.qty) : 0
     if (entryFill !== null && exitFill !== null && qty > 0) {
@@ -262,11 +295,24 @@ async function deriveEquityUpdate(att: AttemptRow, order: EquityOrderShape): Pro
       if (pnl > eps) outcome = 'closed_win'
       else if (pnl < -eps) outcome = 'closed_loss'
       else outcome = 'closed_be'
+
+      // closure_kind: which bracket leg filled — the one nearer the council
+      // target is a target hit, nearer the stop is a stop. Falls back to P&L
+      // sign when council levels aren't available.
+      const stopLvl = att.council_stop !== null && att.council_stop !== undefined ? Number(att.council_stop) : null
+      const tgtLvl = att.council_target !== null && att.council_target !== undefined ? Number(att.council_target) : null
+      let closureKind: 'stop_fired' | 'target_hit'
+      if (stopLvl !== null && tgtLvl !== null && Number.isFinite(stopLvl) && Number.isFinite(tgtLvl)) {
+        closureKind = Math.abs(exitFill - tgtLvl) <= Math.abs(exitFill - stopLvl) ? 'target_hit' : 'stop_fired'
+      } else {
+        closureKind = pnl > eps ? 'target_hit' : 'stop_fired'
+      }
+
       return {
         outcome,
         realized_pnl: Number(pnl.toFixed(2)),
         closed_at: filledLeg.filled_at ?? new Date().toISOString(),
-        closure_kind: 'stop_fired',  // either stop OR target leg; for equity we don't distinguish here
+        closure_kind: closureKind,
       }
     }
   }
