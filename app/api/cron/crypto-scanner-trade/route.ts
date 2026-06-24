@@ -44,6 +44,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const startedAt = Date.now()
   const users: UserResult[] = []
+  // Surfaced in the response so we can see WHERE discovery stalls:
+  //   universeSize 0           → Coinbase product fetch returned nothing (auth/endpoint)
+  //   universeSize>0, postFilter 0 → coins found, but filters (bullish/composite/movement) rejected all
+  let scanDiag: Record<string, unknown> | null = null
 
   try {
     const enabledUsers = (await listEnabledTradingUsers())
@@ -73,6 +77,23 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         limit: 10,
         direction: 'bullish',
       })
+    }
+
+    scanDiag = {
+      universeSize: scan.universeSize,
+      postFilterSize: scan.postFilterSize,
+      picks: scan.picks.length,
+      authedPath: scan.authedPath,
+      fromCache: scan.fromCache,
+      universeAgeMs: scan.universeAgeMs,
+      errors: scan.errors,
+      topPicks: scan.picks.slice(0, 5).map(p => ({
+        symbol: p.symbol,
+        composite: p.composite,
+        direction: p.direction,
+        change24h: Number(p.priceChange24h.toFixed(2)),
+        volUsdM: Number((p.volumeUsd24h / 1e6).toFixed(1)),
+      })),
     }
 
     for (const settings of enabledUsers) {
@@ -201,7 +222,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const durationMs = Date.now() - startedAt
   console.log(`[crypto-scanner-trade cron] done in ${durationMs}ms, triggered=${users.reduce((s, u) => s + u.picksTriggered, 0)}`)
-  return NextResponse.json({ users, durationMs })
+  return NextResponse.json({ users, durationMs, scan: scanDiag })
 }
 
 async function countOpenCryptoAttempts(userId: string): Promise<number> {
