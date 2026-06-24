@@ -13,6 +13,7 @@
 // =============================================================
 
 import type { AssetClass } from './settings'
+import { cryptoBaseOf } from '@/app/lib/crypto-symbol'
 
 export interface AssetRoute {
   assetClass: AssetClass | 'unknown'
@@ -34,11 +35,7 @@ const FOREX_PAIRS = new Set([
   'USDSGD', 'USDHKD', 'USDPLN', 'USDSEK', 'USDNOK', 'USDDKK',
 ])
 
-const KNOWN_CRYPTO_BASES = new Set([
-  'BTC', 'ETH', 'LTC', 'BCH', 'XRP', 'DOGE', 'ADA', 'SOL', 'MATIC',
-  'DOT', 'LINK', 'AVAX', 'UNI', 'AAVE', 'SHIB', 'TRX', 'XLM', 'NEAR',
-  'ALGO', 'GRT', 'COMP', 'MKR', 'YFI', 'SUSHI', 'CRV', 'BAT',
-])
+// Crypto recognition lives in app/lib/crypto-symbol.ts (structural, full universe).
 
 // CME futures contract roots
 const FUTURES_ROOTS = new Set([
@@ -66,33 +63,18 @@ function normalize(symbol: string): string {
 }
 
 /**
- * Detect crypto pair. Accepts: BTC/USD, BTCUSD, BTC-USD.
+ * Detect crypto pair. Accepts BTC/USD, BTCUSD, BTC-USD for ANY listed coin
+ * (structural recognition via the shared crypto-symbol module), not just a
+ * hardcoded shortlist. Normalizes to Alpaca canonical "BASE/USD".
  */
 function tryCrypto(symbol: string): AssetRoute | null {
-  const norm = symbol.replace(/[\/\-]/g, '')
-  // Match BASE + USD where BASE is in KNOWN_CRYPTO_BASES
-  for (const base of KNOWN_CRYPTO_BASES) {
-    if (norm === `${base}USD` || norm === `${base}USDT` || norm === `${base}USDC`) {
-      // Alpaca canonical form is "BASE/USD"
-      return {
-        assetClass: 'crypto',
-        broker: 'alpaca',
-        normalizedSymbol: `${base}/USD`,
-      }
-    }
+  const base = cryptoBaseOf(symbol)
+  if (!base) return null
+  return {
+    assetClass: 'crypto',
+    broker: 'alpaca',
+    normalizedSymbol: `${base}/USD`,
   }
-  // Slash form input
-  if (symbol.includes('/')) {
-    const [base, quote] = symbol.split('/')
-    if (base && quote === 'USD' && KNOWN_CRYPTO_BASES.has(base.toUpperCase())) {
-      return {
-        assetClass: 'crypto',
-        broker: 'alpaca',
-        normalizedSymbol: `${base.toUpperCase()}/USD`,
-      }
-    }
-  }
-  return null
 }
 
 /**

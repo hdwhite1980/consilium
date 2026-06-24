@@ -16,6 +16,7 @@
 
 import type { SignalBundle } from './aggregator'
 import { isFuturesRootSupported } from './trading/futures-sizing'
+import { isCryptoPairSymbol } from './crypto-symbol'
 
 export type GateAssetClass = 'equity' | 'futures' | 'forex' | 'crypto' | 'spot_metal'
 
@@ -48,10 +49,7 @@ const FOREX_PAIRS = new Set([
   'USDSGD','USDHKD','USDPLN','USDSEK','USDNOK','USDDKK',
 ])
 
-const CRYPTO_BASES = new Set([
-  'BTC','ETH','LTC','BCH','XRP','DOGE','ADA','SOL','MATIC',
-  'DOT','LINK','AVAX','UNI','AAVE','SHIB','TRX','XLM','NEAR',
-])
+// Crypto recognition now lives in app/lib/crypto-symbol.ts (structural, full universe).
 
 const SPOT_METALS = new Set(['XAUUSD','XAGUSD','XPTUSD','XPDUSD'])
 
@@ -127,12 +125,11 @@ export function evaluateTickerGate(rawTicker: string): GateResult {
     return { ok: true, assetClass: 'futures', futuresRoot: withoutSlash }
   }
 
-  // Crypto — accept concatenated (BTCUSD), hyphen (BTC-USD), or slash (BTC/USD).
-  const cryptoNorm = ticker.replace(/[-/]/g, '')
-  for (const base of CRYPTO_BASES) {
-    if (cryptoNorm === `${base}USD` || cryptoNorm === `${base}USDT` || cryptoNorm === `${base}USDC`) {
-      return { ok: true, assetClass: 'crypto' }
-    }
+  // Crypto — any BASE+USD/USDT/USDC pair (full Coinbase universe). Fiat and
+  // spot metals are excluded by the shared recognizer and handled above.
+  // Accepts concatenated (BTCUSD), hyphen (BTC-USD), or slash (BTC/USD).
+  if (isCryptoPairSymbol(ticker)) {
+    return { ok: true, assetClass: 'crypto' }
   }
 
   // Forex

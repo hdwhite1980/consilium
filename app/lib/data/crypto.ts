@@ -5,6 +5,8 @@
 // ─────────────────────────────────────────────────────────────
 
 import type { AlpacaBar } from './alpaca'
+import { fetchCryptoBars as fetchCoinbaseCandles, type CryptoGranularity } from '@/app/lib/trading/crypto-bars'
+import { isCryptoPairSymbol, toCoinbaseProduct } from '@/app/lib/crypto-symbol'
 
 // Map common crypto tickers to CoinGecko IDs
 const COINGECKO_IDS: Record<string, string> = {
@@ -35,14 +37,16 @@ const COINGECKO_IDS: Record<string, string> = {
   SUI:   'sui',
 }
 
-// Also accept BTCUSD, ETHUSD etc formats
+// Also accept BTCUSD, ETHUSD, BTC-USD, BTC/USD formats
 function normalizeCryptoTicker(ticker: string): string {
-  return ticker.replace(/USD$/, '').replace(/USDT$/, '').replace(/USDC$/, '').toUpperCase()
+  return ticker.toUpperCase().replace(/[-/]/g, '').replace(/(USDT|USDC|USD)$/, '')
 }
 
+// Crypto recognition is now structural (any BASE+USD pair that isn't fiat/metal),
+// covering the full Coinbase universe — not just the COINGECKO_IDS shortlist,
+// which is now only used for CoinGecko metadata/fallback lookups.
 export function isCryptoTicker(ticker: string): boolean {
-  const normalized = normalizeCryptoTicker(ticker)
-  return normalized in COINGECKO_IDS
+  return isCryptoPairSymbol(ticker)
 }
 
 function getCoinGeckoId(ticker: string): string | null {
@@ -118,6 +122,19 @@ async function fetchAlpacaCryptoBars(ticker: string, timeframe: string, daysBack
 
 // Fetch current crypto price from CoinGecko
 export async function fetchCryptoPrice(ticker: string): Promise<number> {
+  // PRIMARY: latest Coinbase 1-minute candle close — works for any listed coin.
+  try {
+    const usdProduct = toCoinbaseProduct(ticker)
+    for (const product of [usdProduct, usdProduct.replace(/-USD$/, '-USDC')]) {
+      const bars = await fetchCoinbaseCandles({ symbol: product, granularity: 'ONE_MINUTE', limit: 1 })
+      const last = bars[bars.length - 1]
+      if (last && last.c > 0) return last.c
+    }
+  } catch {
+    // fall through to CoinGecko
+  }
+
+  // FALLBACK: CoinGecko simple price (known coins only).
   const coinId = getCoinGeckoId(ticker)
   if (!coinId) return 0
   try {
@@ -134,22 +151,49 @@ export async function fetchCryptoPrice(ticker: string): Promise<number> {
 }
 
 // Main function — get OHLCV bars for crypto
-export async function fetchCryptoBars(ticker: string, timeframe: string): Promise<AlpacaBar[]> {
-  const coinId = getCoinGeckoId(ticker)
+// Coinbase candle config per Council timeframe. Coinbase candles cover the
+// full product universe, so any scanner-surfaced coin gets real chart data.
+const CB_BARS: Record<string, { granularity: CryptoGranularity; limit: number }> = {
+  '1D': { granularity: 'ONE_HOUR', limit: 72 },
+  '1W': { granularity: 'ONE_HOUR', limit: 168 },
+  '1M': { granularity: 'ONE_DAY', limit: 35 },
+  '3M': { granularity: 'ONE_DAY', limit: 95 },
+}
 
-  // Map timeframe to days
-  const daysMap: Record<string, number> = {
-    '1D': 1, '1W': 7, '1M': 30, '3M': 90
+// Fetch bars from Coinbase for the Council. Tries the -USD product first,
+// then -USDC (some coins are only quoted in USDC). Returns AlpacaBar shape.
+async function fetchCoinbaseBarsForCouncil(ticker: string, timeframe: string): Promise<AlpacaBar[]> {
+  const cfg = CB_BARS[timeframe] ?? CB_BARS['1M']
+  const usdProduct = toCoinbaseProduct(ticker)                 // "BTC-USD"
+  const candidates = [usdProduct, usdProduct.replace(/-USD$/, '-USDC')]
+  for (const product of candidates) {
+    try {
+      const bars = await fetchCoinbaseCandles({ symbol: product, granularity: cfg.granularity, limit: cfg.limit })
+      if (bars.length >= 10) {
+        return bars.map(b => ({ t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v })) as AlpacaBar[]
+      }
+    } catch {
+      // try next candidate / fall through to CoinGecko
+    }
   }
+  return []
+}
+
+export async function fetchCryptoBars(ticker: string, timeframe: string): Promise<AlpacaBar[]> {
+  // PRIMARY: Coinbase candles — full product universe, same feed the scanner
+  // and position monitor use, so the Council no longer disagrees with them and
+  // less-public coins (outside COINGECKO_IDS) now get real chart data.
+  const cb = await fetchCoinbaseBarsForCouncil(ticker, timeframe)
+  if (cb.length >= 10) return cb
+
+  // FALLBACK: CoinGecko (known coins only) for resilience if a Coinbase candle
+  // call fails transiently.
+  const coinId = getCoinGeckoId(ticker)
+  const daysMap: Record<string, number> = { '1D': 1, '1W': 7, '1M': 30, '3M': 90 }
   const days = daysMap[timeframe] ?? 30
-
-  // Try CoinGecko first (free, reliable)
   if (coinId) {
-    // Get OHLC bars
     const ohlcBars = await fetchCoinGeckoBars(coinId, days)
-
     if (ohlcBars.length >= 10) {
-      // Augment with volume data from market chart
       try {
         const chart = await fetchCoinGeckoMarketChart(coinId, days)
         const volMap = new Map(chart.total_volumes.map(([t, v]) => [
@@ -165,9 +209,8 @@ export async function fetchCryptoBars(ticker: string, timeframe: string): Promis
     }
   }
 
-  // Fallback to Alpaca crypto
-  const daysBack = daysMap[timeframe] ?? 30
-  const alpacaBars = await fetchAlpacaCryptoBars(ticker, timeframe, daysBack * 3)
+  // LAST RESORT: Alpaca crypto bars (legacy).
+  const alpacaBars = await fetchAlpacaCryptoBars(ticker, timeframe, (daysMap[timeframe] ?? 30) * 3)
   if (alpacaBars.length >= 10) return alpacaBars
 
   return []
