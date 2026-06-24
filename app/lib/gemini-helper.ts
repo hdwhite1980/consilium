@@ -290,8 +290,77 @@ export async function generateWithFallback(
     }
   }
 
-  // If we got here, every model in the chain failed
-  throw lastError ?? new Error(`[gemini-helper:${opts.caller}] all models failed`)
+  // If we got here, every model in the chain failed. Before giving up, try a
+  // DIFFERENT provider entirely — a Gemini 503 storm shouldn't take out the
+  // Scout/verifier. Grounded calls fall to Sonar; non-grounded to OpenAI.
+  try {
+    const fb = await geminiCrossProviderFallback({
+      prompt: opts.prompt,
+      caller: opts.caller,
+      grounded: opts.useGoogleSearchGrounding,
+      maxOutputTokens: opts.maxOutputTokens,
+      temperature: opts.temperature,
+    })
+    return {
+      text: fb.text,
+      modelUsed: fb.modelUsed,
+      attemptsMade: models.length + 1,
+      elapsedMs: Date.now() - startedAt,
+      rawResponse: fb.rawResponse,
+    }
+  } catch (fbErr) {
+    console.error(
+      `[gemini:${opts.caller}] cross-provider fallback failed: ` +
+      (fbErr instanceof Error ? fbErr.message : String(fbErr)),
+    )
+    throw lastError ?? new Error(`[gemini-helper:${opts.caller}] all models failed`)
+  }
+}
+
+// Cross-provider backstop. When the entire Gemini chain fails (typically a 503
+// overload storm), fall back to a DIFFERENT provider so the pipeline keeps
+// running instead of losing the Scout / verifier entirely:
+//   • grounded (live web search) calls → Perplexity Sonar (PERPLEXITY_API_KEY)
+//   • non-grounded calls               → OpenAI gpt-5-mini class (OPENAI_API_KEY)
+// Returns the text, which model answered, and (for grounded) the Sonar grounding
+// shape so the verifier's credible-source check still works. Throws if no
+// fallback provider is configured or it also fails — the caller then surfaces
+// the original Gemini error.
+export async function geminiCrossProviderFallback(opts: {
+  prompt: string
+  caller: string
+  grounded?: boolean
+  maxOutputTokens?: number
+  temperature?: number
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+}): Promise<{ text: string; modelUsed: string; rawResponse?: any }> {
+  if (opts.grounded && process.env.PERPLEXITY_API_KEY) {
+    const { searchWithSonar } = await import('./perplexity-helper')
+    const r = await searchWithSonar({
+      prompt: opts.prompt,
+      caller: `${opts.caller}:fallback`,
+      maxOutputTokens: opts.maxOutputTokens,
+      temperature: opts.temperature,
+      useGoogleSearchGrounding: true,
+    })
+    console.warn(`[${opts.caller}] Gemini down → Sonar fallback (${r.modelUsed})`)
+    return { text: r.text, modelUsed: r.modelUsed, rawResponse: r.rawResponse }
+  }
+  if (process.env.OPENAI_API_KEY) {
+    const { openaiChat } = await import('./pipeline/llm')
+    const model = process.env.GEMINI_FALLBACK_OPENAI_MODEL ?? 'gpt-5.4-mini'
+    const completion = await openaiChat({
+      model,
+      messages: [{ role: 'user', content: opts.prompt }],
+      maxTokens: opts.maxOutputTokens ?? 4000,
+      temperature: opts.temperature ?? 0.1,
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const text = (completion as any)?.choices?.[0]?.message?.content ?? ''
+    console.warn(`[${opts.caller}] Gemini down → OpenAI fallback (${model})`)
+    return { text, modelUsed: model }
+  }
+  throw new Error(`[${opts.caller}] Gemini chain failed and no cross-provider fallback configured`)
 }
 
 // Convenience wrapper that matches the most common call pattern:

@@ -22,6 +22,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { GoogleGenerativeAI } from '@google/generative-ai'
+import { geminiCrossProviderFallback } from './gemini-helper'
 
 // ─────────────────────────────────────────────────────────────
 // Types
@@ -375,14 +376,36 @@ Rules:
         }
       } catch (e) {
         lastErr = e as Error
-        const msg = (e as Error).message ?? ''
-        const isLast = modelName === GEMINI_MODELS[GEMINI_MODELS.length - 1]
-        if (isLast) throw e
-        // Try next model on 503/overload/404
-        if (!msg.includes('503') && !msg.includes('overload') && !msg.includes('404')) throw e
+        // Fall through to the next model; if the whole chain fails, the
+        // cross-provider fallback after the loop handles it (then the stub).
       }
     }
-    throw lastErr ?? new Error('All Gemini models failed')
+    void lastErr
+    // All Gemini models failed — try a different provider (non-grounded →
+    // OpenAI) before degrading to the deterministic stub in the catch below.
+    const fb = await geminiCrossProviderFallback({
+      prompt, caller: 'aggregator-scout', grounded: false,
+      maxOutputTokens: 1500, temperature: 0.2,
+    })
+    const fbClean = fb.text.replace(/```json|```/g, '').trim()
+    const fbStart = fbClean.indexOf('{')
+    const fbEnd = fbClean.lastIndexOf('}')
+    if (fbStart === -1 || fbEnd === -1) throw new Error('No JSON in fallback response')
+    const fbParsed = JSON.parse(fbClean.slice(fbStart, fbEnd + 1))
+    const fbValid = ['positive', 'negative', 'neutral', 'mixed']
+    const fbSentiment = fbValid.includes(fbParsed.sentiment) ? fbParsed.sentiment : 'neutral'
+    const fbConfidence = typeof fbParsed.confidence === 'number'
+      ? Math.max(0, Math.min(100, Math.round(fbParsed.confidence))) : 50
+    console.warn('[aggregator-scout] Gemini down — used cross-provider fallback')
+    return {
+      summary: typeof fbParsed.summary === 'string' ? fbParsed.summary.slice(0, 600) : '',
+      headlines: Array.isArray(fbParsed.headlines)
+        ? fbParsed.headlines.filter((h: unknown) => typeof h === 'string').slice(0, 5) : [],
+      sentiment: fbSentiment as AggregatorScoutResult['sentiment'],
+      confidence: fbConfidence,
+      keyEvents: Array.isArray(fbParsed.keyEvents)
+        ? fbParsed.keyEvents.filter((e: unknown) => typeof e === 'string').slice(0, 4) : [],
+    }
   } catch (e) {
     console.warn(`[aggregator-scout] Gemini synthesis failed: ${(e as Error).message?.slice(0, 200)}`)
     // Fall back to a deterministic summary built from the raw data
