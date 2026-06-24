@@ -17,7 +17,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/app/lib/admin/admin-auth'
 import {
   listEnabledTradingUsers,
-  setWorkerWatermark,
+  setVerdictWatermark,
   getRiskPerTradePctForAsset,
   getMaxConcurrentForAsset,
   isAssetClassEnabled,
@@ -30,7 +30,6 @@ import { computeCryptoSize } from '@/app/lib/trading/crypto-sizing'
 import { sizeCryptoTradeForCoinbase } from '@/app/lib/trading/crypto-product-sizing'
 import { routeTicker } from '@/app/lib/trading/asset-router'
 import { haltUserAccount } from '@/app/lib/trading/kill-switches'
-import { randomBytes } from 'crypto'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -247,11 +246,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           continue
         }
 
-        // Fetch new crypto verdicts
-        const verdicts = await fetchNewCryptoVerdicts(settings.userId, settings.lastProcessedVerdictId ?? 0)
+        // Fetch new crypto verdicts using the CRYPTO watermark (not the shared
+        // stock pointer — that's the bug that starved crypto of its verdicts).
+        const verdicts = await fetchNewCryptoVerdicts(settings.userId, settings.cryptoLastProcessedVerdictId ?? 0)
         summary.considered += verdicts.length
 
-        let maxId = settings.lastProcessedVerdictId ?? 0
+        let maxId = settings.cryptoLastProcessedVerdictId ?? 0
         for (const verdict of verdicts) {
           maxId = Math.max(maxId, verdict.id)
 
@@ -437,7 +437,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           }
 
           // Place market entry via the active broker
-          const clientOrderId = `wos-c-${verdict.id}-${randomBytes(4).toString('hex')}`
+          // Deterministic client_order_id (keyed on verdict id) so a re-run
+          // can't double-place if the watermark write is lost mid-run.
+          const clientOrderId = `wos-c-${verdict.id}`
           try {
             const order = await broker.marketEntry({
               symbol: brokerSymbol,
@@ -467,10 +469,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           }
         }
 
-        if (maxId > (settings.lastProcessedVerdictId ?? 0)) {
-          // Update watermark — shared with stocks worker; only advance, never regress
-          // We rely on settings.lastProcessedVerdictId being a shared rolling pointer.
-          await setWorkerWatermark(settings.userId, maxId)
+        if (maxId > (settings.cryptoLastProcessedVerdictId ?? 0)) {
+          // Advance the CRYPTO watermark only — independent of the stock pointer.
+          await setVerdictWatermark(settings.userId, 'crypto', maxId)
         }
       } catch (e) {
         summary.errors++

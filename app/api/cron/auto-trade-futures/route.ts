@@ -19,7 +19,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/app/lib/admin/admin-auth'
 import {
   listEnabledTradingUsers,
-  setWorkerWatermark,
+  setVerdictWatermark,
   getRiskPerTradePctForAsset,
   getMaxConcurrentForAsset,
   isAssetClassEnabled,
@@ -102,10 +102,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         if (totalOpen >= settings.totalMaxConcurrent) continue
 
         // Fetch new futures verdicts
-        const verdicts = await fetchNewFuturesVerdicts(settings.userId, settings.lastProcessedVerdictId ?? 0)
+        const verdicts = await fetchNewFuturesVerdicts(settings.userId, settings.futuresLastProcessedVerdictId ?? 0)
         summary.considered += verdicts.length
 
-        let maxId = settings.lastProcessedVerdictId ?? 0
+        let maxId = settings.futuresLastProcessedVerdictId ?? 0
         for (const verdict of verdicts) {
           maxId = Math.max(maxId, verdict.id)
 
@@ -284,8 +284,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           }
         }
 
-        if (maxId > (settings.lastProcessedVerdictId ?? 0)) {
-          await setWorkerWatermark(settings.userId, maxId)
+        if (maxId > (settings.futuresLastProcessedVerdictId ?? 0)) {
+          await setVerdictWatermark(settings.userId, 'futures', maxId)
         }
       } catch (e) {
         summary.errors++

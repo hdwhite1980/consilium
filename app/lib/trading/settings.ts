@@ -38,6 +38,12 @@ export interface UserTradingSettings {
   // Council grade floor
   minGrade: 'A' | 'B' | 'C'
   lastProcessedVerdictId: number | null
+  // Per-asset verdict watermarks (Migration 004). Each non-stock asset cron
+  // tracks its own pointer so the stock cron can't advance past — and starve —
+  // crypto/forex/futures verdicts. Stocks still use lastProcessedVerdictId.
+  cryptoLastProcessedVerdictId: number | null
+  forexLastProcessedVerdictId: number | null
+  futuresLastProcessedVerdictId: number | null
   // Scanner (existing)
   scannerEnabled: boolean
   scannerMaxConcurrent: number
@@ -98,6 +104,9 @@ export const DEFAULT_TRADING_SETTINGS: Omit<UserTradingSettings, 'id' | 'userId'
   allowShorts: false,
   minGrade: 'B',
   lastProcessedVerdictId: null,
+  cryptoLastProcessedVerdictId: null,
+  forexLastProcessedVerdictId: null,
+  futuresLastProcessedVerdictId: null,
   scannerEnabled: false,
   scannerMaxConcurrent: 8,
   scannerMinComposite: 70,
@@ -137,6 +146,9 @@ interface DbRow {
   trade_futures: boolean | null
   allow_shorts: boolean | null
   min_grade: string | null; last_processed_verdict_id: number | string | null
+  crypto_last_processed_verdict_id: number | string | null
+  forex_last_processed_verdict_id: number | string | null
+  futures_last_processed_verdict_id: number | string | null
   scanner_enabled: boolean; scanner_max_concurrent: number; scanner_min_composite: number
   scanner_max_position_pct: string | number | null
   active_mgmt_enabled: boolean; reeval_drawdown_pct: string | number
@@ -179,6 +191,12 @@ function rowToSettings(row: DbRow): UserTradingSettings {
     minGrade: (row.min_grade ?? 'B') as 'A' | 'B' | 'C',
     lastProcessedVerdictId: row.last_processed_verdict_id !== null && row.last_processed_verdict_id !== undefined
       ? Number(row.last_processed_verdict_id) : null,
+    cryptoLastProcessedVerdictId: row.crypto_last_processed_verdict_id !== null && row.crypto_last_processed_verdict_id !== undefined
+      ? Number(row.crypto_last_processed_verdict_id) : null,
+    forexLastProcessedVerdictId: row.forex_last_processed_verdict_id !== null && row.forex_last_processed_verdict_id !== undefined
+      ? Number(row.forex_last_processed_verdict_id) : null,
+    futuresLastProcessedVerdictId: row.futures_last_processed_verdict_id !== null && row.futures_last_processed_verdict_id !== undefined
+      ? Number(row.futures_last_processed_verdict_id) : null,
     scannerEnabled: row.scanner_enabled ?? false,
     scannerMaxConcurrent: row.scanner_max_concurrent ?? 8,
     scannerMinComposite: row.scanner_min_composite ?? 70,
@@ -246,6 +264,9 @@ export async function upsertUserTradingSettings(
     tradeFutures: 'trade_futures',
     allowShorts: 'allow_shorts',
     minGrade: 'min_grade', lastProcessedVerdictId: 'last_processed_verdict_id',
+    cryptoLastProcessedVerdictId: 'crypto_last_processed_verdict_id',
+    forexLastProcessedVerdictId: 'forex_last_processed_verdict_id',
+    futuresLastProcessedVerdictId: 'futures_last_processed_verdict_id',
     scannerEnabled: 'scanner_enabled', scannerMaxConcurrent: 'scanner_max_concurrent',
     scannerMinComposite: 'scanner_min_composite',
     scannerMaxPositionPct: 'scanner_max_position_pct',
@@ -333,6 +354,23 @@ export async function listEnabledTradingUsers(): Promise<UserTradingSettings[]> 
 export async function setWorkerWatermark(userId: string, lastVerdictId: number): Promise<void> {
   const admin = await getSupabaseAdmin()
   await admin.from('user_trading_settings').update({ last_processed_verdict_id: lastVerdictId }).eq('user_id', userId)
+}
+
+// Per-asset watermark setter (Migration 004). Each non-stock asset cron
+// persists its own pointer so the stock cron can't advance past — and starve —
+// crypto/forex/futures verdicts. 'stock' maps to the legacy shared column.
+export async function setVerdictWatermark(
+  userId: string,
+  assetClass: 'stock' | 'crypto' | 'forex' | 'futures',
+  lastVerdictId: number,
+): Promise<void> {
+  const col =
+    assetClass === 'crypto'  ? 'crypto_last_processed_verdict_id'  :
+    assetClass === 'forex'   ? 'forex_last_processed_verdict_id'   :
+    assetClass === 'futures' ? 'futures_last_processed_verdict_id' :
+                               'last_processed_verdict_id'
+  const admin = await getSupabaseAdmin()
+  await admin.from('user_trading_settings').update({ [col]: lastVerdictId }).eq('user_id', userId)
 }
 
 // ─────────────────────────────────────────────────────────────
