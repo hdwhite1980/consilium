@@ -12,6 +12,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/app/lib/auth/client'
+import TradingRulesCard from '@/app/components/TradingRulesCard'
 import {
   Activity, AlertTriangle, RefreshCw, CheckCircle, XCircle, Pause,
   TrendingUp, TrendingDown, Zap, Target, Shield, DollarSign, Clock,
@@ -42,6 +43,12 @@ interface DashboardSettings {
   allowTightenStop: boolean
   allowEarlyExit: boolean
   allowAddPosition: boolean
+  allowShorts: boolean
+  tradeStocks: boolean
+  tradeCrypto: boolean
+  tradeForex: boolean
+  tradeFutures: boolean
+  tradeOptions: boolean
 }
 
 interface DashboardBroker {
@@ -494,6 +501,20 @@ export default function AutoTraderDashboardPage() {
               clearingHalt={clearingHalt}
             />
 
+            {/* Trading rules — user-editable toggles (master switch, shorts, asset filters) */}
+            <TradingRulesCard
+              rules={{
+                enabled: data.settings.enabled,
+                allowShorts: data.settings.allowShorts,
+                tradeStocks: data.settings.tradeStocks,
+                tradeCrypto: data.settings.tradeCrypto,
+                tradeForex: data.settings.tradeForex,
+                tradeFutures: data.settings.tradeFutures,
+                tradeOptions: data.settings.tradeOptions,
+              }}
+              onChanged={() => { void fetchAll() }}
+            />
+
             {/* KPI row */}
             {data.todayKpis && (
               <KpiRow kpis={data.todayKpis} mode={data.settings.mode} />
@@ -647,6 +668,7 @@ function StatusBanner({
               <span>Grade floor: <strong>{settings.minGrade}</strong></span>
               <span>Scanner: <strong style={{ color: settings.scannerEnabled ? '#34d399' : '#9ca3af' }}>{settings.scannerEnabled ? 'ON' : 'OFF'}</strong></span>
               <span>Active mgmt: <strong style={{ color: settings.activeMgmtEnabled ? '#34d399' : '#9ca3af' }}>{settings.activeMgmtEnabled ? 'ON' : 'OFF'}</strong></span>
+              <span>Shorts: <strong style={{ color: settings.allowShorts ? '#34d399' : '#9ca3af' }}>{settings.allowShorts ? 'ON' : 'OFF'}</strong></span>
             </div>
             {broker?.connected && (
               <div className="text-xs mt-1" style={{ color: 'var(--text3)' }}>

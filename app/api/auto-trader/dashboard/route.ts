@@ -171,6 +171,12 @@ export async function GET(): Promise<NextResponse> {
         allowTightenStop: settings.allowTightenStop,
         allowEarlyExit: settings.allowEarlyExit,
         allowAddPosition: settings.allowAddPosition,
+        allowShorts: settings.allowShorts,
+        tradeStocks: settings.tradeStocks,
+        tradeCrypto: settings.tradeCrypto,
+        tradeForex: settings.tradeForex,
+        tradeFutures: settings.tradeFutures,
+        tradeOptions: settings.tradeOptions,
       },
       broker: credentialMeta,
       todayKpis: {
