@@ -84,8 +84,9 @@ export function evaluateTickerGate(rawTicker: string): GateResult {
     }
   }
 
-  // Allow digits-prefix for CME FX futures (6E, 6B, etc.)
-  if (!/^[A-Z0-9.]{1,12}$/.test(ticker)) {
+  // Allow digits-prefix for CME FX futures (6E, 6B, etc.) and pair separators
+  // (- or /) for crypto/forex pairs like BTC-USD, BTC/USD.
+  if (!/^[A-Z0-9./-]{1,12}$/.test(ticker)) {
     return {
       ok: false, stage: 'pre_bundle',
       title: `"${rawTicker}" doesn't look like a valid ticker`,
@@ -126,9 +127,10 @@ export function evaluateTickerGate(rawTicker: string): GateResult {
     return { ok: true, assetClass: 'futures', futuresRoot: withoutSlash }
   }
 
-  // Crypto
+  // Crypto — accept concatenated (BTCUSD), hyphen (BTC-USD), or slash (BTC/USD).
+  const cryptoNorm = ticker.replace(/[-/]/g, '')
   for (const base of CRYPTO_BASES) {
-    if (ticker === `${base}USD` || ticker === `${base}USDT` || ticker === `${base}USDC`) {
+    if (cryptoNorm === `${base}USD` || cryptoNorm === `${base}USDT` || cryptoNorm === `${base}USDC`) {
       return { ok: true, assetClass: 'crypto' }
     }
   }

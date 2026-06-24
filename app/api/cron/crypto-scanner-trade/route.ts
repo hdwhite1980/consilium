@@ -96,7 +96,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
         // Dedup: skip tickers analyzed for this user in last 4 hours
         const recent = await getRecentlyAnalyzed(settings.userId, 4)
-        const fresh = scan.picks.filter(p => !recent.has(p.symbol.toUpperCase()))
+        const fresh = scan.picks.filter(p => !recent.has(toCouncilSymbol(p.symbol)))
         // Bullish only (we don't short crypto)
         const directional = fresh.filter(p => p.direction === 'bullish')
 
@@ -171,7 +171,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
         for (const pick of toTrigger) {
           try {
-            const triggered = await triggerAnalyze(settings.userId, pick.symbol)
+            const triggered = await triggerAnalyze(settings.userId, toCouncilSymbol(pick.symbol))
             if (triggered) {
               result.picksTriggered++
               result.triggered.push({
@@ -224,6 +224,16 @@ async function getRecentlyAnalyzed(userId: string, hours: number): Promise<Set<s
     .gte('created_at', cutoff)
   if (!data) return new Set()
   return new Set((data as Array<{ ticker: string }>).map(r => r.ticker.toUpperCase()))
+}
+
+// The Council / ticker-gate canonical crypto form is concatenated BASE+USD
+// (e.g. "BTCUSD") — NOT Coinbase's product id "BTC-USD" (the gate rejects
+// hyphens) and NOT the slash form. The quote is normalized to USD because
+// USDC/USD are equivalent for analysis; the trader re-derives the exact broker
+// product (BTC-USD for Coinbase, BTC/USD for Alpaca) at execution time.
+function toCouncilSymbol(productId: string): string {
+  const base = (productId.split('-')[0] ?? productId).toUpperCase()
+  return `${base}USD`
 }
 
 async function triggerAnalyze(userId: string, ticker: string): Promise<boolean> {
