@@ -419,7 +419,12 @@ export async function decideForUser(args: {
   // (marginal R:R, earnings timing, or WAIT quality concerns); we override
   // that gate but cap our per-trade exposure at half normal so any single
   // bypass loss has half the impact.
-  const sizeMultiplier = bypass ? 0.5 : 1.0
+  // Bypass sizing: half size by default. Exception — an EARNINGS-window bypass
+  // is taken at FULL size when the user has opted into trading through earnings
+  // (earningsFullSize). marginal_rr and wait_high_quality bypasses always stay
+  // half size; only the earnings timing decision is user-overridable here.
+  const earningsFull = bypass?.category === 'earnings_window' && settings.earningsFullSize
+  const sizeMultiplier = bypass ? (earningsFull ? 1.0 : 0.5) : 1.0
   const effectiveTraderSize = Math.min(1, Math.max(0, traderSize * sizeMultiplier))
 
   // Per-trade bounds from user_trading_settings (Audit Phase 2).
@@ -433,6 +438,9 @@ export async function decideForUser(args: {
     maxPositionPct: settings.maxPositionPct,
     entryPrice,
     stopPrice,
+    // Per-share price floor: normally $3 (skip penny/illiquid names). Small
+    // accounts can opt in to sub-$5 stocks via allowLowPriceShares → floor $0.
+    minSharePrice: settings.allowLowPriceShares ? 0 : 3,
     traderPositionSizePct: effectiveTraderSize > 0 ? effectiveTraderSize : 1,
     minDollarRiskPerTrade: settings.minDollarRiskPerTrade,
     maxDollarRiskPerTrade: settings.maxDollarRiskPerTrade,

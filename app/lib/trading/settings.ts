@@ -35,6 +35,20 @@ export interface UserTradingSettings {
   // (sell-to-open) bracket orders. Gated again at decide-time on a margin
   // account with shorting enabled and a shortable symbol. Default false.
   allowShorts: boolean
+  // Earnings-window trades (per-user opt-in). The Trader PASSes directional
+  // trades when earnings are imminent (binary gap risk). When false, such
+  // PASSes are still bypassed but taken at HALF size to cap gap-risk damage.
+  // When true, earnings-window bypasses are taken at FULL size — the user is
+  // explicitly choosing to trade through earnings and rely on the stop/monitor.
+  // NOTE: stops do NOT protect against an overnight gap that jumps through the
+  // stop price; that's the residual risk this toggle accepts. Default false.
+  earningsFullSize: boolean
+  // Low-priced shares (per-user opt-in). The sizing floor normally skips
+  // entries under minSharePrice ($3 default) to avoid penny/illiquid names.
+  // When true that floor drops to $0 so sub-$5 stocks become tradeable —
+  // intended for very small accounts. Alpaca still won't trade true OTC /
+  // pink-sheet penny stocks regardless of this flag. Default false.
+  allowLowPriceShares: boolean
   // Council grade floor
   minGrade: 'A' | 'B' | 'C'
   lastProcessedVerdictId: number | null
@@ -102,6 +116,8 @@ export const DEFAULT_TRADING_SETTINGS: Omit<UserTradingSettings, 'id' | 'userId'
   tradeForex: false,
   tradeFutures: false,
   allowShorts: false,
+  earningsFullSize: false,
+  allowLowPriceShares: false,
   minGrade: 'B',
   lastProcessedVerdictId: null,
   cryptoLastProcessedVerdictId: null,
@@ -145,6 +161,8 @@ interface DbRow {
   trade_stocks: boolean; trade_crypto: boolean; trade_options: boolean; trade_forex: boolean
   trade_futures: boolean | null
   allow_shorts: boolean | null
+  earnings_full_size: boolean | null
+  allow_low_price_shares: boolean | null
   min_grade: string | null; last_processed_verdict_id: number | string | null
   crypto_last_processed_verdict_id: number | string | null
   forex_last_processed_verdict_id: number | string | null
@@ -188,6 +206,8 @@ function rowToSettings(row: DbRow): UserTradingSettings {
     tradeOptions: row.trade_options, tradeForex: row.trade_forex,
     tradeFutures: row.trade_futures ?? false,
     allowShorts: row.allow_shorts ?? false,
+    earningsFullSize: row.earnings_full_size ?? false,
+    allowLowPriceShares: row.allow_low_price_shares ?? false,
     minGrade: (row.min_grade ?? 'B') as 'A' | 'B' | 'C',
     lastProcessedVerdictId: row.last_processed_verdict_id !== null && row.last_processed_verdict_id !== undefined
       ? Number(row.last_processed_verdict_id) : null,
@@ -263,6 +283,8 @@ export async function upsertUserTradingSettings(
     tradeOptions: 'trade_options', tradeForex: 'trade_forex',
     tradeFutures: 'trade_futures',
     allowShorts: 'allow_shorts',
+    earningsFullSize: 'earnings_full_size',
+    allowLowPriceShares: 'allow_low_price_shares',
     minGrade: 'min_grade', lastProcessedVerdictId: 'last_processed_verdict_id',
     cryptoLastProcessedVerdictId: 'crypto_last_processed_verdict_id',
     forexLastProcessedVerdictId: 'forex_last_processed_verdict_id',
