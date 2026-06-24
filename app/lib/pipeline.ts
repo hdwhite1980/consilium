@@ -22,9 +22,12 @@
 //
 // ─────────────────────────────────────────────────────────────
 
-import Anthropic from '@anthropic-ai/sdk'
-import OpenAI from 'openai'
 import { GoogleGenerativeAI } from '@google/generative-ai'
+import {
+  anthropic, openai,
+  COUNCIL_MODELS, COUNCIL_TEMPS,
+  callClaudeJSON, callGPTJSON,
+} from './pipeline/llm'
 import { generateWithFallback } from './gemini-helper'
 import { buildMacroIntelligenceContext } from './macro-intelligence'
 import type { SignalBundle } from './aggregator'
@@ -42,8 +45,6 @@ import {
 } from './pipeline/futures-prompts'
 import { isFuturesBundle } from './pipeline/futures-router'
 
-function getAnthropic() { return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) }
-function getOpenAI()    { return new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) }
 function getGenAI()     { return new GoogleGenerativeAI(process.env.GEMINI_API_KEY!) }
 
 export type Signal = 'BULLISH' | 'BEARISH' | 'NEUTRAL'
@@ -1723,13 +1724,11 @@ export async function runClaude(bundle: SignalBundle, gemini: GeminiResult, soci
   const evidenceBlock = buildLeadEvidenceBlock(bundle, lens, overrides)
   const citationReqs = buildCitationRequirements(lens)
 
-  const msg = await getAnthropic().messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 2000,  // Layer 6: bumped from 1000 — futures + EIA prompts are larger; truncation caused parseJSON failures
+  return callClaudeJSON<ClaudeResult>({
+    role: 'lead',
+    maxTokens: 2000,
     system: systemPrompt,
-    messages: [{
-      role: 'user',
-      content: `TICKER: ${bundle.ticker} | TIMEFRAME: ${bundle.timeframe} | PRICE: $${bundle.currentPrice.toFixed(2)} | LENS: ${lens.toUpperCase()}${isPersonaExplicit(persona) ? ' (user-selected)' : ' (timeframe default)'}
+    user: `TICKER: ${bundle.ticker} | TIMEFRAME: ${bundle.timeframe} | PRICE: $${bundle.currentPrice.toFixed(2)} | LENS: ${lens.toUpperCase()}${isPersonaExplicit(persona) ? ' (user-selected)' : ' (timeframe default)'}
 
 ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}
 
@@ -1748,11 +1747,8 @@ ${evidenceBlock}
 ${/* eslint-disable-next-line @typescript-eslint/no-explicit-any */ ''}${(bundle.aiContext as any).macroIntelligenceSection ? (bundle.aiContext as any).macroIntelligenceSection + '\n\n' : ''}${citationReqs}
 
 JSON ONLY:
-{"signal":"BULLISH|BEARISH|NEUTRAL","reasoning":"4-5 sentences integrating all signals through your ${lens} lens","target":"price target e.g. $195","confidence":<0-100>,"technicalBasis":"2-3 sentences${lens === 'technical' ? ' --- this is your primary evidence' : lens === 'fundamental' ? ' --- brief, this is background unless override fired' : ''}","fundamentalBasis":"2 sentences${lens === 'fundamental' ? ' --- this is your primary evidence' : lens === 'technical' ? ' --- brief, this is background unless override fired' : ''}","catalysts":["2-3 catalysts"],"keyRisks":["2-3 risks"]}`
-    }]
+{"signal":"BULLISH|BEARISH|NEUTRAL","reasoning":"4-5 sentences integrating all signals through your ${lens} lens","target":"price target e.g. $195","confidence":<0-100>,"technicalBasis":"2-3 sentences${lens === 'technical' ? ' --- this is your primary evidence' : lens === 'fundamental' ? ' --- brief, this is background unless override fired' : ''}","fundamentalBasis":"2 sentences${lens === 'fundamental' ? ' --- this is your primary evidence' : lens === 'technical' ? ' --- brief, this is background unless override fired' : ''}","catalysts":["2-3 catalysts"],"keyRisks":["2-3 risks"]}`,
   })
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return parseJSON<ClaudeResult>(extractText(msg.content as any[]))
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1811,12 +1807,11 @@ ${bundle.aiContext.optionsSection}${filingAlerts ? '\n\n' + filingAlerts : ''}${
 ${bundle.aiContext.convictionSection}`
   }
 
-  const completion = await getOpenAI().chat.completions.create({
-    model: 'gpt-4o',
-    max_tokens: 2000,  // Layer 6: bumped from 1000 — futures + EIA prompts are larger
-    messages: [
-      { role: 'system', content: devilSystemPrompt },
-      { role: 'user', content: `TICKER: ${bundle.ticker} | PRICE: $${bundle.currentPrice.toFixed(2)} | LEAD'S LENS: ${lens.toUpperCase()}
+  return callGPTJSON<GptResult>({
+    role: 'devil',
+    maxTokens: 2000,
+    system: devilSystemPrompt,
+    user: `TICKER: ${bundle.ticker} | PRICE: $${bundle.currentPrice.toFixed(2)} | LEAD'S LENS: ${lens.toUpperCase()}
 
 NEWS SCOUT: ${gemini.sentiment} sentiment, ${gemini.confidence}% confidence
 ${gemini.summary}
@@ -1833,10 +1828,8 @@ ${devilEvidence}
 Before you respond, ask yourself: "If the Lead Analyst is right, what specific data would I expect to see? Do I see it?" If the answer is "yes, I see it," return NEUTRAL with that honest reasoning. Do not invent opposition.
 
 JSON ONLY:
-{"agrees":<true|false>,"signal":"BULLISH|BEARISH|NEUTRAL","reasoning":"4 sentences --- if returning NEUTRAL because data supports the Lead, be explicit about that","confidence":<0-100>,"challenges":["2-4 specific data-backed challenges${lens !== 'balanced' ? ` --- cite ${lens === 'technical' ? 'fundamental/earnings/analyst/valuation' : 'chart/momentum/flow/technical'} evidence per your cross-pressure discipline` : ''}; if no substantive challenges exist, return 1-2 items describing why the Lead's confidence should be lower"],"alternateScenario":"scenario the Lead Analyst underweights --- or 'none, the Lead's scenario accounts for known risks'","strongestCounterArgument":"single most compelling counter --- or 'no compelling counter; the thesis survives scrutiny'"}` }
-    ]
+{"agrees":<true|false>,"signal":"BULLISH|BEARISH|NEUTRAL","reasoning":"4 sentences --- if returning NEUTRAL because data supports the Lead, be explicit about that","confidence":<0-100>,"challenges":["2-4 specific data-backed challenges${lens !== 'balanced' ? ` --- cite ${lens === 'technical' ? 'fundamental/earnings/analyst/valuation' : 'chart/momentum/flow/technical'} evidence per your cross-pressure discipline` : ''}; if no substantive challenges exist, return 1-2 items describing why the Lead's confidence should be lower"],"alternateScenario":"scenario the Lead Analyst underweights --- or 'none, the Lead's scenario accounts for known risks'","strongestCounterArgument":"single most compelling counter --- or 'no compelling counter; the thesis survives scrutiny'"}`,
   })
-  return parseJSON<GptResult>(completion.choices[0].message.content!)
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2017,8 +2010,9 @@ export async function runRebuttal(
   const cacheBlock = formatCachedResearchBlock(cachedResearch)
   const forexGuidance = buildForexQuestionGuidance(bundle)
 
-  const researchAsk = await getAnthropic().messages.create({
-    model: 'claude-sonnet-4-6',
+  const researchAsk = await anthropic().messages.create({
+    model: COUNCIL_MODELS.research,
+    temperature: COUNCIL_TEMPS.research,
     max_tokens: 250,
     system: `You are the Lead Analyst in a stock debate about ${bundle.ticker}. You can send TWO research questions to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before you respond to the Devil's Advocate. Choose two questions that target the most important data points to resolve the Devil's strongest challenges. The two questions should explore DIFFERENT angles --- do not ask variations of the same thing. Return them as a numbered list, ONE QUESTION PER LINE: "1. <question>\\n2. <question>". Nothing else.${forexGuidance}`,
     messages: [{
@@ -2048,9 +2042,10 @@ What TWO questions should the News Scout research right now to help you respond?
     `Question ${i + 1}: "${q}"\nAnswer ${i + 1}: ${researchAnswers[i]}`
   ).join('\n\n')
 
-  const msg = await getAnthropic().messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 2500,  // Layer 6: bumped from 1500 — futures R2 needs room with research + EIA + COT
+  const msg = await anthropic().messages.create({
+    model: COUNCIL_MODELS.rebuttal,
+    temperature: COUNCIL_TEMPS.rebuttal,
+    max_tokens: 2500,  // futures R2 needs room with research + EIA + COT
     system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research from TWO of your questions. Use both responses. Defend your position where data supports you, concede where the Devil's Advocate is correct. Intellectual honesty wins with the Judge --- a thoughtful concession beats a dishonest defense.
 
 CRITICAL PRICE-GROUNDING RULE: The bundle's ground-truth price for ${bundle.ticker} is $${bundle.currentPrice.toFixed(2)}. If the news scout's research contains a current price that differs from the bundle's $${bundle.currentPrice.toFixed(2)} by more than 5%, do NOT pivot your thesis based on that conflicting price. Treat it with explicit skepticism — the research may be referring to a different contract month, a different instrument, stale data, or simply hallucinated from web search noise. State clearly that the research-reported price conflicts with the bundle's reference price, and either (a) use the bundle's price as authoritative, or (b) note the conflict and refuse to rebuild the thesis on the basis of a single uncorroborated price datapoint. NEVER produce a dramatic confidence flip (e.g. NEUTRAL→strong BEARISH or weak→strong any direction) based solely on a conflicting price number that contradicts the bundle. The Devil's actual challenges (positioning, fundamentals, macro narrative) can still be addressed without anchoring to an unverified price.`,
@@ -2109,8 +2104,9 @@ export async function runCounter(
     `"${q}" → ${(rebuttal.researchAnswers ?? [])[i] ?? '(no answer)'}`
   ).join('; ')
 
-  const researchAsk = await getOpenAI().chat.completions.create({
-    model: 'gpt-4o',
+  const researchAsk = await openai().chat.completions.create({
+    model: COUNCIL_MODELS.research,
+    temperature: COUNCIL_TEMPS.research,
     max_tokens: 250,
     messages: [
       { role: 'system', content: `You are the Devil's Advocate in a stock debate about ${bundle.ticker}. You can send TWO research questions to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before firing back at the Lead Analyst. Choose two questions that strengthen your challenges from DIFFERENT angles --- do not ask variations of the same thing. Return them as a numbered list, ONE QUESTION PER LINE: "1. <question>\\n2. <question>". Nothing else.${forexGuidance}` },
@@ -2141,8 +2137,9 @@ What TWO questions should the News Scout research right now to help you counter?
 
 CALIBRATION: Yield on a challenge ONLY if the Lead Analyst directly refuted it AND your fresh research confirms their refutation. Mitigation is not refutation --- if the Lead's rebuttal merely softened a challenge by adding an offsetting factor, your challenge still stands. Defensive admissions about risk do not count as resolution. The Judge weighs argument QUALITY. Yielding on weakly-pressured challenges is fine; yielding on points the Lead failed to actually refute is dishonest. If your strongest challenges remain materially unresolved, say so plainly and press them with the fresh research.`
 
-  const completion = await getOpenAI().chat.completions.create({
-    model: 'gpt-4o',
+  const completion = await openai().chat.completions.create({
+    model: COUNCIL_MODELS.counter,
+    temperature: COUNCIL_TEMPS.counter,
     max_tokens: 1200,
     messages: [
       { role: 'system', content: counterSystem },
@@ -2435,8 +2432,9 @@ async function runJudgeClaude(
   const systemPrompt = buildJudgeSystemPrompt(bundle)
   const userPrompt   = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator, verifications)
 
-  const msg = await getAnthropic().messages.create({
-    model: 'claude-opus-4-7',
+  const msg = await anthropic().messages.create({
+    model: COUNCIL_MODELS.judge,
+    temperature: COUNCIL_TEMPS.judge,
     max_tokens: 6000,
     system: systemPrompt,
     messages: [{ role: 'user', content: userPrompt }]
@@ -2467,7 +2465,7 @@ async function runJudgeGemini(
   const { text, modelUsed } = await generateWithFallback({
     prompt: fullPrompt,
     caller: 'judge:draft',
-    temperature: 0.2,
+    temperature: COUNCIL_TEMPS.judge,
     maxOutputTokens: 8192,
     responseMimeType: 'application/json',
   })
@@ -2744,9 +2742,10 @@ JSON ONLY:
 }`
 
   try {
-    const msg = await getAnthropic().messages.create({
-      model: 'claude-opus-4-7',
-      max_tokens: 2000,  // increased from 1200 — extra rules need more room
+    const msg = await anthropic().messages.create({
+      model: COUNCIL_MODELS.reviewer,
+      temperature: COUNCIL_TEMPS.reviewer,
+      max_tokens: 2000,  // extra rules need more room
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }]
     })
@@ -3103,7 +3102,7 @@ Keep your verdict structure identical to the draft. Update only what's needed to
     const { text, modelUsed } = await generateWithFallback({
       prompt: fullPrompt,
       caller: 'judge:reviewed-rerun',
-      temperature: 0.2,
+      temperature: COUNCIL_TEMPS.judge,
       maxOutputTokens: 8192,
       responseMimeType: 'application/json',
     })
@@ -3113,8 +3112,9 @@ Keep your verdict structure identical to the draft. Update only what's needed to
     const systemPrompt = buildJudgeSystemPrompt(bundle)
     const userPrompt = buildJudgeUserPrompt(bundle, gemini, claude, gpt, rebuttal, counter, round, social, aggregator, verifications) + calibrationGuidance
 
-    const msg = await getAnthropic().messages.create({
-      model: 'claude-opus-4-7',
+    const msg = await anthropic().messages.create({
+      model: COUNCIL_MODELS.judge,
+      temperature: COUNCIL_TEMPS.judge,
       max_tokens: 6000,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }]
