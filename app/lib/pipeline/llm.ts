@@ -247,20 +247,22 @@ export interface JSONCallOpts {
 
 export async function callClaudeJSON<T>(opts: JSONCallOpts): Promise<T> {
   const model = COUNCIL_MODELS[opts.role]
-  const temperature = COUNCIL_TEMPS[opts.role]
   // Provider guard: this path hits the Anthropic SDK. A non-Claude model here
   // means a role was mis-wired; fail loud with the role name instead of letting
   // Anthropic return a confusing error.
   if (!/^claude/i.test(model)) {
     throw new Error(`callClaudeJSON: role '${opts.role}' resolves to non-Claude model '${model}'. Route GPT roles through callGPTJSON.`)
   }
+  // NOTE: `temperature` is intentionally NOT sent. Current Claude models
+  // (Opus 4.8+) reject it ("temperature is deprecated for this model"), the
+  // same way the GPT-5 family dropped it. These models are deterministic enough
+  // by default for the Judge/Reviewer roles; sending temperature 400s the call.
   let lastErr: unknown
   for (let attempt = 0; attempt < 2; attempt++) {
     const user = attempt === 0 ? opts.user : opts.user + JSON_REPROMPT
     const msg = await anthropic().messages.create({
       model,
       max_tokens: opts.maxTokens,
-      temperature: attempt === 0 ? temperature : 0,
       system: opts.system,
       messages: [{ role: 'user', content: user }],
     })

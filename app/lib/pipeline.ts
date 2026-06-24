@@ -2033,7 +2033,6 @@ export async function runRebuttal(
 
   const researchAsk = await anthropic().messages.create({
     model: COUNCIL_MODELS.research,
-    temperature: COUNCIL_TEMPS.research,
     max_tokens: 250,
     system: `You are the Lead Analyst in a stock debate about ${bundle.ticker}. You can send TWO research questions to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before you respond to the Devil's Advocate. Choose two questions that target the most important data points to resolve the Devil's strongest challenges. The two questions should explore DIFFERENT angles --- do not ask variations of the same thing. Return them as a numbered list, ONE QUESTION PER LINE: "1. <question>\\n2. <question>". Nothing else.${forexGuidance}`,
     messages: [{
@@ -2065,7 +2064,6 @@ What TWO questions should the News Scout research right now to help you respond?
 
   const msg = await anthropic().messages.create({
     model: COUNCIL_MODELS.rebuttal,
-    temperature: COUNCIL_TEMPS.rebuttal,
     max_tokens: 2500,  // futures R2 needs room with research + EIA + COT
     system: `You are the Lead Analyst in an elite AI stock council for ${bundle.ticker}. The News Scout just provided fresh research from TWO of your questions. Use both responses. Defend your position where data supports you, concede where the Devil's Advocate is correct. Intellectual honesty wins with the Judge --- a thoughtful concession beats a dishonest defense.
 
@@ -2455,7 +2453,6 @@ async function runJudgeClaude(
 
   const msg = await anthropic().messages.create({
     model: COUNCIL_MODELS.judge,
-    temperature: COUNCIL_TEMPS.judge,
     max_tokens: 6000,
     system: systemPrompt,
     messages: [{ role: 'user', content: userPrompt }]
@@ -2486,7 +2483,6 @@ async function runJudgeGemini(
   const { text, modelUsed } = await generateWithFallback({
     prompt: fullPrompt,
     caller: 'judge:draft',
-    temperature: COUNCIL_TEMPS.judge,
     maxOutputTokens: 8192,
     responseMimeType: 'application/json',
   })
@@ -2765,7 +2761,6 @@ JSON ONLY:
   try {
     const msg = await anthropic().messages.create({
       model: COUNCIL_MODELS.reviewer,
-      temperature: COUNCIL_TEMPS.reviewer,
       max_tokens: 2000,  // extra rules need more room
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }]
@@ -3123,7 +3118,6 @@ Keep your verdict structure identical to the draft. Update only what's needed to
     const { text, modelUsed } = await generateWithFallback({
       prompt: fullPrompt,
       caller: 'judge:reviewed-rerun',
-      temperature: COUNCIL_TEMPS.judge,
       maxOutputTokens: 8192,
       responseMimeType: 'application/json',
     })
@@ -3135,7 +3129,6 @@ Keep your verdict structure identical to the draft. Update only what's needed to
 
     const msg = await anthropic().messages.create({
       model: COUNCIL_MODELS.judge,
-      temperature: COUNCIL_TEMPS.judge,
       max_tokens: 6000,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }]
