@@ -29,6 +29,7 @@ import { makeAlpacaClient, type AlpacaClient, type AlpacaPosition } from '@/app/
 import { fetchBars } from '@/app/lib/data/alpaca'
 import { calculateTechnicals } from '@/app/lib/signals/technicals'
 import { countSignals, decide, computeTrailingStop, type SignalSnapshot, type Decision, type TrailingStopResult } from '@/app/lib/trading/position-monitor-signals'
+import { type MonitorConfig, type MonitorMode, SWING_CONFIG } from '@/app/lib/trading/monitor-config'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -136,7 +137,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         cooldowns: 0, errors: 0,
       }
       try {
-        await processUser(settings, userSummary)
+        await processUser(settings, userSummary, SWING_CONFIG)
       } catch (e) {
         userSummary.errors++
         console.error(`[position-monitor] user=${settings.userId} fatal:`, e instanceof Error ? e.message : e)
@@ -161,7 +162,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 // Per-user processing
 // ─────────────────────────────────────────────────────────────
 
-async function processUser(settings: UserTradingSettings, userSummary: PerUserSummary): Promise<void> {
+async function processUser(settings: UserTradingSettings, userSummary: PerUserSummary, config: MonitorConfig): Promise<void> {
   // Read PM-specific settings via defensive cast (the migration adds these
   // columns; the settings loader may not surface them until we update it)
   const pmSettings = pmSettingsFrom(settings)
@@ -192,7 +193,7 @@ async function processUser(settings: UserTradingSettings, userSummary: PerUserSu
     console.log(`[position-monitor] user=${settings.userId} alpaca returned 0 open positions`)
     // Don't return early — exited tickers may still be on the re-entry watch,
     // which is scanned below regardless of whether anything is open right now.
-    await runReentryPass(settings, alpaca, new Set<string>()).catch(e =>
+    await runReentryPass(settings, alpaca, new Set<string>(), config).catch(e =>
       console.warn(`[position-monitor] reentry pass user=${settings.userId}: ${e instanceof Error ? e.message : e}`))
     return
   }
@@ -201,7 +202,7 @@ async function processUser(settings: UserTradingSettings, userSummary: PerUserSu
     positions.map(p => `${p.symbol}(qty=${p.qty})`).join(','),
   )
 
-  const attemptsByTicker = await fetchOpenAttempts(settings.userId)
+  const attemptsByTicker = await fetchOpenAttempts(settings.userId, config.mode)
   console.log(
     `[position-monitor] user=${settings.userId} trade_attempts has ${attemptsByTicker.size} open rows: ` +
     Array.from(attemptsByTicker.keys()).join(','),
@@ -229,7 +230,7 @@ async function processUser(settings: UserTradingSettings, userSummary: PerUserSu
     )
 
     try {
-      const handled = await processPosition(settings, pmSettings, alpaca, pos, att, userSummary)
+      const handled = await processPosition(settings, pmSettings, alpaca, pos, att, userSummary, config)
       if (!handled) userSummary.errors++
     } catch (e) {
       userSummary.errors++
@@ -239,14 +240,14 @@ async function processUser(settings: UserTradingSettings, userSummary: PerUserSu
         decision: 'HOLD', actionTaken: 'error',
         snap5m: emptySnapshot(), snap15m: emptySnapshot(),
         currentPrice: pos.current_price, currentStop: att.stop_price,
-      })
+      }, config.mode)
     }
   }
 
   // Re-entry pass: scan watched (exited) tickers for a returning setup. Pass the
   // currently-open tickers so we never re-enter something we already hold.
   const openTickers = new Set(positions.map(p => p.symbol.toUpperCase()))
-  await runReentryPass(settings, alpaca, openTickers).catch(e =>
+  await runReentryPass(settings, alpaca, openTickers, config).catch(e =>
     console.warn(`[position-monitor] reentry pass user=${settings.userId}: ${e instanceof Error ? e.message : e}`))
 }
 
@@ -332,8 +333,11 @@ async function processPosition(
   pos: AlpacaPosition,
   att: OpenAttempt,
   userSummary: PerUserSummary,
+  config: MonitorConfig,
 ): Promise<boolean> {
   const ticker = pos.symbol.toUpperCase()
+  // Stamp every log row with the acting monitor's mode (attribution).
+  const logR = (tk: string, p: LogPayload) => logResult(settings, att, tk, p, config.mode)
 
   // Cooldown — don't double-act on a position within pm_cooldown_min
   if (await isInCooldown(att.id, pm.cooldownMin)) {
@@ -346,13 +350,13 @@ async function processPosition(
 
   // Fetch bars and compute technicals
   const [bars5m, bars15m] = await Promise.all([
-    fetchBarsForTimeframe(ticker, '5Min', BARS_TO_FETCH_5MIN),
-    fetchBarsForTimeframe(ticker, '15Min', BARS_TO_FETCH_15MIN),
+    fetchBarsForTimeframe(ticker, config.fastTimeframe, BARS_TO_FETCH_5MIN),
+    fetchBarsForTimeframe(ticker, config.slowTimeframe, BARS_TO_FETCH_15MIN),
   ])
 
   if (bars5m.length < MIN_BARS || bars15m.length < MIN_BARS) {
     // Not enough data — log a HOLD and move on
-    await logResult(settings, att, ticker, {
+    await logR(ticker, {
       ok: true, decision: 'HOLD', actionTaken: 'hold_insufficient_data',
       snap5m: emptySnapshot(), snap15m: emptySnapshot(),
       currentPrice: pos.current_price, currentStop: att.stop_price,
@@ -370,9 +374,9 @@ async function processPosition(
   // Rule engine decision
   const ruling = decide({
     snap5m, snap15m,
-    tightenThreshold15m: pm.tightenThreshold15m,
-    exitThreshold15m: pm.exitThreshold15m,
-    exitThreshold5m: pm.exitThreshold5m,
+    tightenThreshold15m: config.tightenThreshold15m ?? pm.tightenThreshold15m,
+    exitThreshold15m: config.exitThreshold15m ?? pm.exitThreshold15m,
+    exitThreshold5m: config.exitThreshold5m ?? pm.exitThreshold5m,
     escalateOnConflict: pm.escalateOnConflict,
   })
 
@@ -387,7 +391,7 @@ async function processPosition(
     if (trail.applied) {
       console.log(`[position-monitor] ${ticker} TRAIL ${trail.milestone} → stop ${trail.newStop?.toFixed(2)}`)
     }
-    await logResult(settings, att, ticker, {
+    await logR(ticker, {
       ok: true, decision: 'HOLD', actionTaken: trail.applied ? 'trailed' : 'hold',
       snap5m, snap15m,
       currentPrice: pos.current_price, currentStop: att.stop_price,
@@ -399,7 +403,7 @@ async function processPosition(
   if (ruling.decision === 'TIGHTEN_STOP') {
     const result = await applyTighten(alpaca, att, pos)
     userSummary.tightens++
-    await logResult(settings, att, ticker, {
+    await logR(ticker, {
       ok: result.ok, decision: 'TIGHTEN_STOP', actionTaken: result.ok ? 'tightened' : 'tighten_failed',
       snap5m, snap15m,
       currentPrice: pos.current_price, currentStop: att.stop_price,
@@ -430,7 +434,7 @@ async function processPosition(
     // overnight. Pre-market-reeval cron picks up these cases at next open.
     if (isWithinMarketCloseWindow()) {
       console.log(`[position-monitor] ${ticker} EXIT deferred — within 5 min of market close (${ruling.reason})`)
-      await logResult(settings, att, ticker, {
+      await logR(ticker, {
         ok: true, decision: 'EXIT', actionTaken: 'exit_deferred_close_window',
         snap5m, snap15m,
         currentPrice: pos.current_price, currentStop: att.stop_price,
@@ -440,7 +444,7 @@ async function processPosition(
     }
     const result = await applyExit(alpaca, pos)
     userSummary.exits++
-    await logResult(settings, att, ticker, {
+    await logR(ticker, {
       ok: result.ok, decision: 'EXIT', actionTaken: result.ok ? 'exited' : 'exit_failed',
       snap5m, snap15m,
       currentPrice: pos.current_price, currentStop: att.stop_price,
@@ -467,7 +471,7 @@ async function processPosition(
       // Same market-close guard for escalated exits
       if (isWithinMarketCloseWindow()) {
         console.log(`[position-monitor] ${ticker} ESCALATED EXIT deferred — within 5 min of market close`)
-        await logResult(settings, att, ticker, {
+        await logR(ticker, {
           ok: true, decision: 'ESCALATE', actionTaken: 'escalated_exit_deferred_close_window',
           snap5m, snap15m,
           currentPrice: pos.current_price, currentStop: att.stop_price,
@@ -477,7 +481,7 @@ async function processPosition(
         return true
       }
       const result = await applyExit(alpaca, pos)
-      await logResult(settings, att, ticker, {
+      await logR(ticker, {
         ok: result.ok, decision: 'ESCALATE', actionTaken: result.ok ? 'escalated_exit' : 'escalated_exit_failed',
         snap5m, snap15m,
         currentPrice: pos.current_price, currentStop: att.stop_price,
@@ -492,7 +496,7 @@ async function processPosition(
       }
     } else if (escalation.action === 'TIGHTEN_STOP') {
       const result = await applyTighten(alpaca, att, pos)
-      await logResult(settings, att, ticker, {
+      await logR(ticker, {
         ok: result.ok, decision: 'ESCALATE', actionTaken: result.ok ? 'escalated_tighten' : 'escalated_tighten_failed',
         snap5m, snap15m,
         currentPrice: pos.current_price, currentStop: att.stop_price,
@@ -506,7 +510,7 @@ async function processPosition(
       }
     } else {
       // Council said HOLD or returned ambiguously
-      await logResult(settings, att, ticker, {
+      await logR(ticker, {
         ok: true, decision: 'ESCALATE', actionTaken: 'escalated_hold',
         snap5m, snap15m,
         currentPrice: pos.current_price, currentStop: att.stop_price,
@@ -699,6 +703,7 @@ async function runReentryPass(
   settings: UserTradingSettings,
   alpaca: AlpacaClient,
   openTickers: Set<string>,
+  config: MonitorConfig,
 ): Promise<void> {
   const admin = await getSupabaseAdmin()
   const cutoff = new Date(Date.now() - REENTRY_WINDOW_DAYS * 86_400_000).toISOString()
@@ -732,8 +737,8 @@ async function runReentryPass(
     const side = w.side === 'sell' ? 'sell' : 'buy'
 
     const [bars5m, bars15m] = await Promise.all([
-      fetchBarsForTimeframe(ticker, '5Min', BARS_TO_FETCH_5MIN),
-      fetchBarsForTimeframe(ticker, '15Min', BARS_TO_FETCH_15MIN),
+      fetchBarsForTimeframe(ticker, config.fastTimeframe, BARS_TO_FETCH_5MIN),
+      fetchBarsForTimeframe(ticker, config.slowTimeframe, BARS_TO_FETCH_15MIN),
     ])
     if (bars5m.length < MIN_BARS || bars15m.length < MIN_BARS) continue
 
@@ -762,7 +767,7 @@ async function runReentryPass(
     const exitMs = new Date(w.exit_at).getTime()
     if (!Number.isFinite(lastBarMs) || lastBarMs <= exitMs) continue
 
-    await placeReentry(settings, alpaca, w, ticker, side, t5.currentPrice).catch(e =>
+    await placeReentry(settings, alpaca, w, ticker, side, t5.currentPrice, config).catch(e =>
       console.warn(`[position-monitor] reentry place ${ticker}: ${e instanceof Error ? e.message : e}`))
   }
 }
@@ -780,6 +785,7 @@ async function placeReentry(
   ticker: string,
   side: 'buy' | 'sell',
   currentPrice: number,
+  config: MonitorConfig,
 ): Promise<void> {
   const origEntry = w.original_entry !== null ? Number(w.original_entry) : NaN
   const origStop = w.original_stop !== null ? Number(w.original_stop) : NaN
@@ -838,6 +844,7 @@ async function placeReentry(
     council_stop: newStop,
     council_target: newTarget,
     asset_class: w.asset_class ?? 'stock',
+    monitor_mode: config.mode,
   })
   if (insErr) {
     console.warn(`[position-monitor] reentry trade_attempts insert ${ticker}: ${insErr.message}`)
@@ -1127,7 +1134,7 @@ async function escalateToCouncil(
 // DB helpers
 // ─────────────────────────────────────────────────────────────
 
-async function fetchOpenAttempts(userId: string): Promise<Map<string, OpenAttempt>> {
+async function fetchOpenAttempts(userId: string, mode: MonitorMode = 'swing'): Promise<Map<string, OpenAttempt>> {
   const admin = await getSupabaseAdmin()
   const cutoff = new Date(Date.now() - 30 * 86_400_000).toISOString()
 
@@ -1143,6 +1150,7 @@ async function fetchOpenAttempts(userId: string): Promise<Map<string, OpenAttemp
     .select('id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, initial_stop, outcome, asset_class')
     .eq('user_id', userId)
     .in('asset_class', ['stock', 'stocks'])
+    .eq('monitor_mode', mode)
     .in('outcome', ['placed', 'filled', 'partial_fill'])
     .gte('created_at', cutoff)
 
@@ -1158,6 +1166,7 @@ async function fetchOpenAttempts(userId: string): Promise<Map<string, OpenAttemp
     .select('id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, initial_stop, outcome, asset_class')
     .eq('user_id', userId)
     .is('asset_class', null)
+    .eq('monitor_mode', mode)
     .in('outcome', ['placed', 'filled', 'partial_fill'])
     .gte('created_at', cutoff)
 
@@ -1260,12 +1269,14 @@ async function logResult(
   att: OpenAttempt,
   ticker: string,
   payload: LogPayload,
+  monitorMode: MonitorMode = 'swing',
 ): Promise<void> {
   const admin = await getSupabaseAdmin()
   await admin.from('position_monitor_log').insert({
     user_id: settings.userId,
     trade_attempt_id: att.id,
     ticker,
+    monitor_mode: monitorMode,
     asset_class: att.asset_class ?? 'stock',
     bearish_count_5m: payload.snap5m.bearishCount,
     bearish_count_15m: payload.snap15m.bearishCount,
