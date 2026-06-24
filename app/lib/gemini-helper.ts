@@ -188,6 +188,17 @@ async function callOnce(
 export async function generateWithFallback(
   opts: GeminiCallOptions
 ): Promise<GeminiCallResult> {
+  // Provider delegation: route grounded (live web search) calls to Perplexity
+  // Sonar when SEARCH_PROVIDER=sonar. Sonar is search-native with a much lower
+  // citation-hallucination rate — a better fit for the verification/fact-check
+  // roles, and immune to the Gemini-tier 503 overload. Only grounded calls are
+  // delegated; non-grounded Gemini work (Scout summarization, Judge reasoning,
+  // claim extraction) stays on Gemini. Unset SEARCH_PROVIDER to roll back.
+  if (opts.useGoogleSearchGrounding && process.env.SEARCH_PROVIDER === 'sonar') {
+    const { searchWithSonar } = await import('./perplexity-helper')
+    return searchWithSonar(opts)
+  }
+
   // Env-overridable so the Scout/verifier model can be upgraded (e.g. to
   // gemini-3.1-pro) from Railway without a code change. Default stays on the
   // known-good 2.5 chain; set GEMINI_PRO_MODEL / GEMINI_FLASH_MODEL to move up
