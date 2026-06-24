@@ -28,7 +28,7 @@ import { loadBrokerCredentialForUse } from '@/app/lib/trading/credentials'
 import { makeAlpacaClient, type AlpacaClient, type AlpacaPosition } from '@/app/lib/trading/alpaca-client'
 import { fetchBars } from '@/app/lib/data/alpaca'
 import { calculateTechnicals } from '@/app/lib/signals/technicals'
-import { countSignals, decide, type SignalSnapshot, type Decision } from '@/app/lib/trading/position-monitor-signals'
+import { countSignals, decide, computeTrailingStop, type SignalSnapshot, type Decision, type TrailingStopResult } from '@/app/lib/trading/position-monitor-signals'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -53,6 +53,7 @@ interface OpenAttempt {
   target_price: number | null
   broker_order_id: string | null
   verdict_log_id: number | null
+  original_stop_loss: number | null   // Council's original stop from verdict_log (immutable, for R-multiple trailing)
   outcome: string
   asset_class: string | null
 }
@@ -358,10 +359,19 @@ async function processPosition(
   // Execute
   if (ruling.decision === 'HOLD') {
     userSummary.holds++
+    // Profit trailing: even on a HOLD, ratchet the stop up to lock in gains at
+    // R-multiple milestones (breakeven at +1R, +0.5R at +2R, etc.). This is the
+    // "exit with a win" protection that previously only existed on the crypto
+    // monitor — the stock monitor reached HOLD and left the stop untouched.
+    const trail = await applyTrailingStop(alpaca, att, pos)
+    if (trail.applied) {
+      console.log(`[position-monitor] ${ticker} TRAIL ${trail.milestone} → stop ${trail.newStop?.toFixed(2)}`)
+    }
     await logResult(settings, att, ticker, {
-      ok: true, decision: 'HOLD', actionTaken: 'hold',
+      ok: true, decision: 'HOLD', actionTaken: trail.applied ? 'trailed' : 'hold',
       snap5m, snap15m,
       currentPrice: pos.current_price, currentStop: att.stop_price,
+      newStopPrice: trail.applied ? trail.newStop : undefined,
     })
     return true
   }
@@ -382,7 +392,14 @@ async function processPosition(
       await syncTightenedStop(att, result.newStop).catch(e =>
         console.warn(`[position-monitor] sync-tighten ${ticker}: ${e instanceof Error ? e.message : e}`))
     }
-    return result.ok
+    // After the signal-based tighten, also run profit trailing: if the R-multiple
+    // milestone implies a higher stop than the midpoint nudge, ratchet up to it.
+    // applyTighten already updated att.stop_price, so this only moves UP further.
+    const trail = await applyTrailingStop(alpaca, att, pos)
+    if (trail.applied) {
+      console.log(`[position-monitor] ${ticker} TRAIL ${trail.milestone} → stop ${trail.newStop?.toFixed(2)} (post-tighten)`)
+    }
+    return result.ok || trail.applied
   }
 
   if (ruling.decision === 'EXIT') {
@@ -626,6 +643,63 @@ async function applyTighten(
   }
 }
 
+/**
+ * Profit-based trailing stop (R-multiple milestones).
+ *
+ * Distinct from applyTighten (which reacts to bearish signals with a midpoint
+ * nudge): this runs every cycle on a winning long and ratchets the stop up to
+ * lock in gains — breakeven at +1R, +0.5R at +2R, +1.5R at +3R, then a 1R
+ * trail at +4R+. It needs the IMMUTABLE original stop (att.original_stop_loss,
+ * the Council's verdict stop) to compute R, because att.stop_price has already
+ * been moved up by prior tightens/trails.
+ *
+ * Applies through the same Alpaca bracket-stop-leg PATCH path as applyTighten,
+ * then persists via syncTightenedStop. Only ever moves the stop UP.
+ */
+interface TrailResult { applied: boolean; newStop?: number; milestone?: string; reason?: string }
+
+async function applyTrailingStop(alpaca: AlpacaClient, att: OpenAttempt, pos: AlpacaPosition): Promise<TrailResult> {
+  if (att.side && att.side !== 'buy') return { applied: false, reason: 'short side not supported' }
+  if (!att.broker_order_id) return { applied: false, reason: 'no broker_order_id' }
+
+  const entry = att.filled_avg_price ?? att.entry_price_est
+  if (entry === null || att.stop_price === null || att.original_stop_loss === null) {
+    return { applied: false, reason: 'missing entry / stop / original_stop_loss' }
+  }
+
+  const trail: TrailingStopResult | null = computeTrailingStop({
+    side: 'buy',
+    entryPrice: entry,
+    currentPrice: pos.current_price,
+    currentStop: att.stop_price,
+    originalStop: att.original_stop_loss,
+  })
+  if (!trail) return { applied: false, reason: 'no milestone reached / not in profit' }
+
+  try {
+    const parent = await alpaca.getOrder(att.broker_order_id) as unknown as {
+      legs?: Array<{ id: string; type?: string; order_type?: string; status?: string }>
+    }
+    const legs = parent.legs ?? []
+    const stopLeg = legs.find(l => {
+      const t = (l.type ?? l.order_type ?? '').toLowerCase()
+      const s = (l.status ?? '').toLowerCase()
+      return (t === 'stop' || t === 'stop_limit') && (s === 'new' || s === 'accepted' || s === 'held' || s === 'pending_new')
+    })
+    if (!stopLeg) return { applied: false, reason: 'no active stop leg found on parent', newStop: trail.newStop }
+
+    await (alpaca as unknown as { request: (m: string, p: string, body?: unknown) => Promise<unknown> })
+      .request('PATCH', `/v2/orders/${encodeURIComponent(stopLeg.id)}`, { stop_price: trail.newStop.toFixed(2) })
+  } catch (e) {
+    return { applied: false, reason: e instanceof Error ? e.message.slice(0, 200) : String(e), newStop: trail.newStop }
+  }
+
+  await syncTightenedStop(att, trail.newStop).catch(e =>
+    console.warn(`[position-monitor] sync-trail ${att.ticker}: ${e instanceof Error ? e.message : e}`))
+
+  return { applied: true, newStop: trail.newStop, milestone: trail.milestone }
+}
+
 interface ExitResult { ok: boolean; reason?: string }
 
 /**
@@ -842,11 +916,42 @@ async function fetchOpenAttempts(userId: string): Promise<Map<string, OpenAttemp
       target_price: row.target_price !== null && row.target_price !== undefined ? Number(row.target_price) : null,
       broker_order_id: row.broker_order_id !== null && row.broker_order_id !== undefined ? String(row.broker_order_id) : null,
       verdict_log_id: row.verdict_log_id !== null && row.verdict_log_id !== undefined ? Number(row.verdict_log_id) : null,
+      original_stop_loss: null,
       outcome: String(row.outcome),
       asset_class: row.asset_class !== null && row.asset_class !== undefined ? String(row.asset_class) : null,
     }
     map.set(att.ticker.toUpperCase(), att)
   }
+
+  // Enrich with the Council's ORIGINAL stop from verdict_log (immutable —
+  // stop_price on the attempt gets moved up by tightening/trailing, so it
+  // can't be used to compute R-multiples). Done as a separate batched query
+  // rather than a PostgREST embedded join: this file was previously bitten by
+  // the .or().in() silent-empty bug, so we avoid adding joins to that path.
+  const verdictIds = Array.from(
+    new Set(Array.from(map.values()).map(a => a.verdict_log_id).filter((v): v is number => v !== null))
+  )
+  if (verdictIds.length > 0) {
+    const { data: vData, error: vError } = await admin
+      .from('verdict_log')
+      .select('id, stop_loss')
+      .in('id', verdictIds)
+    if (vError) {
+      console.warn(`[position-monitor] verdict_log stop_loss lookup failed (trailing will no-op):`, vError.message)
+    } else {
+      const stopById = new Map<number, number>()
+      for (const r of (vData ?? []) as Array<{ id: number; stop_loss: number | string | null }>) {
+        const sl = r.stop_loss !== null && r.stop_loss !== undefined ? Number(r.stop_loss) : null
+        if (sl !== null && Number.isFinite(sl)) stopById.set(Number(r.id), sl)
+      }
+      for (const att of map.values()) {
+        if (att.verdict_log_id !== null && stopById.has(att.verdict_log_id)) {
+          att.original_stop_loss = stopById.get(att.verdict_log_id)!
+        }
+      }
+    }
+  }
+
   return map
 }
 
