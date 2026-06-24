@@ -144,9 +144,27 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           Array.from(tickerSet),
         )
 
+        // Dedupe picks by ticker BEFORE scoring. The scanner can surface the
+        // same ticker more than once in one run — identical repeats, or two
+        // setups for the same name (e.g. breakout + mixed). Each occurrence
+        // used to become its own scanner_triage row, so every name was inserted
+        // twice, doubling fire_now candidates and burning the per-run fire cap
+        // (MAX_FIRE_NOW_PER_USER / the 8-per-run trigger cap) on duplicates.
+        // Keep the strongest pick per ticker (composite, then news-composite,
+        // then momentum) so each ticker yields exactly one row per run.
+        const bestByTicker = new Map<string, EnrichedScore>()
+        for (const pick of picks) {
+          const t = String(pick.ticker).toUpperCase()
+          const cur = bestByTicker.get(t)
+          if (!cur || pickStrength(pick) > pickStrength(cur)) {
+            bestByTicker.set(t, pick)
+          }
+        }
+        const dedupedPicks = Array.from(bestByTicker.values())
+
         // Score each pick
         const scoredRows: Array<{ ticker: string; pick: EnrichedScore; result: TriageResult }> = []
-        for (const pick of picks) {
+        for (const pick of dedupedPicks) {
           const t = pick.ticker.toUpperCase()
           const ctx: TriageContext = {
             recentVerdicts: recentVerdictsByTicker.get(t) ?? [],
@@ -286,6 +304,19 @@ async function fetchRecentVerdictsByTicker(
     })
   }
   return out
+}
+
+// ─────────────────────────────────────────────────────────────
+// Pick dedupe ranking
+// ─────────────────────────────────────────────────────────────
+
+// Rank a scanner pick for per-ticker dedupe. Composite is the primary scanner
+// metric; news-composite and momentum break ties. Encoded into one number so
+// the strongest pick per ticker wins deterministically.
+function pickStrength(p: EnrichedScore): number {
+  return (p.compositeScore ?? 0) * 1_000_000
+       + (p.compositeWithNews ?? 0) * 1_000
+       + (p.momentumScore ?? 0)
 }
 
 // ─────────────────────────────────────────────────────────────
