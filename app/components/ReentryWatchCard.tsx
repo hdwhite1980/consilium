@@ -96,10 +96,7 @@ export default function ReentryWatchCard() {
 
   const watching = data?.watching ?? []
   const exhausted = data?.exhausted ?? []
-
-  // Don't render the card at all when there's nothing to show (keeps the
-  // dashboard clean until the monitor has actually exited something).
-  if (!loading && watching.length === 0 && exhausted.length === 0) return null
+  const endpointError = data && data.ok === false ? data.error : null
 
   return (
     <div className="mb-4 p-4 rounded-xl"
@@ -114,6 +111,16 @@ export default function ReentryWatchCard() {
 
       {loading ? (
         <div className="text-xs py-2" style={{ color: 'var(--text3)' }}>Loading…</div>
+      ) : endpointError ? (
+        <div className="text-xs py-2" style={{ color: '#f87171' }}>
+          Couldn&apos;t load the watch list ({endpointError}). If this mentions a missing
+          table/column, the re-entry migration hasn&apos;t been run yet.
+        </div>
+      ) : watching.length === 0 && exhausted.length === 0 ? (
+        <div className="text-xs py-2" style={{ color: 'var(--text3)' }}>
+          No exited positions yet. This list populates automatically when the monitor closes a
+          position — the ticker is then watched for a returning setup.
+        </div>
       ) : (
         <>
           {watching.length > 0 ? (
