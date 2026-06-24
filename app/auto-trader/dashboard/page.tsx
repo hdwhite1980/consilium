@@ -13,6 +13,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/app/lib/auth/client'
 import TradingRulesCard from '@/app/components/TradingRulesCard'
+import ReentryWatchCard from '@/app/components/ReentryWatchCard'
 import {
   Activity, AlertTriangle, RefreshCw, CheckCircle, XCircle, Pause,
   TrendingUp, TrendingDown, Zap, Target, Shield, DollarSign, Clock,
@@ -562,6 +563,9 @@ export default function AutoTraderDashboardPage() {
               color="#a78bfa">
               <MonitorActivityPanel data={monitor} />
             </Section>
+
+            {/* Re-entry watch: exited tickers eligible for automated re-entry */}
+            <ReentryWatchCard />
 
             {/* Reeval activity (after-hours + pre-market + morning crons) */}
             <Section
