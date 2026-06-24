@@ -299,7 +299,7 @@ export interface TrailingStopInputs {
 
 export interface TrailingStopResult {
   newStop: number
-  milestone: '1R_breakeven' | '2R_lock_half' | '3R_lock_1_5R' | '4R_trail_1R'
+  milestone: '1R_breakeven' | '1_5R_lock_half' | '2R_lock_half' | '3R_lock_1_5R' | '4R_trail_1R'
   gainR: number
   reason: string
 }
@@ -371,6 +371,11 @@ export function computeTrailingStop(inputs: TrailingStopInputs): TrailingStopRes
     // Lock +0.5R gain
     proposedStop = entryPrice + (riskPerShare * 0.5)
     milestone = '2R_lock_half'
+  } else if (gainR >= 1.5) {
+    // Lock +0.5R gain — closes the gap where +1R–+2R sat at breakeven and a
+    // trade that ran to ~+1.8R then reversed gave back the entire gain.
+    proposedStop = entryPrice + (riskPerShare * 0.5)
+    milestone = '1_5R_lock_half'
   } else if (gainR >= 1) {
     // Move to breakeven
     proposedStop = entryPrice
