@@ -48,6 +48,11 @@ export type Decision =
       dollarRisk: number
       accountEquity: number
       rationale: string
+      // Which monitor owns this position once filled. Earnings-window trades
+      // are forced to 'day' so the fast (5m/15m) day-monitor manages them and
+      // can exit intraday before the overnight earnings gap. Everything else
+      // starts 'swing'. (Requires the day-monitor cron to be scheduled.)
+      monitorMode: 'swing' | 'day'
     }
   | { kind: 'skip'; reason: string; shouldHalt: false }
   | { kind: 'halt'; reason: string; shouldHalt: true }
@@ -424,6 +429,9 @@ export async function decideForUser(args: {
   // (earningsFullSize). marginal_rr and wait_high_quality bypasses always stay
   // half size; only the earnings timing decision is user-overridable here.
   const earningsFull = bypass?.category === 'earnings_window' && settings.earningsFullSize
+  // Earnings-window bypasses are force-routed to the day monitor (set on the
+  // place result below) regardless of size, so they can be exited intraday.
+  const isEarningsBypass = bypass?.category === 'earnings_window'
   const sizeMultiplier = bypass ? (earningsFull ? 1.0 : 0.5) : 1.0
   const effectiveTraderSize = Math.min(1, Math.max(0, traderSize * sizeMultiplier))
 
@@ -492,5 +500,6 @@ export async function decideForUser(args: {
     rationale: bypass
       ? `[${bypass.category === 'wait_high_quality' ? 'WAIT_BYPASS' : 'PASS_BYPASS'}:${bypass.category}] ${bypass.rationale} | ${sizing.rationale}`
       : sizing.rationale,
+    monitorMode: isEarningsBypass ? 'day' : 'swing',
   }
 }
