@@ -28,7 +28,7 @@ import {
   COUNCIL_MODELS, COUNCIL_TEMPS,
   callClaudeJSON, callGPTJSON,
 } from './pipeline/llm'
-import { generateWithFallback } from './gemini-helper'
+import { generateWithFallback, geminiCrossProviderFallback } from './gemini-helper'
 import { buildMacroIntelligenceContext } from './macro-intelligence'
 import type { SignalBundle } from './aggregator'
 import { isFundTicker, getFundInfo, buildFundContext } from './data/fund-detection'
@@ -1687,28 +1687,26 @@ Answer in 2-4 sentences using the freshest data available, prioritizing the LIVE
 export async function runGemini(bundle: SignalBundle): Promise<GeminiResult> {
   const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro']
   let lastError: Error | null = null
-  for (const modelName of GEMINI_MODELS) {
-    try {
-      const model = getGenAI().getGenerativeModel({ model: modelName })
-      const tfFocus: Record<string, string> = {
-        '1D': 'FOCUS on TODAY only --- intraday news, pre/post-market moves, breaking catalysts. Ignore multi-week trends.',
-        '1W': 'FOCUS on THIS WEEK --- earnings this week, analyst actions, macro data releases in the next 5 days.',
-        '1M': 'FOCUS on THIS MONTH --- upcoming earnings date, recent upgrades/downgrades, sector rotation.',
-        '3M': 'FOCUS on NEXT QUARTER --- earnings trajectory, macro tailwinds/headwinds, institutional positioning.',
-      }
-      const newsInput = (bundle.aiContext.newsSection || '').slice(0, 6000)
-      const marketInput = (bundle.aiContext.marketSection || '').slice(0, 2000)
-      // SEC filing alerts (Form 4 insider trades, 13D activist positions,
-      // 8-K material events). These are EDGAR-sourced official disclosures
-      // — treat as primary catalysts equal in weight to news headlines.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const filingInput = ((bundle.aiContext as any).filingAlerts || '').slice(0, 2000)
-      // Economic calendar — upcoming central bank meetings and macro releases.
-      // Critical for forex; relevant for stocks around Fed weeks.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const econInput = ((bundle.aiContext as any).econCalendar || '').slice(0, 2000)
 
-      const result = await model.generateContent(`You are the News Scout and Macro Analyst for an elite AI stock council.
+  const tfFocus: Record<string, string> = {
+    '1D': 'FOCUS on TODAY only --- intraday news, pre/post-market moves, breaking catalysts. Ignore multi-week trends.',
+    '1W': 'FOCUS on THIS WEEK --- earnings this week, analyst actions, macro data releases in the next 5 days.',
+    '1M': 'FOCUS on THIS MONTH --- upcoming earnings date, recent upgrades/downgrades, sector rotation.',
+    '3M': 'FOCUS on NEXT QUARTER --- earnings trajectory, macro tailwinds/headwinds, institutional positioning.',
+  }
+  const newsInput = (bundle.aiContext.newsSection || '').slice(0, 6000)
+  const marketInput = (bundle.aiContext.marketSection || '').slice(0, 2000)
+  // SEC filing alerts (Form 4 insider trades, 13D activist positions,
+  // 8-K material events). These are EDGAR-sourced official disclosures
+  // — treat as primary catalysts equal in weight to news headlines.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const filingInput = ((bundle.aiContext as any).filingAlerts || '').slice(0, 2000)
+  // Economic calendar — upcoming central bank meetings and macro releases.
+  // Critical for forex; relevant for stocks around Fed weeks.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const econInput = ((bundle.aiContext as any).econCalendar || '').slice(0, 2000)
+
+  const scoutPrompt = `You are the News Scout and Macro Analyst for an elite AI stock council.
 
 Analyze all news, macro, and market context for ${bundle.ticker}. You go first. Be specific.
 TIMEFRAME: ${bundle.timeframe} --- ${tfFocus[bundle.timeframe] ?? ''}
@@ -1718,18 +1716,51 @@ ${newsInput}
 ${marketInput}${filingInput ? '\n\n' + filingInput + '\n\nNOTE: The SEC FILINGS section above lists official EDGAR-sourced disclosures (Form 4 insider trades, 13D activist positions, 8-K material events). These are NOT rumors or analyst opinions — they are filed disclosures with regulatory weight. Cite specific filings in your headlines and keyEvents when they bear on the ${bundle.timeframe} thesis (e.g. "8-K Item 5.02 executive change disclosed yesterday", "Form 4: CEO bought $X.XM"). Weight these EQUALLY with news headlines.' : ''}${econInput ? '\n\n' + econInput + '\n\nNOTE: The ECONOMIC CALENDAR section above lists upcoming central bank meetings and macro releases. Events within 24-48 hours are BINARY CATALYSTS — directional positions held through them carry binary risk regardless of how strong the technical/fundamental thesis appears. Cite the most imminent event in keyEvents when relevant (e.g. "FOMC tomorrow", "ECB Thursday"). If a HIGH-impact event falls inside the ${bundle.timeframe} timeframe, factor it into confidence and regimeAssessment.' : ''}
 
 Respond JSON ONLY (no fences):
-{"summary":"3 sentence overview","headlines":["top 4-5 headlines"],"sentiment":"positive|negative|neutral|mixed","confidence":<0-100>,"keyEvents":["2-4 near-term catalysts relevant to the ${bundle.timeframe} timeframe"],"macroFactors":["2-3 macro conditions"],"regimeAssessment":"1 sentence on regime impact"}`)
+{"summary":"3 sentence overview","headlines":["top 4-5 headlines"],"sentiment":"positive|negative|neutral|mixed","confidence":<0-100>,"keyEvents":["2-4 near-term catalysts relevant to the ${bundle.timeframe} timeframe"],"macroFactors":["2-3 macro conditions"],"regimeAssessment":"1 sentence on regime impact"}`
+
+  // Provider switch: use Perplexity Sonar as the PRIMARY News Scout when
+  // NEWS_SCOUT_PROVIDER=sonar. Sonar searches the LIVE web (not just the
+  // pre-fetched feed) and returns low-hallucination cited news. The same scout
+  // prompt is sent — its curated EDGAR/market context becomes grounding that
+  // Sonar augments with live retrieval. Falls through to the Gemini chain on
+  // any failure, so this is safe to flip on. Unset the env var to revert.
+  if (process.env.NEWS_SCOUT_PROVIDER === 'sonar' && process.env.PERPLEXITY_API_KEY) {
+    try {
+      const r = await geminiCrossProviderFallback({
+        prompt: scoutPrompt, caller: 'news-scout', grounded: true,
+        maxOutputTokens: 2000, temperature: 0.3,
+      })
+      console.log(`[news-scout] Perplexity Sonar (primary) via ${r.modelUsed}`)
+      return parseJSON<GeminiResult>(r.text)
+    } catch (e) {
+      console.warn(`[news-scout] Sonar primary failed, falling back to Gemini: ${e instanceof Error ? e.message : e}`)
+    }
+  }
+
+  for (const modelName of GEMINI_MODELS) {
+    try {
+      const model = getGenAI().getGenerativeModel({ model: modelName })
+      const result = await model.generateContent(scoutPrompt)
       const rawText = result.response.text()
       return parseJSON<GeminiResult>(rawText)
     } catch (e) {
       lastError = e as Error
       const msg = (e as Error).message ?? ''
-      const isLastModel = modelName === GEMINI_MODELS[GEMINI_MODELS.length - 1]
-      if (isLastModel) throw e
       console.warn(`News Scout model ${modelName} failed (${msg.slice(0,60)}), trying next...`)
     }
   }
-  throw lastError ?? new Error('News Scout unavailable --- all models failed')
+  // All Gemini models failed — cross-provider fallback (non-grounded → OpenAI).
+  try {
+    const fb = await geminiCrossProviderFallback({
+      prompt: scoutPrompt, caller: 'news-scout', grounded: false,
+      maxOutputTokens: 2000, temperature: 0.3,
+    })
+    console.warn('[news-scout] Gemini chain down — used cross-provider fallback')
+    return parseJSON<GeminiResult>(fb.text)
+  } catch (fbErr) {
+    console.error(`[news-scout] cross-provider fallback failed: ${fbErr instanceof Error ? fbErr.message : fbErr}`)
+    throw lastError ?? new Error('News Scout unavailable --- all models failed')
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
