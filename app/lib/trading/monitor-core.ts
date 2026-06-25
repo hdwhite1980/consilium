@@ -378,6 +378,12 @@ async function processPosition(
         }
         return true
       }
+      // Not breached: arm a broker-side DAY stop for intratick protection so we
+      // don't depend on the next poll. Fractional stops expire each close, so
+      // this re-arms them every run (self-healing daily). The hard-breach check
+      // above remains the backstop for the brief unarmed window + overnight.
+      await ensureMonitorOwnedStop(alpaca, att, pos, stopLevel, sideNow).catch(e =>
+        console.warn(`[position-monitor] arm stop ${ticker}: ${e instanceof Error ? e.message : e}`))
     }
   }
 
@@ -1159,6 +1165,34 @@ async function flattenDayPositionsAtClose(
     }
   }
   return true
+}
+
+/**
+ * Arm (or re-arm) a broker-side protective stop for a monitor-owned (fractional)
+ * position. Fractional stops are DAY tif and expire each close, so this runs on
+ * every monitor cycle: if no open stop order exists for the symbol, place one at
+ * the tracked stop level. Best-effort — the monitor's hard stop-breach close is
+ * the backstop for the brief unarmed window and overnight (after DAY expiry).
+ */
+async function ensureMonitorOwnedStop(
+  alpaca: AlpacaClient,
+  att: OpenAttempt,
+  pos: AlpacaPosition,
+  stopLevel: number,
+  side: 'buy' | 'sell',
+): Promise<void> {
+  const symbol = att.ticker
+  const exitSide: 'buy' | 'sell' = side === 'buy' ? 'sell' : 'buy'
+  const open = await alpaca.openOrders(symbol)
+  const hasStop = open.some(o => {
+    const t = (o.type ?? '').toLowerCase()
+    return (t === 'stop' || t === 'stop_limit') && o.side === exitSide
+  })
+  if (hasStop) return
+  const qty = Math.abs(Number(att.qty ?? pos.qty ?? 0))
+  if (!Number.isFinite(qty) || qty <= 0) return
+  await alpaca.fractionalStopOrder({ symbol, qty, stopPrice: stopLevel, side: exitSide })
+  console.log(`[position-monitor] ${symbol} armed DAY stop @ ${stopLevel.toFixed(2)} (monitor-owned, qty=${qty})`)
 }
 
 async function applyExit(alpaca: AlpacaClient, pos: AlpacaPosition): Promise<ExitResult> {

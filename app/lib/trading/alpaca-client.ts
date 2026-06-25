@@ -242,6 +242,32 @@ export class AlpacaClient {
     return this.toOrder(raw)
   }
 
+  /**
+   * Standalone fractional/whole STOP order (no bracket) — the broker-side
+   * protective stop for a monitor-owned (fractional) position. Fractional stops
+   * are time_in_force='day', so they expire at the close and must be re-armed
+   * each session (the monitor does this every run).
+   */
+  async fractionalStopOrder(input: {
+    symbol: string
+    qty: number
+    stopPrice: number
+    side: 'buy' | 'sell'
+    clientOrderId?: string
+  }): Promise<AlpacaOrder> {
+    const body: Record<string, unknown> = {
+      symbol: input.symbol,
+      qty: input.qty.toString(),
+      side: input.side,
+      type: 'stop',
+      time_in_force: 'day',
+      stop_price: input.stopPrice.toFixed(2),
+    }
+    if (input.clientOrderId) body.client_order_id = input.clientOrderId
+    const raw = await this.request<Record<string, unknown>>('POST', '/v2/orders', body, 10_000)
+    return this.toOrder(raw)
+  }
+
   async getOrder(orderId: string): Promise<AlpacaOrder> {
     const raw = await this.request<Record<string, unknown>>('GET', `/v2/orders/${encodeURIComponent(orderId)}`)
     return this.toOrder(raw)
