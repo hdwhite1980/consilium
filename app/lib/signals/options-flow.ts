@@ -1,15 +1,12 @@
 // ─────────────────────────────────────────────────────────────
 // PHASE 4 — Options Flow & Short Interest
 // Sources:
-//   - Tradier API (free tier) for options chain
+//   - Alpaca options data (snapshots + contracts) for the options chain
 //   - FINRA short interest (public data)
 //   - Calculated put/call ratio from options chain
 // ─────────────────────────────────────────────────────────────
 
-const TRADIER_BASE = () => process.env.TRADIER_API_KEY
-  ? 'https://api.tradier.com/v1'
-  : 'https://sandbox.tradier.com/v1'
-const TRADIER_KEY = () => process.env.TRADIER_API_KEY
+import { fetchAlpacaOptionChain } from './options-flow-alpaca'
 
 export interface OptionsFlowSignals {
   // Put/Call ratios — both volume (today's flow) and open interest (cumulative
@@ -60,119 +57,10 @@ export interface UnusualOption {
 }
 
 async function fetchOptionsChain(ticker: string) {
-  if (!TRADIER_KEY()) return null
-  try {
-    // Get all available expiries
-    const expRes = await fetch(
-      `${TRADIER_BASE()}/markets/options/expirations?symbol=${ticker}&includeAllRoots=true`,
-      {
-        headers: {
-          'Authorization': `Bearer ${TRADIER_KEY()}`,
-          'Accept': 'application/json',
-        },
-        next: { revalidate: 3600 }
-      }
-    )
-    if (!expRes.ok) return null
-    const expData = await expRes.json()
-    // Tradier returns expirations.date as either an array (multiple expiries)
-    // or a single string (one expiry). Handle both shapes.
-    const dateField = expData?.expirations?.date
-    let allExpiries: string[] = []
-    if (Array.isArray(dateField)) {
-      allExpiries = dateField
-    } else if (typeof dateField === 'string') {
-      allExpiries = [dateField]
-    }
-    if (allExpiries.length === 0) return null
-
-    // Cap to the front 3 monthly expiries within ~120 days. Volume
-    // and OI in expiries beyond that decay rapidly and add noise to
-    // the P/C ratio without representing real near-term positioning.
-    const cutoffMs = Date.now() + 120 * 86400_000
-    const candidateExpiries = allExpiries
-      .filter(d => {
-        const t = new Date(d).getTime()
-        return Number.isFinite(t) && t <= cutoffMs
-      })
-      .slice(0, 3)
-    const expiries = candidateExpiries.length > 0
-      ? candidateExpiries
-      : allExpiries.slice(0, 1)  // fallback if filter rejected everything
-
-    // Primary expiry for IV skew / max pain / unusual sweeps / GEX.
-    // Same selection rule as before — prefer the 2nd to skip front
-    // weeklies-noise, fall back to the 1st.
-    const primaryExpiry = expiries[1] ?? expiries[0]
-
-    // Pull all chains in parallel
-    const chainResponses = await Promise.all(
-      expiries.map(exp =>
-        fetch(
-          `${TRADIER_BASE()}/markets/options/chains?symbol=${ticker}&expiration=${exp}&greeks=true`,
-          {
-            headers: {
-              'Authorization': `Bearer ${TRADIER_KEY()}`,
-              'Accept': 'application/json',
-            },
-            next: { revalidate: 3600 }
-          }
-        ).then(r => r.ok ? r.json() : null).catch(() => null)
-      )
-    )
-
-    // Aggregate volume + OI sums across all fetched expiries
-    let aggregateVolCalls = 0, aggregateVolPuts = 0
-    let aggregateOICalls = 0, aggregateOIPuts = 0
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let primaryOptions: any[] = []
-
-    for (let i = 0; i < expiries.length; i++) {
-      const exp = expiries[i]
-      const chainData = chainResponses[i]
-      const opts: Array<Record<string, unknown>> = chainData?.options?.option ?? []
-      for (const o of opts) {
-        const vol = Number(o.volume) || 0
-        const oi  = Number(o.open_interest) || 0
-        if (o.option_type === 'call') {
-          aggregateVolCalls += vol
-          aggregateOICalls  += oi
-        } else if (o.option_type === 'put') {
-          aggregateVolPuts += vol
-          aggregateOIPuts  += oi
-        }
-      }
-      if (exp === primaryExpiry) primaryOptions = opts
-    }
-
-    // If primary expiry's chain failed but other expiries succeeded, fall
-    // back to whichever non-empty chain we have for the per-option work.
-    if (primaryOptions.length === 0) {
-      for (let i = 0; i < expiries.length; i++) {
-        const opts = chainResponses[i]?.options?.option ?? []
-        if (opts.length > 0) { primaryOptions = opts; break }
-      }
-    }
-
-    if (primaryOptions.length === 0 && aggregateVolCalls === 0 && aggregateVolPuts === 0) {
-      return null
-    }
-
-    return {
-      // Backward-compat: existing callers read `expiry` and `options` to
-      // mean primary expiry (for max pain, sweeps, IV, GEX).
-      expiry: primaryExpiry,
-      options: primaryOptions,
-      // New: aggregate sums across multiple expiries for accurate P/C ratios.
-      aggregateExpiries: expiries,
-      aggregateVolCalls,
-      aggregateVolPuts,
-      aggregateOICalls,
-      aggregateOIPuts,
-    }
-  } catch {
-    return null
-  }
+  // Sourced from Alpaca (data snapshots + trading contracts for OI) — same
+  // shape as the old Tradier fetch, so all downstream Council options logic
+  // (max pain, GEX, IV signal, suggestions) is unchanged.
+  return fetchAlpacaOptionChain(ticker)
 }
 
 // FINRA short interest (public, no auth needed)
@@ -422,7 +310,7 @@ export async function fetchOptionsFlow(ticker: string, currentPrice: number): Pr
                )].join('\n')
             : `  No unusual sweep activity detected`,
         ].filter(Boolean).join('\n')
-      : `  Options data unavailable (set TRADIER_API_KEY to enable)`,
+      : `  Options data unavailable`,
     ``,
     shortPct !== null
       ? [

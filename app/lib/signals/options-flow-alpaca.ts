@@ -142,3 +142,137 @@ export async function fetchOptionsFlowAlpaca(
     return EMPTY
   }
 }
+
+// ---------------------------------------------------------------------------
+// Full option-chain builder for the Council (fetchOptionsFlow). Returns the
+// SAME shape the old Tradier fetchOptionsChain returned, so all downstream
+// computation (max pain, GEX, IV signal, unusual activity, summary, and the
+// "options you could take" suggestions) keeps working unchanged — just on
+// Alpaca data. Sources:
+//   - data API snapshots  -> IV, greeks (delta/gamma), volume, bid/ask
+//   - trading API contracts -> open interest (not present in data snapshots)
+// ---------------------------------------------------------------------------
+
+const ALPACA_TRADE_BASE = 'https://paper-api.alpaca.markets'
+
+interface AlpacaChainSnapshot {
+  dailyBar?: { v?: number }
+  impliedVolatility?: number
+  greeks?: { delta?: number; gamma?: number; impliedVolatility?: number; iv?: number }
+  latestQuote?: { bp?: number; ap?: number }
+}
+
+export interface AlpacaOptionChain {
+  expiry: string
+  options: Array<Record<string, unknown>>
+  aggregateExpiries: string[]
+  aggregateVolCalls: number
+  aggregateVolPuts: number
+  aggregateOICalls: number
+  aggregateOIPuts: number
+}
+
+async function fetchOpenInterestMap(
+  ticker: string,
+  headers: Record<string, string>,
+  cutoff: string,
+): Promise<Map<string, number>> {
+  const oi = new Map<string, number>()
+  try {
+    let pageToken: string | undefined
+    let pages = 0
+    do {
+      const u = new URL(`${ALPACA_TRADE_BASE}/v2/options/contracts`)
+      u.searchParams.set('underlying_symbols', ticker)
+      u.searchParams.set('expiration_date_lte', cutoff)
+      u.searchParams.set('limit', '10000')
+      if (pageToken) u.searchParams.set('page_token', pageToken)
+      const res = await fetch(u.toString(), { headers })
+      if (!res.ok) break
+      const j = (await res.json()) as {
+        option_contracts?: Array<{ symbol: string; open_interest?: string | number | null }>
+        next_page_token?: string | null
+      }
+      for (const c of j.option_contracts ?? []) {
+        const v = Number(c.open_interest)
+        if (Number.isFinite(v)) oi.set(c.symbol, v)
+      }
+      pageToken = j.next_page_token ?? undefined
+      pages++
+    } while (pageToken && pages < 3)
+  } catch {
+    /* OI is best-effort; P/C volume + IV still work without it */
+  }
+  return oi
+}
+
+export async function fetchAlpacaOptionChain(ticker: string): Promise<AlpacaOptionChain | null> {
+  const key = process.env.ALPACA_API_KEY
+  const secret = process.env.ALPACA_SECRET_KEY
+  if (!key || !secret) return null
+  const headers = { 'APCA-API-KEY-ID': key, 'APCA-API-SECRET-KEY': secret }
+  const dataBase = process.env.ALPACA_BASE_URL || 'https://data.alpaca.markets'
+
+  try {
+    const cutoff = new Date(Date.now() + 120 * 86400000).toISOString().split('T')[0]
+    const snapUrl =
+      `${dataBase}/v1beta1/options/snapshots/${encodeURIComponent(ticker)}` +
+      `?feed=indicative&limit=1000&expiration_date_lte=${cutoff}`
+
+    const [snapRes, oiMap] = await Promise.all([
+      fetch(snapUrl, { headers }),
+      fetchOpenInterestMap(ticker, headers, cutoff),
+    ])
+    if (!snapRes.ok) return null
+    const snapJson = (await snapRes.json()) as { snapshots?: Record<string, AlpacaChainSnapshot> }
+    const snaps = snapJson.snapshots ?? {}
+
+    const contracts: Array<Record<string, unknown>> = []
+    for (const [sym, snap] of Object.entries(snaps)) {
+      const occ = parseOcc(sym)
+      if (!occ) continue
+      const g = snap.greeks ?? {}
+      const ivRaw = snap.impliedVolatility ?? g.impliedVolatility ?? g.iv
+      const iv = Number(ivRaw)
+      contracts.push({
+        option_type: occ.type === 'C' ? 'call' : 'put',
+        strike: occ.strike,
+        expiration_date: occ.expiry,
+        volume: Number(snap.dailyBar?.v ?? 0),
+        open_interest: oiMap.get(sym) ?? 0,
+        bid: Number(snap.latestQuote?.bp ?? 0),
+        ask: Number(snap.latestQuote?.ap ?? 0),
+        greeks: {
+          mid_iv: Number.isFinite(iv) ? iv : 0,
+          delta: Number(g.delta ?? 0),
+          gamma: Number(g.gamma ?? 0),
+        },
+      })
+    }
+    if (contracts.length === 0) return null
+
+    const expiries = [...new Set(contracts.map(c => String(c.expiration_date)))].sort()
+    const primaryExpiry = expiries[0]
+    const primaryOptions = contracts.filter(c => c.expiration_date === primaryExpiry)
+
+    let aggregateVolCalls = 0, aggregateVolPuts = 0, aggregateOICalls = 0, aggregateOIPuts = 0
+    for (const c of contracts) {
+      const vol = Number(c.volume) || 0
+      const oi = Number(c.open_interest) || 0
+      if (c.option_type === 'call') { aggregateVolCalls += vol; aggregateOICalls += oi }
+      else { aggregateVolPuts += vol; aggregateOIPuts += oi }
+    }
+
+    return {
+      expiry: primaryExpiry,
+      options: primaryOptions,
+      aggregateExpiries: expiries,
+      aggregateVolCalls,
+      aggregateVolPuts,
+      aggregateOICalls,
+      aggregateOIPuts,
+    }
+  } catch {
+    return null
+  }
+}
