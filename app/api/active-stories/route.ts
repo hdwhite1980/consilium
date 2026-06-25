@@ -28,7 +28,7 @@ export const runtime = 'nodejs'
 export const maxDuration = 15  // bumped from 10 to accommodate price fetches
 
 const VALID_SESSIONS: SessionAnchor[] = ['today', 'tomorrow', 'weekend']
-const VALID_ASSET_TYPES = ['stock', 'crypto', 'forex'] as const
+const VALID_ASSET_TYPES = ['stock', 'crypto', 'forex', 'futures'] as const
 type AssetTypeFilter = typeof VALID_ASSET_TYPES[number]
 
 function getAdmin() {
@@ -60,10 +60,9 @@ export async function GET(req: NextRequest) {
     const assetType: AssetTypeFilter =
       assetTypeParam && VALID_ASSET_TYPES.includes(assetTypeParam) ? assetTypeParam : 'stock'
 
-    // Meta row id: 1 = equity (stocks/crypto), 2 = forex.
-    // Forex cron persists its own metadata to id=2 so it doesn't clobber
-    // the equity dashboard's marketTheme/marketStatus.
-    const metaId = assetType === 'forex' ? 2 : 1
+    // Meta row id: 1 = equity (stocks/crypto), 2 = forex, 3 = futures (macro).
+    // Each cron persists its own metadata so it doesn't clobber the others.
+    const metaId = assetType === 'forex' ? 2 : assetType === 'futures' ? 3 : 1
 
     // Load filtered stories + latest run metadata in parallel
     const admin = getAdmin()
@@ -72,12 +71,13 @@ export async function GET(req: NextRequest) {
       admin.from('active_stories_meta').select('*').eq('id', metaId).maybeSingle(),
     ])
 
-    // Filter stories by asset type. Forex = forex only; stock = everything
-    // that isn't forex (preserves pre-existing behavior where /api/active-stories
-    // returned stocks AND crypto in the same payload).
-    const stories = assetType === 'forex'
-      ? storiesAll.filter(s => (s.assetType as string) === 'forex')
-      : storiesAll.filter(s => (s.assetType as string) !== 'forex')
+    // Filter stories by asset type. forex = forex only; futures = futures only;
+    // stock (default) = everything that's neither forex nor futures (stocks AND
+    // crypto, preserving the original combined-payload behavior).
+    const stories =
+      assetType === 'forex'   ? storiesAll.filter(s => (s.assetType as string) === 'forex')   :
+      assetType === 'futures' ? storiesAll.filter(s => (s.assetType as string) === 'futures') :
+      storiesAll.filter(s => (s.assetType as string) !== 'forex' && (s.assetType as string) !== 'futures')
 
     // Bug 23: enrich with live current price (60s cache server-side, so repeated
     // page loads within a minute don't re-hit external APIs)

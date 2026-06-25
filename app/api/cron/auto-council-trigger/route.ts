@@ -248,7 +248,7 @@ async function fetchNewsCandidates(): Promise<Array<{ ticker: string; timeframe:
       // (June 25 2026): include 'forex' and 'crypto' so currency + crypto
       // stories reach the Council too — execution/monitors exist downstream for
       // all three, but only stocks were being routed in.
-      .in('asset_type', ['stock', 'stocks', 'forex', 'crypto'])
+      .in('asset_type', ['stock', 'stocks', 'forex', 'crypto', 'futures'])
       .not('verified', 'is', false)     // accepts null OR true; excludes explicit false
       .order('confidence', { ascending: false })
       .limit(NEWS_PATH_LIMIT * 4)        // overfetch in case some get deduped vs scanner

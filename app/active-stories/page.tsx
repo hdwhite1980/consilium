@@ -12,7 +12,7 @@ import { MoversHitRateWidget } from '@/app/components/MoversHitRateWidget'
 // ── Types ──────────────────────────────────────────────────────
 type Signal = 'BULLISH' | 'BEARISH' | 'NEUTRAL'
 type SessionAnchor = 'today' | 'tomorrow' | 'weekend'
-type AssetType = 'stock' | 'crypto' | 'forex'
+type AssetType = 'stock' | 'crypto' | 'forex' | 'futures'
 type Magnitude = 'high' | 'medium' | 'low'
 type RiskLevel = 'high' | 'medium' | 'low'
 type Timeframe = '1D' | '1W' | '1M' | '3M'
@@ -116,15 +116,15 @@ const SESSION_LABELS: Record<SessionAnchor, string> = {
 }
 
 // The set of selectable view tabs. Three are session anchors that filter
-// stocks/crypto stories by when their catalyst plays out; 'macro' is an
-// asset-class filter that shows all macro stories (FX, metals, energy, DXY)
-// regardless of session.
-type TabKey = SessionAnchor | 'macro'
+// stocks/crypto stories by when their catalyst plays out; 'macro' shows FX /
+// metals / energy / DXY; 'futures' shows the index-futures / rates / vol desk.
+type TabKey = SessionAnchor | 'macro' | 'futures'
 const TAB_LABELS: Record<TabKey, string> = {
   today: 'Today',
   tomorrow: 'Tomorrow',
   weekend: 'Weekend',
   macro: 'Macro',
+  futures: 'Futures',
 }
 
 const TIMEFRAME_LABELS: Record<Timeframe, string> = {
@@ -285,6 +285,10 @@ function StoryCard({ story, onAnalyze }: { story: TrackedStory; onAnalyze: (tick
                 {story.assetType === 'forex' && (
                   <span className="text-[9px] px-1.5 py-0.5 rounded font-mono"
                     style={{ background: 'rgba(96,165,250,0.15)', color: '#60a5fa' }}>FOREX</span>
+                )}
+                {story.assetType === 'futures' && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded font-mono"
+                    style={{ background: 'rgba(167,139,250,0.15)', color: '#a78bfa' }}>FUTURES</span>
                 )}
               </div>
             </div>
@@ -782,9 +786,10 @@ export default function ActiveStoriesPage() {
   const load = useCallback(async (tab: TabKey) => {
     setError(null)
     try {
-      const url = tab === 'macro'
-        ? `/api/active-stories?assetType=forex`
-        : `/api/active-stories?session=${tab}`
+      const url =
+        tab === 'macro'   ? `/api/active-stories?assetType=forex`   :
+        tab === 'futures' ? `/api/active-stories?assetType=futures` :
+        `/api/active-stories?session=${tab}`
       const res = await fetch(url)
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
@@ -976,7 +981,7 @@ export default function ActiveStoriesPage() {
               className="flex items-center gap-1 p-1 rounded-xl border"
               style={{ background: 'var(--surface)', borderColor: 'var(--border)', width: 'fit-content' }}
             >
-              {(['today', 'tomorrow', 'weekend', 'macro'] as TabKey[]).map(tab => {
+              {(['today', 'tomorrow', 'weekend', 'macro', 'futures'] as TabKey[]).map(tab => {
                 const isActive = activeTab === tab
                 // For session tabs, count = stories with that sessionAnchor (from API).
                 // For macro tab, count = total stories returned (already filtered to forex by API).
