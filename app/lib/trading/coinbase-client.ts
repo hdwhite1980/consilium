@@ -86,6 +86,43 @@ export interface CryptoStopInput {
   clientOrderId: string
 }
 
+// ─── Futures (CFM) types ───────────────────────────────────────
+
+export interface CoinbaseFuturesBalance {
+  totalUsd: number          // total CFM futures-account value
+  availableMargin: number   // free margin available for new positions
+  initialMargin: number     // margin currently locked by open positions
+  futuresBuyingPower: number
+  liquidationThreshold: number
+  unrealizedPnl: number
+}
+
+export interface CoinbaseFuturesPosition {
+  productId: string
+  side: 'long' | 'short'
+  contracts: number
+  avgEntryPrice: number
+  currentPrice: number
+  unrealizedPnl: number
+  liquidationPrice: number | null
+}
+
+export interface FuturesEntryInput {
+  productId: string
+  side: 'buy' | 'sell'
+  contracts: number          // integer contract count
+  clientOrderId: string
+}
+
+export interface FuturesStopInput {
+  productId: string
+  side: 'buy' | 'sell'       // closing side (sell to close long, buy to close short)
+  contracts: number
+  stopPrice: number
+  stopDirection: 'STOP_DIRECTION_STOP_DOWN' | 'STOP_DIRECTION_STOP_UP'
+  clientOrderId: string
+}
+
 // ─────────────────────────────────────────────────────────────
 // JWT signing
 // ─────────────────────────────────────────────────────────────
@@ -116,6 +153,21 @@ function base64url(input: Buffer): string {
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '')
+}
+
+/**
+ * Extract a numeric value from Coinbase CFM money fields, which arrive either
+ * as a bare number/string or as a { value, currency } object. Returns 0 for
+ * anything unparseable so downstream gates fail safe (treat as no funds).
+ */
+function cfmValue(v: unknown): number {
+  if (v === null || v === undefined) return 0
+  if (typeof v === 'object' && v !== null && 'value' in (v as Record<string, unknown>)) {
+    const n = Number((v as { value?: unknown }).value)
+    return Number.isFinite(n) ? n : 0
+  }
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
 }
 
 /**
@@ -585,6 +637,140 @@ export class CoinbaseClient {
       side: 'sell',
       clientOrderId,
     })
+  }
+
+  // ─── Futures (CFM) ──────────────────────────────────────────
+
+  /**
+   * CFM futures account balance summary. Coinbase money fields arrive as
+   * { value, currency }; we extract the numeric value defensively.
+   */
+  async futuresBalanceSummary(): Promise<CoinbaseFuturesBalance> {
+    const raw = await this.request<{ balance_summary?: Record<string, unknown> }>(
+      'GET', '/cfm/balance_summary',
+    )
+    const bs = raw.balance_summary ?? {}
+    return {
+      totalUsd: cfmValue(bs.total_usd_balance ?? bs.cfm_usd_balance),
+      availableMargin: cfmValue(bs.available_margin ?? bs.futures_buying_power),
+      initialMargin: cfmValue(bs.initial_margin),
+      futuresBuyingPower: cfmValue(bs.futures_buying_power),
+      liquidationThreshold: cfmValue(bs.liquidation_threshold),
+      unrealizedPnl: cfmValue(bs.unrealized_pnl),
+    }
+  }
+
+  /** All open CFM futures positions. */
+  async listFuturesPositions(): Promise<CoinbaseFuturesPosition[]> {
+    const raw = await this.request<{ positions?: Array<Record<string, unknown>> }>(
+      'GET', '/cfm/positions',
+    )
+    return (raw.positions ?? []).map(p => this.toFuturesPosition(p))
+  }
+
+  /** A single CFM futures position by product_id (null if flat). */
+  async getFuturesPosition(productId: string): Promise<CoinbaseFuturesPosition | null> {
+    try {
+      const raw = await this.request<{ position?: Record<string, unknown> }>(
+        'GET', `/cfm/positions/${encodeURIComponent(productId)}`,
+      )
+      if (!raw.position) return null
+      const pos = this.toFuturesPosition(raw.position)
+      return pos.contracts > 0 ? pos : null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Current intraday-margin window (READ-ONLY). We never auto-switch the
+   * window — switching to INTRADAY raises leverage, which we deliberately
+   * avoid. Exposed only so callers/monitor can log which regime is active.
+   */
+  async getMarginWindow(): Promise<{ window: string; isIntraday: boolean }> {
+    try {
+      const raw = await this.request<{ margin_window?: { margin_window_type?: string } }>(
+        'GET', '/cfm/intraday/current_margin_window',
+      )
+      const w = String(raw.margin_window?.margin_window_type ?? 'UNKNOWN')
+      return { window: w, isIntraday: /INTRADAY/i.test(w) }
+    } catch {
+      return { window: 'UNKNOWN', isIntraday: false }
+    }
+  }
+
+  /**
+   * Place a futures market order. base_size = number of CONTRACTS (integer).
+   * Leverage is governed by the account margin window, not this order.
+   */
+  async futuresMarketOrder(input: FuturesEntryInput): Promise<CoinbaseOrder> {
+    const body = {
+      client_order_id: input.clientOrderId,
+      product_id: input.productId,
+      side: input.side.toUpperCase(),
+      order_configuration: { market_market_ioc: { base_size: String(input.contracts) } },
+    }
+    const raw = await this.request<{
+      success?: boolean
+      success_response?: { order_id?: string }
+      error_response?: { error?: string; message?: string; error_details?: string }
+      failure_reason?: string
+    }>('POST', '/orders', body)
+    if (raw.success === false || !raw.success_response?.order_id) {
+      const detail = raw.error_response?.error ?? raw.error_response?.message
+        ?? raw.error_response?.error_details ?? raw.failure_reason ?? 'order placement failed'
+      throw new Error(`Coinbase futuresMarketOrder: ${detail}`)
+    }
+    return this.getOrder(raw.success_response.order_id)
+  }
+
+  /**
+   * Place a protective futures stop (stop-limit GTC). For a long position the
+   * closing side is SELL with STOP_DOWN; for a short, BUY with STOP_UP.
+   */
+  async futuresStopOrder(input: FuturesStopInput): Promise<CoinbaseOrder> {
+    const slip = input.stopDirection === 'STOP_DIRECTION_STOP_DOWN' ? 0.995 : 1.005
+    const limitPrice = (input.stopPrice * slip).toFixed(2)
+    const body = {
+      client_order_id: input.clientOrderId,
+      product_id: input.productId,
+      side: input.side.toUpperCase(),
+      order_configuration: {
+        stop_limit_stop_limit_gtc: {
+          base_size: String(input.contracts),
+          limit_price: limitPrice,
+          stop_price: input.stopPrice.toFixed(2),
+          stop_direction: input.stopDirection,
+        },
+      },
+    }
+    const raw = await this.request<{
+      success?: boolean
+      success_response?: { order_id?: string }
+      error_response?: { error?: string; message?: string; error_details?: string }
+      failure_reason?: string
+    }>('POST', '/orders', body)
+    if (raw.success === false || !raw.success_response?.order_id) {
+      const detail = raw.error_response?.error ?? raw.error_response?.message
+        ?? raw.error_response?.error_details ?? raw.failure_reason ?? 'stop placement failed'
+      throw new Error(`Coinbase futuresStopOrder: ${detail}`)
+    }
+    return this.getOrder(raw.success_response.order_id)
+  }
+
+  private toFuturesPosition(raw: Record<string, unknown>): CoinbaseFuturesPosition {
+    const sideRaw = String(raw.side ?? raw.position_side ?? '').toUpperCase()
+    const side: 'long' | 'short' = /SHORT|SELL/.test(sideRaw) ? 'short' : 'long'
+    const liq = cfmValue(raw.liquidation_price)
+    return {
+      productId: String(raw.product_id ?? ''),
+      side,
+      contracts: Math.abs(cfmValue(raw.number_of_contracts ?? raw.net_size ?? raw.contracts)),
+      avgEntryPrice: cfmValue(raw.avg_entry_price ?? raw.entry_price),
+      currentPrice: cfmValue(raw.current_price ?? raw.mark_price),
+      unrealizedPnl: cfmValue(raw.unrealized_pnl),
+      liquidationPrice: liq > 0 ? liq : null,
+    }
   }
 
   /**
