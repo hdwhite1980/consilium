@@ -29,6 +29,15 @@ import { fetchBars } from '@/app/lib/data/alpaca'
 import { calculateTechnicals } from '@/app/lib/signals/technicals'
 import { countSignals, decide, computeTrailingStop, type SignalSnapshot, type Decision, type TrailingStopResult } from '@/app/lib/trading/position-monitor-signals'
 import { type MonitorConfig, type MonitorMode } from '@/app/lib/trading/monitor-config'
+import { AsyncLocalStorage } from 'node:async_hooks'
+
+// Per-run monitor label (e.g. 'swing-monitor' / 'day-monitor'). runMonitor()
+// sets this once for its entire async call tree so EVERY log line below —
+// including deep helpers that never receive `config` — is attributed to the
+// acting monitor. AsyncLocalStorage isolates concurrent swing/day runs, so
+// there's no cross-talk even if both crons fire in the same warm process.
+const monitorCtx = new AsyncLocalStorage<string>()
+const monTag = (): string => monitorCtx.getStore() ?? 'monitor'
 
 
 // Minimum bars required for technicals to be meaningful.
@@ -110,6 +119,7 @@ function isWithinMarketCloseWindow(): boolean {
 }
 
 export async function runMonitor(config: MonitorConfig): Promise<CronSummary> {
+  return monitorCtx.run(config.label, async (): Promise<CronSummary> => {
   const startedAt = Date.now()
   const summary: CronSummary = { users: [], durationMs: 0, totalActions: 0 }
 
@@ -143,6 +153,7 @@ export async function runMonitor(config: MonitorConfig): Promise<CronSummary> {
     `totalActions=${summary.totalActions}`
   )
   return summary
+  })
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -158,7 +169,7 @@ async function processUser(settings: UserTradingSettings, userSummary: PerUserSu
   // the alpaca stocks credential row, not crypto or another asset class
   const credLoad = await loadBrokerCredentialForUse(settings.userId, settings.broker, settings.mode, 'stock')
   if (!credLoad) {
-    console.warn(`[position-monitor] user=${settings.userId} no broker credentials for ${settings.broker}/${settings.mode}/stock`)
+    console.warn(`[${monTag()}] user=${settings.userId} no broker credentials for ${settings.broker}/${settings.mode}/stock`)
     return
   }
   const alpaca = makeAlpacaClient(credLoad.keyId, credLoad.secret, settings.mode)
@@ -170,30 +181,36 @@ async function processUser(settings: UserTradingSettings, userSummary: PerUserSu
     positions = await alpaca.positions()
   } catch (e) {
     console.error(
-      `[position-monitor] user=${settings.userId} alpaca.positions() THREW:`,
+      `[${monTag()}] user=${settings.userId} alpaca.positions() THREW:`,
       e instanceof Error ? `${e.message}\n${e.stack ?? ''}`.slice(0, 600) : String(e).slice(0, 300),
     )
     userSummary.errors++
     return
   }
   if (positions.length === 0) {
-    console.log(`[position-monitor] user=${settings.userId} alpaca returned 0 open positions`)
+    console.log(`[${monTag()}] user=${settings.userId} alpaca returned 0 open positions`)
     // Don't return early — exited tickers may still be on the re-entry watch,
     // which is scanned below regardless of whether anything is open right now.
     await runReentryPass(settings, alpaca, new Set<string>(), config).catch(e =>
-      console.warn(`[position-monitor] reentry pass user=${settings.userId}: ${e instanceof Error ? e.message : e}`))
+      console.warn(`[${monTag()}] reentry pass user=${settings.userId}: ${e instanceof Error ? e.message : e}`))
     return
   }
   console.log(
-    `[position-monitor] user=${settings.userId} alpaca returned ${positions.length} positions: ` +
+    `[${monTag()}] user=${settings.userId} alpaca returned ${positions.length} positions: ` +
     positions.map(p => `${p.symbol}(qty=${p.qty})`).join(','),
   )
 
   const attemptsByTicker = await fetchOpenAttempts(settings.userId, config.mode)
   console.log(
-    `[position-monitor] user=${settings.userId} trade_attempts has ${attemptsByTicker.size} open rows: ` +
+    `[${monTag()}] user=${settings.userId} trade_attempts has ${attemptsByTicker.size} open rows: ` +
     Array.from(attemptsByTicker.keys()).join(','),
   )
+
+  // Tickers owned by the OTHER monitor (swing vs day). A position tagged for the
+  // other mode is that monitor's responsibility, not ours — so seeing it here is
+  // expected, not an orphan. We only WARN for positions absent from BOTH modes.
+  const otherMode: MonitorMode = config.mode === 'day' ? 'swing' : 'day'
+  const otherModeTickers = await fetchOwnedTickers(settings.userId, otherMode)
 
   // EOD flatten (day monitor only): inside the pre-close window, flatten all
   // day-owned positions so they don't carry overnight gap risk, then stop —
@@ -207,11 +224,18 @@ async function processUser(settings: UserTradingSettings, userSummary: PerUserSu
     const sym = pos.symbol.toUpperCase()
     const att = attemptsByTicker.get(sym)
     if (!att) {
-      // Position exists on broker but we have no trade_attempts record — can't
-      // act safely (don't know the original stop, can't update). Skip silently.
-      console.warn(
-        `[position-monitor] user=${settings.userId} ${sym} has no matching trade_attempts row (broker has position but DB doesn't); skipping`,
-      )
+      if (otherModeTickers.has(sym)) {
+        // Owned by the other monitor — expected hand-off boundary, not a problem.
+        console.log(
+          `[${monTag()}] user=${settings.userId} ${sym} owned by ${otherMode} monitor — skipping (not this monitor's position)`,
+        )
+      } else {
+        // Genuine orphan: broker has a position with no open trade_attempts row in
+        // EITHER mode. Can't act safely (unknown original stop), so this is a warn.
+        console.warn(
+          `[${monTag()}] user=${settings.userId} ${sym} has no matching trade_attempts row in any mode (broker has position but DB doesn't); skipping`,
+        )
+      }
       continue
     }
     userSummary.positionsChecked++
@@ -221,7 +245,7 @@ async function processUser(settings: UserTradingSettings, userSummary: PerUserSu
     // Mutates `att` in-place if an update happens, so downstream logic
     // sees the corrected values.
     await syncFillBackFromBroker(att, pos).catch(e =>
-      console.warn(`[position-monitor] sync-fill ${sym} failed: ${e instanceof Error ? e.message : e}`),
+      console.warn(`[${monTag()}] sync-fill ${sym} failed: ${e instanceof Error ? e.message : e}`),
     )
 
     try {
@@ -229,7 +253,7 @@ async function processUser(settings: UserTradingSettings, userSummary: PerUserSu
       if (!handled) userSummary.errors++
     } catch (e) {
       userSummary.errors++
-      console.error(`[position-monitor] ${sym} failed:`, e instanceof Error ? e.message : e)
+      console.error(`[${monTag()}] ${sym} failed:`, e instanceof Error ? e.message : e)
       await logResult(settings, att, pos.symbol, {
         ok: false, errorReason: e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300),
         decision: 'HOLD', actionTaken: 'error',
@@ -243,7 +267,7 @@ async function processUser(settings: UserTradingSettings, userSummary: PerUserSu
   // currently-open tickers so we never re-enter something we already hold.
   const openTickers = new Set(positions.map(p => p.symbol.toUpperCase()))
   await runReentryPass(settings, alpaca, openTickers, config).catch(e =>
-    console.warn(`[position-monitor] reentry pass user=${settings.userId}: ${e instanceof Error ? e.message : e}`))
+    console.warn(`[${monTag()}] reentry pass user=${settings.userId}: ${e instanceof Error ? e.message : e}`))
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -285,7 +309,7 @@ async function syncFillBackFromBroker(
   const stop = att.stop_price
   const qty = att.qty ?? Math.abs(pos.qty)
   if (stop === null || qty === null || qty <= 0) {
-    console.warn(`[position-monitor] sync-fill ${att.ticker}: missing stop or qty, skipping risk recalc`)
+    console.warn(`[${monTag()}] sync-fill ${att.ticker}: missing stop or qty, skipping risk recalc`)
     return
   }
 
@@ -302,12 +326,12 @@ async function syncFillBackFromBroker(
     .eq('id', att.id)
 
   if (error) {
-    console.warn(`[position-monitor] sync-fill ${att.ticker} update failed: ${error.message}`)
+    console.warn(`[${monTag()}] sync-fill ${att.ticker} update failed: ${error.message}`)
     return
   }
 
   console.log(
-    `[position-monitor] sync-fill ${att.ticker}: ` +
+    `[${monTag()}] sync-fill ${att.ticker}: ` +
     `entry ${att.filled_avg_price ?? 'null'} -> ${brokerFill.toFixed(2)}, ` +
     `risk $${newRisk.toFixed(2)} (qty ${qty} x |fill - stop ${stop.toFixed(2)}|)`,
   )
@@ -372,9 +396,9 @@ async function processPosition(
           errorReason: result.ok ? undefined : result.reason,
         })
         if (result.ok) {
-          console.log(`[position-monitor] ${ticker} MONITOR-STOP breach @ ${px.toFixed(2)} <= stop ${stopLevel.toFixed(2)} — market close (fractional, no broker stop)`)
+          console.log(`[${monTag()}] ${ticker} MONITOR-STOP breach @ ${px.toFixed(2)} <= stop ${stopLevel.toFixed(2)} — market close (fractional, no broker stop)`)
           await recordExitClosure(att, pos, 'monitor_exit').catch(e =>
-            console.warn(`[position-monitor] record-exit ${ticker}: ${e instanceof Error ? e.message : e}`))
+            console.warn(`[${monTag()}] record-exit ${ticker}: ${e instanceof Error ? e.message : e}`))
         }
         return true
       }
@@ -383,7 +407,7 @@ async function processPosition(
       // this re-arms them every run (self-healing daily). The hard-breach check
       // above remains the backstop for the brief unarmed window + overnight.
       await ensureMonitorOwnedStop(alpaca, att, pos, stopLevel, sideNow).catch(e =>
-        console.warn(`[position-monitor] arm stop ${ticker}: ${e instanceof Error ? e.message : e}`))
+        console.warn(`[${monTag()}] arm stop ${ticker}: ${e instanceof Error ? e.message : e}`))
     }
   }
 
@@ -440,7 +464,7 @@ async function processPosition(
     // monitor — the stock monitor reached HOLD and left the stop untouched.
     const trail = await applyTrailingStop(alpaca, att, pos)
     if (trail.applied) {
-      console.log(`[position-monitor] ${ticker} TRAIL ${trail.milestone} → stop ${trail.newStop?.toFixed(2)}`)
+      console.log(`[${monTag()}] ${ticker} TRAIL ${trail.milestone} → stop ${trail.newStop?.toFixed(2)}`)
     }
     await logR(ticker, {
       ok: true, decision: 'HOLD', actionTaken: trail.applied ? 'trailed' : 'hold',
@@ -462,17 +486,17 @@ async function processPosition(
       errorReason: result.ok ? undefined : result.reason,
     })
     if (result.ok && result.newStop !== undefined) {
-      console.log(`[position-monitor] ${ticker} TIGHTEN ${(att.stop_price ?? 0).toFixed(2)} → ${result.newStop.toFixed(2)} (${ruling.reason})`)
+      console.log(`[${monTag()}] ${ticker} TIGHTEN ${(att.stop_price ?? 0).toFixed(2)} → ${result.newStop.toFixed(2)} (${ruling.reason})`)
       // Persist new stop level to trade_attempts so future runs see correct level
       await syncTightenedStop(att, result.newStop).catch(e =>
-        console.warn(`[position-monitor] sync-tighten ${ticker}: ${e instanceof Error ? e.message : e}`))
+        console.warn(`[${monTag()}] sync-tighten ${ticker}: ${e instanceof Error ? e.message : e}`))
     }
     // After the signal-based tighten, also run profit trailing: if the R-multiple
     // milestone implies a higher stop than the midpoint nudge, ratchet up to it.
     // applyTighten already updated att.stop_price, so this only moves UP further.
     const trail = await applyTrailingStop(alpaca, att, pos)
     if (trail.applied) {
-      console.log(`[position-monitor] ${ticker} TRAIL ${trail.milestone} → stop ${trail.newStop?.toFixed(2)} (post-tighten)`)
+      console.log(`[${monTag()}] ${ticker} TRAIL ${trail.milestone} → stop ${trail.newStop?.toFixed(2)} (post-tighten)`)
     }
     return result.ok || trail.applied
   }
@@ -484,7 +508,7 @@ async function processPosition(
     // queues for the next session's open, leaving the position unprotected
     // overnight. Pre-market-reeval cron picks up these cases at next open.
     if (isWithinMarketCloseWindow()) {
-      console.log(`[position-monitor] ${ticker} EXIT deferred — within 5 min of market close (${ruling.reason})`)
+      console.log(`[${monTag()}] ${ticker} EXIT deferred — within 5 min of market close (${ruling.reason})`)
       await logR(ticker, {
         ok: true, decision: 'EXIT', actionTaken: 'exit_deferred_close_window',
         snap5m, snap15m,
@@ -502,14 +526,14 @@ async function processPosition(
       errorReason: result.ok ? undefined : result.reason,
     })
     if (result.ok) {
-      console.log(`[position-monitor] ${ticker} EXIT @ ~${pos.current_price.toFixed(2)} (${ruling.reason})`)
+      console.log(`[${monTag()}] ${ticker} EXIT @ ~${pos.current_price.toFixed(2)} (${ruling.reason})`)
       // Persist closure to trade_attempts so lifecycle/dashboard see truth
       await recordExitClosure(att, pos, 'monitor_exit').catch(e =>
-        console.warn(`[position-monitor] record-exit ${ticker}: ${e instanceof Error ? e.message : e}`))
+        console.warn(`[${monTag()}] record-exit ${ticker}: ${e instanceof Error ? e.message : e}`))
       // Add to the re-entry watch: if the original directional setup returns
       // within the window, the monitor can re-enter (dip-then-recover).
       await recordReentryWatch(att, pos).catch(e =>
-        console.warn(`[position-monitor] reentry-watch ${ticker}: ${e instanceof Error ? e.message : e}`))
+        console.warn(`[${monTag()}] reentry-watch ${ticker}: ${e instanceof Error ? e.message : e}`))
     }
     return result.ok
   }
@@ -521,7 +545,7 @@ async function processPosition(
     if (escalation.action === 'EXIT') {
       // Same market-close guard for escalated exits
       if (isWithinMarketCloseWindow()) {
-        console.log(`[position-monitor] ${ticker} ESCALATED EXIT deferred — within 5 min of market close`)
+        console.log(`[${monTag()}] ${ticker} ESCALATED EXIT deferred — within 5 min of market close`)
         await logR(ticker, {
           ok: true, decision: 'ESCALATE', actionTaken: 'escalated_exit_deferred_close_window',
           snap5m, snap15m,
@@ -541,9 +565,9 @@ async function processPosition(
       })
       if (result.ok) {
         await recordExitClosure(att, pos, 'escalated_exit').catch(e =>
-          console.warn(`[position-monitor] record-exit ${ticker}: ${e instanceof Error ? e.message : e}`))
+          console.warn(`[${monTag()}] record-exit ${ticker}: ${e instanceof Error ? e.message : e}`))
         await recordReentryWatch(att, pos).catch(e =>
-          console.warn(`[position-monitor] reentry-watch ${ticker}: ${e instanceof Error ? e.message : e}`))
+          console.warn(`[${monTag()}] reentry-watch ${ticker}: ${e instanceof Error ? e.message : e}`))
       }
     } else if (escalation.action === 'TIGHTEN_STOP') {
       const result = await applyTighten(alpaca, att, pos)
@@ -557,7 +581,7 @@ async function processPosition(
       })
       if (result.ok && result.newStop !== undefined) {
         await syncTightenedStop(att, result.newStop).catch(e =>
-          console.warn(`[position-monitor] sync-tighten ${ticker}: ${e instanceof Error ? e.message : e}`))
+          console.warn(`[${monTag()}] sync-tighten ${ticker}: ${e instanceof Error ? e.message : e}`))
       }
     } else {
       // Council said HOLD or returned ambiguously
@@ -604,10 +628,10 @@ async function syncTightenedStop(att: OpenAttempt, newStop: number): Promise<voi
     .update({ stop_price: newStop })
     .eq('id', att.id)
   if (error) {
-    console.warn(`[position-monitor] sync-tighten ${att.ticker} update failed: ${error.message}`)
+    console.warn(`[${monTag()}] sync-tighten ${att.ticker} update failed: ${error.message}`)
     return
   }
-  console.log(`[position-monitor] sync-tighten ${att.ticker}: stop_price -> ${newStop.toFixed(2)}`)
+  console.log(`[${monTag()}] sync-tighten ${att.ticker}: stop_price -> ${newStop.toFixed(2)}`)
   // Mutate so downstream code sees correct value
   att.stop_price = newStop
 }
@@ -622,7 +646,7 @@ async function recordExitClosure(
   const qty = att.qty ?? Math.abs(pos.qty)
 
   if (entryFill === null || !Number.isFinite(exitPrice) || qty <= 0) {
-    console.warn(`[position-monitor] record-exit ${att.ticker}: missing entry/exit/qty, marking closed without P&L`)
+    console.warn(`[${monTag()}] record-exit ${att.ticker}: missing entry/exit/qty, marking closed without P&L`)
     const admin = await getSupabaseAdmin()
     await admin
       .from('trade_attempts')
@@ -659,11 +683,11 @@ async function recordExitClosure(
     })
     .eq('id', att.id)
   if (error) {
-    console.warn(`[position-monitor] record-exit ${att.ticker} update failed: ${error.message}`)
+    console.warn(`[${monTag()}] record-exit ${att.ticker} update failed: ${error.message}`)
     return
   }
   console.log(
-    `[position-monitor] record-exit ${att.ticker}: ` +
+    `[${monTag()}] record-exit ${att.ticker}: ` +
     `${outcome}, pnl $${pnl.toFixed(2)} (entry ${entryFill.toFixed(2)} -> exit ${exitPrice.toFixed(2)}, qty ${qty})`,
   )
 }
@@ -725,7 +749,7 @@ async function recordReentryWatch(att: OpenAttempt, pos: AlpacaPosition): Promis
       status: 'watching',
     })
   }
-  console.log(`[position-monitor] ${att.ticker} on re-entry watch (side=${side})`)
+  console.log(`[${monTag()}] ${att.ticker} on re-entry watch (side=${side})`)
 }
 
 interface ReentryWatchRow {
@@ -775,12 +799,12 @@ async function runReentryPass(
     .gte('exit_at', cutoff)
 
   if (error) {
-    console.warn(`[position-monitor] reentry fetch failed user=${settings.userId}: ${error.message}`)
+    console.warn(`[${monTag()}] reentry fetch failed user=${settings.userId}: ${error.message}`)
     return
   }
   const rows = (data ?? []) as ReentryWatchRow[]
   if (rows.length === 0) return
-  console.log(`[position-monitor] reentry pass user=${settings.userId}: ${rows.length} watched ticker(s)`)
+  console.log(`[${monTag()}] reentry pass user=${settings.userId}: ${rows.length} watched ticker(s)`)
 
   for (const w of rows) {
     const ticker = String(w.ticker).toUpperCase()
@@ -819,7 +843,7 @@ async function runReentryPass(
     if (!Number.isFinite(lastBarMs) || lastBarMs <= exitMs) continue
 
     await placeReentry(settings, alpaca, w, ticker, side, t5.currentPrice, config).catch(e =>
-      console.warn(`[position-monitor] reentry place ${ticker}: ${e instanceof Error ? e.message : e}`))
+      console.warn(`[${monTag()}] reentry place ${ticker}: ${e instanceof Error ? e.message : e}`))
   }
 }
 
@@ -898,7 +922,7 @@ async function placeReentry(
     monitor_mode: config.mode,
   })
   if (insErr) {
-    console.warn(`[position-monitor] reentry trade_attempts insert ${ticker}: ${insErr.message}`)
+    console.warn(`[${monTag()}] reentry trade_attempts insert ${ticker}: ${insErr.message}`)
   }
 
   const status = nextCount >= MAX_REENTRIES ? 'exhausted' : 'watching'
@@ -909,7 +933,7 @@ async function placeReentry(
     updated_at: new Date().toISOString(),
   }).eq('id', w.id)
 
-  console.log(`[position-monitor] ${ticker} RE-ENTRY #${nextCount} ${side} qty=${qty} @ ~${currentPrice.toFixed(2)} stop=${newStop.toFixed(2)} target=${newTarget.toFixed(2)}`)
+  console.log(`[${monTag()}] ${ticker} RE-ENTRY #${nextCount} ${side} qty=${qty} @ ~${currentPrice.toFixed(2)} stop=${newStop.toFixed(2)} target=${newTarget.toFixed(2)}`)
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1023,7 +1047,7 @@ async function applyTrailingStop(alpaca: AlpacaClient, att: OpenAttempt, pos: Al
   }
 
   await syncTightenedStop(att, trail.newStop).catch(e =>
-    console.warn(`[position-monitor] sync-trail ${att.ticker}: ${e instanceof Error ? e.message : e}`))
+    console.warn(`[${monTag()}] sync-trail ${att.ticker}: ${e instanceof Error ? e.message : e}`))
 
   return { applied: true, newStop: trail.newStop, milestone: trail.milestone }
 }
@@ -1230,9 +1254,9 @@ async function ensureMonitorOwnedStop(
   if (trailedUp) {
     // Persist so the hard-breach check and the next run use the trailed level.
     await syncTightenedStop(att, desired).catch(e =>
-      console.warn(`[position-monitor] sync-trail ${symbol}: ${e instanceof Error ? e.message : e}`))
+      console.warn(`[${monTag()}] sync-trail ${symbol}: ${e instanceof Error ? e.message : e}`))
   }
-  console.log(`[position-monitor] ${symbol} stop ${existing ? 'trailed' : 'armed'} @ ${desired.toFixed(2)} (monitor-owned, qty=${qty})`)
+  console.log(`[${monTag()}] ${symbol} stop ${existing ? 'trailed' : 'armed'} @ ${desired.toFixed(2)} (monitor-owned, qty=${qty})`)
 }
 
 async function applyExit(alpaca: AlpacaClient, pos: AlpacaPosition): Promise<ExitResult> {
@@ -1266,7 +1290,7 @@ async function applyExit(alpaca: AlpacaClient, pos: AlpacaPosition): Promise<Exi
       const cancelOk = cancelResults.filter(r => r.ok).length
       const cancelFail = cancelResults.length - cancelOk
       console.log(
-        `[position-monitor] applyExit ${symbol}: ` +
+        `[${monTag()}] applyExit ${symbol}: ` +
         `cancelled ${cancelOk}/${cancelResults.length} bracket children` +
         (cancelFail > 0 ? ` (${cancelFail} failed)` : ''),
       )
@@ -1374,6 +1398,25 @@ async function escalateToCouncil(
 // DB helpers
 // ─────────────────────────────────────────────────────────────
 
+// Lightweight ownership probe: the set of tickers this user has an OPEN
+// position-attempt for under a given monitor mode. Selects only `ticker`
+// (a base column) so it can't be tripped by a stale schema cache on newer
+// columns. Used to distinguish "owned by the OTHER monitor" (expected — info)
+// from a genuine orphan (broker has it, DB doesn't in either mode — a real warn).
+async function fetchOwnedTickers(userId: string, mode: MonitorMode): Promise<Set<string>> {
+  const admin = await getSupabaseAdmin()
+  const cutoff = new Date(Date.now() - 30 * 86_400_000).toISOString()
+  const { data, error } = await admin
+    .from('trade_attempts')
+    .select('ticker')
+    .eq('user_id', userId)
+    .eq('monitor_mode', mode)
+    .in('outcome', ['placed', 'filled', 'partial_fill'])
+    .gte('created_at', cutoff)
+  if (error || !data) return new Set()
+  return new Set((data as Array<{ ticker: string }>).map(r => String(r.ticker).toUpperCase()))
+}
+
 async function fetchOpenAttempts(userId: string, mode: MonitorMode = 'swing'): Promise<Map<string, OpenAttempt>> {
   const admin = await getSupabaseAdmin()
   const cutoff = new Date(Date.now() - 30 * 86_400_000).toISOString()
@@ -1417,7 +1460,7 @@ async function fetchOpenAttempts(userId: string, mode: MonitorMode = 'swing'): P
     let res = await run(COLS_FULL)
     if (res.error && isMissingColumn(res.error)) {
       console.warn(
-        `[position-monitor] fetchOpenAttempts: a selected column is missing — run the pending migration. ` +
+        `[${monTag()}] fetchOpenAttempts: a selected column is missing — run the pending migration. ` +
         `Retrying without new columns so monitoring isn't blocked. (${res.error.message})`,
       )
       res = await run(COLS_BASE)
@@ -1428,7 +1471,7 @@ async function fetchOpenAttempts(userId: string, mode: MonitorMode = 'swing'): P
   const { data, error } = await selectAttempts(false)
 
   if (error) {
-    console.error(`[position-monitor] fetchOpenAttempts main query failed for user=${userId}:`, error.message)
+    console.error(`[${monTag()}] fetchOpenAttempts main query failed for user=${userId}:`, error.message)
     return new Map()
   }
 
@@ -1437,7 +1480,7 @@ async function fetchOpenAttempts(userId: string, mode: MonitorMode = 'swing'): P
   const { data: legacyData, error: legacyError } = await selectAttempts(true)
 
   if (legacyError) {
-    console.warn(`[position-monitor] fetchOpenAttempts legacy NULL query failed for user=${userId} (ignoring):`, legacyError.message)
+    console.warn(`[${monTag()}] fetchOpenAttempts legacy NULL query failed for user=${userId} (ignoring):`, legacyError.message)
   }
 
   const combined: Array<Record<string, unknown>> = []
@@ -1488,7 +1531,7 @@ async function fetchOpenAttempts(userId: string, mode: MonitorMode = 'swing'): P
       .select('id, stop_loss')
       .in('id', verdictIds)
     if (vError) {
-      console.warn(`[position-monitor] verdict_log stop_loss lookup failed (trailing will no-op):`, vError.message)
+      console.warn(`[${monTag()}] verdict_log stop_loss lookup failed (trailing will no-op):`, vError.message)
     } else {
       const stopById = new Map<number, number>()
       for (const r of (vData ?? []) as Array<{ id: number; stop_loss: number | string | null }>) {
