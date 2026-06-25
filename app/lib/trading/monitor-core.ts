@@ -29,6 +29,7 @@ import { fetchBars } from '@/app/lib/data/alpaca'
 import { calculateTechnicals } from '@/app/lib/signals/technicals'
 import { countSignals, decide, computeTrailingStop, type SignalSnapshot, type Decision, type TrailingStopResult } from '@/app/lib/trading/position-monitor-signals'
 import { type MonitorConfig, type MonitorMode } from '@/app/lib/trading/monitor-config'
+import { evaluateReentry, type ReentryOriginalVerdict } from '@/app/lib/trading/reentry-verdict'
 import { AsyncLocalStorage } from 'node:async_hooks'
 
 // Per-run monitor label (e.g. 'swing-monitor' / 'day-monitor'). runMonitor()
@@ -819,30 +820,60 @@ async function runReentryPass(
 
     const t5 = calculateTechnicals(bars5m)
     const t15 = calculateTechnicals(bars15m)
-    const snap5 = countSignals(t5, side)
-    const snap15 = countSignals(t15, side)
 
-    // Directional entry signal: for a long thesis we want BULLISH signals; for a
-    // short thesis we want BEARISH. countSignals already frames bullish/bearish
-    // relative to the side, so we read the matching directional count.
-    const dir5 = side === 'buy' ? snap5.bullishCount : snap5.bearishCount
-    const opp5 = side === 'buy' ? snap5.bearishCount : snap5.bullishCount
-    const dir15 = side === 'buy' ? snap15.bullishCount : snap15.bearishCount
-
-    const freshSetup = dir5 >= REENTRY_MIN_SIGNALS && dir5 > opp5 && dir15 >= 1
-    if (!freshSetup) {
-      await admin.from('reentry_watch').update({ last_checked_at: new Date().toISOString() }).eq('id', w.id)
-      continue
-    }
-
-    // Rebuy guard: the newest 5m bar must have CLOSED after the exit, so we never
-    // re-buy on the same bar we just sold. (The directional setup above is the
-    // "indicators/patterns determine a new entry" condition.)
+    // Rebuy guard: the newest fast bar must have CLOSED after the exit, so we
+    // never re-buy on the same bar we just sold.
     const lastBarMs = new Date(bars5m[bars5m.length - 1].t).getTime()
     const exitMs = new Date(w.exit_at).getTime()
     if (!Number.isFinite(lastBarMs) || lastBarMs <= exitMs) continue
 
-    await placeReentry(settings, alpaca, w, ticker, side, t5.currentPrice, config).catch(e =>
+    // Cheap pre-filter: only spend an LLM verdict when there is at least a
+    // directional lean in the trade's direction — avoids constant calls on dead
+    // setups. The verdict makes the actual decision and sets the levels.
+    const snap5 = countSignals(t5, side)
+    const dir5 = side === 'buy' ? snap5.bullishCount : snap5.bearishCount
+    const opp5 = side === 'buy' ? snap5.bearishCount : snap5.bullishCount
+    if (dir5 < 1 || dir5 <= opp5) {
+      await admin.from('reentry_watch').update({ last_checked_at: new Date().toISOString() }).eq('id', w.id)
+      continue
+    }
+
+    // FOCUSED RE-ENTRY VERDICT (one Claude call, not the Council). It knows the
+    // exit price, the original thesis, the trade type, and the current charts,
+    // and returns fresh levels or STAY_OUT.
+    const original = await fetchOriginalVerdict(w.verdict_log_id)
+    const decision = await evaluateReentry({
+      ticker,
+      side,
+      tradeType: config.mode === 'day' ? 'day' : 'swing',
+      original,
+      exitPrice: w.exit_price,
+      exitAt: w.exit_at,
+      currentPrice: t5.currentPrice,
+      techFast: t5,
+      techSlow: t15,
+      fastLabel: config.fastTimeframe,
+      slowLabel: config.slowTimeframe,
+    }).catch(() => null)
+
+    if (!decision || decision.decision !== 'reenter' || decision.entry === null || decision.stop === null || decision.target === null) {
+      await admin.from('reentry_watch').update({ last_checked_at: new Date().toISOString() }).eq('id', w.id)
+      continue
+    }
+
+    // Honor "come back in AT this price": only enter when current price is at or
+    // on the favorable side of the verdict's entry — otherwise wait and re-check
+    // next cycle rather than chase.
+    const favorable = side === 'buy'
+      ? t5.currentPrice <= decision.entry * 1.003
+      : t5.currentPrice >= decision.entry * 0.997
+    if (!favorable) {
+      await admin.from('reentry_watch').update({ last_checked_at: new Date().toISOString() }).eq('id', w.id)
+      continue
+    }
+
+    console.log(`[${monTag()}] ${ticker} reentry verdict=REENTER entry=${decision.entry} stop=${decision.stop} target=${decision.target} conf=${decision.confidence} — ${(decision.reasons[0] ?? '').slice(0, 60)}`)
+    await placeReentry(settings, alpaca, w, ticker, side, t5.currentPrice, config, { stop: decision.stop, target: decision.target }).catch(e =>
       console.warn(`[${monTag()}] reentry place ${ticker}: ${e instanceof Error ? e.message : e}`))
   }
 }
@@ -853,6 +884,26 @@ async function runReentryPass(
  * trade_attempts row (so the monitor manages it, including trailing) with an
  * immutable initial_stop so R-multiple trailing is correct for the new entry.
  */
+async function fetchOriginalVerdict(verdictLogId: number | null): Promise<ReentryOriginalVerdict | null> {
+  if (verdictLogId === null) return null
+  const admin = await getSupabaseAdmin()
+  const { data, error } = await admin
+    .from('verdict_log')
+    .select('signal, confidence, entry_price, stop_loss, take_profit')
+    .eq('id', verdictLogId)
+    .maybeSingle()
+  if (error || !data) return null
+  const r = data as Record<string, unknown>
+  const num = (v: unknown): number | null => (v !== null && v !== undefined && Number.isFinite(Number(v)) ? Number(v) : null)
+  return {
+    signal: String(r.signal ?? ''),
+    confidence: num(r.confidence),
+    entry_price: num(r.entry_price),
+    stop_loss: num(r.stop_loss),
+    take_profit: num(r.take_profit),
+  }
+}
+
 async function placeReentry(
   settings: UserTradingSettings,
   alpaca: AlpacaClient,
@@ -861,19 +912,30 @@ async function placeReentry(
   side: 'buy' | 'sell',
   currentPrice: number,
   config: MonitorConfig,
+  override?: { stop: number; target: number },
 ): Promise<void> {
   const origEntry = w.original_entry !== null ? Number(w.original_entry) : NaN
   const origStop = w.original_stop !== null ? Number(w.original_stop) : NaN
   const origTarget = w.original_target !== null ? Number(w.original_target) : null
   const qty = w.original_qty !== null ? Math.floor(Number(w.original_qty)) : 0
 
-  if (qty <= 0 || !Number.isFinite(origEntry) || !Number.isFinite(origStop) || !Number.isFinite(currentPrice) || currentPrice <= 0) return
-  const stopDistance = Math.abs(origEntry - origStop)
-  if (stopDistance <= 0) return
-  const targetDistance = origTarget !== null && Number.isFinite(origTarget) ? Math.abs(origTarget - origEntry) : stopDistance * 2
+  if (qty <= 0 || !Number.isFinite(currentPrice) || currentPrice <= 0) return
 
-  const newStop = side === 'buy' ? currentPrice - stopDistance : currentPrice + stopDistance
-  const newTarget = side === 'buy' ? currentPrice + targetDistance : currentPrice - targetDistance
+  // Levels: prefer the re-entry verdict's fresh stop/target; otherwise fall back
+  // to reconstructing from the original trade's distances (legacy behaviour).
+  let newStop: number
+  let newTarget: number
+  if (override) {
+    newStop = override.stop
+    newTarget = override.target
+  } else {
+    if (!Number.isFinite(origEntry) || !Number.isFinite(origStop)) return
+    const stopDistance = Math.abs(origEntry - origStop)
+    if (stopDistance <= 0) return
+    const targetDistance = origTarget !== null && Number.isFinite(origTarget) ? Math.abs(origTarget - origEntry) : stopDistance * 2
+    newStop = side === 'buy' ? currentPrice - stopDistance : currentPrice + stopDistance
+    newTarget = side === 'buy' ? currentPrice + targetDistance : currentPrice - targetDistance
+  }
   if (newStop <= 0 || newTarget <= 0) return
   if ((side === 'buy' && newStop >= currentPrice) || (side === 'sell' && newStop <= currentPrice)) return
 
