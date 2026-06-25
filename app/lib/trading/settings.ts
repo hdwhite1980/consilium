@@ -453,13 +453,13 @@ export function getMaxLeverageForFutures(s: UserTradingSettings): number {
 }
 
 /**
- * Master switch for the Coinbase CFM futures venue. Independent of the shared
- * `tradeFutures` flag (which also covers the Tradovate/CME path), so leveraged
- * Coinbase futures stay OFF until explicitly enabled — a deliberate
- * real-money safety default.
+ * Master switch for the Coinbase CFM futures venue — the SINGLE control for
+ * leveraged Coinbase futures. Off by default; a deliberate real-money opt-in.
+ * Intentionally NOT coupled to the shared `tradeFutures` flag (which gates the
+ * separate Tradovate/CME path), so one dashboard toggle is all that's needed.
  */
 export function isCoinbaseFuturesEnabled(s: UserTradingSettings): boolean {
-  return s.coinbaseFuturesEnabled === true && s.tradeFutures === true
+  return s.coinbaseFuturesEnabled === true
 }
 
 /**
