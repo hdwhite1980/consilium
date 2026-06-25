@@ -234,6 +234,38 @@ export async function loadCoinbaseCredential(
   }
 }
 
+/**
+ * Coinbase FUTURES (CFM) credential loader.
+ *
+ * The same CDP key trades both spot and futures once the account is entitled
+ * for futures, so we prefer a dedicated futures-tagged Coinbase row if one
+ * exists, then transparently fall back to the existing crypto (spot) Coinbase
+ * key. Returns null only when no Coinbase credential is configured at all.
+ */
+export async function loadCoinbaseFuturesCredential(
+  userId: string,
+): Promise<{ credentialRowId: string; keyName: string; privateKey: string } | null> {
+  const admin = await getSupabaseAdmin()
+  const { data, error } = await admin
+    .from('user_broker_credentials')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('broker', 'coinbase')
+    .eq('mode', 'live')
+    .eq('asset_class', 'futures')
+    .maybeSingle()
+  if (!error && data) {
+    const dbRow = data as DbRow
+    return {
+      credentialRowId: dbRow.id,
+      keyName: dbRow.key_id,
+      privateKey: decrypt(dbRow.encrypted_secret),
+    }
+  }
+  // Fall back to the spot/crypto Coinbase key (same CDP key works for CFM).
+  return loadCoinbaseCredential(userId)
+}
+
 export async function loadTradovateSession(
   userId: string,
   mode: 'paper' | 'live',

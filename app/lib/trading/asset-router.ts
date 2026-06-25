@@ -17,7 +17,7 @@ import { cryptoBaseOf } from '@/app/lib/crypto-symbol'
 
 export interface AssetRoute {
   assetClass: AssetClass | 'unknown'
-  broker: 'alpaca' | 'oanda' | 'tradovate' | null
+  broker: 'alpaca' | 'oanda' | 'tradovate' | 'coinbase' | null
   normalizedSymbol: string         // canonical form for the broker
 }
 
@@ -60,6 +60,36 @@ const FUTURES_ROOTS = new Set([
 
 function normalize(symbol: string): string {
   return symbol.toUpperCase().trim().replace(/\s+/g, '')
+}
+
+/**
+ * Detect a Coinbase Financial Markets (CFM) future — leveraged, real-money
+ * crypto/commodity/index futures. This is a DISTINCT venue from CME futures
+ * (Tradovate) and from crypto SPOT (Alpaca). It requires EXPLICIT notation so
+ * a bare "BTC" is never silently turned into a leveraged future:
+ *
+ *   CBF:<ROOT>      explicit marker for any Coinbase future (CBF:BTC, CBF:GOLD,
+ *                   CBF:MAG7, CBF:CRUDE …)
+ *   <CRYPTO>-PERP   convenience for crypto perpetuals (BTC-PERP, ETH-PERP,
+ *                   SOL-PERP, XRP-PERP …)
+ *
+ * normalizedSymbol is the bare ROOT; coinbase-futures-products resolves it to
+ * the live tradable contract at execution time.
+ */
+function tryCoinbaseFutures(symbol: string): AssetRoute | null {
+  let root: string | null = null
+  if (symbol.startsWith('CBF:')) {
+    root = symbol.slice(4).replace(/[\/\-.]/g, '')
+  } else {
+    const m = symbol.match(/^([A-Z0-9]{2,6})[-.]PERP$/)
+    if (m) root = m[1]
+  }
+  if (!root) return null
+  return {
+    assetClass: 'futures',
+    broker: 'coinbase',
+    normalizedSymbol: root,
+  }
 }
 
 /**
@@ -154,7 +184,8 @@ export function routeTicker(ticker: string): AssetRoute {
   const symbol = normalize(ticker)
   if (!symbol) return { assetClass: 'unknown', broker: null, normalizedSymbol: ticker }
 
-  return tryCrypto(symbol)
+  return tryCoinbaseFutures(symbol)
+      ?? tryCrypto(symbol)
       ?? tryForex(symbol)
       ?? tryFutures(symbol)
       ?? tryStock(symbol)

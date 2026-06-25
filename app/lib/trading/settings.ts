@@ -78,6 +78,8 @@ export interface UserTradingSettings {
   forexRiskPerTradePct: number
   futuresMaxConcurrent: number
   futuresRiskPerTradePct: number
+  futuresMaxLeverage: number          // hard leverage cap for Coinbase CFM sizing
+  coinbaseFuturesEnabled: boolean     // master switch for the Coinbase futures venue (off by default)
   totalMaxConcurrent: number        // cross-asset hard cap
 
   // Per-trade dollar bounds (Sizing Audit Phase 2). All nullable.
@@ -141,6 +143,8 @@ export const DEFAULT_TRADING_SETTINGS: Omit<UserTradingSettings, 'id' | 'userId'
   forexRiskPerTradePct: 0.0050,
   futuresMaxConcurrent: 2,
   futuresRiskPerTradePct: 0.0050,
+  futuresMaxLeverage: 2,
+  coinbaseFuturesEnabled: false,
   totalMaxConcurrent: 10,
   minDollarRiskPerTrade: null,
   maxDollarRiskPerTrade: null,
@@ -162,6 +166,8 @@ interface DbRow {
   max_daily_loss_pct: string | number; max_concurrent_pos: number; max_consec_losses: number
   trade_stocks: boolean; trade_crypto: boolean; trade_options: boolean; trade_forex: boolean
   trade_futures: boolean | null
+  futures_max_leverage: string | number | null
+  coinbase_futures_enabled: boolean | null
   allow_shorts: boolean | null
   earnings_full_size: boolean | null
   allow_low_price_shares: boolean | null
@@ -242,6 +248,9 @@ function rowToSettings(row: DbRow): UserTradingSettings {
     futuresMaxConcurrent: row.futures_max_concurrent ?? 2,
     futuresRiskPerTradePct: row.futures_risk_per_trade_pct !== null && row.futures_risk_per_trade_pct !== undefined
       ? Number(row.futures_risk_per_trade_pct) : 0.005,
+    futuresMaxLeverage: row.futures_max_leverage !== null && row.futures_max_leverage !== undefined
+      ? Number(row.futures_max_leverage) : 2,
+    coinbaseFuturesEnabled: row.coinbase_futures_enabled ?? false,
     totalMaxConcurrent: row.total_max_concurrent ?? 10,
     minDollarRiskPerTrade: row.min_dollar_risk_per_trade !== null && row.min_dollar_risk_per_trade !== undefined
       ? Number(row.min_dollar_risk_per_trade) : null,
@@ -303,6 +312,7 @@ export async function upsertUserTradingSettings(
     cryptoMaxConcurrent: 'crypto_max_concurrent', cryptoRiskPerTradePct: 'crypto_risk_per_trade_pct',
     forexMaxConcurrent: 'forex_max_concurrent', forexRiskPerTradePct: 'forex_risk_per_trade_pct',
     futuresMaxConcurrent: 'futures_max_concurrent', futuresRiskPerTradePct: 'futures_risk_per_trade_pct',
+    futuresMaxLeverage: 'futures_max_leverage', coinbaseFuturesEnabled: 'coinbase_futures_enabled',
     totalMaxConcurrent: 'total_max_concurrent',
     minDollarRiskPerTrade: 'min_dollar_risk_per_trade',
     maxDollarRiskPerTrade: 'max_dollar_risk_per_trade',
@@ -354,6 +364,8 @@ export async function upsertUserTradingSettings(
     forex_risk_per_trade_pct: merged.forexRiskPerTradePct,
     futures_max_concurrent: merged.futuresMaxConcurrent,
     futures_risk_per_trade_pct: merged.futuresRiskPerTradePct,
+    futures_max_leverage: merged.futuresMaxLeverage,
+    coinbase_futures_enabled: merged.coinbaseFuturesEnabled,
     total_max_concurrent: merged.totalMaxConcurrent,
     min_dollar_risk_per_trade: merged.minDollarRiskPerTrade,
     max_dollar_risk_per_trade: merged.maxDollarRiskPerTrade,
@@ -426,6 +438,21 @@ export function isAssetClassEnabled(s: UserTradingSettings, ac: AssetClass): boo
   if (ac === 'forex') return s.tradeForex
   if (ac === 'futures') return s.tradeFutures
   return false
+}
+
+/** Hard leverage ceiling for Coinbase CFM sizing. Defaults to 2x. */
+export function getMaxLeverageForFutures(s: UserTradingSettings): number {
+  return Number.isFinite(s.futuresMaxLeverage) && s.futuresMaxLeverage > 0 ? s.futuresMaxLeverage : 2
+}
+
+/**
+ * Master switch for the Coinbase CFM futures venue. Independent of the shared
+ * `tradeFutures` flag (which also covers the Tradovate/CME path), so leveraged
+ * Coinbase futures stay OFF until explicitly enabled — a deliberate
+ * real-money safety default.
+ */
+export function isCoinbaseFuturesEnabled(s: UserTradingSettings): boolean {
+  return s.coinbaseFuturesEnabled === true && s.tradeFutures === true
 }
 
 /**

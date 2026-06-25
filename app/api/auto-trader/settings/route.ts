@@ -27,6 +27,7 @@ const BOOL_FIELDS = [
   'enabled', 'allowShorts',
   'tradeStocks', 'tradeCrypto', 'tradeForex', 'tradeFutures', 'tradeOptions',
   'earningsFullSize', 'allowLowPriceShares', 'allowFractionalShares',
+  'coinbaseFuturesEnabled',
 ] as const
 type BoolField = typeof BOOL_FIELDS[number]
 
@@ -43,6 +44,7 @@ function rulesView(s: any) {
     earningsFullSize: s.earningsFullSize,
     allowLowPriceShares: s.allowLowPriceShares,
     allowFractionalShares: s.allowFractionalShares,
+    coinbaseFuturesEnabled: s.coinbaseFuturesEnabled,
   }
 }
 
