@@ -265,11 +265,21 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             resolve(verdict.id)
             console.log(`[auto-trade] PLACED user=${settings.userId} ${decision.side} ${decision.qty} ${decision.ticker} @ ${decision.entryPrice} stop=${decision.stopPrice} tp=${decision.targetPrice} risk=$${decision.dollarRisk.toFixed(2)} mode=${settings.mode}`)
           } catch (e) {
-            userSummary.errors++
             const msg = e instanceof Error ? e.message : String(e)
+            // Live-price race: by the time the order reached the broker, the
+            // price had moved past the council's target (or stop), so the
+            // bracket leg fell on the wrong side of Alpaca's live base_price.
+            // The setup is spent — record it as a skip, not an error, so it
+            // doesn't read as a code failure or inflate the error count.
+            const setupSpent = /base_price|take_profit\.limit_price|stop_loss\.stop_price/i.test(msg)
+            if (!setupSpent) userSummary.errors++
+            const outcome = setupSpent ? 'skipped' : 'rejected'
+            const reason = setupSpent
+              ? `setup spent: price moved past target/stop before execution — ${msg.slice(0, 140)}`
+              : msg.slice(0, 500)
             await logTradeAttempt(verdict, settings, {
-              outcome: 'rejected',
-              reason: msg.slice(0, 500),
+              outcome,
+              reason,
               brokerClientId: clientOrderId,
               side: decision.side,
               qty: decision.qty,
@@ -280,13 +290,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
               accountEquity: decision.accountEquity,
             })
             userSummary.decisions.push({
-              verdictId: verdict.id, ticker: verdict.ticker, outcome: 'rejected',
-              reason: msg.slice(0, 200),
+              verdictId: verdict.id, ticker: verdict.ticker, outcome,
+              reason: reason.slice(0, 200),
             })
             // Broker rejection is terminal (bad price, market closed, not
             // tradable) — retrying rarely helps and would wedge the watermark.
             resolve(verdict.id)
-            console.error(`[auto-trade] REJECTED user=${settings.userId} ${decision.ticker}:`, msg.slice(0, 300))
+            if (setupSpent) {
+              console.log(`[auto-trade] SKIPPED (setup spent) user=${settings.userId} ${decision.ticker}: target=${decision.targetPrice} ${msg.slice(0, 120)}`)
+            } else {
+              console.error(`[auto-trade] REJECTED user=${settings.userId} ${decision.ticker}:`, msg.slice(0, 300))
+            }
           }
         }
 

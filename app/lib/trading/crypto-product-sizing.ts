@@ -63,19 +63,38 @@ const PRODUCT_TTL_MS = 5 * 60 * 1000
  * Returns null on fetch failure — caller should treat that as "skip this
  * trade" since we can't validate constraints without the product info.
  */
+/**
+ * Normalize a crypto symbol to a Coinbase product_id ("BASE-QUOTE", dash form).
+ * Accepts "AAVEUSD", "AAVE/USD", "AAVE-USD", "BTCUSDC" → "AAVE-USD" / "BTC-USDC".
+ * Already-dashed ids pass through untouched.
+ */
+export function toCoinbaseProductId(symbol: string): string {
+  let s = (symbol ?? '').toUpperCase().trim().replace(/\s+/g, '')
+  if (s.includes('-')) return s
+  if (s.includes('/')) return s.replace('/', '-')
+  for (const q of ['USDC', 'USDT', 'USD']) {
+    if (s.endsWith(q) && s.length > q.length) return `${s.slice(0, -q.length)}-${q}`
+  }
+  return s
+}
+
 export async function getProductInfo(
   client: CoinbaseClient,
   symbol: string,
 ): Promise<ProductInfo | null> {
-  const cached = productCache.get(symbol)
+  // Coinbase product IDs are dash-delimited ("AAVE-USD"). Verdict tickers can
+  // arrive dashless ("AAVEUSD") or slash form ("AAVE/USD"), which 404s the
+  // /products/{id} lookup. Normalize before fetching and cache by the canonical id.
+  const productId = toCoinbaseProductId(symbol)
+  const cached = productCache.get(productId)
   if (cached && (Date.now() - cached.fetchedAt) < PRODUCT_TTL_MS) {
     return cached.info
   }
 
   try {
-    const raw = await client.getProduct(symbol)
+    const raw = await client.getProduct(productId)
     const info: ProductInfo = {
-      productId: String(raw.product_id ?? symbol),
+      productId: String(raw.product_id ?? productId),
       baseIncrement: parseNumber(raw.base_increment) ?? 0.00000001,
       quoteIncrement: parseNumber(raw.quote_increment) ?? 0.01,
       baseMinSize: parseNumber(raw.base_min_size) ?? 0,
@@ -88,10 +107,10 @@ export async function getProductInfo(
       postOnly: raw.post_only === true,
       limitOnly: raw.limit_only === true,
     }
-    productCache.set(symbol, { info, fetchedAt: Date.now() })
+    productCache.set(productId, { info, fetchedAt: Date.now() })
     return info
   } catch (e) {
-    console.warn(`[crypto-product-sizing] getProduct(${symbol}) failed:`, e instanceof Error ? e.message : e)
+    console.warn(`[crypto-product-sizing] getProduct(${productId}) failed:`, e instanceof Error ? e.message : e)
     return null
   }
 }
