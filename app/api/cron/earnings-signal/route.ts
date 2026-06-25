@@ -20,7 +20,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/app/lib/admin/admin-auth'
 import { fetchBars } from '@/app/lib/data/alpaca'
-import { fetchOptionsFlow } from '@/app/lib/signals/options-flow'
+import { fetchOptionsFlowAlpaca } from '@/app/lib/signals/options-flow-alpaca'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -31,7 +31,7 @@ export const maxDuration = 300
 // form while keeping the per-day universe small.
 const SIGNAL_WINDOW_DAYS = 5
 const MAX_NAMES = 60            // hard cap on names processed per run
-const MAX_OPTIONS_FETCHES = 35 // cap on Tradier option-chain pulls per run
+const MAX_OPTIONS_FETCHES = 35 // cap on Alpaca option-snapshot pulls per run
 
 // Universe gates (NOT per-user position sizing — these decide whether a name is
 // liquid/priced enough to be worth tracking and to have a usable options market)
@@ -48,32 +48,6 @@ interface WatchRow {
 function pctChange(from: number, to: number): number {
   if (!Number.isFinite(from) || from === 0) return 0
   return ((to - from) / from) * 100
-}
-
-// One-off diagnostic: hit Tradier's expirations endpoint for a known-liquid
-// name on BOTH bases and report raw status/body. A 401 on production with the
-// key set => the token is a sandbox token (options-flow uses production when a
-// key is present), which silently nulls every chain. Remove once resolved.
-async function tradierProbe(): Promise<Record<string, unknown>> {
-  const key = process.env.TRADIER_API_KEY
-  if (!key) return { configured: false }
-  const hit = async (base: string) => {
-    try {
-      const res = await fetch(
-        `${base}/markets/options/expirations?symbol=DRI&includeAllRoots=true`,
-        { headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' } },
-      )
-      const text = await res.text()
-      return { status: res.status, ok: res.ok, bodySnippet: text.slice(0, 180) }
-    } catch (e) {
-      return { error: e instanceof Error ? e.message : 'fetch failed' }
-    }
-  }
-  return {
-    configured: true,
-    production: await hit('https://api.tradier.com/v1'),
-    sandbox: await hit('https://sandbox.tradier.com/v1'),
-  }
 }
 
 function tradingDaysTo(reportDate: string, today: Date): number {
@@ -119,9 +93,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const gatedInIds: string[] = []
   const gatedOutIds: string[] = []
   let optionsFetches = 0
-  // Diagnostics: is Tradier returning usable data, or is every name falling
+  // Diagnostics: is Alpaca options returning usable data, or is every name falling
   // back to neutral? withData = non-null P/C; empty = fetched but null; errors = threw.
-  const optDiag = { configured: !!process.env.TRADIER_API_KEY, withData: 0, empty: 0, errors: 0 }
+  const optDiag = { configured: !!process.env.ALPACA_API_KEY, source: 'alpaca', withData: 0, empty: 0, errors: 0 }
   const optSample: Array<{ ticker: string; pc: number | null; pcOi: number | null; skew: number | null }> = []
 
   for (const w of names) {
@@ -188,7 +162,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     if (optionsFetches < MAX_OPTIONS_FETCHES) {
       optionsFetches++
       try {
-        const of = await fetchOptionsFlow(ticker, price)
+        const of = await fetchOptionsFlowAlpaca(ticker, price)
         pcRatio = of.putCallRatio
         pcOiRatio = of.putCallOIRatio
         ivSkew = of.ivSkew
@@ -276,7 +250,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     optionsFetches,
     optionsDiag: optDiag,
     optionsSample: optSample,
-    tradierProbe: await tradierProbe(),
     upserted,
     durationMs,
     topRunups,
