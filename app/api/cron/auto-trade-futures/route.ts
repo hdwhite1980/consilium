@@ -110,7 +110,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           maxId = Math.max(maxId, verdict.id)
 
           const route = routeTicker(verdict.ticker)
-          if (route.assetClass !== 'futures') continue
+          if (route.assetClass !== 'futures' || route.broker !== 'tradovate') continue
 
           if (verdict.trader_decision !== 'TAKE') {
             await logSkipped(verdict, settings, route.normalizedSymbol, `not a TAKE (${verdict.trader_decision})`)
