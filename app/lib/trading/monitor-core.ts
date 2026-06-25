@@ -1385,14 +1385,47 @@ async function fetchOpenAttempts(userId: string, mode: MonitorMode = 'swing'): P
   //
   // Fix: use a plain `.in('asset_class', [...])` and run a SECOND query for
   // legacy NULL rows. Both errors are now logged explicitly.
-  const { data, error } = await admin
-    .from('trade_attempts')
-    .select('id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, initial_stop, outcome, asset_class, monitor_owned_stop')
-    .eq('user_id', userId)
-    .in('asset_class', ['stock', 'stocks'])
-    .eq('monitor_mode', mode)
-    .in('outcome', ['placed', 'filled', 'partial_fill'])
-    .gte('created_at', cutoff)
+  // Resilience: select the full column set, but if a newly-added column is
+  // missing (migration not run yet / stale PostgREST cache), retry WITHOUT it
+  // instead of failing the whole query and blinding the monitor to every
+  // position. The row mapping defaults any absent column safely.
+  const COLS_FULL = 'id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, initial_stop, outcome, asset_class, monitor_owned_stop'
+  const COLS_BASE = 'id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, initial_stop, outcome, asset_class'
+
+  const isMissingColumn = (err: { code?: string; message?: string } | null): boolean => {
+    if (!err) return false
+    const code = err.code ?? ''
+    const msg = (err.message ?? '').toLowerCase()
+    return code === 'PGRST204' || code === '42703' || msg.includes('does not exist') || msg.includes('column')
+  }
+
+  const selectAttempts = async (
+    legacyNull: boolean,
+  ): Promise<{ data: Array<Record<string, unknown>> | null; error: { code?: string; message?: string } | null }> => {
+    const run = async (cols: string) => {
+      const base = admin.from('trade_attempts').select(cols).eq('user_id', userId)
+      const scoped = legacyNull ? base.is('asset_class', null) : base.in('asset_class', ['stock', 'stocks'])
+      const { data, error } = await scoped
+        .eq('monitor_mode', mode)
+        .in('outcome', ['placed', 'filled', 'partial_fill'])
+        .gte('created_at', cutoff)
+      return {
+        data: (data ?? null) as Array<Record<string, unknown>> | null,
+        error: (error ?? null) as { code?: string; message?: string } | null,
+      }
+    }
+    let res = await run(COLS_FULL)
+    if (res.error && isMissingColumn(res.error)) {
+      console.warn(
+        `[position-monitor] fetchOpenAttempts: a selected column is missing — run the pending migration. ` +
+        `Retrying without new columns so monitoring isn't blocked. (${res.error.message})`,
+      )
+      res = await run(COLS_BASE)
+    }
+    return res
+  }
+
+  const { data, error } = await selectAttempts(false)
 
   if (error) {
     console.error(`[position-monitor] fetchOpenAttempts main query failed for user=${userId}:`, error.message)
@@ -1401,14 +1434,7 @@ async function fetchOpenAttempts(userId: string, mode: MonitorMode = 'swing'): P
 
   // Legacy: rows created before the asset_class column was added may have NULL.
   // Quick second query — if it errors we just skip the legacy rows.
-  const { data: legacyData, error: legacyError } = await admin
-    .from('trade_attempts')
-    .select('id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, initial_stop, outcome, asset_class, monitor_owned_stop')
-    .eq('user_id', userId)
-    .is('asset_class', null)
-    .eq('monitor_mode', mode)
-    .in('outcome', ['placed', 'filled', 'partial_fill'])
-    .gte('created_at', cutoff)
+  const { data: legacyData, error: legacyError } = await selectAttempts(true)
 
   if (legacyError) {
     console.warn(`[position-monitor] fetchOpenAttempts legacy NULL query failed for user=${userId} (ignoring):`, legacyError.message)
