@@ -177,6 +177,9 @@ export async function GET(): Promise<NextResponse> {
         tradeForex: settings.tradeForex,
         tradeFutures: settings.tradeFutures,
         tradeOptions: settings.tradeOptions,
+        earningsFullSize: settings.earningsFullSize,
+        allowLowPriceShares: settings.allowLowPriceShares,
+        allowFractionalShares: settings.allowFractionalShares,
       },
       broker: credentialMeta,
       todayKpis: {

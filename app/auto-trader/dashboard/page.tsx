@@ -50,6 +50,9 @@ interface DashboardSettings {
   tradeForex: boolean
   tradeFutures: boolean
   tradeOptions: boolean
+  earningsFullSize: boolean
+  allowLowPriceShares: boolean
+  allowFractionalShares: boolean
 }
 
 interface DashboardBroker {
@@ -517,6 +520,9 @@ export default function AutoTraderDashboardPage() {
                 tradeForex: data.settings.tradeForex,
                 tradeFutures: data.settings.tradeFutures,
                 tradeOptions: data.settings.tradeOptions,
+                earningsFullSize: data.settings.earningsFullSize,
+                allowLowPriceShares: data.settings.allowLowPriceShares,
+                allowFractionalShares: data.settings.allowFractionalShares,
               }}
               onChanged={() => { void fetchAll() }}
             />
