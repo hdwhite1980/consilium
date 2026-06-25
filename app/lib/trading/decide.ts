@@ -42,6 +42,7 @@ export type Decision =
       ticker: string
       side: 'buy' | 'sell'
       qty: number
+      fractional: boolean
       entryPrice: number
       stopPrice: number
       targetPrice: number
@@ -449,6 +450,7 @@ export async function decideForUser(args: {
     // Per-share price floor: normally $3 (skip penny/illiquid names). Small
     // accounts can opt in to sub-$5 stocks via allowLowPriceShares → floor $0.
     minSharePrice: settings.allowLowPriceShares ? 0 : 3,
+    allowFractionalShares: settings.allowFractionalShares,
     traderPositionSizePct: effectiveTraderSize > 0 ? effectiveTraderSize : 1,
     minDollarRiskPerTrade: settings.minDollarRiskPerTrade,
     maxDollarRiskPerTrade: settings.maxDollarRiskPerTrade,
@@ -492,6 +494,7 @@ export async function decideForUser(args: {
     ticker: symbol,
     side,
     qty: sizing.qty,
+    fractional: sizing.fractional ?? false,
     entryPrice,
     stopPrice,
     targetPrice,

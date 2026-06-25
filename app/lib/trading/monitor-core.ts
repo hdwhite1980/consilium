@@ -63,6 +63,7 @@ interface OpenAttempt {
   original_stop_loss: number | null   // Council's original stop from verdict_log (immutable, for R-multiple trailing)
   outcome: string
   asset_class: string | null
+  monitor_owned_stop: boolean | null
 }
 
 interface PerUserSummary {
@@ -347,6 +348,37 @@ async function processPosition(
   if (await isInCooldown(att.id, pm.cooldownMin)) {
     userSummary.cooldowns++
     return true
+  }
+
+  // Monitor-owned stop (fractional shares): there is NO broker stop leg, so the
+  // monitor IS the stop. Hard-close immediately on a stop breach, before any
+  // signal evaluation — this is the protection a broker bracket would normally
+  // provide. Bracket positions skip this (their broker stop leg handles it).
+  {
+    const stopLevel = att.stop_price
+    const sideNow = (att.side ?? 'buy') as 'buy' | 'sell'
+    if (att.monitor_owned_stop && stopLevel !== null && Number.isFinite(stopLevel)) {
+      const px = pos.current_price
+      const breached = sideNow === 'buy' ? px <= stopLevel : px >= stopLevel
+      if (breached) {
+        const result = await applyExit(alpaca, pos)
+        if (result.ok) userSummary.exits++
+        await logR(ticker, {
+          ok: result.ok,
+          decision: 'EXIT',
+          actionTaken: result.ok ? 'monitor_stop_breach' : 'monitor_stop_breach_failed',
+          snap5m: emptySnapshot(), snap15m: emptySnapshot(),
+          currentPrice: px, currentStop: stopLevel,
+          errorReason: result.ok ? undefined : result.reason,
+        })
+        if (result.ok) {
+          console.log(`[position-monitor] ${ticker} MONITOR-STOP breach @ ${px.toFixed(2)} <= stop ${stopLevel.toFixed(2)} — market close (fractional, no broker stop)`)
+          await recordExitClosure(att, pos, 'monitor_exit').catch(e =>
+            console.warn(`[position-monitor] record-exit ${ticker}: ${e instanceof Error ? e.message : e}`))
+        }
+        return true
+      }
+    }
   }
 
   // Side (we don't currently take shorts; default buy)
@@ -1281,7 +1313,7 @@ async function fetchOpenAttempts(userId: string, mode: MonitorMode = 'swing'): P
   // legacy NULL rows. Both errors are now logged explicitly.
   const { data, error } = await admin
     .from('trade_attempts')
-    .select('id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, initial_stop, outcome, asset_class')
+    .select('id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, initial_stop, outcome, asset_class, monitor_owned_stop')
     .eq('user_id', userId)
     .in('asset_class', ['stock', 'stocks'])
     .eq('monitor_mode', mode)
@@ -1297,7 +1329,7 @@ async function fetchOpenAttempts(userId: string, mode: MonitorMode = 'swing'): P
   // Quick second query — if it errors we just skip the legacy rows.
   const { data: legacyData, error: legacyError } = await admin
     .from('trade_attempts')
-    .select('id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, initial_stop, outcome, asset_class')
+    .select('id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, initial_stop, outcome, asset_class, monitor_owned_stop')
     .eq('user_id', userId)
     .is('asset_class', null)
     .eq('monitor_mode', mode)
@@ -1325,6 +1357,7 @@ async function fetchOpenAttempts(userId: string, mode: MonitorMode = 'swing'): P
       stop_price: row.stop_price !== null && row.stop_price !== undefined ? Number(row.stop_price) : null,
       target_price: row.target_price !== null && row.target_price !== undefined ? Number(row.target_price) : null,
       broker_order_id: row.broker_order_id !== null && row.broker_order_id !== undefined ? String(row.broker_order_id) : null,
+      monitor_owned_stop: row.monitor_owned_stop === true,
       verdict_log_id: row.verdict_log_id !== null && row.verdict_log_id !== undefined ? Number(row.verdict_log_id) : null,
       // Prefer the per-attempt immutable initial_stop (set on re-entries, whose
       // stop sits at a new price). Falls back to verdict_log.stop_loss below for

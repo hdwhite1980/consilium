@@ -49,6 +49,7 @@ export interface UserTradingSettings {
   // intended for very small accounts. Alpaca still won't trade true OTC /
   // pink-sheet penny stocks regardless of this flag. Default false.
   allowLowPriceShares: boolean
+  allowFractionalShares: boolean
   // Council grade floor
   minGrade: 'A' | 'B' | 'C'
   lastProcessedVerdictId: number | null
@@ -118,6 +119,7 @@ export const DEFAULT_TRADING_SETTINGS: Omit<UserTradingSettings, 'id' | 'userId'
   allowShorts: false,
   earningsFullSize: false,
   allowLowPriceShares: false,
+  allowFractionalShares: false,
   minGrade: 'B',
   lastProcessedVerdictId: null,
   cryptoLastProcessedVerdictId: null,
@@ -163,6 +165,7 @@ interface DbRow {
   allow_shorts: boolean | null
   earnings_full_size: boolean | null
   allow_low_price_shares: boolean | null
+  allow_fractional_shares: boolean | null
   min_grade: string | null; last_processed_verdict_id: number | string | null
   crypto_last_processed_verdict_id: number | string | null
   forex_last_processed_verdict_id: number | string | null
@@ -208,6 +211,7 @@ function rowToSettings(row: DbRow): UserTradingSettings {
     allowShorts: row.allow_shorts ?? false,
     earningsFullSize: row.earnings_full_size ?? false,
     allowLowPriceShares: row.allow_low_price_shares ?? false,
+    allowFractionalShares: row.allow_fractional_shares ?? false,
     minGrade: (row.min_grade ?? 'B') as 'A' | 'B' | 'C',
     lastProcessedVerdictId: row.last_processed_verdict_id !== null && row.last_processed_verdict_id !== undefined
       ? Number(row.last_processed_verdict_id) : null,
@@ -285,6 +289,7 @@ export async function upsertUserTradingSettings(
     allowShorts: 'allow_shorts',
     earningsFullSize: 'earnings_full_size',
     allowLowPriceShares: 'allow_low_price_shares',
+    allowFractionalShares: 'allow_fractional_shares',
     minGrade: 'min_grade', lastProcessedVerdictId: 'last_processed_verdict_id',
     cryptoLastProcessedVerdictId: 'crypto_last_processed_verdict_id',
     forexLastProcessedVerdictId: 'forex_last_processed_verdict_id',

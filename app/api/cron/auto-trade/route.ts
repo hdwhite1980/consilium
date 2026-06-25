@@ -208,14 +208,23 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
               continue
             }
 
-            const order = await alpaca.bracketOrder({
-              symbol: decision.ticker,
-              qty: decision.qty,
-              side: decision.side,
-              takeProfitPrice: decision.targetPrice,
-              stopLossPrice: decision.stopPrice,
-              clientOrderId,
-            })
+            // Fractional setups can't use a broker bracket (Alpaca restriction),
+            // so they place a plain market order and the monitor owns the stop.
+            const order = decision.fractional
+              ? await alpaca.fractionalMarketOrder({
+                  symbol: decision.ticker,
+                  qty: decision.qty,
+                  side: decision.side,
+                  clientOrderId,
+                })
+              : await alpaca.bracketOrder({
+                  symbol: decision.ticker,
+                  qty: decision.qty,
+                  side: decision.side,
+                  takeProfitPrice: decision.targetPrice,
+                  stopLossPrice: decision.stopPrice,
+                  clientOrderId,
+                })
 
             userSummary.placed++
             summary.totalPlaced++
@@ -257,6 +266,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
               dollarRisk: decision.dollarRisk,
               accountEquity: decision.accountEquity,
               monitorMode: effectiveMode,
+              monitorOwnedStop: decision.fractional,
             })
             userSummary.decisions.push({
               verdictId: verdict.id, ticker: verdict.ticker, outcome: 'placed',
@@ -380,6 +390,7 @@ interface LogPayload {
   dollarRisk?: number
   accountEquity?: number
   monitorMode?: 'swing' | 'day'
+  monitorOwnedStop?: boolean
 }
 
 async function logTradeAttempt(
@@ -412,5 +423,6 @@ async function logTradeAttempt(
     risk_dollar_amount: payload.dollarRisk ?? null,
     account_equity_at: payload.accountEquity ?? null,
     monitor_mode: payload.monitorMode ?? 'swing',
+    monitor_owned_stop: payload.monitorOwnedStop ?? false,
   })
 }

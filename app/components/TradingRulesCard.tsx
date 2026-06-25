@@ -26,6 +26,7 @@ export interface TradingRules {
   tradeOptions?: boolean
   earningsFullSize?: boolean
   allowLowPriceShares?: boolean
+  allowFractionalShares?: boolean
 }
 
 function Toggle({ on, onClick, disabled }: { on: boolean; onClick: () => void; disabled?: boolean }) {
@@ -84,6 +85,7 @@ export default function TradingRulesCard({
     { key: 'tradeFutures', label: 'Futures', on: rules.tradeFutures },
     { key: 'earningsFullSize', label: 'Trade through earnings', hint: 'Takes earnings-window setups at full size (vs. half). Managed by the day-monitor and flattened before the print — but stops do NOT protect against an overnight earnings gap. Required for the pre-earnings run-up tracker.', on: rules.earningsFullSize ?? false, accent: true },
     { key: 'allowLowPriceShares', label: 'Allow sub-$5 shares', hint: 'Drops the $3/share sizing floor to $0 so low-priced stocks become tradeable. For small accounts; Alpaca still won\u2019t trade true OTC/penny names.', on: rules.allowLowPriceShares ?? false, accent: true },
+    { key: 'allowFractionalShares', label: 'Allow fractional shares', hint: 'When a setup sizes to less than one whole share, buy a fractional amount instead of skipping. Fractional orders can\u2019t use a broker bracket, so the stop/target are enforced by the position-monitor (hard close on a stop breach) rather than sitting at the broker. Best for small accounts and high-priced names.', on: rules.allowFractionalShares ?? false, accent: true },
   ]
 
   return (

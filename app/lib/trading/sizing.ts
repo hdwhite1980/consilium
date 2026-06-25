@@ -25,6 +25,7 @@ export interface SizingInput {
   stopPrice: number
   traderPositionSizePct?: number  // 0..1, defaults to 1
   minSharePrice?: number          // skip penny stocks; default $5
+  allowFractionalShares?: boolean  // sub-1-share setups buy a fraction instead of skipping
   minDollarRisk?: number          // skip if computed risk < this; default $1
 
   // Per-trade dollar bounds (Audit Phase 2). All optional; null = unbounded.
@@ -54,7 +55,7 @@ export interface SizingInput {
 }
 
 export type SizingOutcome =
-  | { ok: true; qty: number; dollarRisk: number; positionDollar: number; rationale: string; qualityMultiplier?: number }
+  | { ok: true; qty: number; dollarRisk: number; positionDollar: number; rationale: string; qualityMultiplier?: number; fractional?: boolean }
   | { ok: false; reason: string }
 
 /**
@@ -126,6 +127,7 @@ export function computePositionSize(input: SizingInput): SizingOutcome {
     stopPrice,
     traderPositionSizePct = 1,
     minSharePrice = 3,
+    allowFractionalShares = false,
     minDollarRisk = 1,
     minDollarRiskPerTrade = null,
     maxDollarRiskPerTrade = null,
@@ -206,7 +208,34 @@ export function computePositionSize(input: SizingInput): SizingOutcome {
   // Risk-parity qty (whole shares)
   let qty = Math.floor(dollarRisk / perShareRisk)
   if (qty < 1) {
-    return { ok: false, reason: `Sized to 0 shares (dollarRisk=${dollarRisk.toFixed(2)}, perShareRisk=${perShareRisk.toFixed(2)})` }
+    if (!allowFractionalShares) {
+      return { ok: false, reason: `Sized to 0 shares (dollarRisk=${dollarRisk.toFixed(2)}, perShareRisk=${perShareRisk.toFixed(2)})` }
+    }
+    // Fractional path: a sub-1-share position is the smallest possible, so the
+    // upper-bound caps (max position %, max notional) can't bind. Use the
+    // unfloored risk-based size and validate only the lower bounds + Alpaca's
+    // $1 fractional-notional minimum. The stop is monitor-owned (no bracket).
+    const fracQty = Math.round((dollarRisk / perShareRisk) * 1e6) / 1e6
+    const fracNotional = fracQty * entryPrice
+    const ALPACA_FRACTIONAL_MIN_NOTIONAL = 1
+    if (!Number.isFinite(fracQty) || fracQty <= 0) {
+      return { ok: false, reason: `fractional sizing produced ${fracQty} shares` }
+    }
+    if (fracNotional < ALPACA_FRACTIONAL_MIN_NOTIONAL) {
+      return { ok: false, reason: `fractional notional $${fracNotional.toFixed(2)} below $1 Alpaca minimum` }
+    }
+    if (minDollarRiskPerTrade !== null && Number.isFinite(minDollarRiskPerTrade) && minDollarRiskPerTrade > 0 && dollarRisk < minDollarRiskPerTrade) {
+      return { ok: false, reason: `fractional dollarRisk $${dollarRisk.toFixed(2)} below min_dollar_risk_per_trade $${minDollarRiskPerTrade.toFixed(2)}` }
+    }
+    return {
+      ok: true,
+      qty: fracQty,
+      dollarRisk,
+      positionDollar: fracNotional,
+      fractional: true,
+      qualityMultiplier: qualityMultiplierApplied,
+      rationale: `${fracQty} fractional shares ($${fracNotional.toFixed(2)} notional, $${dollarRisk.toFixed(2)} risk at ${(stopWidthPct * 100).toFixed(2)}% stop — monitor-owned stop)`,
+    }
   }
 
   let positionDollar = qty * entryPrice

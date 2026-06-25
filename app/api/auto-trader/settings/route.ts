@@ -26,7 +26,7 @@ export const dynamic = 'force-dynamic'
 const BOOL_FIELDS = [
   'enabled', 'allowShorts',
   'tradeStocks', 'tradeCrypto', 'tradeForex', 'tradeFutures', 'tradeOptions',
-  'earningsFullSize', 'allowLowPriceShares',
+  'earningsFullSize', 'allowLowPriceShares', 'allowFractionalShares',
 ] as const
 type BoolField = typeof BOOL_FIELDS[number]
 
@@ -42,6 +42,7 @@ function rulesView(s: any) {
     tradeOptions: s.tradeOptions,
     earningsFullSize: s.earningsFullSize,
     allowLowPriceShares: s.allowLowPriceShares,
+    allowFractionalShares: s.allowFractionalShares,
   }
 }
 

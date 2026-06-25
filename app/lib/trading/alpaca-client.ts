@@ -218,6 +218,30 @@ export class AlpacaClient {
     return this.toOrder(raw)
   }
 
+  /**
+   * Plain fractional/whole market order with NO bracket legs. Alpaca does not
+   * support bracket/OCO on fractional shares, so the stop+target are owned by
+   * the position-monitor (hard close on a stop breach), not the broker.
+   * Fractional qty requires time_in_force='day'.
+   */
+  async fractionalMarketOrder(input: {
+    symbol: string
+    qty: number
+    side: 'buy' | 'sell'
+    clientOrderId: string
+  }): Promise<AlpacaOrder> {
+    const body = {
+      symbol: input.symbol,
+      qty: input.qty.toString(),
+      side: input.side,
+      type: 'market',
+      time_in_force: 'day',
+      client_order_id: input.clientOrderId,
+    }
+    const raw = await this.request<Record<string, unknown>>('POST', '/v2/orders', body, 10_000)
+    return this.toOrder(raw)
+  }
+
   async getOrder(orderId: string): Promise<AlpacaOrder> {
     const raw = await this.request<Record<string, unknown>>('GET', `/v2/orders/${encodeURIComponent(orderId)}`)
     return this.toOrder(raw)
