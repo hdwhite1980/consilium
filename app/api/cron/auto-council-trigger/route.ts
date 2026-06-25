@@ -245,7 +245,10 @@ async function fetchNewsCandidates(): Promise<Array<{ ticker: string; timeframe:
       // integration has been completely dead since deploy.
       // Accept both 'stock' singular (current convention) and 'stocks' plural
       // (legacy/defensive) so any historical rows match too.
-      .in('asset_type', ['stock', 'stocks'])
+      // (June 25 2026): include 'forex' so currency stories reach the Council
+      // too — forex execution/monitor exist downstream but nothing was feeding
+      // pairs in.
+      .in('asset_type', ['stock', 'stocks', 'forex'])
       .not('verified', 'is', false)     // accepts null OR true; excludes explicit false
       .order('confidence', { ascending: false })
       .limit(NEWS_PATH_LIMIT * 4)        // overfetch in case some get deduped vs scanner
@@ -260,7 +263,7 @@ async function fetchNewsCandidates(): Promise<Array<{ ticker: string; timeframe:
       if (!r.ticker || typeof r.ticker !== 'string') continue
       if (!r.signal || (r.signal !== 'BULLISH' && r.signal !== 'BEARISH')) continue
       const t = r.ticker.toUpperCase().trim()
-      if (!/^[A-Z]{1,6}$/.test(t)) continue
+      if (!/^[A-Z]{1,9}$/.test(t)) continue       // stocks ≤6, forex pairs up to 9 (e.g. NATGASUSD)
       if (seen.has(t)) continue
       seen.add(t)
 

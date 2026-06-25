@@ -110,11 +110,65 @@ const TYPICAL_DAILY_RANGE: Record<string, number> = {
   DEFAULT: 0.0055,
 }
 
+// ── OANDA: real candles (preferred over Frankfurter daily-synthetic) ─────────
+// Uses an app-level market-data token. The /v3/instruments/{i}/candles endpoint
+// is account-independent — any valid OANDA token works — and practice/live serve
+// the same market prices, so a practice token is fine for charts. This is the
+// SAME data the execution + position monitor trade on, so the Council finally
+// analyses the chart the trade actually lives on (real intraday OHLC + volume),
+// instead of one synthetic daily ECB candle.
+const OANDA_MD_TOKEN = process.env.OANDA_API_TOKEN ?? process.env.OANDA_ACCESS_TOKEN
+const OANDA_MD_HOST = process.env.OANDA_ENV === 'live'
+  ? 'https://api-fxtrade.oanda.com'
+  : 'https://api-fxpractice.oanda.com'
+
+// Map the analysis timeframe to an OANDA granularity, matching the pipeline's
+// own description of each timeframe (1D=15-min, 1W=1-hour, 1M/3M=daily).
+function oandaGranularityFor(timeframe: string): { gran: string; count: number } {
+  switch (timeframe) {
+    case '1D': return { gran: 'M15', count: 250 }  // intraday day analysis
+    case '1W': return { gran: 'H1',  count: 300 }  // swing
+    case '1M': return { gran: 'D',   count: 250 }  // position
+    case '3M': return { gran: 'D',   count: 400 }  // investment
+    default:   return { gran: 'H1',  count: 300 }
+  }
+}
+
+async function fetchOandaForexBars(instrument: string, timeframe: string): Promise<AlpacaBar[]> {
+  if (!OANDA_MD_TOKEN) return []
+  const { gran, count } = oandaGranularityFor(timeframe)
+  try {
+    const res = await fetch(
+      `${OANDA_MD_HOST}/v3/instruments/${encodeURIComponent(instrument)}/candles?price=M&granularity=${gran}&count=${count}`,
+      { headers: { Authorization: `Bearer ${OANDA_MD_TOKEN}`, 'Accept-Datetime-Format': 'RFC3339' }, next: { revalidate: 300 } },
+    )
+    if (!res.ok) return []
+    const data = await res.json() as {
+      candles?: Array<{ time?: string; volume?: number; complete?: boolean; mid?: { o?: string; h?: string; l?: string; c?: string } }>
+    }
+    const out: AlpacaBar[] = []
+    for (const c of data.candles ?? []) {
+      if (c.complete === false) continue          // skip the still-forming candle
+      const m = c.mid
+      if (!m) continue
+      const o = Number(m.o), h = Number(m.h), l = Number(m.l), cl = Number(m.c)
+      if (![o, h, l, cl].every(v => Number.isFinite(v))) continue
+      out.push({ t: String(c.time ?? ''), o, h, l, c: cl, v: Number(c.volume ?? 0) })
+    }
+    return out  // oldest-first
+  } catch { return [] }
+}
+
 export async function fetchForexBars(ticker: string, timeframe: string): Promise<AlpacaBar[]> {
   const norm = normalizeForexTicker(ticker)
   const info = getForexInfo(norm)
   if (!info) return []
 
+  // Prefer OANDA real candles (the same data execution + the monitor trade on).
+  const oanda = await fetchOandaForexBars(`${info.base}_${info.quote}`, timeframe)
+  if (oanda.length >= 30) return oanda
+
+  // ── Fallback: Frankfurter daily ECB rates with synthesised O/H/L ──
   // Check both currencies are supported by Frankfurter
   if (!FRANKFURTER_CURRENCIES.has(info.base) || !FRANKFURTER_CURRENCIES.has(info.quote)) {
     return []
