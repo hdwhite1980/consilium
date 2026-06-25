@@ -50,6 +50,32 @@ function pctChange(from: number, to: number): number {
   return ((to - from) / from) * 100
 }
 
+// One-off diagnostic: hit Tradier's expirations endpoint for a known-liquid
+// name on BOTH bases and report raw status/body. A 401 on production with the
+// key set => the token is a sandbox token (options-flow uses production when a
+// key is present), which silently nulls every chain. Remove once resolved.
+async function tradierProbe(): Promise<Record<string, unknown>> {
+  const key = process.env.TRADIER_API_KEY
+  if (!key) return { configured: false }
+  const hit = async (base: string) => {
+    try {
+      const res = await fetch(
+        `${base}/markets/options/expirations?symbol=DRI&includeAllRoots=true`,
+        { headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' } },
+      )
+      const text = await res.text()
+      return { status: res.status, ok: res.ok, bodySnippet: text.slice(0, 180) }
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : 'fetch failed' }
+    }
+  }
+  return {
+    configured: true,
+    production: await hit('https://api.tradier.com/v1'),
+    sandbox: await hit('https://sandbox.tradier.com/v1'),
+  }
+}
+
 function tradingDaysTo(reportDate: string, today: Date): number {
   // Simple calendar-day delta is fine for ordering/labeling here.
   const r = new Date(`${reportDate}T00:00:00Z`).getTime()
@@ -250,6 +276,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     optionsFetches,
     optionsDiag: optDiag,
     optionsSample: optSample,
+    tradierProbe: await tradierProbe(),
     upserted,
     durationMs,
     topRunups,
