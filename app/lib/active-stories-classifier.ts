@@ -30,6 +30,17 @@ const VALID_RISKS: RiskLevel[] = ['high', 'medium', 'low']
 const VALID_TIMEFRAMES: Timeframe[] = ['1D', '1W', '1M', '3M']
 const VALID_SESSIONS: SessionAnchor[] = ['today', 'tomorrow', 'weekend']
 
+// Known crypto tickers. If the model emits one of these (it routinely tags
+// coin stories as 'stock' despite principle 15), force assetType='crypto' at
+// the validation layer so they get the CRYPTO badge and route to the crypto
+// execution path instead of being treated as equities.
+const KNOWN_CRYPTO_TICKERS = new Set<string>([
+  'BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'LINK', 'DOT', 'MATIC',
+  'LTC', 'BCH', 'SHIB', 'TRX', 'ATOM', 'UNI', 'NEAR', 'APT', 'ARB', 'OP',
+  'SUI', 'PEPE', 'INJ', 'TIA', 'SEI', 'RNDR', 'IMX', 'AAVE', 'MKR', 'XLM',
+  'ETC', 'FIL', 'HBAR', 'ALGO', 'VET', 'GRT', 'STX', 'BONK', 'WIF', 'FET',
+])
+
 // ─────────────────────────────────────────────────────────────
 // Prompt builders — kept as pure functions for testability
 // ─────────────────────────────────────────────────────────────
@@ -373,7 +384,10 @@ function validateOutput(
         sessionAnchor: n.sessionAnchor as SessionAnchor,
       }
       if (typeof n.companyName === 'string') cleaned.companyName = n.companyName
-      if (n.assetType === 'crypto') cleaned.assetType = 'crypto'
+      // Force crypto for known coins even if the model tagged it 'stock'.
+      if (n.assetType === 'crypto' || KNOWN_CRYPTO_TICKERS.has(cleaned.ticker)) {
+        cleaned.assetType = 'crypto'
+      }
       if (typeof n.magnitude === 'string' && VALID_MAGNITUDES.includes(n.magnitude as Magnitude)) {
         cleaned.magnitude = n.magnitude as Magnitude
       }

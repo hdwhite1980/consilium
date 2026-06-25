@@ -17,7 +17,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/app/lib/admin/admin-auth'
 import {
   listEnabledTradingUsers,
-  setWorkerWatermark,
+  setVerdictWatermark,
   getRiskPerTradePctForAsset,
   getMaxConcurrentForAsset,
   isAssetClassEnabled,
@@ -27,9 +27,9 @@ import { loadBrokerCredentialForUse, loadCoinbaseCredential } from '@/app/lib/tr
 import { makeAlpacaCryptoClient, type AlpacaCryptoClient, type AlpacaCryptoPosition } from '@/app/lib/trading/alpaca-crypto-client'
 import { makeCoinbaseClient, type CoinbaseClient, type CoinbasePosition } from '@/app/lib/trading/coinbase-client'
 import { computeCryptoSize } from '@/app/lib/trading/crypto-sizing'
+import { sizeCryptoTradeForCoinbase, toCoinbaseProductId } from '@/app/lib/trading/crypto-product-sizing'
 import { routeTicker } from '@/app/lib/trading/asset-router'
 import { haltUserAccount } from '@/app/lib/trading/kill-switches'
-import { randomBytes } from 'crypto'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -246,11 +246,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           continue
         }
 
-        // Fetch new crypto verdicts
-        const verdicts = await fetchNewCryptoVerdicts(settings.userId, settings.lastProcessedVerdictId ?? 0)
+        // Fetch new crypto verdicts using the CRYPTO watermark (not the shared
+        // stock pointer — that's the bug that starved crypto of its verdicts).
+        const verdicts = await fetchNewCryptoVerdicts(settings.userId, settings.cryptoLastProcessedVerdictId ?? 0)
         summary.considered += verdicts.length
 
-        let maxId = settings.lastProcessedVerdictId ?? 0
+        let maxId = settings.cryptoLastProcessedVerdictId ?? 0
         for (const verdict of verdicts) {
           maxId = Math.max(maxId, verdict.id)
 
@@ -324,10 +325,29 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           }
 
           // Convert symbol to broker-specific form (BTC/USD → BTC-USD for Coinbase)
-          const brokerSymbol = broker.symbolFor(route.normalizedSymbol)
+          let brokerSymbol = broker.symbolFor(route.normalizedSymbol)
+          // Coinbase needs canonical dash form ("AAVE-USD"); symbolFor only
+          // swaps '/' for '-', so a dashless council ticker ("AAVEUSD") would
+          // leak through and 404. Normalize for Coinbase only (Alpaca wants slash).
+          if (broker.kind === 'coinbase') brokerSymbol = toCoinbaseProductId(brokerSymbol)
 
           // Verify tradability via the active broker
-          const tradable = await broker.assetTradable(brokerSymbol)
+          let tradable = await broker.assetTradable(brokerSymbol)
+
+          // USDC-only fallback: some coins (often newer / less-public) are listed
+          // on Coinbase ONLY as BASE-USDC, not BASE-USD. If the -USD product
+          // isn't tradable, retry the -USDC product and trade whichever exists.
+          // Mirrors the data layer's -USD → -USDC fallback so analysis and
+          // execution resolve to the same product.
+          if (!tradable.tradable && broker.brokerName === 'coinbase' && brokerSymbol.endsWith('-USD')) {
+            const usdcSymbol = brokerSymbol.replace(/-USD$/, '-USDC')
+            const usdcTradable = await broker.assetTradable(usdcSymbol)
+            if (usdcTradable.tradable) {
+              brokerSymbol = usdcSymbol
+              tradable = usdcTradable
+              console.log(`[auto-trade-crypto] ${verdict.ticker} resolved to USDC product ${usdcSymbol}`)
+            }
+          }
           if (!tradable.tradable) {
             await logSkipped(verdict, settings, `${broker.brokerName} crypto: ${tradable.reason ?? 'not tradable'}`)
             summary.skipped++
@@ -361,7 +381,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             : 1
           const sizeMultiplier = bypass ? 0.5 : 1.0
           const effectiveTraderSize = Math.min(1, Math.max(0.05, traderSize * sizeMultiplier))
-          const sizing = computeCryptoSize({
+
+          const sizingInput = {
             accountEquity: effectiveEquity,
             riskPerTradePct: getRiskPerTradePctForAsset(settings, 'crypto'),
             maxPositionPct: settings.maxPositionPct,
@@ -372,16 +393,41 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             maxDollarRiskPerTrade: settings.maxDollarRiskPerTrade,
             minTradeNotional: settings.minTradeNotional,
             maxTradeNotional: settings.maxTradeNotional,
-            qualityGrade: (effGrade === 'A' || effGrade === 'B' || effGrade === 'C') ? effGrade : null,
+            qualityGrade: (effGrade === 'A' || effGrade === 'B' || effGrade === 'C') ? effGrade as 'A' | 'B' | 'C' : null,
             qualityConfidence: verdict.confidence !== null ? Number(verdict.confidence) : null,
             qualityRiskReward: verdict.trader_risk_reward !== null && verdict.trader_risk_reward !== undefined
               ? Number(verdict.trader_risk_reward) : null,
-          })
+          }
+
+          // Use Coinbase-product-aware sizing when broker is Coinbase.
+          // This pre-flights against base_increment, base_min_size, quote_min_size,
+          // and rounds quantities to valid increments. For Alpaca crypto, fall
+          // back to generic sizing (Alpaca handles increments server-side).
+          let sizing
+          let coinbaseAdjustedStop: number | undefined
+          if (broker.kind === 'coinbase') {
+            const coinbaseSizing = await sizeCryptoTradeForCoinbase({
+              ...sizingInput,
+              symbol: brokerSymbol,
+              coinbaseClient: broker.client as CoinbaseClient,
+            })
+            sizing = coinbaseSizing
+            if (coinbaseSizing.ok) {
+              coinbaseAdjustedStop = coinbaseSizing.adjustedStop
+            }
+          } else {
+            sizing = computeCryptoSize(sizingInput)
+          }
+
           if (!sizing.ok) {
             await logSkipped(verdict, settings, `crypto sizing: ${sizing.reason}`)
             summary.skipped++
             continue
           }
+
+          // If Coinbase adjusted the stop to a valid quote_increment, use the
+          // adjusted value going forward instead of the verdict's raw stop.
+          const effectiveStop = coinbaseAdjustedStop ?? stop
 
           // Pre-place buying-power gate (Audit Phase 3).
           // For Alpaca crypto, available capital = account.cash (unmargined).
@@ -410,7 +456,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           }
 
           // Place market entry via the active broker
-          const clientOrderId = `wos-c-${verdict.id}-${randomBytes(4).toString('hex')}`
+          // Deterministic client_order_id (keyed on verdict id) so a re-run
+          // can't double-place if the watermark write is lost mid-run.
+          const clientOrderId = `wos-c-${verdict.id}`
           try {
             const order = await broker.marketEntry({
               symbol: brokerSymbol,
@@ -424,7 +472,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
               units: sizing.units,
               notionalUsd: sizing.notionalUsd,
               entryPrice: entry,
-              stopPrice: stop,
+              stopPrice: effectiveStop,
               targetPrice: target,
               dollarRisk: sizing.dollarRisk,
               accountEquity: effectiveEquity,
@@ -433,17 +481,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
               effectiveMode: broker.effectiveMode,
             })
             summary.placed++
-            console.log(`[auto-trade-crypto] PLACED user=${settings.userId} broker=${broker.brokerName} BUY $${sizing.notionalUsd.toFixed(2)} ${brokerSymbol} stop=${stop} tp=${target} mode=${broker.effectiveMode}`)
+            console.log(`[auto-trade-crypto] PLACED user=${settings.userId} broker=${broker.brokerName} BUY $${sizing.notionalUsd.toFixed(2)} ${brokerSymbol} stop=${effectiveStop} tp=${target} mode=${broker.effectiveMode}`)
           } catch (e) {
             await logRejected(verdict, settings, clientOrderId, e instanceof Error ? e.message : String(e), broker.brokerName)
             summary.errors++
           }
         }
 
-        if (maxId > (settings.lastProcessedVerdictId ?? 0)) {
-          // Update watermark — shared with stocks worker; only advance, never regress
-          // We rely on settings.lastProcessedVerdictId being a shared rolling pointer.
-          await setWorkerWatermark(settings.userId, maxId)
+        if (maxId > (settings.cryptoLastProcessedVerdictId ?? 0)) {
+          // Advance the CRYPTO watermark only — independent of the stock pointer.
+          await setVerdictWatermark(settings.userId, 'crypto', maxId)
         }
       } catch (e) {
         summary.errors++

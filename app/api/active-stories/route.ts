@@ -16,6 +16,7 @@ import { createClient } from '@/app/lib/auth/server'
 import { createClient as createAdmin } from '@supabase/supabase-js'
 import {
   loadStoriesBySession,
+  loadActiveStories,
   type SessionAnchor,
   type Signal,
   type Timeframe,
@@ -64,10 +65,14 @@ export async function GET(req: NextRequest) {
     // Each cron persists its own metadata so it doesn't clobber the others.
     const metaId = assetType === 'forex' ? 2 : assetType === 'futures' ? 3 : 1
 
-    // Load filtered stories + latest run metadata in parallel
+    // Load filtered stories + latest run metadata in parallel.
+    // Macro (forex) and futures are asset-class views with NO session filter —
+    // they show every active story of that class across today/tomorrow/weekend.
+    // Stock/crypto stay session-anchored to the selected tab.
     const admin = getAdmin()
+    const isAssetClassView = assetType === 'forex' || assetType === 'futures'
     const [storiesAll, metaRes] = await Promise.all([
-      loadStoriesBySession(session),
+      isAssetClassView ? loadActiveStories() : loadStoriesBySession(session),
       admin.from('active_stories_meta').select('*').eq('id', metaId).maybeSingle(),
     ])
 
