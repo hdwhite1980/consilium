@@ -900,7 +900,7 @@ async function placeReentry(
   const admin = await getSupabaseAdmin()
   // trade_attempts row so the monitor tracks (and trails) the re-entered position.
   // initial_stop is immutable and drives R-multiple trailing for THIS entry.
-  const { error: insErr } = await admin.from('trade_attempts').insert({
+  const reentryRow = {
     user_id: settings.userId,
     verdict_log_id: w.verdict_log_id,
     ticker,
@@ -920,9 +920,27 @@ async function placeReentry(
     council_target: newTarget,
     asset_class: w.asset_class ?? 'stock',
     monitor_mode: config.mode,
-  })
+  }
+
+  let { error: insErr } = await admin.from('trade_attempts').insert(reentryRow)
   if (insErr) {
-    console.warn(`[${monTag()}] reentry trade_attempts insert ${ticker}: ${insErr.message}`)
+    // The order is ALREADY live at the broker. The most likely failure is the
+    // (user_id, verdict_log_id) idempotency key colliding with the original
+    // (now-closed) attempt on this verdict. Retry with the verdict link dropped
+    // so the position is still TRACKED — an untracked live position (invisible
+    // to the monitor) is the worst outcome and must never be left behind.
+    console.warn(`[${monTag()}] reentry insert ${ticker} failed (${insErr.message}); retrying unlinked to avoid orphan`)
+    const retry = await admin.from('trade_attempts').insert({ ...reentryRow, verdict_log_id: null })
+    insErr = retry.error
+  }
+  if (insErr) {
+    // Couldn't record it either way — flatten rather than hold an untracked
+    // position. Leave reentry_watch unchanged so nothing logs a phantom entry.
+    console.error(`[${monTag()}] reentry insert FAILED twice ${ticker}: ${insErr.message} — flattening to avoid orphaned position`)
+    await alpaca.closePosition(ticker).catch(e =>
+      console.error(`[${monTag()}] reentry flatten FAILED ${ticker}: ${e instanceof Error ? e.message : e} — MANUAL INTERVENTION NEEDED (untracked position live)`))
+    await alpaca.cancelOrder(orderId).catch(() => null)
+    return
   }
 
   const status = nextCount >= MAX_REENTRIES ? 'exhausted' : 'watching'
