@@ -16,6 +16,8 @@
 // STOP_LOSS_ON_FILL clauses (OANDA's native bracket equivalent).
 // =============================================================
 
+import type { Bar } from '@/app/lib/signals/technicals'
+
 const OANDA_PRACTICE_BASE = 'https://api-fxpractice.oanda.com'
 const OANDA_LIVE_BASE     = 'https://api-fxtrade.oanda.com'
 
@@ -85,6 +87,18 @@ export interface MarketOrderInput {
   takeProfitPrice: number
   stopLossPrice: number
   clientOrderId: string       // we generate
+}
+
+export interface OandaTrade {
+  tradeId: string
+  instrument: string
+  currentUnits: number          // signed: + long, - short
+  side: 'long' | 'short'
+  entryPrice: number | null
+  unrealizedPL: number
+  stopLossOrderId: string | null
+  stopLossPrice: number | null
+  takeProfitPrice: number | null
 }
 
 export class OandaClient {
@@ -259,6 +273,73 @@ export class OandaClient {
     return await this.request(
       'PUT', `/v3/accounts/${encodeURIComponent(this.accountId)}/positions/${encodeURIComponent(instrument)}/close`, body,
     )
+  }
+
+  // ── Monitor support: candles for signals, open-trade lookup, stop trailing ──
+
+  /** Mid-price candles, oldest-first, mapped to the shared Bar shape so the
+   *  same technical-signal engine the other monitors use can consume them.
+   *  granularity: OANDA codes — 'M5', 'M15', 'H1', etc. */
+  async candles(instrument: string, granularity: string, count = 100): Promise<Bar[]> {
+    const raw = await this.request<{
+      candles?: Array<{ time?: string; volume?: number; complete?: boolean; mid?: { o?: string; h?: string; l?: string; c?: string } }>
+    }>(
+      'GET',
+      `/v3/instruments/${encodeURIComponent(instrument)}/candles?price=M&granularity=${encodeURIComponent(granularity)}&count=${count}`,
+    )
+    const out: Bar[] = []
+    for (const c of raw.candles ?? []) {
+      if (c.complete === false) continue          // skip the still-forming candle
+      const m = c.mid
+      if (!m) continue
+      const o = Number(m.o), h = Number(m.h), l = Number(m.l), cl = Number(m.c)
+      if (![o, h, l, cl].every(v => Number.isFinite(v))) continue
+      out.push({ t: String(c.time ?? ''), o, h, l, c: cl, v: Number(c.volume ?? 0) })
+    }
+    return out
+  }
+
+  /** Open trades with their attached stop-loss order — needed to trail. */
+  async openTrades(): Promise<OandaTrade[]> {
+    const raw = await this.request<{ trades?: Array<Record<string, unknown>> }>(
+      'GET', `/v3/accounts/${encodeURIComponent(this.accountId)}/openTrades`,
+    )
+    return (raw.trades ?? []).map(t => {
+      const sl = t.stopLossOrder as Record<string, unknown> | undefined
+      const tp = t.takeProfitOrder as Record<string, unknown> | undefined
+      const units = Number(t.currentUnits ?? 0)
+      return {
+        tradeId: String(t.id ?? ''),
+        instrument: String(t.instrument ?? ''),
+        currentUnits: units,
+        side: units >= 0 ? 'long' : 'short',
+        entryPrice: t.price !== undefined ? Number(t.price) : null,
+        unrealizedPL: Number(t.unrealizedPL ?? 0),
+        stopLossOrderId: sl?.id !== undefined ? String(sl.id) : null,
+        stopLossPrice: sl?.price !== undefined ? Number(sl.price) : null,
+        takeProfitPrice: tp?.price !== undefined ? Number(tp.price) : null,
+      } as OandaTrade
+    })
+  }
+
+  /** Replace a trade's stop-loss in place (OANDA cancels the old SL and arms a
+   *  new one atomically). This is the trailing action. */
+  async setTradeStopLoss(tradeId: string, instrument: string, price: number): Promise<{ ok: boolean; stopOrderId?: string; reason?: string }> {
+    try {
+      const res = await this.request<{ stopLossOrderTransaction?: { id?: string } }>(
+        'PUT', `/v3/accounts/${encodeURIComponent(this.accountId)}/trades/${encodeURIComponent(tradeId)}/orders`,
+        { stopLoss: { price: this.fmtPrice(instrument, price), timeInForce: 'GTC' } },
+      )
+      return { ok: true, stopOrderId: res.stopLossOrderTransaction?.id }
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : 'unknown' }
+    }
+  }
+
+  /** OANDA rejects stop prices that don't match the instrument's price
+   *  precision: JPY pairs are quoted to 3 decimals, everything else to 5. */
+  private fmtPrice(instrument: string, price: number): string {
+    return price.toFixed(instrument.toUpperCase().includes('JPY') ? 3 : 5)
   }
 }
 
