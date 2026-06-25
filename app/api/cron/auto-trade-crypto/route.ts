@@ -325,10 +325,25 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           }
 
           // Convert symbol to broker-specific form (BTC/USD → BTC-USD for Coinbase)
-          const brokerSymbol = broker.symbolFor(route.normalizedSymbol)
+          let brokerSymbol = broker.symbolFor(route.normalizedSymbol)
 
           // Verify tradability via the active broker
-          const tradable = await broker.assetTradable(brokerSymbol)
+          let tradable = await broker.assetTradable(brokerSymbol)
+
+          // USDC-only fallback: some coins (often newer / less-public) are listed
+          // on Coinbase ONLY as BASE-USDC, not BASE-USD. If the -USD product
+          // isn't tradable, retry the -USDC product and trade whichever exists.
+          // Mirrors the data layer's -USD → -USDC fallback so analysis and
+          // execution resolve to the same product.
+          if (!tradable.tradable && broker.brokerName === 'coinbase' && brokerSymbol.endsWith('-USD')) {
+            const usdcSymbol = brokerSymbol.replace(/-USD$/, '-USDC')
+            const usdcTradable = await broker.assetTradable(usdcSymbol)
+            if (usdcTradable.tradable) {
+              brokerSymbol = usdcSymbol
+              tradable = usdcTradable
+              console.log(`[auto-trade-crypto] ${verdict.ticker} resolved to USDC product ${usdcSymbol}`)
+            }
+          }
           if (!tradable.tradable) {
             await logSkipped(verdict, settings, `${broker.brokerName} crypto: ${tradable.reason ?? 'not tradable'}`)
             summary.skipped++
@@ -389,7 +404,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           if (broker.kind === 'coinbase') {
             const coinbaseSizing = await sizeCryptoTradeForCoinbase({
               ...sizingInput,
-              symbol: broker.symbolFor(verdict.ticker),
+              symbol: brokerSymbol,
               coinbaseClient: broker.client as CoinbaseClient,
             })
             sizing = coinbaseSizing

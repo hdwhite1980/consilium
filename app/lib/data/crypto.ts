@@ -217,6 +217,39 @@ export async function fetchCryptoBars(ticker: string, timeframe: string): Promis
 }
 
 // Get extended crypto metadata from CoinGecko
+// When CoinGecko has no entry for a coin, derive the fields Coinbase CAN
+// provide from candles: 24h/7d price change and 24h USD volume. Market cap,
+// circulating supply, and ATH are tokenomics data Coinbase does not expose,
+// so those remain null.
+async function fetchCoinbaseMetaFallback(ticker: string): Promise<{
+  priceChange24h: number | null
+  priceChange7d: number | null
+  volume24h: number | null
+  name: string
+}> {
+  const base = toCoinbaseProduct(ticker).replace(/-USD$/, '')
+  const empty = { priceChange24h: null, priceChange7d: null, volume24h: null, name: base }
+  for (const product of [`${base}-USD`, `${base}-USDC`]) {
+    try {
+      const bars = await fetchCoinbaseCandles({ symbol: product, granularity: 'ONE_HOUR', limit: 168 })
+      if (bars.length < 2) continue
+      const last = bars[bars.length - 1].c
+      const c24 = bars[Math.max(0, bars.length - 1 - 24)].c
+      const c7d = bars[0].c
+      const vol24Base = bars.slice(Math.max(0, bars.length - 24)).reduce((s, b) => s + b.v, 0)
+      return {
+        priceChange24h: c24 > 0 ? ((last - c24) / c24) * 100 : null,
+        priceChange7d: c7d > 0 ? ((last - c7d) / c7d) * 100 : null,
+        volume24h: last > 0 ? vol24Base * last : null,
+        name: base,
+      }
+    } catch {
+      // try next product / fall through
+    }
+  }
+  return empty
+}
+
 export async function fetchCryptoMetadata(ticker: string): Promise<{
   marketCap: number | null
   volume24h: number | null
@@ -228,29 +261,47 @@ export async function fetchCryptoMetadata(ticker: string): Promise<{
   name: string
   description: string
 }> {
+  const empty = { marketCap: null, volume24h: null, circulatingSupply: null, priceChange24h: null, priceChange7d: null, ath: null, athChangePercent: null, name: ticker, description: '' }
   const coinId = getCoinGeckoId(ticker)
-  if (!coinId) return { marketCap: null, volume24h: null, circulatingSupply: null, priceChange24h: null, priceChange7d: null, ath: null, athChangePercent: null, name: ticker, description: '' }
 
-  try {
-    const res = await fetch(
-      `https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&community_data=false&developer_data=false`,
-      { next: { revalidate: 600 } }
-    )
-    if (!res.ok) return { marketCap: null, volume24h: null, circulatingSupply: null, priceChange24h: null, priceChange7d: null, ath: null, athChangePercent: null, name: ticker, description: '' }
-
-    const d = await res.json()
-    return {
-      name: d.name ?? ticker,
-      description: d.description?.en?.slice(0, 300) ?? '',
-      marketCap: d.market_data?.market_cap?.usd ?? null,
-      volume24h: d.market_data?.total_volume?.usd ?? null,
-      circulatingSupply: d.market_data?.circulating_supply ?? null,
-      priceChange24h: d.market_data?.price_change_percentage_24h ?? null,
-      priceChange7d: d.market_data?.price_change_percentage_7d ?? null,
-      ath: d.market_data?.ath?.usd ?? null,
-      athChangePercent: d.market_data?.ath_change_percentage?.usd ?? null,
+  let cg = empty
+  if (coinId) {
+    try {
+      const res = await fetch(
+        `https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&community_data=false&developer_data=false`,
+        { next: { revalidate: 600 } }
+      )
+      if (res.ok) {
+        const d = await res.json()
+        cg = {
+          name: d.name ?? ticker,
+          description: d.description?.en?.slice(0, 300) ?? '',
+          marketCap: d.market_data?.market_cap?.usd ?? null,
+          volume24h: d.market_data?.total_volume?.usd ?? null,
+          circulatingSupply: d.market_data?.circulating_supply ?? null,
+          priceChange24h: d.market_data?.price_change_percentage_24h ?? null,
+          priceChange7d: d.market_data?.price_change_percentage_7d ?? null,
+          ath: d.market_data?.ath?.usd ?? null,
+          athChangePercent: d.market_data?.ath_change_percentage?.usd ?? null,
+        }
+      }
+    } catch {
+      cg = empty
     }
-  } catch {
-    return { marketCap: null, volume24h: null, circulatingSupply: null, priceChange24h: null, priceChange7d: null, ath: null, athChangePercent: null, name: ticker, description: '' }
   }
+
+  // If CoinGecko lacked the coin (less-public), backfill the price/volume
+  // fields from Coinbase candles. Cap/supply/ATH stay null (no Coinbase source).
+  if (cg.priceChange24h === null || cg.volume24h === null) {
+    const cb = await fetchCoinbaseMetaFallback(ticker)
+    return {
+      ...cg,
+      priceChange24h: cg.priceChange24h ?? cb.priceChange24h,
+      priceChange7d: cg.priceChange7d ?? cb.priceChange7d,
+      volume24h: cg.volume24h ?? cb.volume24h,
+      name: cg.name && cg.name !== ticker ? cg.name : cb.name,
+    }
+  }
+
+  return cg
 }
