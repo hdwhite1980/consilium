@@ -88,13 +88,20 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const pulled = rows.length
 
-  // 2. Light structural filter: US-listed ticker shape + future-or-today date
+  // 2. Light structural filter:
+  //    - US-listed ticker shape (drops OTC/foreign/preferred)
+  //    - future-or-today date
+  //    - has an analyst estimate (EPS or revenue). This drops closed-end funds,
+  //      tracking stocks, and no-coverage names that have no "print" to drift
+  //      into — exactly the rows a run-up thesis can't be built on, and the ones
+  //      that would otherwise waste per-symbol quote calls in the signal phase.
   const kept = rows.filter(
     r =>
       typeof r.symbol === 'string' &&
       STOCK_RE.test(r.symbol) &&
       typeof r.date === 'string' &&
-      r.date >= from,
+      r.date >= from &&
+      (typeof r.epsEstimate === 'number' || typeof r.revenueEstimate === 'number'),
   )
 
   // 3. Read existing watch rows to preserve first_seen_at and detect drift.
@@ -143,7 +150,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       fiscal_quarter: fq,
       report_date: r.date,
       prev_report_date: drifted ? prior!.report_date : null,
-      report_hour: r.hour ?? null,
+      report_hour: r.hour && r.hour.trim() ? r.hour.trim().toLowerCase() : null,
       eps_estimate: typeof r.epsEstimate === 'number' ? r.epsEstimate : null,
       revenue_estimate: typeof r.revenueEstimate === 'number' ? r.revenueEstimate : null,
       drift_count: prior ? (drifted ? prior.drift_count + 1 : prior.drift_count) : 0,
@@ -201,6 +208,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     window: { from, to },
     pulled,
     kept: kept.length,
+    filteredOut: pulled - kept.length,
     upserted,
     reported,
     durationMs,
