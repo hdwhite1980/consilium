@@ -23,6 +23,7 @@ interface MonitorRow {
   trade_attempt_id: string | null
   ticker: string
   asset_class: string | null
+  monitor_mode: string | null
   decision: string
   action_taken: string
   current_price: number | null
@@ -32,6 +33,9 @@ interface MonitorRow {
   bullish_count_5m: number | null
   bearish_count_15m: number | null
   bullish_count_15m: number | null
+  bars_fast_count: number | null
+  bars_slow_count: number | null
+  slow_bar_age_min: number | null
   error_reason: string | null
   escalation_result: unknown
   created_at: string
@@ -50,6 +54,7 @@ interface RecentMonitorCheck {
   id: number
   ticker: string
   assetClass: 'stock' | 'crypto'
+  monitorMode: 'swing' | 'day' | null
   decision: string
   action_taken: string
   current_price: number | null
@@ -59,6 +64,9 @@ interface RecentMonitorCheck {
   bullish_15m: number | null
   bearish_5m: number | null
   bullish_5m: number | null
+  barsFast: number | null
+  barsSlow: number | null
+  slowBarAgeMin: number | null
   error_reason: string | null
   created_at: string
 }
@@ -108,7 +116,7 @@ export async function GET(_req: NextRequest): Promise<NextResponse<MonitorActivi
 
     const { data, error } = await admin
       .from('position_monitor_log')
-      .select('id, trade_attempt_id, ticker, asset_class, decision, action_taken, current_price, current_stop, new_stop_price, bearish_count_5m, bullish_count_5m, bearish_count_15m, bullish_count_15m, error_reason, escalation_result, created_at')
+      .select('id, trade_attempt_id, ticker, asset_class, monitor_mode, decision, action_taken, current_price, current_stop, new_stop_price, bearish_count_5m, bullish_count_5m, bearish_count_15m, bullish_count_15m, bars_fast_count, bars_slow_count, slow_bar_age_min, error_reason, escalation_result, created_at')
       .eq('user_id', userId)
       .gte('created_at', cutoffIso)
       .order('id', { ascending: false })
@@ -145,10 +153,14 @@ export async function GET(_req: NextRequest): Promise<NextResponse<MonitorActivi
       current_price: r.current_price !== null ? Number(r.current_price) : null,
       current_stop: r.current_stop !== null ? Number(r.current_stop) : null,
       new_stop_price: r.new_stop_price !== null ? Number(r.new_stop_price) : null,
+      monitorMode: (r.monitor_mode as 'swing' | 'day' | null) ?? null,
       bearish_15m: r.bearish_count_15m,
       bullish_15m: r.bullish_count_15m,
       bearish_5m: r.bearish_count_5m,
       bullish_5m: r.bullish_count_5m,
+      barsFast: r.bars_fast_count !== null && r.bars_fast_count !== undefined ? Number(r.bars_fast_count) : null,
+      barsSlow: r.bars_slow_count !== null && r.bars_slow_count !== undefined ? Number(r.bars_slow_count) : null,
+      slowBarAgeMin: r.slow_bar_age_min !== null && r.slow_bar_age_min !== undefined ? Number(r.slow_bar_age_min) : null,
       error_reason: r.error_reason,
       created_at: r.created_at,
     }))

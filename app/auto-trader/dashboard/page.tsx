@@ -237,6 +237,10 @@ interface RecentMonitorCheck {
   bullish_15m: number | null
   bearish_5m: number | null
   bullish_5m: number | null
+  monitorMode?: 'swing' | 'day' | null
+  barsFast?: number | null
+  barsSlow?: number | null
+  slowBarAgeMin?: number | null
   error_reason: string | null
   created_at: string
 }
@@ -1264,11 +1268,13 @@ function MonitorActivityPanel({ data }: { data: MonitorActivityData | null }) {
             <tr style={{ borderBottom: '1px solid var(--border)' }}>
               <Th>Time</Th>
               <Th>Ticker</Th>
+              <Th>Mode</Th>
               <Th>Decision</Th>
               <Th>Price</Th>
               <Th>Stop</Th>
-              <Th>15m b/u</Th>
-              <Th>5m b/u</Th>
+              <Th>slow b/u</Th>
+              <Th>fast b/u</Th>
+              <Th>Bars f/s</Th>
               <Th>Note</Th>
             </tr>
           </thead>
@@ -1287,6 +1293,18 @@ function MonitorActivityPanel({ data }: { data: MonitorActivityData | null }) {
                       style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>
                       CRYPTO
                     </span>
+                  )}
+                </Td>
+                <Td>
+                  {c.monitorMode ? (
+                    <span className="text-[9px] px-1 py-0.5 rounded font-semibold"
+                      style={c.monitorMode === 'day'
+                        ? { background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }
+                        : { background: 'rgba(96,165,250,0.15)', color: '#60a5fa' }}>
+                      {c.monitorMode.toUpperCase()}
+                    </span>
+                  ) : (
+                    <span style={{ color: 'var(--text3)' }}>—</span>
                   )}
                 </Td>
                 <Td><MonitorDecisionBadge decision={c.decision} action={c.action_taken} /></Td>
@@ -1314,6 +1332,19 @@ function MonitorActivityPanel({ data }: { data: MonitorActivityData | null }) {
                     /
                     <span style={{ color: '#34d399' }}>{c.bullish_5m ?? '—'}</span>
                   </span>
+                </Td>
+                <Td>
+                  {(() => {
+                    const thin = c.barsSlow !== null && c.barsSlow !== undefined && c.barsSlow < 30
+                    return (
+                      <span className="font-mono text-xs" style={{ color: thin ? '#f87171' : 'var(--text3)' }}
+                        title={thin
+                          ? 'slow feed thin (<30 bars) — signals may be saturated/unreliable'
+                          : c.slowBarAgeMin !== null && c.slowBarAgeMin !== undefined ? `slow bar ~${c.slowBarAgeMin}m old` : ''}>
+                        {c.barsFast ?? '—'}/{c.barsSlow ?? '—'}
+                      </span>
+                    )
+                  })()}
                 </Td>
                 <Td>
                   <span className="text-xs opacity-70" style={{ color: c.error_reason ? '#f87171' : 'var(--text3)' }}>

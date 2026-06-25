@@ -330,8 +330,18 @@ async function processPosition(
   config: MonitorConfig,
 ): Promise<boolean> {
   const ticker = pos.symbol.toUpperCase()
-  // Stamp every log row with the acting monitor's mode (attribution).
-  const logR = (tk: string, p: LogPayload) => logResult(settings, att, tk, p, config.mode)
+  // Stamp every log row with the acting monitor's mode (attribution) and the
+  // latest bar-health readout (captured by reference; assigned after the fetch).
+  let bhFast: number | null = null
+  let bhSlow: number | null = null
+  let bhAge: number | null = null
+  const logR = (tk: string, p: LogPayload) =>
+    logResult(settings, att, tk, {
+      ...p,
+      barsFastCount: p.barsFastCount ?? bhFast,
+      barsSlowCount: p.barsSlowCount ?? bhSlow,
+      slowBarAgeMin: p.slowBarAgeMin ?? bhAge,
+    }, config.mode)
 
   // Cooldown — don't double-act on a position within pm_cooldown_min
   if (await isInCooldown(att.id, pm.cooldownMin)) {
@@ -347,6 +357,15 @@ async function processPosition(
     fetchBarsForTimeframe(ticker, config.fastTimeframe, BARS_TO_FETCH_5MIN),
     fetchBarsForTimeframe(ticker, config.slowTimeframe, BARS_TO_FETCH_15MIN),
   ])
+
+  // Bar-health: counts + staleness of the slow feed (latest slow bar age).
+  bhFast = bars5m.length
+  bhSlow = bars15m.length
+  {
+    const lastSlow = bars15m[bars15m.length - 1]
+    const ts = lastSlow ? Date.parse(String(lastSlow.t)) : NaN
+    bhAge = Number.isFinite(ts) ? Math.max(0, Math.round((Date.now() - ts) / 60000)) : null
+  }
 
   if (bars5m.length < MIN_BARS || bars15m.length < MIN_BARS) {
     // Not enough data — log a HOLD and move on
@@ -1377,6 +1396,10 @@ interface LogPayload {
   newStopPrice?: number
   escalationResult?: EscalationResult
   errorReason?: string
+  // Bar-health diagnostics (optional; set on the main processPosition path)
+  barsFastCount?: number | null
+  barsSlowCount?: number | null
+  slowBarAgeMin?: number | null
 }
 
 async function logResult(
@@ -1397,6 +1420,9 @@ async function logResult(
     bearish_count_15m: payload.snap15m.bearishCount,
     bullish_count_5m: payload.snap5m.bullishCount,
     bullish_count_15m: payload.snap15m.bullishCount,
+    bars_fast_count: payload.barsFastCount ?? null,
+    bars_slow_count: payload.barsSlowCount ?? null,
+    slow_bar_age_min: payload.slowBarAgeMin ?? null,
     signals_5m: payload.snap5m.bearishSignals,
     signals_15m: payload.snap15m.bearishSignals,
     decision: payload.decision,
