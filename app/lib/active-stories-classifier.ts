@@ -124,7 +124,9 @@ CORE PRINCIPLES:
 
 13. WEEKEND DETECTION. If the "Now" timestamp in run context falls on a Saturday, Sunday, or Friday after 4pm ET, OR if the scheduled catalysts list shows the next event is on Monday, use sessionAnchor='weekend' for those scheduled-catalyst stories instead of 'tomorrow'. Active stories already tracking next-week catalysts should keep their existing sessionAnchor unless the catalyst moves.
 
-14. DO NOT DUPLICATE TOMORROW STORIES. If the scheduled catalysts list shows AAPL earnings tomorrow but an active story is already tracking AAPL with a tomorrow anchor for the same catalyst, that's an UPDATE (storyUpdates), not a new story. Continuity rule applies the same way.`
+14. DO NOT DUPLICATE TOMORROW STORIES. If the scheduled catalysts list shows AAPL earnings tomorrow but an active story is already tracking AAPL with a tomorrow anchor for the same catalyst, that's an UPDATE (storyUpdates), not a new story. Continuity rule applies the same way.
+
+15. ASSET COVERAGE — CRYPTO. Your news input also includes major crypto (BTC, ETH, SOL, XRP, DOGE and others). Hold crypto to the SAME catalyst bar as stocks: a specific, actionable catalyst (spot-ETF flows, protocol upgrade/fork, regulatory ruling, large liquidation or range breakout, major exchange/listing event, or a macro-driven risk move), confidence ≥ 60. When that bar is met, emit a newStory with assetType='crypto' and the BARE symbol as ticker (BTC, ETH, SOL — never "BTC-USD" or "BTCUSD"). Do NOT manufacture crypto stories from price noise or generic "crypto rallied" headlines. Crypto trades 24/7, so sessionAnchor='today' is almost always correct.`
 }
 
 /**
@@ -254,6 +256,20 @@ OUTPUT EXACTLY ONE JSON OBJECT — nothing before the opening brace, nothing aft
       "catalyst": "Q1 earnings tomorrow after close — options pricing ±3.8% move; consensus Azure growth +30% YoY",
       "reason": "Mega-cap earnings into a risk-on backdrop with cloud growth as the swing factor; bullish setup conditional on Azure beat, but options market is pricing a bigger move than historical avg suggesting elevated tension. Watch for guidance vs. estimates as the primary swing factor.",
       "headline": "Microsoft to report Q1 earnings tomorrow AMC",
+      "riskLevel": "medium"
+    },
+    {
+      "ticker": "ETH",
+      "companyName": "Ethereum",
+      "assetType": "crypto",
+      "signal": "BULLISH",
+      "confidence": 68,
+      "magnitude": "high",
+      "timeframes": ["1D", "1W"],
+      "sessionAnchor": "today",
+      "catalyst": "Spot ETH ETFs logged 240M net inflows for a 3rd straight day; price reclaimed the 200-day",
+      "reason": "Sustained ETF demand plus a technical reclaim sets up continuation; 24/7 market means the move can extend through the weekend.",
+      "headline": "Ethereum ETFs log third straight day of inflows",
       "riskLevel": "medium"
     }
   ],
