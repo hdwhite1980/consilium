@@ -985,6 +985,9 @@ interface TrailResult { applied: boolean; newStop?: number; milestone?: string; 
 
 async function applyTrailingStop(alpaca: AlpacaClient, att: OpenAttempt, pos: AlpacaPosition): Promise<TrailResult> {
   if (att.side && att.side !== 'buy') return { applied: false, reason: 'short side not supported' }
+  // Fractional / monitor-owned positions have no bracket leg to PATCH — their
+  // stop is armed and trailed in ensureMonitorOwnedStop (earlier in the run).
+  if (att.monitor_owned_stop) return { applied: false, reason: 'monitor-owned stop (trailed in ensureMonitorOwnedStop)' }
   if (!att.broker_order_id) return { applied: false, reason: 'no broker_order_id' }
 
   const entry = att.filled_avg_price ?? att.entry_price_est
@@ -1168,11 +1171,17 @@ async function flattenDayPositionsAtClose(
 }
 
 /**
- * Arm (or re-arm) a broker-side protective stop for a monitor-owned (fractional)
- * position. Fractional stops are DAY tif and expire each close, so this runs on
- * every monitor cycle: if no open stop order exists for the symbol, place one at
- * the tracked stop level. Best-effort — the monitor's hard stop-breach close is
- * the backstop for the brief unarmed window and overnight (after DAY expiry).
+ * Arm, re-arm, and TRAIL a broker-side protective stop for a monitor-owned
+ * (fractional) position. Fractional stops are DAY tif and expire each close, so
+ * this runs every monitor cycle:
+ *   - no broker stop open  → arm one at the desired level (covers initial arm
+ *     and the daily re-arm after DAY expiry)
+ *   - a new R-multiple milestone raised the stop → cancel the old stop, place a
+ *     new one at the higher level, and persist it (so the hard-breach check and
+ *     the next run both see the trailed level)
+ *   - otherwise            → leave the existing stop in place
+ * Best-effort — the monitor's hard stop-breach close is the backstop for the
+ * brief unarmed window and overnight.
  */
 async function ensureMonitorOwnedStop(
   alpaca: AlpacaClient,
@@ -1181,18 +1190,49 @@ async function ensureMonitorOwnedStop(
   stopLevel: number,
   side: 'buy' | 'sell',
 ): Promise<void> {
+  if (side !== 'buy') return // trailing/arming is long-only for now
   const symbol = att.ticker
-  const exitSide: 'buy' | 'sell' = side === 'buy' ? 'sell' : 'buy'
+  const exitSide: 'buy' | 'sell' = 'sell'
+  const qty = Math.abs(Number(att.qty ?? pos.qty ?? 0))
+  if (!Number.isFinite(qty) || qty <= 0) return
+
+  // Desired stop: ratchet up via the same R-multiple milestones as bracket
+  // positions, never below the tracked stop, never at/above current price.
+  let desired = stopLevel
+  const entry = att.filled_avg_price ?? att.entry_price_est
+  if (entry !== null && att.original_stop_loss !== null) {
+    const trail = computeTrailingStop({
+      side: 'buy',
+      entryPrice: entry,
+      currentPrice: pos.current_price,
+      currentStop: stopLevel,
+      originalStop: att.original_stop_loss,
+    })
+    if (trail && trail.newStop > desired) desired = trail.newStop
+  }
+  const cap = pos.current_price * 0.997 // keep ≥0.3% below price so it doesn't insta-trigger
+  if (desired > cap) desired = cap
+  if (!Number.isFinite(desired) || desired <= 0) return
+
   const open = await alpaca.openOrders(symbol)
-  const hasStop = open.some(o => {
+  const existing = open.find(o => {
     const t = (o.type ?? '').toLowerCase()
     return (t === 'stop' || t === 'stop_limit') && o.side === exitSide
   })
-  if (hasStop) return
-  const qty = Math.abs(Number(att.qty ?? pos.qty ?? 0))
-  if (!Number.isFinite(qty) || qty <= 0) return
-  await alpaca.fractionalStopOrder({ symbol, qty, stopPrice: stopLevel, side: exitSide })
-  console.log(`[position-monitor] ${symbol} armed DAY stop @ ${stopLevel.toFixed(2)} (monitor-owned, qty=${qty})`)
+  const trailedUp = desired > stopLevel + 1e-6
+
+  // Already armed at the right level → nothing to do.
+  if (existing && !trailedUp) return
+  // Trailing up → replace the existing stop with one at the higher level.
+  if (existing && trailedUp) await alpaca.cancelOrder(existing.id).catch(() => {})
+
+  await alpaca.fractionalStopOrder({ symbol, qty, stopPrice: desired, side: exitSide })
+  if (trailedUp) {
+    // Persist so the hard-breach check and the next run use the trailed level.
+    await syncTightenedStop(att, desired).catch(e =>
+      console.warn(`[position-monitor] sync-trail ${symbol}: ${e instanceof Error ? e.message : e}`))
+  }
+  console.log(`[position-monitor] ${symbol} stop ${existing ? 'trailed' : 'armed'} @ ${desired.toFixed(2)} (monitor-owned, qty=${qty})`)
 }
 
 async function applyExit(alpaca: AlpacaClient, pos: AlpacaPosition): Promise<ExitResult> {
