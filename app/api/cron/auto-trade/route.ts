@@ -220,6 +220,31 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             userSummary.placed++
             summary.totalPlaced++
             placedThisRun++
+
+            // Day-route trades on names with an IMMINENT earnings print (opt-in
+            // via earningsFullSize) so the day-monitor owns them and flattens
+            // before the print. Multi-day pre-earnings run-up rides entered a
+            // couple days early are normal TAKEs (not earnings bypasses), so
+            // decide() leaves them 'swing'; this promotes them to 'day'. The
+            // flatten logic then holds overnight until the print is imminent.
+            let effectiveMode = decision.monitorMode
+            if (settings.earningsFullSize && effectiveMode !== 'day') {
+              try {
+                const admin2 = await getSupabaseAdmin()
+                const today2 = new Date().toISOString().split('T')[0]
+                const to2 = new Date(Date.now() + 4 * 86400000).toISOString().split('T')[0]
+                const { data: ew } = await admin2
+                  .from('earnings_watch')
+                  .select('id')
+                  .eq('ticker', decision.ticker.toUpperCase())
+                  .gte('report_date', today2)
+                  .lte('report_date', to2)
+                  .in('status', ['watching', 'analyzed', 'entered'])
+                  .limit(1)
+                if ((ew?.length ?? 0) > 0) effectiveMode = 'day'
+              } catch { /* leave routing as decided */ }
+            }
+
             await logTradeAttempt(verdict, settings, {
               outcome: 'placed',
               brokerOrderId: order.id,
@@ -231,6 +256,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
               targetPrice: decision.targetPrice,
               dollarRisk: decision.dollarRisk,
               accountEquity: decision.accountEquity,
+              monitorMode: effectiveMode,
             })
             userSummary.decisions.push({
               verdictId: verdict.id, ticker: verdict.ticker, outcome: 'placed',
@@ -339,6 +365,7 @@ interface LogPayload {
   targetPrice?: number
   dollarRisk?: number
   accountEquity?: number
+  monitorMode?: 'swing' | 'day'
 }
 
 async function logTradeAttempt(
@@ -370,5 +397,6 @@ async function logTradeAttempt(
     target_price: payload.targetPrice ?? null,
     risk_dollar_amount: payload.dollarRisk ?? null,
     account_equity_at: payload.accountEquity ?? null,
+    monitor_mode: payload.monitorMode ?? 'swing',
   })
 }

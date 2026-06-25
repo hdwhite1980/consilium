@@ -1000,6 +1000,34 @@ interface ExitResult { ok: boolean; reason?: string }
 const EOD_FLATTEN_LEAD_MIN = 15
 const EOD_FLATTEN_FLOOR_MIN = 5
 
+// Decide, for a day-owned position, whether we must flatten it now (before its
+// earnings print) or can still hold it overnight. `ev` is the nearest upcoming
+// earnings event for the ticker (from earnings_watch), or undefined if none.
+//   - no upcoming earnings        -> flatten (plain intraday day trade)
+//   - bmo print on report_date    -> last safe hold session is report_date - 1
+//   - amc/dmh/unknown on report_date -> last safe hold session is report_date
+// We flatten once today >= that last-safe session; otherwise we ride overnight.
+// This is what lets a multi-day pre-earnings run-up hold through to the print
+// session and exit just before the binary event, instead of flattening every
+// EOD (intraday earnings trades) or holding straight through it (swing).
+function shouldFlattenForPrint(
+  today: string,
+  ev: { report_date: string; report_hour: string | null } | undefined,
+): { flatten: boolean; reason: string } {
+  if (!ev) return { flatten: true, reason: 'day_trade_no_earnings' }
+  const hour = (ev.report_hour ?? '').toLowerCase()
+  let mustBeFlatBy = ev.report_date
+  if (hour === 'bmo') {
+    const d = new Date(`${ev.report_date}T00:00:00Z`)
+    d.setUTCDate(d.getUTCDate() - 1)
+    mustBeFlatBy = d.toISOString().split('T')[0]
+  }
+  if (today >= mustBeFlatBy) {
+    return { flatten: true, reason: `pre_print_flatten (reports ${ev.report_date} ${hour || 'unknown'})` }
+  }
+  return { flatten: false, reason: `holding_runup (reports ${ev.report_date} ${hour || 'unknown'}, not yet imminent)` }
+}
+
 async function flattenDayPositionsAtClose(
   settings: UserTradingSettings,
   alpaca: AlpacaClient,
@@ -1015,11 +1043,47 @@ async function flattenDayPositionsAtClose(
   if (!Number.isFinite(minsToClose)) return false
   if (minsToClose > EOD_FLATTEN_LEAD_MIN || minsToClose < EOD_FLATTEN_FLOOR_MIN) return false
 
-  console.log(`[${config.label}] EOD flatten window (${minsToClose.toFixed(1)} min to close) — flattening ${positions.length} day-owned position(s)`)
+  // Today's trading date (UTC date == ET date at the ~close-time this runs).
+  const today = (clock.timestamp.split('T')[0]) || new Date().toISOString().split('T')[0]
+
+  // One lookup: nearest upcoming earnings for every day-owned ticker, so we can
+  // decide hold-overnight vs flatten-before-print per position.
+  const dayTickers = positions
+    .map(p => p.symbol.toUpperCase())
+    .filter(sym => attemptsByTicker.has(sym))
+  const earningsByTicker = new Map<string, { report_date: string; report_hour: string | null }>()
+  if (dayTickers.length > 0) {
+    try {
+      const admin = await getSupabaseAdmin()
+      const { data } = await admin
+        .from('earnings_watch')
+        .select('ticker, report_date, report_hour')
+        .in('ticker', dayTickers)
+        .gte('report_date', today)
+        .in('status', ['watching', 'analyzed', 'entered'])
+        .order('report_date', { ascending: true })
+      for (const r of (data ?? []) as Array<{ ticker: string; report_date: string; report_hour: string | null }>) {
+        const k = r.ticker.toUpperCase()
+        if (!earningsByTicker.has(k)) earningsByTicker.set(k, { report_date: r.report_date, report_hour: r.report_hour })
+      }
+    } catch (e) {
+      // If the lookup fails, fall back to the safe default (flatten) below.
+      console.warn(`[${config.label}] earnings_watch lookup failed: ${e instanceof Error ? e.message : e}`)
+    }
+  }
+
+  console.log(`[${config.label}] EOD flatten window (${minsToClose.toFixed(1)} min to close) — evaluating ${dayTickers.length} day-owned position(s)`)
   for (const pos of positions) {
     const sym = pos.symbol.toUpperCase()
     const att = attemptsByTicker.get(sym)
     if (!att) continue  // ownership filter already applied upstream; leave non-day rows
+
+    const decision = shouldFlattenForPrint(today, earningsByTicker.get(sym))
+    if (!decision.flatten) {
+      console.log(`[${config.label}] ${sym} HOLD overnight — ${decision.reason}`)
+      continue  // multi-day run-up still mid-flight; ride it
+    }
+
     userSummary.positionsChecked++
     try {
       const result = await applyExit(alpaca, pos)
@@ -1032,15 +1096,15 @@ async function flattenDayPositionsAtClose(
         errorReason: result.ok ? undefined : result.reason,
       }, config.mode)
       if (result.ok) {
-        console.log(`[${config.label}] ${sym} EOD FLATTEN @ ~${pos.current_price.toFixed(2)} (day trade — avoiding overnight gap)`)
+        console.log(`[${config.label}] ${sym} FLATTEN @ ~${pos.current_price.toFixed(2)} — ${decision.reason}`)
         await recordExitClosure(att, pos, 'eod_flatten').catch(e =>
           console.warn(`[${config.label}] record-exit ${sym}: ${e instanceof Error ? e.message : e}`))
       } else {
-        console.warn(`[${config.label}] ${sym} EOD FLATTEN failed: ${result.reason}`)
+        console.warn(`[${config.label}] ${sym} FLATTEN failed: ${result.reason}`)
       }
     } catch (e) {
       userSummary.errors++
-      console.error(`[${config.label}] EOD flatten ${sym} failed:`, e instanceof Error ? e.message : e)
+      console.error(`[${config.label}] flatten ${sym} failed:`, e instanceof Error ? e.message : e)
     }
   }
   return true

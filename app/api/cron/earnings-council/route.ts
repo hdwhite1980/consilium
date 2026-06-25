@@ -38,9 +38,12 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
-// Entry window (trading-day delta to the report). KEEP MAX AT 1 until Phase 3b.
+// Entry window (trading-day delta to the report). Phase 3b (flatten-before-
+// print) is in place: run-up trades are day-routed and held overnight until the
+// print is imminent, then flattened before it — so the multi-day "two days
+// early" ride is now safe. DTE 1-2 = enter up to two sessions before the print.
 const ENTRY_DTE_MIN = 1
-const ENTRY_DTE_MAX = 1
+const ENTRY_DTE_MAX = 2
 // Run-up quality bars
 const MIN_RUNUP_SCORE = 62          // directional 0..100; >=62 = clearly bullish
 const MIN_BULLISH_SNAPSHOTS = 2     // signal must have been bullish on >=2 days (consistency)

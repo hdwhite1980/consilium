@@ -93,6 +93,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const gatedInIds: string[] = []
   const gatedOutIds: string[] = []
   let optionsFetches = 0
+  // Diagnostics: is Tradier returning usable data, or is every name falling
+  // back to neutral? withData = non-null P/C; empty = fetched but null; errors = threw.
+  const optDiag = { configured: !!process.env.TRADIER_API_KEY, withData: 0, empty: 0, errors: 0 }
+  const optSample: Array<{ ticker: string; pc: number | null; pcOi: number | null; skew: number | null }> = []
 
   for (const w of names) {
     const ticker = w.ticker
@@ -163,8 +167,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         pcOiRatio = of.putCallOIRatio
         ivSkew = of.ivSkew
         optionsBias = of.putCallSignal // 'bullish' | 'bearish' | 'neutral'
+        if (pcRatio !== null) optDiag.withData++
+        else optDiag.empty++
+        if (optSample.length < 10) optSample.push({ ticker, pc: pcRatio, pcOi: pcOiRatio, skew: ivSkew })
       } catch {
         optionsBias = 'neutral'
+        optDiag.errors++
       }
     }
 
@@ -240,6 +248,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     gatedIn: gatedInIds.length,
     gatedOut: gatedOutIds.length,
     optionsFetches,
+    optionsDiag: optDiag,
+    optionsSample: optSample,
     upserted,
     durationMs,
     topRunups,

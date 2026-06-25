@@ -24,6 +24,8 @@ export interface TradingRules {
   tradeForex: boolean
   tradeFutures: boolean
   tradeOptions?: boolean
+  earningsFullSize?: boolean
+  allowLowPriceShares?: boolean
 }
 
 function Toggle({ on, onClick, disabled }: { on: boolean; onClick: () => void; disabled?: boolean }) {
@@ -80,6 +82,8 @@ export default function TradingRulesCard({
     { key: 'tradeCrypto', label: 'Crypto', on: rules.tradeCrypto },
     { key: 'tradeForex', label: 'Forex', on: rules.tradeForex },
     { key: 'tradeFutures', label: 'Futures', on: rules.tradeFutures },
+    { key: 'earningsFullSize', label: 'Trade through earnings', hint: 'Takes earnings-window setups at full size (vs. half). Managed by the day-monitor and flattened before the print — but stops do NOT protect against an overnight earnings gap. Required for the pre-earnings run-up tracker.', on: rules.earningsFullSize ?? false, accent: true },
+    { key: 'allowLowPriceShares', label: 'Allow sub-$5 shares', hint: 'Drops the $3/share sizing floor to $0 so low-priced stocks become tradeable. For small accounts; Alpaca still won\u2019t trade true OTC/penny names.', on: rules.allowLowPriceShares ?? false, accent: true },
   ]
 
   return (
