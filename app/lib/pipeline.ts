@@ -33,6 +33,7 @@ import { buildMacroIntelligenceContext } from './macro-intelligence'
 import type { SignalBundle } from './aggregator'
 import { isFundTicker, getFundInfo, buildFundContext } from './data/fund-detection'
 import { isForexTicker } from './data/forex'
+import { isCryptoPairSymbol } from './crypto-symbol'
 import { runSocialScout, formatSocialSentimentForPrompt, type SocialSentiment } from './social-scout'
 import { runAggregatorScout, formatAggregatorForPrompt, type AggregatorScoutResult } from './news-aggregator-scout'
 import { evaluateTrade, type TraderVerdict } from './trader'
@@ -539,6 +540,20 @@ CRITICAL --- POST-CATALYST AWARENESS: For forex, the catalysts are FOMC decision
 ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
   }
 
+  // Cryptocurrencies are digital assets / tokens, NOT operating companies.
+  // The equity-lens prompts below would have the model reaching for earnings,
+  // P/E, insider Form 4, 13F, and options data that simply don't exist for a
+  // coin. Substitute crypto-native analysis dimensions.
+  if (isCryptoPairSymbol(bundle.ticker)) {
+    return `You are the Lead Analyst in an elite AI council analyzing ${bundle.ticker}. This is a CRYPTOCURRENCY (a digital asset / token traded as a USD pair), NOT a company. Analysis focuses on: price action and trend structure, volume and liquidity, volatility, support/resistance and market structure, crypto-market regime (BTC dominance, total-market risk-on/off, correlation to BTC/ETH), tokenomics where known (circulating supply, unlock/emission schedule), exchange/listing status, and on-chain or sentiment signals where available. There are NO earnings, P/E, revenue, EPS, analyst price targets, insider Form 4 filings, 13F institutional holdings, congressional trades, or options put/call data for a cryptocurrency --- DO NOT cite, infer, or request any of them, and do not treat their absence as a signal. Be decisive. Support every claim with specific data (price levels, % moves, volume, indicator readings). Your analysis will be challenged by the Devil's Advocate. Never mention missing or unavailable data --- only use what you have. CRITICAL: Absence of data is not evidence. If a metric, disclosure, or detail is unavailable, that is a research limitation --- not a directional argument. Never use phrases like "the lack of X suggests Y" or "the absence of Z validates" to support a directional case. If you cannot find data confirming a hypothesis, the honest answer is "cannot confirm" --- not "therefore the opposite is true." If a sub-question wasn't answered, ignore that gap and reason from the parts that WERE answered. IMPORTANT: low-cap tokens often have noisy data --- if price data shows period change >±200%, treat as potential data error and sanity-check against the live price.
+
+${GROUNDING_RULE}
+
+CRITICAL --- POST-CATALYST AWARENESS: For crypto, catalysts are exchange listings/delistings, token unlocks/emissions, protocol upgrades or forks, large BTC/ETH moves that drag the whole market, ETF flows, and macro risk events (FOMC, CPI) that hit risk assets broadly. If such a catalyst occurred within the last 3 days AND the token is still trading near/above the post-event high (bullish) or near/below the post-event low (bearish), you are writing a CONTINUATION thesis, not a fresh setup --- state this explicitly and calibrate confidence down (continuation ~55% vs fresh setup ~65-70%). If you maintain a directional call, your trade plan must require a pullback entry (bullish) or relief-bounce entry (bearish), not at-market chasing of an already-extended move. Crypto is 24/7 and far more volatile than equities --- size and stops must respect that a 10-20% daily move is ordinary.
+
+${timeframeContext(bundle.timeframe)}${sectorContextString(bundle)}`
+  }
+
   // Fund-type tickers (ETFs, commodity ETFs, volatility ETPs, bond funds, leveraged funds)
   // get a different analytical framework --- they are NOT operating companies.
   if (isFundTicker(bundle.ticker)) {
@@ -631,6 +646,43 @@ CALIBRATION RULES --- follow these carefully:
 10. ${GROUNDING_RULE}
 
 ${timeframeContext(bundle.timeframe)}${extendedHoursContext(bundle)}${earningsContext(bundle)}${sectorContextString(bundle)}`
+  }
+
+  // Cryptocurrencies have no earnings, dilution, insider filings, or 13F data,
+  // so the equity-lens Devil prompts would attack on dimensions that don't
+  // exist. Substitute crypto-native cross-pressure: market regime, BTC
+  // correlation, tokenomics/unlocks, liquidity, and volatility risk.
+  if (isCryptoPairSymbol(bundle.ticker)) {
+    return `You are the Devil's Advocate in an elite AI council for ${bundle.ticker}. This is a CRYPTOCURRENCY, not a stock. The Lead Analyst will present a directional thesis — your role is to stress-test it.
+
+CALIBRATION RULES --- follow these carefully:
+
+1. The Lead Analyst's thesis is wrong by default until proven right by data. However, if you cannot find compelling data-backed counter-evidence, you MUST return NEUTRAL with honest reasoning --- do NOT manufacture disagreement.
+
+2. CATEGORY DISCIPLINE: This is a TOKEN, not a company. NEVER cite operating-company concerns (P/E, EPS, earnings beats/misses, dilution, revenue growth, net income, insider Form 4, 13F holdings, analyst ratings, options put/call). There is no company behind a coin. Citing equity metrics is a category error and weakens your case with the Judge.
+
+3. APPROPRIATE CROSS-PRESSURE for crypto:
+   - Market regime: is the thesis fighting the broader crypto tape? Most alts follow BTC/ETH — a bullish alt thesis while BTC is breaking down is high-risk. Check BTC dominance and risk-on/off.
+   - Correlation risk: how much of this token's move is idiosyncratic vs just beta to BTC? A "breakout" that's only tracking BTC isn't a real edge.
+   - Tokenomics: imminent unlocks/emissions/vesting cliffs add structural sell pressure. High FDV-to-circulating ratios mean dilution overhang.
+   - Liquidity: thin order books mean the entry/exit slippage can exceed the edge. Is 24h volume deep enough for the position size?
+   - Volatility / overextension: crypto routinely moves 10-20% intraday. Is the Lead chasing an already-extended parabolic move (RSI extreme, far above moving averages)? Blow-off tops reverse violently.
+   - Listing/exchange risk: new listings pump-and-fade; delisting or thin-exchange risk for low-caps.
+   - Macro risk events (FOMC, CPI) hit crypto as a risk asset regardless of token-specific bullishness.
+
+4. Timeframe honesty. The Lead's target may be achievable but not within the ${bundle.timeframe} window. Challenge time-to-target alignment given crypto's volatility.
+
+5. Reflexivity check. Crowded long positioning + a parabolic move + an imminent token unlock or macro event is where crypto longs get liquidated. Surface asymmetric reversal risk.
+
+6. Absence of a metric is not evidence. Never mention unavailable data. "No earnings data" or "no 13F" is NOT a finding — those don't exist for crypto. Don't cite the absence of equity-style data as if it matters.
+
+7. Quality over volume. Two rigorous crypto-appropriate challenges beat five equity-shaped challenges that don't apply.
+
+8. Post-catalyst framing check. If the Lead's thesis describes a move that has ALREADY happened (listing pop, BTC-led rally already underway) or hinges on a catalyst already played out, it's a CONTINUATION thesis with lower hit rates than fresh setups. Press on whether it's already priced in.
+
+9. ${GROUNDING_RULE}
+
+${timeframeContext(bundle.timeframe)}${sectorContextString(bundle)}`
   }
 
   // Fund-type tickers get specialized cross-pressure guidance that excludes
@@ -1195,6 +1247,9 @@ export async function runTargetedResearch(
   // !isForexQuestion checks so they don't add "no data" noise on top.
   const isForexQuestion = isForexTicker(bundle.ticker) &&
     (needsInsider || needsCongress || needsInstitutional)
+  // Crypto has no insider Form 4 / congressional / 13F data either — skip those
+  // fetches so they don't add "no data" noise to the research answers.
+  const isCryptoBundle = isCryptoPairSymbol(bundle.ticker)
   if (isForexQuestion) {
     const cotSection = bundle.aiContext?.smartMoneySection ?? ''
     if (cotSection.trim().length > 0) {
@@ -1368,7 +1423,7 @@ export async function runTargetedResearch(
   // should anchor on. For forex tickers, these branches are gated off
   // by the isForexQuestion check above.
 
-  if (needsInsider && !isForexQuestion) {
+  if (needsInsider && !isForexQuestion && !isCryptoBundle) {
     const txns = bundle.smartMoney?.insiderTransactions ?? []
     const buyValue = txns.filter(t => t.type === 'buy').reduce((s, t) => s + (t.totalValue ?? 0), 0)
     const sellValue = txns.filter(t => t.type === 'sell').reduce((s, t) => s + (t.totalValue ?? 0), 0)
@@ -1389,7 +1444,7 @@ export async function runTargetedResearch(
     }
   }
 
-  if (needsCongress && !isForexQuestion) {
+  if (needsCongress && !isForexQuestion && !isCryptoBundle) {
     const trades = bundle.smartMoney?.congressionalTrades ?? []
     if (trades.length > 0) {
       const buys = trades.filter(t => t.type === 'purchase').length
@@ -1408,7 +1463,7 @@ export async function runTargetedResearch(
     }
   }
 
-  if (needsInstitutional && !isForexQuestion) {
+  if (needsInstitutional && !isForexQuestion && !isCryptoBundle) {
     const holders = bundle.smartMoney?.institutionalOwnership ?? []
     const notable = bundle.smartMoney?.notableHolders ?? []
     if (holders.length > 0) {
@@ -1998,6 +2053,27 @@ async function getCachedResearchQuestions(
  * a generic "policy signals" question rather than "what's the consensus
  * for tomorrow's ECB decision specifically."
  */
+function buildCryptoQuestionGuidance(bundle: SignalBundle): string {
+  if (!isCryptoPairSymbol(bundle.ticker)) return ''
+  return `
+
+━━━ CRYPTO-SPECIFIC GUIDANCE FOR QUESTIONS (${bundle.ticker} is a cryptocurrency) ━━━
+Cryptocurrencies do NOT have:
+  • Earnings, EPS, revenue, P/E, or analyst price targets
+  • Insider Form 4 transactions, 13F institutional filings, or congressional trades
+  • Options put/call flow, or company news
+
+DO NOT ask the News Scout about any of those — the answer will be empty.
+
+DO ask about:
+  • Token-specific catalysts: exchange listings/delistings, token unlocks / vesting cliffs / emissions, protocol upgrades, forks, mainnet launches, partnerships
+  • Market regime: BTC/ETH trend and dominance, total crypto market cap direction, risk-on/off, whether this token is leading or just following BTC
+  • Liquidity & flows: 24h volume depth, ETF/spot flows (for BTC/ETH), exchange reserves, notable whale moves where reported
+  • Tokenomics: circulating vs fully-diluted supply, upcoming unlock schedule, staking/yield dynamics
+  • Sentiment & on-chain: funding rates, open interest, social/sentiment shifts, active addresses or TVL where relevant
+  • Macro risk events (FOMC, CPI) that move crypto as a risk asset`
+}
+
 function buildForexQuestionGuidance(bundle: SignalBundle): string {
   if (!isForexTicker(bundle.ticker)) return ''
 
@@ -2061,11 +2137,12 @@ export async function runRebuttal(
   const cachedResearch = await getCachedResearchQuestions(bundle.ticker, 'claude')
   const cacheBlock = formatCachedResearchBlock(cachedResearch)
   const forexGuidance = buildForexQuestionGuidance(bundle)
+  const cryptoGuidance = buildCryptoQuestionGuidance(bundle)
 
   const researchAsk = await anthropic().messages.create({
     model: COUNCIL_MODELS.research,
     max_tokens: 250,
-    system: `You are the Lead Analyst in a stock debate about ${bundle.ticker}. You can send TWO research questions to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before you respond to the Devil's Advocate. Choose two questions that target the most important data points to resolve the Devil's strongest challenges. The two questions should explore DIFFERENT angles --- do not ask variations of the same thing. Return them as a numbered list, ONE QUESTION PER LINE: "1. <question>\\n2. <question>". Nothing else.${forexGuidance}`,
+    system: `You are the Lead Analyst in a stock debate about ${bundle.ticker}. You can send TWO research questions to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before you respond to the Devil's Advocate. Choose two questions that target the most important data points to resolve the Devil's strongest challenges. The two questions should explore DIFFERENT angles --- do not ask variations of the same thing. Return them as a numbered list, ONE QUESTION PER LINE: "1. <question>\\n2. <question>". Nothing else.${forexGuidance}${cryptoGuidance}`,
     messages: [{
       role: 'user',
       content: `YOUR ORIGINAL CALL: ${claude.signal} at $${bundle.currentPrice.toFixed(2)}, target ${claude.target}
@@ -2148,6 +2225,7 @@ export async function runCounter(
   const cachedResearch = await getCachedResearchQuestions(bundle.ticker, 'gpt')
   const cacheBlock = formatCachedResearchBlock(cachedResearch)
   const forexGuidance = buildForexQuestionGuidance(bundle)
+  const cryptoGuidance = buildCryptoQuestionGuidance(bundle)
 
   // Format the Lead's R2 research (now array shape) into a string for prompt context
   const leadResearchSummary = (rebuttal.researchQuestions ?? []).map((q, i) =>
@@ -2159,7 +2237,7 @@ export async function runCounter(
     temperature: COUNCIL_TEMPS.researchGpt,
     maxTokens: 250,
     messages: [
-      { role: 'system', content: `You are the Devil's Advocate in a stock debate about ${bundle.ticker}. You can send TWO research questions to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before firing back at the Lead Analyst. Choose two questions that strengthen your challenges from DIFFERENT angles --- do not ask variations of the same thing. Return them as a numbered list, ONE QUESTION PER LINE: "1. <question>\\n2. <question>". Nothing else.${forexGuidance}` },
+      { role: 'system', content: `You are the Devil's Advocate in a stock debate about ${bundle.ticker}. You can send TWO research questions to the News Scout (who has access to real-time news, fundamentals, options flow, and market data) before firing back at the Lead Analyst. Choose two questions that strengthen your challenges from DIFFERENT angles --- do not ask variations of the same thing. Return them as a numbered list, ONE QUESTION PER LINE: "1. <question>\\n2. <question>". Nothing else.${forexGuidance}${cryptoGuidance}` },
       { role: 'user', content: `LEAD ANALYST'S REBUTTAL: ${rebuttal.rebuttal}
 THEY CONCEDE: ${rebuttal.concedes.join('; ')}
 THEY MAINTAIN: ${rebuttal.maintains.join('; ')}
@@ -3493,40 +3571,25 @@ function sanitizeJudgeResult(judge: JudgeResult, bundle: SignalBundle): JudgeRes
   const daysToEarnings = bundle.fundamentals?.daysToEarnings ?? null
 
   // Tier 0 + Tier 1: full block
+  // Tier 0 + Tier 1: earnings today/tomorrow. CHANGED (intraday earnings
+  // trading): this previously nulled entry/stop/target ("N/A - post-earnings
+  // price discovery"), which left the verdict un-tradeable (this is why such
+  // setups showed "-" with no levels). We now PRESERVE the Council's numeric
+  // levels so the auto-trader can act on the setup. Overnight gap risk is
+  // handled downstream rather than by destroying the plan: the trade is
+  // force-routed to the day-monitor (monitor_mode='day') and flattened before
+  // the close - never held through the print. We prefix an explicit
+  // intraday/binary-risk warning, then fall through to the normal
+  // BULLISH/BEARISH level validation below (same shape as the Tier 2/3 path).
   if (daysToEarnings !== null && daysToEarnings >= 0 && daysToEarnings <= 1) {
     const tierLabel = daysToEarnings === 0 ? 'TODAY' : 'TOMORROW'
-    const blockedEntry = `No entry before earnings (reports ${tierLabel}) --- wait for post-earnings reaction`
-    const blockedStop  = `N/A --- stop level depends on post-earnings price discovery`
-    const blockedTp    = `N/A --- target level depends on post-earnings price discovery`
-    const guard        = `IMPORTANT: ${bundle.ticker} reports ${tierLabel}. Do not enter before the catalyst. Wait for post-earnings price action to establish a new trend, then re-evaluate using the directional thesis below as a starting hypothesis.\n\n`
-    const wasOverridden = (
-      extractPrice(judge.entryPrice) !== null ||
-      extractPrice(judge.stopLoss) !== null ||
-      extractPrice(judge.takeProfit) !== null
-    )
-    if (wasOverridden) {
-      console.warn(`[pipeline] earnings tier ${tierLabel} (${daysToEarnings}d) --- overriding actionable fields, preserving thesis`)
-      logJudgeCorrection(bundle, judge.judgeModel, signal, 'stopLoss', judge.stopLoss, blockedStop, atr, entry)
+    const guard01 = `IMPORTANT: ${bundle.ticker} reports ${tierLabel}. Intraday-only setup --- binary overnight gap risk. This position is managed by the day-monitor and flattened before the close; it is NOT held through the earnings print. Treat the levels below as an intraday plan with a clear invalidation.\n\n`
+    const wasGuarded01 = (judge.actionPlan ?? '').startsWith('IMPORTANT:')
+    if (!wasGuarded01) {
+      console.warn(`[pipeline] earnings tier ${tierLabel} (${daysToEarnings}d) --- preserving levels, prefixing intraday-risk guard (day-monitor + EOD flatten manage gap risk)`)
     }
-    // Strip price-bearing sentences from the action plan body so it
-    // doesn't contradict the blocked structured fields. The LLM may
-    // have written 'enter at $X / stop $Y / target $Z' even though
-    // the directive says wait --- remove those.
-    const stripPriceSentences = (s: string): string => {
-      if (!s) return s
-      // Split on sentence terminators while keeping the structure;
-      // drop any sentence containing a dollar price.
-      const parts = s.split(/(?<=[.!?])\s+/)
-      return parts.filter(p => !/\$\d{1,6}(?:\.\d{1,2})?/.test(p)).join(' ').trim()
-    }
-    const cleanedActionPlan = stripPriceSentences(judge.actionPlan ?? '')
-    return {
-      ...judge,
-      entryPrice: blockedEntry,
-      stopLoss:   blockedStop,
-      takeProfit: blockedTp,
-      actionPlan: guard + cleanedActionPlan,
-    }
+    judge = wasGuarded01 ? judge : { ...judge, actionPlan: guard01 + (judge.actionPlan ?? '') }
+    // fall through to BULLISH/BEARISH validation below (no early return)
   }
 
   // Tier 2 + Tier 3: entry allowed, but force binary-risk acknowledgment

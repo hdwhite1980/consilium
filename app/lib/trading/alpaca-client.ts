@@ -253,6 +253,37 @@ export class AlpacaClient {
     return raw.map(o => this.toOrder(o))
   }
 
+  /** Market clock — used to compute minutes until the session close (EOD flatten). */
+  async getClock(): Promise<{ isOpen: boolean; nextClose: string; nextOpen: string; timestamp: string }> {
+    const raw = await this.request<Record<string, unknown>>('GET', '/v2/clock')
+    return {
+      isOpen: Boolean(raw.is_open ?? false),
+      nextClose: String(raw.next_close ?? ''),
+      nextOpen: String(raw.next_open ?? ''),
+      timestamp: String(raw.timestamp ?? ''),
+    }
+  }
+
+  /** Open (working) orders, optionally filtered to a single symbol. */
+  async openOrders(symbol?: string): Promise<AlpacaOrder[]> {
+    const q = symbol
+      ? `?status=open&symbols=${encodeURIComponent(symbol)}&nested=true`
+      : '?status=open&nested=true'
+    const raw = await this.request<Array<Record<string, unknown>>>('GET', `/v2/orders${q}`)
+    return raw.map(o => this.toOrder(o))
+  }
+
+  /** Cancel a single order by id. */
+  async cancelOrder(orderId: string): Promise<void> {
+    await this.request('DELETE', `/v2/orders/${encodeURIComponent(orderId)}`)
+  }
+
+  /** Liquidate a position at market (DELETE /v2/positions/{symbol}). Also
+   *  releases shares held by working bracket legs once those are cancelled. */
+  async closePosition(symbol: string): Promise<void> {
+    await this.request('DELETE', `/v2/positions/${encodeURIComponent(symbol)}`)
+  }
+
   private toOrder(raw: Record<string, unknown>): AlpacaOrder {
     const legs = Array.isArray(raw.legs) ? raw.legs as Array<Record<string, unknown>> : null
     return {

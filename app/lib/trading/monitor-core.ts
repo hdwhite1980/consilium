@@ -194,6 +194,14 @@ async function processUser(settings: UserTradingSettings, userSummary: PerUserSu
     Array.from(attemptsByTicker.keys()).join(','),
   )
 
+  // EOD flatten (day monitor only): inside the pre-close window, flatten all
+  // day-owned positions so they don't carry overnight gap risk, then stop —
+  // no signal processing or re-entry at the end of the day.
+  if (config.mode === 'day') {
+    const flattened = await flattenDayPositionsAtClose(settings, alpaca, positions, attemptsByTicker, userSummary, config)
+    if (flattened) return
+  }
+
   for (const pos of positions) {
     const sym = pos.symbol.toUpperCase()
     const att = attemptsByTicker.get(sym)
@@ -550,7 +558,7 @@ async function syncTightenedStop(att: OpenAttempt, newStop: number): Promise<voi
 async function recordExitClosure(
   att: OpenAttempt,
   pos: AlpacaPosition,
-  closureKind: 'monitor_exit' | 'escalated_exit',
+  closureKind: 'monitor_exit' | 'escalated_exit' | 'eod_flatten',
 ): Promise<void> {
   const entryFill = att.filled_avg_price ?? att.entry_price_est
   const exitPrice = pos.current_price
@@ -981,6 +989,63 @@ interface ExitResult { ok: boolean; reason?: string }
  * protected at the bracket stop level. Not catastrophic, just not the
  * immediate market exit we wanted.
  */
+// ── End-of-day flatten (day monitor only) ─────────────────────────────────
+// Day-owned positions (monitor_mode='day' — currently earnings-window trades)
+// are flattened before the session close so they never carry overnight gap
+// risk through an earnings print. Timing comes from Alpaca's clock (next_close)
+// so DST and half-days are handled. We act in a [floor, lead] window before
+// close; the floor (>=5 min) leaves the market close orders time to fill before
+// the bell, avoiding the after-hours-queue problem that strands a position
+// unprotected overnight (the KLAC failure mode).
+const EOD_FLATTEN_LEAD_MIN = 15
+const EOD_FLATTEN_FLOOR_MIN = 5
+
+async function flattenDayPositionsAtClose(
+  settings: UserTradingSettings,
+  alpaca: AlpacaClient,
+  positions: AlpacaPosition[],
+  attemptsByTicker: Map<string, OpenAttempt>,
+  userSummary: PerUserSummary,
+  config: MonitorConfig,
+): Promise<boolean> {
+  if (config.mode !== 'day') return false
+  const clock = await alpaca.getClock().catch(() => null)
+  if (!clock || !clock.isOpen || !clock.nextClose || !clock.timestamp) return false
+  const minsToClose = (Date.parse(clock.nextClose) - Date.parse(clock.timestamp)) / 60000
+  if (!Number.isFinite(minsToClose)) return false
+  if (minsToClose > EOD_FLATTEN_LEAD_MIN || minsToClose < EOD_FLATTEN_FLOOR_MIN) return false
+
+  console.log(`[${config.label}] EOD flatten window (${minsToClose.toFixed(1)} min to close) — flattening ${positions.length} day-owned position(s)`)
+  for (const pos of positions) {
+    const sym = pos.symbol.toUpperCase()
+    const att = attemptsByTicker.get(sym)
+    if (!att) continue  // ownership filter already applied upstream; leave non-day rows
+    userSummary.positionsChecked++
+    try {
+      const result = await applyExit(alpaca, pos)
+      if (result.ok) userSummary.exits++
+      await logResult(settings, att, pos.symbol, {
+        ok: result.ok, decision: 'EXIT',
+        actionTaken: result.ok ? 'eod_flatten' : 'eod_flatten_failed',
+        snap5m: emptySnapshot(), snap15m: emptySnapshot(),
+        currentPrice: pos.current_price, currentStop: att.stop_price,
+        errorReason: result.ok ? undefined : result.reason,
+      }, config.mode)
+      if (result.ok) {
+        console.log(`[${config.label}] ${sym} EOD FLATTEN @ ~${pos.current_price.toFixed(2)} (day trade — avoiding overnight gap)`)
+        await recordExitClosure(att, pos, 'eod_flatten').catch(e =>
+          console.warn(`[${config.label}] record-exit ${sym}: ${e instanceof Error ? e.message : e}`))
+      } else {
+        console.warn(`[${config.label}] ${sym} EOD FLATTEN failed: ${result.reason}`)
+      }
+    } catch (e) {
+      userSummary.errors++
+      console.error(`[${config.label}] EOD flatten ${sym} failed:`, e instanceof Error ? e.message : e)
+    }
+  }
+  return true
+}
+
 async function applyExit(alpaca: AlpacaClient, pos: AlpacaPosition): Promise<ExitResult> {
   const symbol = pos.symbol
   // IMPORTANT: do NOT extract `request` as a const — that loses the `this`
