@@ -255,32 +255,84 @@ export interface AccumulationPick {
   weekly: WeeklyTrendAnalysis
 }
 
+/** Map with bounded concurrency so we don't burst Coinbase's rate limit. */
+async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length)
+  let i = 0
+  async function worker(): Promise<void> {
+    while (i < items.length) {
+      const idx = i++
+      out[idx] = await fn(items[idx])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return out
+}
+
 export async function runAccumulationScan(opts?: {
-  minVolumeUsd?: number      // liquidity floor, default 10M
-  universeLimit?: number     // cap on weekly-bar fetches (cost control), default 40
+  minVolumeUsd?: number      // liquidity floor, default 0 (NO floor — see every coin)
+  maxVolumeUsd?: number      // upper band cap (exclusive); omit for no cap
+  universeLimit?: number     // cap on weekly-bar fetches (cost control), default 120
   minStrength?: number       // default 45
   phases?: Array<WeeklyTrendAnalysis['phase']>  // default accumulation + distribution
-}): Promise<{ picks: AccumulationPick[]; scanned: number; universeSize: number; scannedReads: Array<{ symbol: string; phase: WeeklyTrendAnalysis['phase']; bias: WeeklyTrendAnalysis['bias']; strength: number; ok: boolean }> }> {
+}): Promise<{
+  picks: AccumulationPick[]
+  scanned: number
+  universeSize: number
+  scannedReads: Array<{ symbol: string; phase: WeeklyTrendAnalysis['phase']; bias: WeeklyTrendAnalysis['bias']; strength: number; ok: boolean; isNew: boolean; price: number; volumeUsd24h: number; priceChange24h: number; note: string | null }>
+  newCoins: Array<{ symbol: string; priceChange24h: number; volumeUsd24h: number }>
+}> {
   const { runCryptoScan } = await import('@/app/lib/trading/crypto-scanner')
-  const minVolumeUsd = opts?.minVolumeUsd ?? 10_000_000
-  const universeLimit = opts?.universeLimit ?? 40
+  const minVolumeUsd = opts?.minVolumeUsd ?? 0          // no floor by default
+  const maxVolumeUsd = opts?.maxVolumeUsd               // optional upper band cap
+  const universeLimit = opts?.universeLimit ?? 120
   const minStrength = opts?.minStrength ?? 45
   const phases = opts?.phases ?? ['accumulation', 'distribution']
 
-  // movement floor 0 -> include quiet-but-liquid coins the momentum scan drops
-  const scan = await runCryptoScan({ minMovement: 0, minVolume: minVolumeUsd, limit: 200 })
-  const candidates = [...scan.picks]
-    .sort((a, b) => b.volumeUsd24h - a.volumeUsd24h)
-    .slice(0, universeLimit)
+  // movement floor 0 + volume floor 0 -> the FULL liquid+illiquid universe,
+  // including brand-new listings the momentum scan never surfaces.
+  const scanRaw = await runCryptoScan({ minMovement: 0, minVolume: minVolumeUsd, limit: 500 })
+  // Apply the upper band cap (runCryptoScan only floors, doesn't cap).
+  const universe = maxVolumeUsd != null
+    ? scanRaw.picks.filter(c => c.volumeUsd24h < maxVolumeUsd)
+    : scanRaw.picks
+  const scan = { ...scanRaw, picks: universe }
 
-  const analyzed = await Promise.all(candidates.map(async (c) => {
+  // New listings: surface them explicitly even though they lack the >=8 weeks
+  // of history the weekly engine needs — visibility is the point.
+  const newCoins = scan.picks
+    .filter(c => c.isNew)
+    .map(c => ({
+      symbol: c.baseDisplaySymbol ?? c.symbol.replace('-USD', ''),
+      priceChange24h: c.priceChange24h,
+      volumeUsd24h: Math.round(c.volumeUsd24h),
+    }))
+
+  // Candidates for weekly analysis: highest-volume first (cost cap), but always
+  // fold in every new coin so nothing new is dropped by the cap.
+  const byVol = [...scan.picks].sort((a, b) => b.volumeUsd24h - a.volumeUsd24h)
+  const seen = new Set<string>()
+  const candidates: typeof scan.picks = []
+  for (const c of byVol) {
+    if (candidates.length >= universeLimit) break
+    if (seen.has(c.symbol)) continue
+    seen.add(c.symbol); candidates.push(c)
+  }
+  for (const c of scan.picks) {
+    if (c.isNew && !seen.has(c.symbol)) { seen.add(c.symbol); candidates.push(c) }
+  }
+
+  // Bounded concurrency (8) to respect rate limits across the wide universe.
+  const analyzed = await mapLimited(candidates, 8, async (c) => {
     const weekly = await getWeeklyTrend(c.symbol, 'crypto')
     return { c, weekly }
-  }))
+  })
 
   const scannedReads = analyzed.map(({ c, weekly }) => ({
     symbol: c.baseDisplaySymbol ?? c.symbol.replace('-USD', ''),
     phase: weekly.phase, bias: weekly.bias, strength: weekly.strength, ok: weekly.ok,
+    isNew: c.isNew, price: c.price, volumeUsd24h: Math.round(c.volumeUsd24h),
+    priceChange24h: c.priceChange24h, note: weekly.notes[0] ?? null,
   }))
 
   const picks: AccumulationPick[] = analyzed
@@ -295,5 +347,5 @@ export async function runAccumulationScan(opts?: {
     }))
     .sort((a, b) => b.weekly.strength - a.weekly.strength)
 
-  return { picks, scanned: candidates.length, universeSize: scan.universeSize, scannedReads }
+  return { picks, scanned: candidates.length, universeSize: scan.universeSize, scannedReads, newCoins }
 }

@@ -38,13 +38,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // coils across the liquid universe), instead of analyzing specific tickers.
   if (url.searchParams.get('mode') === 'scan') {
     const minStrength = Number(url.searchParams.get('minStrength') ?? '45')
-    const universeLimit = Number(url.searchParams.get('limit') ?? '40')
-    const scan = await runAccumulationScan({ minStrength, universeLimit })
+    const universeLimit = Number(url.searchParams.get('limit') ?? '120')
+    const minVolumeUsd = Number(url.searchParams.get('minVolume') ?? '0')   // no floor by default
+    const scan = await runAccumulationScan({ minStrength, universeLimit, minVolumeUsd })
     return NextResponse.json({
       mode: 'accumulation-scan',
       generatedAt: new Date().toISOString(),
       universeSize: scan.universeSize,
       scanned: scan.scanned,
+      minVolumeUsd,
       found: scan.picks.length,
       picks: scan.picks.map(p => ({
         symbol: p.baseSymbol,
@@ -55,6 +57,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         volumeUsd24h: Math.round(p.volumeUsd24h),
         note: p.weekly.notes[0],
       })),
+      // brand-new listings (no weekly history yet) surfaced for visibility
+      newCoins: scan.newCoins,
       // every coin the scan checked + its read, so found:0 is explainable
       scannedReads: scan.scannedReads.sort((a, b) => b.strength - a.strength),
     }, { status: 200 })
