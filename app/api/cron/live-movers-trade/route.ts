@@ -72,6 +72,7 @@ async function run(req: NextRequest): Promise<NextResponse> {
   const limit = Number(url.searchParams.get('limit') ?? DEFAULT_LIMIT)
   const universeLimit = url.searchParams.get('universeLimit')
   const dryRun = url.searchParams.get('dryRun') === '1'
+  const force = url.searchParams.get('force') === '1'
 
   let movers
   try {
@@ -85,11 +86,12 @@ async function run(req: NextRequest): Promise<NextResponse> {
   const recentlyAnalyzed = await getRecentlyAnalyzed(userId, DEDUP_HOURS)
 
   const selected: Array<{ display: string; council: string; score: number; changePct: number; timeframe: Timeframe }> = []
+  const dropped: Array<{ symbol: string; reason: string }> = []
   for (const m of movers) {
-    if (m.score < minScore) continue
+    if (m.score < minScore) { dropped.push({ symbol: m.symbol, reason: `score ${m.score} < ${minScore}` }); continue }
     const council = toCouncilSymbol(assetType, m.symbol)
-    if (recentlyAnalyzed.has(council)) continue
-    if (selected.some(s => s.council === council)) continue
+    if (!force && recentlyAnalyzed.has(council)) { dropped.push({ symbol: m.symbol, reason: 'recently_analyzed (4h)' }); continue }
+    if (selected.some(s => s.council === council)) { dropped.push({ symbol: m.symbol, reason: 'duplicate in batch' }); continue }
     selected.push({ display: m.symbol, council, score: m.score, changePct: m.intradayChangePct, timeframe: '1D' })
     if (selected.length >= limit) break
   }
@@ -107,14 +109,14 @@ async function run(req: NextRequest): Promise<NextResponse> {
     for (const s of selected) {
       const r = await enqueueCouncil({
         userId, ticker: s.council, assetType,
-        source: `live_movers_${assetType}`, pool: 'high', timeframe: s.timeframe,
+        source: `live_movers_${assetType}`, pool: 'high', timeframe: s.timeframe, force,
       })
       if (r === 'enqueued') enqueued.push(s.council)
       else skipped.push(`${s.council}:${r}`)
     }
   }
 
-  console.log(`[live-movers-trade] assetType=${assetType} movers=${movers.length} selected=${selected.length} enqueued=${enqueued.length} skipped=${skipped.length}${dryRun ? ' (dryRun)' : ''}`)
+  console.log(`[live-movers-trade] assetType=${assetType} movers=${movers.length} selected=${selected.length} enqueued=${enqueued.length} skipped=${skipped.length}${dryRun ? ' (dryRun)' : ''}${force ? ' (force)' : ''}`)
 
   return NextResponse.json({
     assetType,
@@ -122,9 +124,11 @@ async function run(req: NextRequest): Promise<NextResponse> {
     minScore,
     moversFound: movers.length,
     selected: selected.map(s => ({ ticker: s.council, display: s.display, score: s.score, intradayChangePct: s.changePct, timeframe: s.timeframe })),
+    dropped,
     enqueued,
     skipped,
     dryRun,
+    force,
     note: 'Selected movers are enqueued to the high pool; council-dispatcher drains the queue into the Council.',
   }, { status: 200 })
 }

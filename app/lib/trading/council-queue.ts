@@ -19,6 +19,7 @@ export interface EnqueueArgs {
   timeframe: CouncilTimeframe
   persona?: string
   dedupHours?: number             // skip if analyzed within this window (default 4)
+  force?: boolean                 // bypass the verdict_log dedup (testing / manual)
 }
 
 function admin() {
@@ -27,7 +28,7 @@ function admin() {
 
 /**
  * Enqueue a Council analyze-job. Two-layer dedup:
- *   1. skip if a verdict already exists for this ticker within dedupHours
+ *   1. skip if a verdict already exists for this ticker within dedupHours (unless force)
  *   2. the unique partial index blocks a second live (pending/running) job
  */
 export async function enqueueCouncil(args: EnqueueArgs): Promise<EnqueueResult> {
@@ -35,12 +36,14 @@ export async function enqueueCouncil(args: EnqueueArgs): Promise<EnqueueResult> 
   const ticker = args.ticker.toUpperCase()
   const dedupHours = args.dedupHours ?? 4
 
-  const cutoff = new Date(Date.now() - dedupHours * 3_600_000).toISOString()
-  const { data: recent } = await db
-    .from('verdict_log').select('id')
-    .eq('user_id', args.userId).eq('ticker', ticker)
-    .gte('created_at', cutoff).limit(1)
-  if (recent && recent.length > 0) return 'recently_analyzed'
+  if (!args.force) {
+    const cutoff = new Date(Date.now() - dedupHours * 3_600_000).toISOString()
+    const { data: recent } = await db
+      .from('verdict_log').select('id')
+      .eq('user_id', args.userId).eq('ticker', ticker)
+      .gte('created_at', cutoff).limit(1)
+    if (recent && recent.length > 0) return 'recently_analyzed'
+  }
 
   const { error } = await db.from('council_queue').insert({
     user_id: args.userId,
