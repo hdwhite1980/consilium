@@ -30,6 +30,7 @@ export interface BacktestParams {
   warmupBars: number     // bars reserved to warm the signal (~26 weeks)
   stepBars: number       // evaluation cadence (5 ≈ weekly on daily bars)
   costBps: number        // ONE-WAY cost (slippage+fee+spread) in bps; round-trip = 2x
+  historyDays: number    // how deep to pull daily history (default ~10y)
 }
 
 const ASSET_COST_BPS: Record<BacktestAssetType, number> = { stock: 5, crypto: 15, forex: 2, futures: 5 }
@@ -38,8 +39,14 @@ export function defaultParams(assetType: BacktestAssetType): BacktestParams {
   return {
     minStrength: 50, stopPct: 0.05, rMultiple: 2, horizonBars: 20,
     maxHoldBars: 60, warmupBars: 130, stepBars: 5, costBps: ASSET_COST_BPS[assetType],
+    historyDays: 3650,
   }
 }
+
+// The weekly-trend read only uses the last ~26 weeks, so feed it a bounded daily
+// window instead of the full (possibly decade-long) slice — keeps each evaluation
+// O(window) regardless of history depth. Lookahead-safe: the window still ends at T.
+const SIGNAL_WINDOW = 220   // daily bars ≈ 44 weeks
 
 export interface BacktestTrade {
   entryDate: string
@@ -70,22 +77,42 @@ export interface BacktestResult {
   note: string
 }
 
-// ── History loader: chronological daily bars via the existing fetchers ──
-async function loadDailyHistory(ticker: string, assetType: BacktestAssetType): Promise<Bar[]> {
+// ── History loader: deep chronological daily bars ──
+async function loadDailyHistory(ticker: string, assetType: BacktestAssetType, historyDays: number): Promise<Bar[]> {
   let bars: Bar[]
   if (assetType === 'crypto') {
-    const { fetchCryptoBars } = await import('@/app/lib/trading/crypto-bars')
-    const { toCoinbaseProduct } = await import('@/app/lib/crypto-symbol')
-    bars = (await fetchCryptoBars({ symbol: toCoinbaseProduct(ticker), granularity: 'ONE_DAY', limit: 350 })) as unknown as Bar[]
+    bars = await loadCryptoDeep(ticker, historyDays)
   } else if (assetType === 'forex') {
     const { fetchForexBars } = await import('@/app/lib/data/forex')
-    bars = (await fetchForexBars(ticker.toUpperCase(), '1M')) as unknown as Bar[]   // 1M -> daily
+    bars = (await fetchForexBars(ticker.toUpperCase(), '1M')) as unknown as Bar[]   // ~250 daily; deepening is a follow-up
   } else {
-    const { fetchBars } = await import('@/app/lib/data/alpaca')
-    bars = (await fetchBars(ticker.toUpperCase(), '1M')) as unknown as Bar[]         // 1M -> 1Day
+    const { fetchDailyBarsDeep } = await import('@/app/lib/data/alpaca')
+    bars = (await fetchDailyBarsDeep(ticker.toUpperCase(), historyDays)) as unknown as Bar[]
   }
-  // Guarantee chronological order (signals assume oldest-first).
   return (bars ?? []).slice().sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0))
+}
+
+// Coinbase caps 300 candles/request; page backward to assemble deep daily history.
+async function loadCryptoDeep(ticker: string, historyDays: number): Promise<Bar[]> {
+  const { fetchCryptoBars } = await import('@/app/lib/trading/crypto-bars')
+  const { toCoinbaseProduct } = await import('@/app/lib/crypto-symbol')
+  const product = toCoinbaseProduct(ticker)
+  const DAY = 86_400
+  const earliest = Math.floor(Date.now() / 1000) - historyDays * DAY
+  let end = Math.floor(Date.now() / 1000)
+  const all: Bar[] = []
+  for (let i = 0; i < 25 && end > earliest; i++) {
+    const start = Math.max(earliest, end - 300 * DAY)
+    let chunk: Bar[]
+    try { chunk = await fetchCryptoBars({ symbol: product, granularity: 'ONE_DAY', limit: 300, startUnix: start, endUnix: end }) }
+    catch { break }
+    if (!chunk.length) break
+    all.push(...chunk)
+    if (chunk.length < 200) break    // ran out of listing history
+    end = start - DAY
+  }
+  const seen = new Set<string>()
+  return all.filter(b => { if (seen.has(b.t)) return false; seen.add(b.t); return true })
 }
 
 function mean(xs: number[]): number { return xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 0 }
@@ -118,7 +145,7 @@ export async function collectWeeklyTrendTrades(
   override: Partial<BacktestParams> = {},
 ): Promise<{ trades: BacktestTrade[]; barsLoaded: number; params: BacktestParams }> {
   const p = { ...defaultParams(assetType), ...override }
-  const bars = await loadDailyHistory(ticker, assetType)
+  const bars = await loadDailyHistory(ticker, assetType, p.historyDays)
   const n = bars.length
   const costRT = 2 * p.costBps / 10_000   // round-trip fraction
 
@@ -126,7 +153,7 @@ export async function collectWeeklyTrendTrades(
   let T = p.warmupBars
 
   while (T < n - 2) {
-    const sig = analyzeWeeklyTrend(bars.slice(0, T + 1))
+    const sig = analyzeWeeklyTrend(bars.slice(Math.max(0, T + 1 - SIGNAL_WINDOW), T + 1))
     const fires = sig.ok && sig.bias === 'bullish'
       && (sig.phase === 'accumulation' || sig.phase === 'markup')
       && sig.strength >= p.minStrength

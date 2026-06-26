@@ -123,6 +123,28 @@ export async function fetchBars(ticker: string, timeframe: string): Promise<Alpa
   }
 }
 
+/** Deep daily history for backtesting — up to `daysBack` of 1Day bars in one paginated pull. */
+export async function fetchDailyBarsDeep(ticker: string, daysBack = 3650): Promise<AlpacaBar[]> {
+  try {
+    const end = new Date()
+    const start = new Date()
+    start.setDate(start.getDate() - daysBack)
+    const startStr = start.toISOString().split('T')[0]
+    const endStr = end.toISOString().split('T')[0]
+    try {
+      const bars = await fetchPaginatedBars(
+        `${BASE}/v2/stocks/${ticker}/bars?timeframe=1Day&start=${startStr}&end=${endStr}&limit=10000&adjustment=all&feed=sip`
+      )
+      if (bars.length >= 5) return bars
+    } catch { /* fallthrough to IEX */ }
+    try {
+      return await fetchPaginatedBars(
+        `${BASE}/v2/stocks/${ticker}/bars?timeframe=1Day&start=${startStr}&end=${endStr}&limit=10000&adjustment=all&feed=iex`
+      )
+    } catch { return [] }
+  } catch { return [] }
+}
+
 // ── Latest Quote ───────────────────────────────────────────────
 export async function fetchQuote(ticker: string): Promise<AlpacaQuote | null> {
   try {
