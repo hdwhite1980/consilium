@@ -29,7 +29,6 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
 const VALID: BacktestAssetType[] = ['stock', 'crypto', 'forex', 'futures']
-const DEFAULT_STOPS = [0.05, 0.10, 0.15]   // 3 points span the range; keep the request light
 const DEFAULT_MAX_SYMBOLS = 15             // synchronous compute — bounded so the proxy doesn't cut us
 const MIN_TRAIN_TRADES = 30   // don't trust a train pick made on too few trades
 
@@ -62,7 +61,9 @@ async function run(req: NextRequest): Promise<NextResponse> {
   const explicit = url.searchParams.get('symbols')
   const splitFrac = Math.min(0.9, Math.max(0.4, Number(url.searchParams.get('splitFrac') ?? '0.7')))
   const rMultiple = Number(url.searchParams.get('rMultiple') ?? '2')
-  const stops = (url.searchParams.get('stops')?.split(',').map(Number).filter(s => s > 0 && s < 1)) || DEFAULT_STOPS
+  // ONE stop per call — the whole-grid version exceeds Railway's request window.
+  // Run this 3x (e.g. 0.05/0.10/0.15) and compare train vs test across calls.
+  const stopPct = Number(url.searchParams.get('stopPct') ?? '0.10')
 
   const base = defaultParams(assetType)
   const fixed: Partial<BacktestParams> = { rMultiple: Number.isFinite(rMultiple) ? rMultiple : base.rMultiple }
@@ -74,71 +75,44 @@ async function run(req: NextRequest): Promise<NextResponse> {
   const symbols = resolved.symbols.slice(0, maxSymbols)
   const label = resolved.label
 
-  // Load + simulate per symbol so we never hold the whole universe's bars at once,
-  // and the grid of stops is evaluated against each symbol's history before it's freed.
-  const concurrency = assetType === 'crypto' ? 2 : 5
-  const perStop = new Map<number, BacktestTrade[]>()
-  for (const s of stops) perStop.set(s, [])
-  let tested = 0
+  // Deterministic calendar split — independent of which stop is being run, so the
+  // separate single-stop calls share the same train/test boundary and stay comparable.
+  const historyDays = (fixed.historyDays as number) ?? base.historyDays
+  const splitDate = new Date(Date.now() - (1 - splitFrac) * historyDays * 86_400_000).toISOString().split('T')[0]
 
+  // Load + simulate per symbol; free each symbol's bars before the next.
+  const concurrency = assetType === 'crypto' ? 2 : 5
+  const pooled: BacktestTrade[] = []
+  let tested = 0
   await mapLimited(symbols, concurrency, async (ticker) => {
     let bars
-    try { bars = await loadBacktestHistory(ticker, assetType, base.historyDays) } catch { return }
+    try { bars = await loadBacktestHistory(ticker, assetType, historyDays) } catch { return }
     if (!bars || bars.length <= base.warmupBars + 40) return
     tested++
-    for (const stopPct of stops) {
-      const trades = simulateWeeklyTrend(bars, { ...base, ...fixed, stopPct })
-      perStop.get(stopPct)!.push(...trades)
-    }
+    pooled.push(...simulateWeeklyTrend(bars, { ...base, ...fixed, stopPct }))
   })
 
-  // One global split date from all trade entry-dates (so windows match across stops).
-  const allDates = [...perStop.values()].flat().map(t => t.entryDate).sort()
-  if (allDates.length < MIN_TRAIN_TRADES + 10) {
-    return NextResponse.json({
-      assetType, universe: label, symbolsTested: tested, totalTrades: allDates.length,
-      error: 'Too few trades to split — widen the universe, lower minStrength, or deepen history.',
-    })
-  }
-  const splitDate = allDates[Math.floor(allDates.length * splitFrac)]
-
-  // Per stop: split by date, score each window.
-  const grid = stops.map(stopPct => {
-    const trades = perStop.get(stopPct) ?? []
-    const train = trades.filter(t => t.entryDate < splitDate)
-    const test = trades.filter(t => t.entryDate >= splitDate)
-    const trainStats = statsFromTrades(train)
-    const testStats = statsFromTrades(test)
-    return {
-      stopPct, rMultiple: fixed.rMultiple,
-      train: { trades: train.length, expectancy: trainStats.bracket.expectancy, winRate: trainStats.bracket.winRate, profitFactor: trainStats.bracket.profitFactor },
-      test: { trades: test.length, expectancy: testStats.bracket.expectancy, winRate: testStats.bracket.winRate, profitFactor: testStats.bracket.profitFactor },
-    }
-  })
-
-  // Choose the stop that's best on TRAIN (with enough train trades); report its TEST result.
-  const eligible = grid.filter(g => g.train.trades >= MIN_TRAIN_TRADES)
-  const chosen = (eligible.length ? eligible : grid)
-    .slice().sort((a, b) => b.train.expectancy - a.train.expectancy)[0]
-
-  const honest = chosen
-    ? (chosen.test.expectancy >= chosen.train.expectancy * 0.5 && chosen.test.expectancy > 0
-        ? 'Test expectancy held up — the edge survives out-of-sample (still survivorship-biased; not yet point-in-time).'
-        : 'Test expectancy collapsed vs train — the in-sample number was largely curve-fit. Treat the signal as unproven.')
-    : 'No eligible stop met the minimum train-trade count.'
+  const train = pooled.filter(t => t.entryDate < splitDate)
+  const test = pooled.filter(t => t.entryDate >= splitDate)
+  const trainStats = statsFromTrades(train)
+  const testStats = statsFromTrades(test)
 
   return NextResponse.json({
     signal: 'weekly_trend', assetType, universe: label,
-    symbolsRequested: symbols.length, symbolsTested: tested,
-    splitFrac, splitDate, totalTrades: allDates.length,
-    chosenStop: chosen ? {
-      stopPct: chosen.stopPct, rMultiple: chosen.rMultiple,
-      trainExpectancy: chosen.train.expectancy, trainTrades: chosen.train.trades,
-      testExpectancy: chosen.test.expectancy, testTrades: chosen.test.trades,
-      testWinRate: chosen.test.winRate, testProfitFactor: chosen.test.profitFactor,
-    } : null,
-    grid,
-    verdict: honest,
-    note: 'Stop chosen on the train window only; headline figure is its expectancy on the untouched test window. Bracket (net R) basis, long-only, costs applied.',
+    stopPct, rMultiple: fixed.rMultiple, splitFrac, splitDate,
+    symbolsRequested: symbols.length, symbolsTested: tested, totalTrades: pooled.length,
+    train: {
+      trades: train.length,
+      bracketExpectancy: trainStats.bracket.expectancy, bracketWinRate: trainStats.bracket.winRate, bracketProfitFactor: trainStats.bracket.profitFactor,
+      horizonExpectancy: trainStats.horizon.expectancy,
+    },
+    test: {
+      trades: test.length,
+      bracketExpectancy: testStats.bracket.expectancy, bracketWinRate: testStats.bracket.winRate, bracketProfitFactor: testStats.bracket.profitFactor,
+      horizonExpectancy: testStats.horizon.expectancy,
+    },
+    note: train.length < MIN_TRAIN_TRADES
+      ? `Thin train sample (${train.length} trades) — widen the universe or lower minStrength before trusting this.`
+      : 'One stop, split at a fixed calendar date. Run several stops and pick the best TRAIN expectancy, then read its TEST. Bracket (net R) basis, long-only, costs applied.',
   })
 }
