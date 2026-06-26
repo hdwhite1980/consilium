@@ -16,6 +16,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient as createAdmin } from '@supabase/supabase-js'
 import { detectLiveMovers, type LiveAssetType } from '@/app/lib/signals/live-movers'
 import { selectTimeframe, type Timeframe } from '@/app/lib/signals/timeframe-selector'
+import { enqueueCouncil } from '@/app/lib/trading/council-queue'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -55,29 +56,6 @@ async function getRecentlyAnalyzed(userId: string, hours: number): Promise<Set<s
     .from('verdict_log').select('ticker')
     .eq('user_id', userId).gte('created_at', cutoff)
   return new Set((data as Array<{ ticker: string }> ?? []).map(r => r.ticker.toUpperCase()))
-}
-
-async function triggerAnalyze(userId: string, ticker: string, assetType: LiveAssetType, timeframe: Timeframe): Promise<boolean> {
-  const rawBase = (process.env.APP_BASE_URL ?? '').replace(/\/$/, '')
-  if (!rawBase) { console.warn('[live-movers-trade] APP_BASE_URL not set'); return false }
-  const baseUrl = /^https?:\/\//.test(rawBase) ? rawBase : `https://${rawBase}`
-  try {
-    const res = await fetch(`${baseUrl}/api/analyze`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Service-Trigger': 'live-movers-trade',
-        'X-Service-User-Id': userId,
-        'Authorization': `Bearer ${process.env.CRON_SECRET ?? ''}`,
-      },
-      body: JSON.stringify({ ticker, userId, source: `live_movers_${assetType}`, timeframe, persona: 'balanced' }),
-      signal: AbortSignal.timeout(90_000),
-    })
-    return res.ok
-  } catch (e) {
-    console.warn(`[live-movers-trade] analyze trigger failed for ${ticker}:`, e instanceof Error ? e.message : e)
-    return false
-  }
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> { return run(req) }
@@ -123,16 +101,20 @@ async function run(req: NextRequest): Promise<NextResponse> {
     catch { s.timeframe = '1D' }
   }
 
-  const triggered: string[] = []
-  const failed: string[] = []
+  const enqueued: string[] = []
+  const skipped: string[] = []
   if (!dryRun) {
     for (const s of selected) {
-      const ok = await triggerAnalyze(userId, s.council, assetType, s.timeframe)
-      if (ok) triggered.push(s.council); else failed.push(s.council)
+      const r = await enqueueCouncil({
+        userId, ticker: s.council, assetType,
+        source: `live_movers_${assetType}`, pool: 'high', timeframe: s.timeframe,
+      })
+      if (r === 'enqueued') enqueued.push(s.council)
+      else skipped.push(`${s.council}:${r}`)
     }
   }
 
-  console.log(`[live-movers-trade] assetType=${assetType} movers=${movers.length} selected=${selected.length} triggered=${triggered.length} failed=${failed.length}${dryRun ? ' (dryRun)' : ''}`)
+  console.log(`[live-movers-trade] assetType=${assetType} movers=${movers.length} selected=${selected.length} enqueued=${enqueued.length} skipped=${skipped.length}${dryRun ? ' (dryRun)' : ''}`)
 
   return NextResponse.json({
     assetType,
@@ -140,9 +122,9 @@ async function run(req: NextRequest): Promise<NextResponse> {
     minScore,
     moversFound: movers.length,
     selected: selected.map(s => ({ ticker: s.council, display: s.display, score: s.score, intradayChangePct: s.changePct, timeframe: s.timeframe })),
-    triggered,
-    failed,
+    enqueued,
+    skipped,
     dryRun,
-    note: 'Triggered movers flow through the Council; the matching auto-trade cron executes any TAKE verdicts.',
+    note: 'Selected movers are enqueued to the high pool; council-dispatcher drains the queue into the Council.',
   }, { status: 200 })
 }
