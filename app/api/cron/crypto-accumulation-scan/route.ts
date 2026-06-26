@@ -65,9 +65,25 @@ async function run(req: NextRequest): Promise<NextResponse> {
   }
 
   // ── Scan mode: scan one liquidity band and persist ──
-  const minM = Number(url.searchParams.get('min') ?? '0')
-  const maxParam = url.searchParams.get('max')
-  const maxM = maxParam == null || maxParam === '' ? null : Number(maxParam)
+  // Accept either ?band=2-4 / ?band=10plus (single param, QStash-friendly) or
+  // explicit ?min=&max= (in millions).
+  const bandParam = url.searchParams.get('band')
+  let minM: number
+  let maxM: number | null
+  if (bandParam) {
+    if (/plus$/i.test(bandParam) || bandParam.endsWith('+')) {
+      minM = parseInt(bandParam, 10) || 0
+      maxM = null
+    } else {
+      const parts = bandParam.split('-').map(Number)
+      minM = Number.isFinite(parts[0]) ? parts[0] : 0
+      maxM = Number.isFinite(parts[1]) ? parts[1] : null
+    }
+  } else {
+    minM = Number(url.searchParams.get('min') ?? '0')
+    const maxParam = url.searchParams.get('max')
+    maxM = maxParam == null || maxParam === '' ? null : Number(maxParam)
+  }
   const minVolumeUsd = minM * 1_000_000
   const maxVolumeUsd = maxM == null ? undefined : maxM * 1_000_000
   const universeLimit = Number(url.searchParams.get('limit') ?? '150')
