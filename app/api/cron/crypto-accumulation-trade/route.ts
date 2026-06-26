@@ -20,6 +20,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient as createAdmin } from '@supabase/supabase-js'
 import { selectTimeframe, type Timeframe } from '@/app/lib/signals/timeframe-selector'
+import { enqueueCouncil } from '@/app/lib/trading/council-queue'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -55,26 +56,11 @@ async function getRecentlyAnalyzed(userId: string, hours: number): Promise<Set<s
 }
 
 async function triggerAnalyze(userId: string, ticker: string, timeframe: Timeframe): Promise<boolean> {
-  const rawBase = (process.env.APP_BASE_URL ?? '').replace(/\/$/, '')
-  if (!rawBase) { console.warn('[crypto-accum-trade] APP_BASE_URL not set'); return false }
-  const baseUrl = /^https?:\/\//.test(rawBase) ? rawBase : `https://${rawBase}`
-  try {
-    const res = await fetch(`${baseUrl}/api/analyze`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Service-Trigger': 'crypto-accumulation-trade',
-        'X-Service-User-Id': userId,
-        'Authorization': `Bearer ${process.env.CRON_SECRET ?? ''}`,
-      },
-      body: JSON.stringify({ ticker, userId, source: 'crypto_accumulation', timeframe, persona: 'balanced' }),
-      signal: AbortSignal.timeout(90_000),
-    })
-    return res.ok
-  } catch (e) {
-    console.warn(`[crypto-accum-trade] analyze trigger failed for ${ticker}:`, e instanceof Error ? e.message : e)
-    return false
-  }
+  const r = await enqueueCouncil({
+    userId, ticker, assetType: 'crypto',
+    source: 'crypto_accumulation', pool: 'low', timeframe,
+  })
+  return r === 'enqueued'
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> { return run(req) }

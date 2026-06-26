@@ -31,6 +31,8 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/app/lib/admin/admin-auth'
+import { enqueueCouncil, type CouncilTimeframe } from '@/app/lib/trading/council-queue'
+import { cryptoBaseOf } from '@/app/lib/crypto-symbol'
 import { listEnabledTradingUsers } from '@/app/lib/trading/settings'
 import { runScan } from '@/app/lib/scanner-engine'
 
@@ -490,74 +492,12 @@ async function hasRecentVerdict(userId: string, ticker: string, windowHours: num
  * then we abandon the response.
  */
 async function triggerAnalyze(userId: string, ticker: string, timeframe: string): Promise<boolean> {
-  const rawBase = process.env.APP_BASE_URL ?? ''
-  if (!rawBase) {
-    console.warn('[auto-council-trigger] APP_BASE_URL not set; cannot trigger analyze')
-    return false
-  }
-
-  // Normalize: Railway env vars often contain the bare hostname (e.g.
-  // `consilium-production-d8e6.up.railway.app`) without a scheme. Node's
-  // fetch requires a fully-qualified URL with `https://`. Prepend if missing
-  // and strip any trailing slash to keep the join clean.
-  const baseUrl = (rawBase.startsWith('http://') || rawBase.startsWith('https://'))
-    ? rawBase.replace(/\/+$/, '')
-    : `https://${rawBase.replace(/\/+$/, '')}`
-
-  const ctrl = new AbortController()
-  const briefHeadTimeout = setTimeout(() => ctrl.abort(), 8_000)
-
-  try {
-    const res = await fetch(`${baseUrl}/api/analyze`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.CRON_SECRET ?? ''}`,
-        'x-service-trigger': 'auto-council-trigger',
-        'x-service-user-id': userId,
-      },
-      body: JSON.stringify({
-        ticker,
-        timeframe,
-        forceRefresh: false,
-        persona: 'balanced',
-      }),
-      signal: ctrl.signal,
-    })
-
-    // Clear the head timeout — connection established
-    clearTimeout(briefHeadTimeout)
-
-    if (!res.ok) {
-      console.warn(`[auto-council-trigger] analyze returned ${res.status} for ${ticker}`)
-      return false
-    }
-
-    // Fire-and-forget: don't await body. Schedule an async drain of the
-    // response stream so the connection is released cleanly on the server,
-    // but don't block this function. /api/analyze's controller-closed
-    // handler will let the pipeline continue server-side either way.
-    void (async () => {
-      try {
-        const reader = res.body?.getReader()
-        if (!reader) return
-        // Read a few chunks then abandon — gives the pipeline a head start
-        // before we tear down the connection. The server tolerates close.
-        for (let i = 0; i < 3; i++) {
-          const { done } = await reader.read()
-          if (done) break
-        }
-        try { await reader.cancel() } catch { /* ignore */ }
-      } catch { /* ignore drain failures */ }
-    })()
-
-    console.log(`[auto-council-trigger] FIRED user=${userId} ${ticker}`)
-    return true
-  } catch (e) {
-    clearTimeout(briefHeadTimeout)
-    const msg = e instanceof Error ? e.message : String(e)
-    // AbortError on the brief head timeout is also a failure
-    console.warn(`[auto-council-trigger] analyze fire failed for ${ticker}: ${msg.slice(0, 200)}`)
-    return false
-  }
+  // Enqueue to the Council queue (normal pool) instead of firing /analyze directly.
+  const tf = (['1D', '1W', '1M'].includes(timeframe) ? timeframe : '1W') as CouncilTimeframe
+  const assetType = cryptoBaseOf(ticker) ? 'crypto' : 'stock'
+  const r = await enqueueCouncil({
+    userId, ticker, assetType,
+    source: 'active_story', pool: 'normal', timeframe: tf,
+  })
+  return r === 'enqueued'
 }

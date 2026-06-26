@@ -28,6 +28,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/app/lib/admin/admin-auth'
+import { enqueueCouncil } from '@/app/lib/trading/council-queue'
 import {
   listEnabledTradingUsers,
   isAssetClassEnabled,
@@ -73,35 +74,11 @@ async function getRecentlyAnalyzed(userId: string, hours: number): Promise<Set<s
 }
 
 async function triggerAnalyze(userId: string, ticker: string): Promise<boolean> {
-  const rawBase = (process.env.APP_BASE_URL ?? '').replace(/\/$/, '')
-  if (!rawBase) {
-    console.warn('[earnings-council] APP_BASE_URL not set')
-    return false
-  }
-  const baseUrl = /^https?:\/\//.test(rawBase) ? rawBase : `https://${rawBase}`
-  try {
-    const res = await fetch(`${baseUrl}/api/analyze`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Service-Trigger': 'earnings-council',
-        'X-Service-User-Id': userId,
-        Authorization: `Bearer ${process.env.CRON_SECRET ?? ''}`,
-      },
-      body: JSON.stringify({
-        ticker,
-        userId,
-        source: 'earnings_runup',
-        timeframe: '1W',
-        persona: 'balanced',
-      }),
-      signal: AbortSignal.timeout(90_000),
-    })
-    return res.ok
-  } catch (e) {
-    console.warn(`[earnings-council] analyze trigger failed for ${ticker}:`, e instanceof Error ? e.message : e)
-    return false
-  }
+  const r = await enqueueCouncil({
+    userId, ticker, assetType: 'stock',
+    source: 'earnings_runup', pool: 'normal', timeframe: '1W',
+  })
+  return r === 'enqueued'
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {

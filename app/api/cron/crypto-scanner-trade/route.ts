@@ -11,6 +11,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/app/lib/admin/admin-auth'
+import { enqueueCouncil } from '@/app/lib/trading/council-queue'
 import { listEnabledTradingUsers, isAssetClassEnabled, type UserTradingSettings } from '@/app/lib/trading/settings'
 import { runCryptoScan, type CryptoTickerStats } from '@/app/lib/trading/crypto-scanner'
 import { fetchCryptoBars } from '@/app/lib/trading/crypto-bars'
@@ -26,7 +27,7 @@ export const maxDuration = 60
 const MIN_TECHNICAL_SCORE = 50      // -100..+100 scale; need clearly bullish bias
 const REQUIRE_BIAS = 'BULLISH' as const  // technicalBias must equal this
 const MAX_RSI = 78                  // skip if RSI extreme (overbought blow-off risk)
-const MIN_VOLUME_USD_FOR_TRADING = 10_000_000  // $10M+ — quality liquidity for real money
+const MIN_VOLUME_USD_FOR_TRADING = 1_000_000   // $1M+ — sized for $8-25 positions; Council + techScore are the quality gate
 
 interface UserResult {
   userId: string
@@ -63,7 +64,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     if (enabledUsers.length > 0) {
       scan = await runCryptoScan({
         userId: enabledUsers[0].userId,
-        minComposite: 65,
+        minComposite: 50,
         minMovement: 2.0,
         minVolume: 1_000_000,
         limit: 10,
@@ -71,7 +72,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       })
     } else {
       scan = await runCryptoScan({
-        minComposite: 65,
+        minComposite: 50,
         minMovement: 2.0,
         minVolume: 1_000_000,
         limit: 10,
@@ -275,33 +276,10 @@ function toCouncilSymbol(productId: string): string {
 }
 
 async function triggerAnalyze(userId: string, ticker: string): Promise<boolean> {
-  const rawBase = (process.env.APP_BASE_URL ?? '').replace(/\/$/, '')
-  if (!rawBase) {
-    console.warn('[crypto-scanner-trade] APP_BASE_URL not set')
-    return false
-  }
-  const baseUrl = /^https?:\/\//.test(rawBase) ? rawBase : `https://${rawBase}`
-  try {
-    const res = await fetch(`${baseUrl}/api/analyze`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Service-Trigger': 'crypto-scanner-trade',
-        'X-Service-User-Id': userId,
-        'Authorization': `Bearer ${process.env.CRON_SECRET ?? ''}`,
-      },
-      body: JSON.stringify({
-        ticker,
-        userId,
-        source: 'crypto_scanner',
-        timeframe: '1D',
-        persona: 'balanced',
-      }),
-      signal: AbortSignal.timeout(90_000),
-    })
-    return res.ok
-  } catch (e) {
-    console.warn(`[crypto-scanner-trade] analyze trigger failed for ${ticker}:`, e instanceof Error ? e.message : e)
-    return false
-  }
+  // Enqueue to the Council queue (high pool) instead of firing /analyze directly.
+  const r = await enqueueCouncil({
+    userId, ticker, assetType: 'crypto',
+    source: 'crypto_scanner', pool: 'high', timeframe: '1D',
+  })
+  return r === 'enqueued'
 }
