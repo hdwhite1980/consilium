@@ -223,9 +223,11 @@ export async function getWeeklyTrend(
       const sym = ticker.includes('-') ? ticker : `${ticker.toUpperCase()}-USD`
       daily = await fetchCryptoBars({ symbol: sym, granularity: 'ONE_DAY', limit: 200 })
     } else {
-      // stock + futures-proxy (SPY/QQQ/...) both use the equity bar feed
+      // stock + futures-proxy (SPY/QQQ/...) both use the equity bar feed.
+      // '1M' maps to 1Day bars over ~500 days (~70 weeks) — the right lens for
+      // weekly aggregation. ('1D' is intraday 15-min and far too short.)
       const { fetchBars } = await import('@/app/lib/data/alpaca')
-      daily = (await fetchBars(ticker.toUpperCase(), '1D')) as unknown as Bar[]
+      daily = (await fetchBars(ticker.toUpperCase(), '1M')) as unknown as Bar[]
     }
     if (!daily?.length) return { ...base, reason: 'no bars returned' }
     return analyzeWeeklyTrend(daily, opts)
@@ -258,7 +260,7 @@ export async function runAccumulationScan(opts?: {
   universeLimit?: number     // cap on weekly-bar fetches (cost control), default 40
   minStrength?: number       // default 45
   phases?: Array<WeeklyTrendAnalysis['phase']>  // default accumulation + distribution
-}): Promise<{ picks: AccumulationPick[]; scanned: number; universeSize: number }> {
+}): Promise<{ picks: AccumulationPick[]; scanned: number; universeSize: number; scannedReads: Array<{ symbol: string; phase: WeeklyTrendAnalysis['phase']; bias: WeeklyTrendAnalysis['bias']; strength: number; ok: boolean }> }> {
   const { runCryptoScan } = await import('@/app/lib/trading/crypto-scanner')
   const minVolumeUsd = opts?.minVolumeUsd ?? 10_000_000
   const universeLimit = opts?.universeLimit ?? 40
@@ -276,6 +278,11 @@ export async function runAccumulationScan(opts?: {
     return { c, weekly }
   }))
 
+  const scannedReads = analyzed.map(({ c, weekly }) => ({
+    symbol: c.baseDisplaySymbol ?? c.symbol.replace('-USD', ''),
+    phase: weekly.phase, bias: weekly.bias, strength: weekly.strength, ok: weekly.ok,
+  }))
+
   const picks: AccumulationPick[] = analyzed
     .filter(({ weekly }) => weekly.ok && phases.includes(weekly.phase) && weekly.strength >= minStrength)
     .map(({ c, weekly }) => ({
@@ -288,5 +295,5 @@ export async function runAccumulationScan(opts?: {
     }))
     .sort((a, b) => b.weekly.strength - a.weekly.strength)
 
-  return { picks, scanned: candidates.length, universeSize: scan.universeSize }
+  return { picks, scanned: candidates.length, universeSize: scan.universeSize, scannedReads }
 }

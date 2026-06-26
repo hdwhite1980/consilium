@@ -55,6 +55,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         volumeUsd24h: Math.round(p.volumeUsd24h),
         note: p.weekly.notes[0],
       })),
+      // every coin the scan checked + its read, so found:0 is explainable
+      scannedReads: scan.scannedReads.sort((a, b) => b.strength - a.strength),
     }, { status: 200 })
   }
 
