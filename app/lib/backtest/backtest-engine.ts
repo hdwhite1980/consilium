@@ -1,0 +1,185 @@
+// =============================================================
+// app/lib/backtest/backtest-engine.ts
+//
+// Signal backtester. Backtests deterministic discovery SIGNALS (not the Council —
+// the Council's data bundle is point-in-time-contaminated and can't be replayed
+// historically without lookahead leakage). The signals are pure functions of a
+// Bar[] array, so "evaluate as of bar T" = call the real function on bars[0..T].
+// The production code IS the backtest, so there's no model/reality drift.
+//
+// Two exit models, reported side by side:
+//   bracket  — stop at stopPct, target at stopPct*rMultiple; pessimistic fill
+//              (if one bar straddles both, assume STOP hit first)
+//   horizon  — exit at a fixed number of bars after entry (return N bars later)
+//
+// Anti-lookahead: signal sees only bars<=T; entry is bars[T+1].open; exits use
+// bars strictly after entry. Trades are non-overlapping (one position at a time).
+// =============================================================
+
+import type { Bar } from '@/app/lib/signals/technicals'
+import { analyzeWeeklyTrend } from '@/app/lib/signals/weekly-trend'
+
+export type BacktestAssetType = 'stock' | 'crypto' | 'forex' | 'futures'
+
+export interface BacktestParams {
+  minStrength: number    // signal strength floor to take a trade
+  stopPct: number        // 1R in price terms (e.g. 0.05 = 5% stop)
+  rMultiple: number      // target distance = rMultiple * stopPct
+  horizonBars: number    // fixed-horizon lookforward
+  maxHoldBars: number    // bracket timeout
+  warmupBars: number     // bars reserved to warm the signal (~26 weeks)
+  stepBars: number       // evaluation cadence (5 ≈ weekly on daily bars)
+  costBps: number        // ONE-WAY cost (slippage+fee+spread) in bps; round-trip = 2x
+}
+
+const ASSET_COST_BPS: Record<BacktestAssetType, number> = { stock: 5, crypto: 15, forex: 2, futures: 5 }
+
+export function defaultParams(assetType: BacktestAssetType): BacktestParams {
+  return {
+    minStrength: 50, stopPct: 0.05, rMultiple: 2, horizonBars: 20,
+    maxHoldBars: 60, warmupBars: 130, stepBars: 5, costBps: ASSET_COST_BPS[assetType],
+  }
+}
+
+export interface BacktestTrade {
+  entryDate: string
+  entryPrice: number
+  strength: number
+  bracket: { outcome: 'target' | 'stop' | 'timeout'; exitPrice: number; barsHeld: number; netR: number }
+  horizon: { exitPrice: number; barsHeld: number; netReturnPct: number }
+}
+
+interface SideStats {
+  winRate: number
+  expectancy: number       // avg net R (bracket) or avg net % (horizon) per trade
+  profitFactor: number
+  maxDrawdown: number      // in R (bracket) or cumulative % (horizon)
+  avgBarsHeld: number
+}
+
+export interface BacktestResult {
+  ticker: string
+  assetType: BacktestAssetType
+  signal: 'weekly_trend'
+  barsLoaded: number
+  trades: number
+  params: BacktestParams
+  bracket: SideStats
+  horizon: SideStats
+  sampleTrades: BacktestTrade[]
+  note: string
+}
+
+// ── History loader: chronological daily bars via the existing fetchers ──
+async function loadDailyHistory(ticker: string, assetType: BacktestAssetType): Promise<Bar[]> {
+  let bars: Bar[]
+  if (assetType === 'crypto') {
+    const { fetchCryptoBars } = await import('@/app/lib/trading/crypto-bars')
+    const { toCoinbaseProduct } = await import('@/app/lib/crypto-symbol')
+    bars = (await fetchCryptoBars({ symbol: toCoinbaseProduct(ticker), granularity: 'ONE_DAY', limit: 350 })) as unknown as Bar[]
+  } else if (assetType === 'forex') {
+    const { fetchForexBars } = await import('@/app/lib/data/forex')
+    bars = (await fetchForexBars(ticker.toUpperCase(), '1M')) as unknown as Bar[]   // 1M -> daily
+  } else {
+    const { fetchBars } = await import('@/app/lib/data/alpaca')
+    bars = (await fetchBars(ticker.toUpperCase(), '1M')) as unknown as Bar[]         // 1M -> 1Day
+  }
+  // Guarantee chronological order (signals assume oldest-first).
+  return (bars ?? []).slice().sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0))
+}
+
+function mean(xs: number[]): number { return xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 0 }
+
+function maxDrawdown(perTrade: number[]): number {
+  let cum = 0, peak = 0, dd = 0
+  for (const v of perTrade) { cum += v; peak = Math.max(peak, cum); dd = Math.max(dd, peak - cum) }
+  return dd
+}
+
+function sideStats(values: number[], barsHeld: number[]): SideStats {
+  if (values.length === 0) return { winRate: 0, expectancy: 0, profitFactor: 0, maxDrawdown: 0, avgBarsHeld: 0 }
+  const wins = values.filter(v => v > 0)
+  const losses = values.filter(v => v <= 0)
+  const grossWin = wins.reduce((s, x) => s + x, 0)
+  const grossLoss = Math.abs(losses.reduce((s, x) => s + x, 0))
+  return {
+    winRate: Math.round((wins.length / values.length) * 1000) / 10,
+    expectancy: Math.round(mean(values) * 1000) / 1000,
+    profitFactor: grossLoss > 0 ? Math.round((grossWin / grossLoss) * 100) / 100 : (grossWin > 0 ? 999 : 0),
+    maxDrawdown: Math.round(maxDrawdown(values) * 1000) / 1000,
+    avgBarsHeld: Math.round(mean(barsHeld) * 10) / 10,
+  }
+}
+
+export async function runWeeklyTrendBacktest(
+  ticker: string,
+  assetType: BacktestAssetType,
+  override: Partial<BacktestParams> = {},
+): Promise<BacktestResult> {
+  const p = { ...defaultParams(assetType), ...override }
+  const bars = await loadDailyHistory(ticker, assetType)
+  const n = bars.length
+  const costRT = 2 * p.costBps / 10_000   // round-trip fraction
+
+  const trades: BacktestTrade[] = []
+  let T = p.warmupBars
+
+  while (T < n - 2) {
+    const sig = analyzeWeeklyTrend(bars.slice(0, T + 1))
+    const fires = sig.ok && sig.bias === 'bullish'
+      && (sig.phase === 'accumulation' || sig.phase === 'markup')
+      && sig.strength >= p.minStrength
+
+    if (!fires) { T += p.stepBars; continue }
+
+    // Enter at the NEXT bar's open (signal known only at close of T).
+    const entryIdx = T + 1
+    const entry = bars[entryIdx].o
+    if (!(entry > 0)) { T += p.stepBars; continue }
+
+    const stop = entry * (1 - p.stopPct)
+    const target = entry * (1 + p.stopPct * p.rMultiple)
+
+    // ── Bracket exit (pessimistic: stop checked before target) ──
+    let bOutcome: 'target' | 'stop' | 'timeout' = 'timeout'
+    let bExitPrice = entry
+    let bBarsHeld = 0
+    const lastBracketIdx = Math.min(entryIdx + p.maxHoldBars, n - 1)
+    for (let j = entryIdx + 1; j <= lastBracketIdx; j++) {
+      if (bars[j].l <= stop) { bOutcome = 'stop'; bExitPrice = stop; bBarsHeld = j - entryIdx; break }
+      if (bars[j].h >= target) { bOutcome = 'target'; bExitPrice = target; bBarsHeld = j - entryIdx; break }
+      if (j === lastBracketIdx) { bOutcome = 'timeout'; bExitPrice = bars[j].c; bBarsHeld = j - entryIdx }
+    }
+    const bNetFrac = (bExitPrice - entry) / entry - costRT
+    const bNetR = bNetFrac / p.stopPct
+
+    // ── Fixed-horizon exit ──
+    const hIdx = Math.min(entryIdx + p.horizonBars, n - 1)
+    const hExit = bars[hIdx].c
+    const hNetPct = ((hExit - entry) / entry - costRT) * 100
+
+    trades.push({
+      entryDate: bars[entryIdx].t,
+      entryPrice: Math.round(entry * 1e6) / 1e6,
+      strength: sig.strength,
+      bracket: { outcome: bOutcome, exitPrice: Math.round(bExitPrice * 1e6) / 1e6, barsHeld: bBarsHeld, netR: Math.round(bNetR * 1000) / 1000 },
+      horizon: { exitPrice: Math.round(hExit * 1e6) / 1e6, barsHeld: hIdx - entryIdx, netReturnPct: Math.round(hNetPct * 100) / 100 },
+    })
+
+    // Non-overlapping: jump past the bracket exit.
+    T = entryIdx + Math.max(bBarsHeld, 1)
+  }
+
+  const bracket = sideStats(trades.map(t => t.bracket.netR), trades.map(t => t.bracket.barsHeld))
+  const horizon = sideStats(trades.map(t => t.horizon.netReturnPct), trades.map(t => t.horizon.barsHeld))
+
+  return {
+    ticker: ticker.toUpperCase(), assetType, signal: 'weekly_trend',
+    barsLoaded: n, trades: trades.length, params: p,
+    bracket, horizon,
+    sampleTrades: trades.slice(0, 15),
+    note: n < p.warmupBars + 40
+      ? 'Limited history loaded; results are thin — extend the history loader for a fuller test.'
+      : 'Backtest of the weekly-trend signal, long-only, non-overlapping, costs applied.',
+  }
+}
