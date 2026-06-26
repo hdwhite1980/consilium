@@ -29,7 +29,8 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
 const VALID: BacktestAssetType[] = ['stock', 'crypto', 'forex', 'futures']
-const DEFAULT_STOPS = [0.05, 0.08, 0.10, 0.12, 0.15]
+const DEFAULT_STOPS = [0.05, 0.10, 0.15]   // 3 points span the range; keep the request light
+const DEFAULT_MAX_SYMBOLS = 15             // synchronous compute — bounded so the proxy doesn't cut us
 const MIN_TRAIN_TRADES = 30   // don't trust a train pick made on too few trades
 
 function isAuthorized(req: NextRequest): boolean {
@@ -57,6 +58,7 @@ async function run(req: NextRequest): Promise<NextResponse> {
   const at = (url.searchParams.get('assetType') ?? 'stock').toLowerCase() as BacktestAssetType
   const assetType = VALID.includes(at) ? at : 'stock'
   const limit = Number(url.searchParams.get('limit') ?? '25')
+  const maxSymbols = Math.max(1, Number(url.searchParams.get('maxSymbols') ?? String(DEFAULT_MAX_SYMBOLS)))
   const explicit = url.searchParams.get('symbols')
   const splitFrac = Math.min(0.9, Math.max(0.4, Number(url.searchParams.get('splitFrac') ?? '0.7')))
   const rMultiple = Number(url.searchParams.get('rMultiple') ?? '2')
@@ -68,36 +70,39 @@ async function run(req: NextRequest): Promise<NextResponse> {
     const v = Number(url.searchParams.get(k)); if (Number.isFinite(v)) (fixed as Record<string, number>)[k] = v
   }
 
-  const { symbols, label } = await resolveUniverse(assetType, limit, explicit)
+  const resolved = await resolveUniverse(assetType, limit, explicit)
+  const symbols = resolved.symbols.slice(0, maxSymbols)
+  const label = resolved.label
 
-  // 1. Load every symbol's deep history once (crypto pages Coinbase — keep gentle).
+  // Load + simulate per symbol so we never hold the whole universe's bars at once,
+  // and the grid of stops is evaluated against each symbol's history before it's freed.
   const concurrency = assetType === 'crypto' ? 2 : 5
-  const loaded = await mapLimited(symbols, concurrency, async (ticker) => {
-    try { return { ticker, bars: await loadBacktestHistory(ticker, assetType, base.historyDays) } }
-    catch { return { ticker, bars: [] } }
-  })
-  const usable = loaded.filter(l => l.bars.length > base.warmupBars + 40)
-
-  // 2. Simulate the grid in memory; pool trades per stop across symbols.
   const perStop = new Map<number, BacktestTrade[]>()
-  for (const stopPct of stops) {
-    const params: BacktestParams = { ...base, ...fixed, stopPct }
-    const pooled: BacktestTrade[] = []
-    for (const { bars } of usable) pooled.push(...simulateWeeklyTrend(bars, params))
-    perStop.set(stopPct, pooled)
-  }
+  for (const s of stops) perStop.set(s, [])
+  let tested = 0
 
-  // 3. One global split date from all trade entry-dates (so windows match across stops).
+  await mapLimited(symbols, concurrency, async (ticker) => {
+    let bars
+    try { bars = await loadBacktestHistory(ticker, assetType, base.historyDays) } catch { return }
+    if (!bars || bars.length <= base.warmupBars + 40) return
+    tested++
+    for (const stopPct of stops) {
+      const trades = simulateWeeklyTrend(bars, { ...base, ...fixed, stopPct })
+      perStop.get(stopPct)!.push(...trades)
+    }
+  })
+
+  // One global split date from all trade entry-dates (so windows match across stops).
   const allDates = [...perStop.values()].flat().map(t => t.entryDate).sort()
   if (allDates.length < MIN_TRAIN_TRADES + 10) {
     return NextResponse.json({
-      assetType, universe: label, symbolsTested: usable.length, totalTrades: allDates.length,
+      assetType, universe: label, symbolsTested: tested, totalTrades: allDates.length,
       error: 'Too few trades to split — widen the universe, lower minStrength, or deepen history.',
     })
   }
   const splitDate = allDates[Math.floor(allDates.length * splitFrac)]
 
-  // 4. Per stop: split by date, score each window.
+  // Per stop: split by date, score each window.
   const grid = stops.map(stopPct => {
     const trades = perStop.get(stopPct) ?? []
     const train = trades.filter(t => t.entryDate < splitDate)
@@ -111,7 +116,7 @@ async function run(req: NextRequest): Promise<NextResponse> {
     }
   })
 
-  // 5. Choose the stop that's best on TRAIN (with enough train trades); report its TEST result.
+  // Choose the stop that's best on TRAIN (with enough train trades); report its TEST result.
   const eligible = grid.filter(g => g.train.trades >= MIN_TRAIN_TRADES)
   const chosen = (eligible.length ? eligible : grid)
     .slice().sort((a, b) => b.train.expectancy - a.train.expectancy)[0]
@@ -124,7 +129,7 @@ async function run(req: NextRequest): Promise<NextResponse> {
 
   return NextResponse.json({
     signal: 'weekly_trend', assetType, universe: label,
-    symbolsRequested: symbols.length, symbolsTested: usable.length,
+    symbolsRequested: symbols.length, symbolsTested: tested,
     splitFrac, splitDate, totalTrades: allDates.length,
     chosenStop: chosen ? {
       stopPct: chosen.stopPct, rMultiple: chosen.rMultiple,
