@@ -53,9 +53,10 @@ function scoreChart(bars: Bar[], assetType: SelectorAssetType): { score: number;
   const closes = b.map(x => x.c)
   const last = closes[closes.length - 1]
 
-  // 1) Trend: regression slope magnitude (clean directional drift scores high)
-  const slope = normSlope(closes)
-  const trendScore = Math.min(35, Math.abs(slope) * (assetType === 'forex' ? 120 : 18))
+  // 1) Trend: regression-implied move OVER the window (honest magnitude, not %/bar)
+  const slope = normSlope(closes)                          // %/bar
+  const trendMovePct = Math.abs(slope) * closes.length     // ~ total drift across the window
+  const trendScore = Math.min(35, trendMovePct * (assetType === 'forex' ? 30 : 2.5))
   const direction: 'up' | 'down' | 'flat' = slope > 0.0005 ? 'up' : slope < -0.0005 ? 'down' : 'flat'
 
   // 2) Directional consistency: fraction of bars moving with the trend
@@ -65,13 +66,13 @@ function scoreChart(bars: Bar[], assetType: SelectorAssetType): { score: number;
     if ((slope >= 0 && d >= 0) || (slope < 0 && d < 0)) withTrend++
   }
   const consistency = withTrend / (closes.length - 1)              // 0..1
-  const consistencyScore = Math.min(20, Math.max(0, (consistency - 0.5) * 40))
+  const consistencyScore = Math.min(20, Math.max(0, (consistency - 0.5) * 50))
 
   // 3) Momentum: move over the last ~15% of the window, aligned with trend
   const ref = closes[Math.floor(closes.length * 0.85)] ?? closes[0]
   const momPct = ref > 0 ? ((last - ref) / ref) * 100 : 0
   const momAligned = (slope >= 0 ? momPct : -momPct)
-  const momScore = Math.min(20, Math.max(0, momAligned * (assetType === 'forex' ? 50 : 3)))
+  const momScore = Math.min(20, Math.max(0, momAligned * (assetType === 'forex' ? 60 : 4)))
 
   // 4) Breakout: last close beyond the prior range edge (excl. last 2 bars)
   const priorHigh = Math.max(...b.slice(0, -2).map(x => x.h))
