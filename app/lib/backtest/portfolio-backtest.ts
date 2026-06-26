@@ -44,6 +44,28 @@ async function mapLimited<T, R>(items: T[], limit: number, fn: (x: T) => Promise
   return out
 }
 
+// ── Default universes (shared by the portfolio + OOS routes) ──
+export const DEFAULT_STOCKS = [
+  'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'AMD', 'NFLX', 'AVGO',
+  'JPM', 'V', 'UNH', 'XOM', 'COST', 'HD', 'PG', 'CRM', 'ORCL', 'ADBE',
+  'BAC', 'KO', 'PEP', 'WMT', 'DIS',
+]
+export const FUTURES_PROXIES = ['SPY', 'QQQ', 'IWM', 'DIA', 'VIXY', 'TLT', 'IEF', 'UUP']
+export const FOREX_PAIRS = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD', 'EURJPY', 'GBPJPY', 'EURGBP']
+
+export async function resolveUniverse(
+  assetType: BacktestAssetType, limit: number, explicit: string | null,
+): Promise<{ symbols: string[]; label: string }> {
+  if (explicit) return { symbols: explicit.split(',').map(s => s.trim()).filter(Boolean), label: 'custom' }
+  if (assetType === 'stock') return { symbols: DEFAULT_STOCKS, label: 'default_megacap' }
+  if (assetType === 'futures') return { symbols: FUTURES_PROXIES, label: 'etf_proxies' }
+  if (assetType === 'forex') return { symbols: FOREX_PAIRS, label: 'major_pairs' }
+  const { runCryptoScan } = await import('@/app/lib/trading/crypto-scanner')
+  const scan = await runCryptoScan({ minMovement: 0, minVolume: 0, limit: 500 })
+  const top = [...scan.picks].sort((a, b) => b.volumeUsd24h - a.volumeUsd24h).slice(0, limit)
+  return { symbols: top.map(p => p.baseDisplaySymbol ?? p.symbol), label: `top${limit}_by_volume` }
+}
+
 export async function runPortfolioBacktest(args: {
   symbols: string[]
   assetType: BacktestAssetType

@@ -14,7 +14,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { runPortfolioBacktest } from '@/app/lib/backtest/portfolio-backtest'
+import { runPortfolioBacktest, resolveUniverse } from '@/app/lib/backtest/portfolio-backtest'
 import type { BacktestAssetType, BacktestParams } from '@/app/lib/backtest/backtest-engine'
 
 export const runtime = 'nodejs'
@@ -30,26 +30,6 @@ function admin() {
 }
 
 const VALID: BacktestAssetType[] = ['stock', 'crypto', 'forex', 'futures']
-
-const DEFAULT_STOCKS = [
-  'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'AMD', 'NFLX', 'AVGO',
-  'JPM', 'V', 'UNH', 'XOM', 'COST', 'HD', 'PG', 'CRM', 'ORCL', 'ADBE',
-  'BAC', 'KO', 'PEP', 'WMT', 'DIS',
-]
-const FUTURES_PROXIES = ['SPY', 'QQQ', 'IWM', 'DIA', 'VIXY', 'TLT', 'IEF', 'UUP']
-const FOREX_PAIRS = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD', 'EURJPY', 'GBPJPY', 'EURGBP']
-
-async function resolveUniverse(assetType: BacktestAssetType, limit: number, explicit: string | null): Promise<{ symbols: string[]; label: string }> {
-  if (explicit) return { symbols: explicit.split(',').map(s => s.trim()).filter(Boolean), label: 'custom' }
-  if (assetType === 'stock') return { symbols: DEFAULT_STOCKS, label: 'default_megacap' }
-  if (assetType === 'futures') return { symbols: FUTURES_PROXIES, label: 'etf_proxies' }
-  if (assetType === 'forex') return { symbols: FOREX_PAIRS, label: 'major_pairs' }
-  // crypto: top-by-volume from the live scan universe
-  const { runCryptoScan } = await import('@/app/lib/trading/crypto-scanner')
-  const scan = await runCryptoScan({ minMovement: 0, minVolume: 0, limit: 500 })
-  const top = [...scan.picks].sort((a, b) => b.volumeUsd24h - a.volumeUsd24h).slice(0, limit)
-  return { symbols: top.map(p => p.baseDisplaySymbol ?? p.symbol), label: `top${limit}_by_volume` }
-}
 
 export async function GET(req: NextRequest): Promise<NextResponse> { return run(req) }
 export async function POST(req: NextRequest): Promise<NextResponse> { return run(req) }

@@ -146,16 +146,16 @@ function sideStats(values: number[], barsHeld: number[]): SideStats {
 }
 
 /** Collect every (non-overlapping) trade the weekly-trend signal would have taken. */
-export async function collectWeeklyTrendTrades(
-  ticker: string,
-  assetType: BacktestAssetType,
-  override: Partial<BacktestParams> = {},
-): Promise<{ trades: BacktestTrade[]; barsLoaded: number; params: BacktestParams }> {
-  const p = { ...defaultParams(assetType), ...override }
-  const bars = await loadDailyHistory(ticker, assetType, p.historyDays)
+/** Load deep daily history for a symbol (exported so sweeps can load once, simulate many param sets). */
+export async function loadBacktestHistory(ticker: string, assetType: BacktestAssetType, historyDays = 3650): Promise<Bar[]> {
+  return loadDailyHistory(ticker, assetType, historyDays)
+}
+
+/** Pure: simulate the weekly-trend signal over pre-loaded bars. Lookahead-free (slice ends at T). */
+export function simulateWeeklyTrend(bars: Bar[], params: BacktestParams): BacktestTrade[] {
+  const p = params
   const n = bars.length
   const costRT = 2 * p.costBps / 10_000   // round-trip fraction
-
   const trades: BacktestTrade[] = []
   let T = p.warmupBars
 
@@ -202,7 +202,18 @@ export async function collectWeeklyTrendTrades(
     T = entryIdx + Math.max(bBarsHeld, 1)   // non-overlapping
   }
 
-  return { trades, barsLoaded: n, params: p }
+  return trades
+}
+
+export async function collectWeeklyTrendTrades(
+  ticker: string,
+  assetType: BacktestAssetType,
+  override: Partial<BacktestParams> = {},
+): Promise<{ trades: BacktestTrade[]; barsLoaded: number; params: BacktestParams }> {
+  const p = { ...defaultParams(assetType), ...override }
+  const bars = await loadDailyHistory(ticker, assetType, p.historyDays)
+  const trades = simulateWeeklyTrend(bars, p)
+  return { trades, barsLoaded: bars.length, params: p }
 }
 
 /** Pooled bracket + horizon stats from a set of trades (works across symbols). */
