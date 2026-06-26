@@ -349,3 +349,51 @@ export async function runAccumulationScan(opts?: {
 
   return { picks, scanned: candidates.length, universeSize: scan.universeSize, scannedReads, newCoins }
 }
+
+// ─────────────────────────────────────────────────────────────
+// Stock accumulation scan — the equity counterpart. Runs the SAME weekly-trend
+// engine over the curated liquid stock universe (not crypto). Validated by the
+// out-of-sample backtest as the asset class where this signal actually has edge.
+// Scans a slice of the universe (offset/limit) so several schedules can cover it
+// without any one call timing out.
+// ─────────────────────────────────────────────────────────────
+export interface StockAccumulationRead {
+  symbol: string
+  phase: WeeklyTrendAnalysis['phase']
+  bias: WeeklyTrendAnalysis['bias']
+  strength: number
+  ok: boolean
+  priceChangeRecentPct: number
+  cap: string
+  sector: string
+  note: string | null
+}
+
+export async function runStockAccumulationScan(opts?: {
+  tickers?: string[]
+  offset?: number
+  limit?: number
+  concurrency?: number
+}): Promise<{ scanned: number; reads: StockAccumulationRead[] }> {
+  const { getAllUniverseTickers, getUniverseEntry } = await import('@/app/lib/scanner-universe')
+  const all = opts?.tickers ?? getAllUniverseTickers()
+  const offset = Math.max(0, opts?.offset ?? 0)
+  const limit = opts?.limit ?? all.length
+  const slice = all.slice(offset, offset + limit)
+  const concurrency = opts?.concurrency ?? 8
+
+  const reads = await mapLimited(slice, concurrency, async (ticker): Promise<StockAccumulationRead> => {
+    const w = await getWeeklyTrend(ticker, 'stock')
+    const entry = getUniverseEntry(ticker)
+    return {
+      symbol: ticker.toUpperCase(),
+      phase: w.phase, bias: w.bias, strength: w.strength, ok: w.ok,
+      priceChangeRecentPct: w.priceChangePctRecent ?? 0,
+      cap: entry?.cap ?? 'unknown',
+      sector: entry?.sector ?? 'unknown',
+      note: w.ok ? null : (w.reason ?? null),
+    }
+  })
+
+  return { scanned: reads.length, reads }
+}
