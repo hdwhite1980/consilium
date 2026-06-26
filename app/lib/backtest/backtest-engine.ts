@@ -49,7 +49,7 @@ export interface BacktestTrade {
   horizon: { exitPrice: number; barsHeld: number; netReturnPct: number }
 }
 
-interface SideStats {
+export interface SideStats {
   winRate: number
   expectancy: number       // avg net R (bracket) or avg net % (horizon) per trade
   profitFactor: number
@@ -111,11 +111,12 @@ function sideStats(values: number[], barsHeld: number[]): SideStats {
   }
 }
 
-export async function runWeeklyTrendBacktest(
+/** Collect every (non-overlapping) trade the weekly-trend signal would have taken. */
+export async function collectWeeklyTrendTrades(
   ticker: string,
   assetType: BacktestAssetType,
   override: Partial<BacktestParams> = {},
-): Promise<BacktestResult> {
+): Promise<{ trades: BacktestTrade[]; barsLoaded: number; params: BacktestParams }> {
   const p = { ...defaultParams(assetType), ...override }
   const bars = await loadDailyHistory(ticker, assetType)
   const n = bars.length
@@ -132,7 +133,6 @@ export async function runWeeklyTrendBacktest(
 
     if (!fires) { T += p.stepBars; continue }
 
-    // Enter at the NEXT bar's open (signal known only at close of T).
     const entryIdx = T + 1
     const entry = bars[entryIdx].o
     if (!(entry > 0)) { T += p.stepBars; continue }
@@ -140,7 +140,7 @@ export async function runWeeklyTrendBacktest(
     const stop = entry * (1 - p.stopPct)
     const target = entry * (1 + p.stopPct * p.rMultiple)
 
-    // ── Bracket exit (pessimistic: stop checked before target) ──
+    // Bracket exit (pessimistic: stop checked before target)
     let bOutcome: 'target' | 'stop' | 'timeout' = 'timeout'
     let bExitPrice = entry
     let bBarsHeld = 0
@@ -150,10 +150,9 @@ export async function runWeeklyTrendBacktest(
       if (bars[j].h >= target) { bOutcome = 'target'; bExitPrice = target; bBarsHeld = j - entryIdx; break }
       if (j === lastBracketIdx) { bOutcome = 'timeout'; bExitPrice = bars[j].c; bBarsHeld = j - entryIdx }
     }
-    const bNetFrac = (bExitPrice - entry) / entry - costRT
-    const bNetR = bNetFrac / p.stopPct
+    const bNetR = ((bExitPrice - entry) / entry - costRT) / p.stopPct
 
-    // ── Fixed-horizon exit ──
+    // Fixed-horizon exit
     const hIdx = Math.min(entryIdx + p.horizonBars, n - 1)
     const hExit = bars[hIdx].c
     const hNetPct = ((hExit - entry) / entry - costRT) * 100
@@ -166,19 +165,34 @@ export async function runWeeklyTrendBacktest(
       horizon: { exitPrice: Math.round(hExit * 1e6) / 1e6, barsHeld: hIdx - entryIdx, netReturnPct: Math.round(hNetPct * 100) / 100 },
     })
 
-    // Non-overlapping: jump past the bracket exit.
-    T = entryIdx + Math.max(bBarsHeld, 1)
+    T = entryIdx + Math.max(bBarsHeld, 1)   // non-overlapping
   }
 
-  const bracket = sideStats(trades.map(t => t.bracket.netR), trades.map(t => t.bracket.barsHeld))
-  const horizon = sideStats(trades.map(t => t.horizon.netReturnPct), trades.map(t => t.horizon.barsHeld))
+  return { trades, barsLoaded: n, params: p }
+}
+
+/** Pooled bracket + horizon stats from a set of trades (works across symbols). */
+export function statsFromTrades(trades: BacktestTrade[]): { bracket: SideStats; horizon: SideStats } {
+  return {
+    bracket: sideStats(trades.map(t => t.bracket.netR), trades.map(t => t.bracket.barsHeld)),
+    horizon: sideStats(trades.map(t => t.horizon.netReturnPct), trades.map(t => t.horizon.barsHeld)),
+  }
+}
+
+export async function runWeeklyTrendBacktest(
+  ticker: string,
+  assetType: BacktestAssetType,
+  override: Partial<BacktestParams> = {},
+): Promise<BacktestResult> {
+  const { trades, barsLoaded, params } = await collectWeeklyTrendTrades(ticker, assetType, override)
+  const { bracket, horizon } = statsFromTrades(trades)
 
   return {
     ticker: ticker.toUpperCase(), assetType, signal: 'weekly_trend',
-    barsLoaded: n, trades: trades.length, params: p,
+    barsLoaded, trades: trades.length, params,
     bracket, horizon,
     sampleTrades: trades.slice(0, 15),
-    note: n < p.warmupBars + 40
+    note: barsLoaded < params.warmupBars + 40
       ? 'Limited history loaded; results are thin — extend the history loader for a fuller test.'
       : 'Backtest of the weekly-trend signal, long-only, non-overlapping, costs applied.',
   }
