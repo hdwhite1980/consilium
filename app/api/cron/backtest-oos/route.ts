@@ -68,7 +68,8 @@ async function run(req: NextRequest): Promise<NextResponse> {
   const base = defaultParams(assetType)
   const fixed: Partial<BacktestParams> = { rMultiple: Number.isFinite(rMultiple) ? rMultiple : base.rMultiple }
   for (const k of ['minStrength', 'horizonBars', 'maxHoldBars', 'warmupBars', 'stepBars', 'costBps', 'historyDays'] as const) {
-    const v = Number(url.searchParams.get(k)); if (Number.isFinite(v)) (fixed as Record<string, number>)[k] = v
+    const raw = url.searchParams.get(k); if (raw == null) continue   // absent → keep default (Number(null) is 0, which would wrongly pass isFinite)
+    const v = Number(raw); if (Number.isFinite(v)) (fixed as Record<string, number>)[k] = v
   }
 
   const resolved = await resolveUniverse(assetType, limit, explicit)
