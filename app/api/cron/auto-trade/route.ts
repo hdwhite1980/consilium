@@ -120,6 +120,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         let advanceTo = watermark
         let blocked = false
         let placedThisRun = 0
+        // Concurrent-cap headroom (#2): evaluateKillSwitches reads live Alpaca
+        // positions, which lag intra-run — brackets placed earlier this run
+        // aren't positions yet — so the per-run cap alone can overshoot
+        // maxConcurrentPos. Cap new placements this run to the real headroom.
+        let runCap = MAX_NEW_POSITIONS_PER_RUN
+        try {
+          const openNow = (await alpaca.positions()).filter(p => p.qty !== 0).length
+          runCap = Math.max(0, Math.min(MAX_NEW_POSITIONS_PER_RUN, settings.maxConcurrentPos - openNow))
+        } catch (e) {
+          console.warn(`[auto-trade] headroom check failed; falling back to per-run cap: ${e instanceof Error ? e.message : e}`)
+        }
         const resolve = (id: number) => { if (!blocked) advanceTo = id }
 
         for (const verdict of verdicts) {
@@ -181,11 +192,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           // the cap and defer the rest to the next run (do NOT advance past
           // them, so they get reconsidered). break is safe: deterministic ids
           // mean a re-decided verdict can't double-place.
-          if (placedThisRun >= MAX_NEW_POSITIONS_PER_RUN) {
+          if (placedThisRun >= runCap) {
             blocked = true
             userSummary.decisions.push({
               verdictId: verdict.id, ticker: verdict.ticker, outcome: 'deferred',
-              reason: `per-run cap reached (${MAX_NEW_POSITIONS_PER_RUN}); deferring to next run`,
+              reason: runCap < MAX_NEW_POSITIONS_PER_RUN
+                ? `at concurrent-cap headroom (${runCap} slot(s) free of ${settings.maxConcurrentPos}); deferring`
+                : `per-run cap reached (${MAX_NEW_POSITIONS_PER_RUN}); deferring to next run`,
             })
             break
           }
