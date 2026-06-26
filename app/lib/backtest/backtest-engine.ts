@@ -34,10 +34,12 @@ export interface BacktestParams {
 }
 
 const ASSET_COST_BPS: Record<BacktestAssetType, number> = { stock: 5, crypto: 15, forex: 2, futures: 5 }
+// Crypto volatility blows through a 5% stop in hours; per-asset stop defaults.
+const ASSET_STOP_PCT: Record<BacktestAssetType, number> = { stock: 0.05, crypto: 0.15, forex: 0.03, futures: 0.05 }
 
 export function defaultParams(assetType: BacktestAssetType): BacktestParams {
   return {
-    minStrength: 50, stopPct: 0.05, rMultiple: 2, horizonBars: 20,
+    minStrength: 50, stopPct: ASSET_STOP_PCT[assetType], rMultiple: 2, horizonBars: 20,
     maxHoldBars: 60, warmupBars: 130, stepBars: 5, costBps: ASSET_COST_BPS[assetType],
     historyDays: 3650,
   }
@@ -93,9 +95,11 @@ async function loadDailyHistory(ticker: string, assetType: BacktestAssetType, hi
 }
 
 // Coinbase caps 300 candles/request; page backward to assemble deep daily history.
+// Throttled + retried — bursting these (esp. across a portfolio sweep) trips 429.
 async function loadCryptoDeep(ticker: string, historyDays: number): Promise<Bar[]> {
   const { fetchCryptoBars } = await import('@/app/lib/trading/crypto-bars')
   const { toCoinbaseProduct } = await import('@/app/lib/crypto-symbol')
+  const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
   const product = toCoinbaseProduct(ticker)
   const DAY = 86_400
   const earliest = Math.floor(Date.now() / 1000) - historyDays * DAY
@@ -103,13 +107,16 @@ async function loadCryptoDeep(ticker: string, historyDays: number): Promise<Bar[
   const all: Bar[] = []
   for (let i = 0; i < 25 && end > earliest; i++) {
     const start = Math.max(earliest, end - 300 * DAY)
-    let chunk: Bar[]
-    try { chunk = await fetchCryptoBars({ symbol: product, granularity: 'ONE_DAY', limit: 300, startUnix: start, endUnix: end }) }
-    catch { break }
-    if (!chunk.length) break
+    let chunk: Bar[] | null = null
+    for (let attempt = 0; attempt < 3 && chunk === null; attempt++) {
+      try { chunk = await fetchCryptoBars({ symbol: product, granularity: 'ONE_DAY', limit: 300, startUnix: start, endUnix: end }) }
+      catch { await sleep(500 * (attempt + 1)) }   // backoff on 429/error
+    }
+    if (!chunk || !chunk.length) break
     all.push(...chunk)
     if (chunk.length < 200) break    // ran out of listing history
     end = start - DAY
+    await sleep(180)                 // throttle between pages
   }
   const seen = new Set<string>()
   return all.filter(b => { if (seen.has(b.t)) return false; seen.add(b.t); return true })

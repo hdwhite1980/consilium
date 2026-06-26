@@ -84,7 +84,10 @@ async function run(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: `universe resolution failed: ${e instanceof Error ? e.message : e}` }, { status: 500 })
   }
 
-  const result = await runPortfolioBacktest({ symbols: universe.symbols, assetType, universe: universe.label, override })
+  const result = await runPortfolioBacktest({
+    symbols: universe.symbols, assetType, universe: universe.label, override,
+    concurrency: assetType === 'crypto' ? 2 : 5,   // crypto pages Coinbase; keep it gentle
+  })
 
   // Persist
   const { data: row, error } = await db.from('backtest_runs').insert({
