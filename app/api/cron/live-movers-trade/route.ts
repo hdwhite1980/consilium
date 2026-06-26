@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient as createAdmin } from '@supabase/supabase-js'
 import { detectLiveMovers, type LiveAssetType } from '@/app/lib/signals/live-movers'
+import { selectTimeframe, type Timeframe } from '@/app/lib/signals/timeframe-selector'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -56,7 +57,7 @@ async function getRecentlyAnalyzed(userId: string, hours: number): Promise<Set<s
   return new Set((data as Array<{ ticker: string }> ?? []).map(r => r.ticker.toUpperCase()))
 }
 
-async function triggerAnalyze(userId: string, ticker: string, assetType: LiveAssetType): Promise<boolean> {
+async function triggerAnalyze(userId: string, ticker: string, assetType: LiveAssetType, timeframe: Timeframe): Promise<boolean> {
   const rawBase = (process.env.APP_BASE_URL ?? '').replace(/\/$/, '')
   if (!rawBase) { console.warn('[live-movers-trade] APP_BASE_URL not set'); return false }
   const baseUrl = /^https?:\/\//.test(rawBase) ? rawBase : `https://${rawBase}`
@@ -69,7 +70,7 @@ async function triggerAnalyze(userId: string, ticker: string, assetType: LiveAss
         'X-Service-User-Id': userId,
         'Authorization': `Bearer ${process.env.CRON_SECRET ?? ''}`,
       },
-      body: JSON.stringify({ ticker, userId, source: `live_movers_${assetType}`, timeframe: '1D', persona: 'balanced' }),
+      body: JSON.stringify({ ticker, userId, source: `live_movers_${assetType}`, timeframe, persona: 'balanced' }),
       signal: AbortSignal.timeout(90_000),
     })
     return res.ok
@@ -105,21 +106,28 @@ async function run(req: NextRequest): Promise<NextResponse> {
 
   const recentlyAnalyzed = await getRecentlyAnalyzed(userId, DEDUP_HOURS)
 
-  const selected: Array<{ display: string; council: string; score: number; changePct: number }> = []
+  const selected: Array<{ display: string; council: string; score: number; changePct: number; timeframe: Timeframe }> = []
   for (const m of movers) {
     if (m.score < minScore) continue
     const council = toCouncilSymbol(assetType, m.symbol)
     if (recentlyAnalyzed.has(council)) continue
     if (selected.some(s => s.council === council)) continue
-    selected.push({ display: m.symbol, council, score: m.score, changePct: m.intradayChangePct })
+    selected.push({ display: m.symbol, council, score: m.score, changePct: m.intradayChangePct, timeframe: '1D' })
     if (selected.length >= limit) break
+  }
+
+  // Preliminary chart read — pick the best horizon (1D/1W/1M) per ticker.
+  // Live movers default to intraday, but the read may upgrade a real swing/position setup.
+  for (const s of selected) {
+    try { s.timeframe = (await selectTimeframe(s.council, assetType, { fallback: '1D' })).timeframe }
+    catch { s.timeframe = '1D' }
   }
 
   const triggered: string[] = []
   const failed: string[] = []
   if (!dryRun) {
     for (const s of selected) {
-      const ok = await triggerAnalyze(userId, s.council, assetType)
+      const ok = await triggerAnalyze(userId, s.council, assetType, s.timeframe)
       if (ok) triggered.push(s.council); else failed.push(s.council)
     }
   }
@@ -131,7 +139,7 @@ async function run(req: NextRequest): Promise<NextResponse> {
     userId,
     minScore,
     moversFound: movers.length,
-    selected: selected.map(s => ({ ticker: s.council, display: s.display, score: s.score, intradayChangePct: s.changePct })),
+    selected: selected.map(s => ({ ticker: s.council, display: s.display, score: s.score, intradayChangePct: s.changePct, timeframe: s.timeframe })),
     triggered,
     failed,
     dryRun,

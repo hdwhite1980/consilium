@@ -19,6 +19,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient as createAdmin } from '@supabase/supabase-js'
+import { selectTimeframe, type Timeframe } from '@/app/lib/signals/timeframe-selector'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -53,7 +54,7 @@ async function getRecentlyAnalyzed(userId: string, hours: number): Promise<Set<s
   return new Set((data as Array<{ ticker: string }> ?? []).map(r => r.ticker.toUpperCase()))
 }
 
-async function triggerAnalyze(userId: string, ticker: string): Promise<boolean> {
+async function triggerAnalyze(userId: string, ticker: string, timeframe: Timeframe): Promise<boolean> {
   const rawBase = (process.env.APP_BASE_URL ?? '').replace(/\/$/, '')
   if (!rawBase) { console.warn('[crypto-accum-trade] APP_BASE_URL not set'); return false }
   const baseUrl = /^https?:\/\//.test(rawBase) ? rawBase : `https://${rawBase}`
@@ -66,7 +67,7 @@ async function triggerAnalyze(userId: string, ticker: string): Promise<boolean> 
         'X-Service-User-Id': userId,
         'Authorization': `Bearer ${process.env.CRON_SECRET ?? ''}`,
       },
-      body: JSON.stringify({ ticker, userId, source: 'crypto_accumulation', timeframe: '1D', persona: 'balanced' }),
+      body: JSON.stringify({ ticker, userId, source: 'crypto_accumulation', timeframe, persona: 'balanced' }),
       signal: AbortSignal.timeout(90_000),
     })
     return res.ok
@@ -108,20 +109,27 @@ async function run(req: NextRequest): Promise<NextResponse> {
 
   const recentlyAnalyzed = await getRecentlyAnalyzed(userId, DEDUP_HOURS)
 
-  const selected: Array<{ base: string; council: string; strength: number; band: string }> = []
+  const selected: Array<{ base: string; council: string; strength: number; band: string; timeframe: Timeframe }> = []
   for (const c of (coils ?? [])) {
     const council = toCouncilSymbol(c.base_symbol ?? c.symbol)
     if (recentlyAnalyzed.has(council)) continue
     if (selected.some(s => s.council === council)) continue
-    selected.push({ base: c.base_symbol ?? c.symbol, council, strength: c.strength, band: c.band })
+    selected.push({ base: c.base_symbol ?? c.symbol, council, strength: c.strength, band: c.band, timeframe: '1W' })
     if (selected.length >= limit) break
+  }
+
+  // Preliminary chart read — coils default to swing (1W); the read can upgrade
+  // a maturing base to position (1M) or flag an intraday breakout (1D).
+  for (const s of selected) {
+    try { s.timeframe = (await selectTimeframe(s.council, 'crypto', { fallback: '1W' })).timeframe }
+    catch { s.timeframe = '1W' }
   }
 
   const triggered: string[] = []
   const failed: string[] = []
   if (!dryRun) {
     for (const s of selected) {
-      const ok = await triggerAnalyze(userId, s.council)
+      const ok = await triggerAnalyze(userId, s.council, s.timeframe)
       if (ok) triggered.push(s.council); else failed.push(s.council)
     }
   }
@@ -132,7 +140,7 @@ async function run(req: NextRequest): Promise<NextResponse> {
     userId,
     minStrength,
     candidatesConsidered: coils?.length ?? 0,
-    selected: selected.map(s => ({ ticker: s.council, base: s.base, strength: s.strength, band: s.band })),
+    selected: selected.map(s => ({ ticker: s.council, base: s.base, strength: s.strength, band: s.band, timeframe: s.timeframe })),
     triggered,
     failed,
     dryRun,
