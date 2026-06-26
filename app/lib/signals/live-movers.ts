@@ -42,7 +42,7 @@ const FOREX_PAIRS = [
 ]
 
 // Class-appropriate "this is a real move" floors (crypto swings far more than FX).
-const DEFAULT_MIN_CHANGE: Record<LiveAssetType, number> = { crypto: 2.5, forex: 0.3, futures: 0.6 }
+const DEFAULT_MIN_CHANGE: Record<LiveAssetType, number> = { crypto: 2.5, forex: 0.25, futures: 0.4 }
 
 async function mapLimited<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length)
@@ -77,9 +77,15 @@ export function analyzeIntraday(
   // RVOL: last 4 bars avg volume vs prior 20 (skip for forex tick-volume)
   let rvol = 1
   if (assetType !== 'forex') {
-    const recentVol = avg(b.slice(-4).map(x => x.v ?? 0))
-    const baseVol = avg(b.slice(-24, -4).map(x => x.v ?? 0))
-    rvol = baseVol > 0 ? recentVol / baseVol : 1
+    // Exclude zero/near-zero-volume bars (extended-hours dead bars). Otherwise
+    // overnight 15-min bars deflate the baseline and RVOL reads absurdly high
+    // (e.g. 50x on SPY just after the open). Cap as a final guard.
+    const live = b.filter(x => (x.v ?? 0) > 0)
+    if (live.length >= 24) {
+      const recentVol = avg(live.slice(-4).map(x => x.v ?? 0))
+      const baseVol = avg(live.slice(-24, -4).map(x => x.v ?? 0))
+      rvol = baseVol > 0 ? Math.min(recentVol / baseVol, 20) : 1
+    }
   }
 
   // Range breakout: last close above the prior window's high (excl. last 2 bars)
