@@ -160,9 +160,11 @@ const CACHE_MINUTES: Record<string, number> = {
 
 export async function POST(req: NextRequest) {
   let ticker: string, timeframe: string, forceRefresh: boolean, persona: string
+  let source: string | null = null
   try {
     const body = await req.json()
     ticker = body.ticker; timeframe = body.timeframe; forceRefresh = body.forceRefresh; persona = body.persona
+    source = typeof body.source === 'string' ? body.source : null
   } catch {
     return Response.json({ error: 'Invalid request body' }, { status: 400 })
   }
@@ -608,6 +610,7 @@ export async function POST(req: NextRequest) {
                 time_horizon: result.judge.timeHorizon ?? null,
                 persona: persona ?? 'balanced',
                 timeframe: tf,
+                source: source ?? 'manual',
                 outcome_1w: 'pending',
                 outcome_1m: 'pending',
                 trader_decision: result.trader?.decision ?? null,

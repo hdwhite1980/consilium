@@ -28,6 +28,7 @@ interface VerdictRow {
   confidence: number | null
   persona: string | null
   timeframe: string | null
+  source: string | null
   verdict_date: string
   entry_price: number | null
   trader_decision: string | null
@@ -101,6 +102,7 @@ export async function GET(req: NextRequest) {
   const horizon = (url.searchParams.get('horizon') ?? '1w') as '1d' | '1w' | '1m'
   const personaFilter = url.searchParams.get('persona') ?? 'all'
   const timeframeFilter = url.searchParams.get('timeframe') ?? 'all'
+  const sourceFilter = url.searchParams.get('source') ?? 'all'
 
   // Auth for user-scope requests
   let userId: string | null = null
@@ -130,7 +132,7 @@ export async function GET(req: NextRequest) {
 
   let query = admin
     .from('verdict_log')
-    .select('ticker, signal, confidence, persona, timeframe, verdict_date, entry_price, trader_decision, trader_grade, trader_risk_reward, outcome_1d_strict, outcome_1d_directional, outcome_1d_price, outcome_1w_strict, outcome_1w_directional, outcome_1w_price, outcome_1m_strict, outcome_1m_directional, outcome_1m_price')
+    .select('ticker, signal, confidence, persona, timeframe, source, verdict_date, entry_price, trader_decision, trader_grade, trader_risk_reward, outcome_1d_strict, outcome_1d_directional, outcome_1d_price, outcome_1w_strict, outcome_1w_directional, outcome_1w_price, outcome_1m_strict, outcome_1m_directional, outcome_1m_price')
     .order('verdict_date', { ascending: false })
     .limit(5000)
 
@@ -145,6 +147,9 @@ export async function GET(req: NextRequest) {
   }
   if (timeframeFilter !== 'all') {
     query = query.eq('timeframe', timeframeFilter)
+  }
+  if (sourceFilter !== 'all') {
+    query = query.eq('source', sourceFilter)
   }
 
   const { data: rows, error } = await query
@@ -184,6 +189,18 @@ export async function GET(req: NextRequest) {
       direction: computeDirectionAccuracy(subset, horizon),
     }
   })
+
+  // Breakdown by source lane (dynamic — whatever sources are present in the data)
+  const sourceSet = Array.from(new Set(allRows.map(r => r.source ?? 'manual')))
+  const bySource = sourceSet.map(s => {
+    const subset = allRows.filter(r => (r.source ?? 'manual') === s)
+    return {
+      source: s,
+      sampleSize: subset.length,
+      hitRate: computeHitRate(subset, horizon),
+      direction: computeDirectionAccuracy(subset, horizon),
+    }
+  }).sort((a, b) => b.sampleSize - a.sampleSize)
 
   // Breakdown by confidence band
   const bands = ['high (80+)', 'medium (65-79)', 'low (50-64)', 'very low (<50)']
@@ -243,11 +260,12 @@ export async function GET(req: NextRequest) {
     ok: true,
     scope,
     horizon,
-    filters: { persona: personaFilter, timeframe: timeframeFilter },
+    filters: { persona: personaFilter, timeframe: timeframeFilter, source: sourceFilter },
     totalVerdicts: allRows.length,
     overall,
     byPersona,
     byTimeframe,
+    bySource,
     byConfidence,
     bySignal,
     recent,
