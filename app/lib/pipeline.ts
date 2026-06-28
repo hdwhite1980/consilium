@@ -45,6 +45,7 @@ import {
   buildFuturesJudgeSystemPrompt,
 } from './pipeline/futures-prompts'
 import { isFuturesBundle } from './pipeline/futures-router'
+import { buildRagContext } from './learning/council-rag'
 
 function getGenAI()     { return new GoogleGenerativeAI(process.env.GEMINI_API_KEY!) }
 
@@ -1829,6 +1830,9 @@ export async function runClaude(bundle: SignalBundle, gemini: GeminiResult, soci
 
   const systemPrompt = buildLeadSystemPrompt(bundle, lens, overrides)
   const evidenceBlock = buildLeadEvidenceBlock(bundle, lens, overrides)
+  // C-engine (gated): historical base-rate from resolved similar setups. Returns
+  // '' unless the RAG flag is active AND enough resolved neighbors exist. Never throws.
+  const ragBlock = await buildRagContext(bundle, { horizon: '1m', timeframe: bundle.timeframe })
   const citationReqs = buildCitationRequirements(lens)
 
   return callClaudeJSON<ClaudeResult>({
@@ -1849,7 +1853,7 @@ ${social ? formatSocialSentimentForPrompt(social, 'lead') : ''}
 ${aggregator ? formatAggregatorForPrompt(aggregator, 'lead') : ''}
 
 YOUR EVIDENCE (filtered for ${lens} lens):
-${evidenceBlock}
+${evidenceBlock}${ragBlock ? '\n\n' + ragBlock : ''}
 
 ${/* eslint-disable-next-line @typescript-eslint/no-explicit-any */ ''}${(bundle.aiContext as any).macroIntelligenceSection ? (bundle.aiContext as any).macroIntelligenceSection + '\n\n' : ''}${citationReqs}
 

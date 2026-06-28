@@ -202,6 +202,76 @@ export async function GET(req: NextRequest) {
     }
   }).sort((a, b) => b.sampleSize - a.sampleSize)
 
+  // Breakdown by the Council's act/skip choice
+  const decOf = (r: VerdictRow) => (r.trader_decision ?? '').toUpperCase()
+  const byDecision = ['TAKE', 'PASS', 'WAIT'].map(d => {
+    const subset = allRows.filter(r => decOf(r) === d)
+    return {
+      decision: d,
+      sampleSize: subset.length,
+      direction: computeDirectionAccuracy(subset, horizon),
+      hitRate: computeHitRate(subset, horizon),
+    }
+  })
+
+  // Council discrimination — the false-negative question made measurable.
+  // Of the setups the Council SKIPPED (PASS/WAIT), how many would have gone the
+  // right way (missed opportunities) vs how many it correctly avoided (good vetoes)?
+  // And critically: do TAKEs resolve favorably MORE OFTEN than skips? If not, the
+  // filtering is destroying value rather than adding it.
+  const takeRows = allRows.filter(r => decOf(r) === 'TAKE')
+  const skipRows = allRows.filter(r => decOf(r) === 'PASS' || decOf(r) === 'WAIT')
+  const takeDir = computeDirectionAccuracy(takeRows, horizon)
+  const skipDir = computeDirectionAccuracy(skipRows, horizon)
+  const takeDecided = takeDir.correct + takeDir.incorrect
+  const skipDecided = skipDir.correct + skipDir.incorrect
+  const councilDiscrimination = {
+    takeAccuracy: takeDir.accuracy, takeDecided,
+    skipAccuracy: skipDir.accuracy, skipDecided,
+    edgePts: (takeDecided && skipDecided) ? Math.round((takeDir.accuracy - skipDir.accuracy) * 1000) / 10 : null,
+    missedOpportunities: skipDir.correct,   // skipped, but direction WAS right
+    goodVetoes: skipDir.incorrect,          // skipped, and direction was wrong
+    interpretation:
+      (takeDecided < 10 || skipDecided < 10)
+        ? 'Sample too thin to judge — accumulate more resolved verdicts before trusting this.'
+        : takeDir.accuracy > skipDir.accuracy
+          ? 'Council adds value: TAKEs resolve favorably more often than the setups it skipped.'
+          : 'WARNING: skipped setups resolved as well as or better than TAKEs — the Council may be filtering out winners. Trust the raw signal more.',
+  }
+
+  // First-seen vs repeat: is the Council specifically worse on the NOVEL names the
+  // signal drags in? "First-seen" = a ticker's earliest appearance in this view.
+  const firstDateByTicker = new Map<string, string>()
+  for (const r of allRows) {
+    const prev = firstDateByTicker.get(r.ticker)
+    if (!prev || r.verdict_date < prev) firstDateByTicker.set(r.ticker, r.verdict_date)
+  }
+  const isFirstSeen = (r: VerdictRow) => firstDateByTicker.get(r.ticker) === r.verdict_date
+  const noveltyStats = (subset: VerdictRow[]) => {
+    const take = subset.filter(r => decOf(r) === 'TAKE')
+    const skip = subset.filter(r => decOf(r) === 'PASS' || decOf(r) === 'WAIT')
+    const td = computeDirectionAccuracy(take, horizon)
+    const sd = computeDirectionAccuracy(skip, horizon)
+    return {
+      sampleSize: subset.length,
+      takeAccuracy: td.accuracy, takeDecided: td.correct + td.incorrect,
+      skipAccuracy: sd.accuracy, skipDecided: sd.correct + sd.incorrect,
+      missedOpportunities: sd.correct, goodVetoes: sd.incorrect,
+    }
+  }
+  const fs = noveltyStats(allRows.filter(isFirstSeen))
+  const rp = noveltyStats(allRows.filter(r => !isFirstSeen(r)))
+  const byNovelty = {
+    firstSeen: fs,
+    repeat: rp,
+    interpretation:
+      (fs.skipDecided < 8 || rp.skipDecided < 8)
+        ? 'Sample too thin to judge the novelty effect yet.'
+        : fs.skipAccuracy > rp.skipAccuracy + 0.05
+          ? 'Council skips MORE winners on first-seen names than on repeats — it is weaker on novel tickers the signal surfaces. RAG retrieval (dormant) is the targeted fix.'
+          : 'No strong novelty penalty — the Council skips novel and familiar names about equally well.',
+  }
+
   // Breakdown by confidence band
   const bands = ['high (80+)', 'medium (65-79)', 'low (50-64)', 'very low (<50)']
   const byConfidence = bands.map(b => {
@@ -266,6 +336,9 @@ export async function GET(req: NextRequest) {
     byPersona,
     byTimeframe,
     bySource,
+    byDecision,
+    councilDiscrimination,
+    byNovelty,
     byConfidence,
     bySignal,
     recent,
