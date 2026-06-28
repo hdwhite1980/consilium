@@ -1,3 +1,4 @@
+import { isSmallAccount, computeSmallAccountNotional } from './small-account-sizing'
 // =============================================================
 // app/lib/trading/crypto-sizing.ts
 //
@@ -33,6 +34,12 @@ export interface CryptoSizingInput {
   qualityGrade?: 'A' | 'B' | 'C' | null
   qualityConfidence?: number | null
   qualityRiskReward?: number | null
+
+  // Small-account mode (June 28, 2026): when on and equity < threshold, switch
+  // to conviction-scaled allocation within [floor, cap] instead of rejecting
+  // sub-floor positions. See small-account-sizing.ts.
+  smallAccountMode?: boolean
+  smallAccountThreshold?: number
 }
 
 export type CryptoSizingOutcome =
@@ -86,6 +93,8 @@ export function computeCryptoSize(input: CryptoSizingInput): CryptoSizingOutcome
     qualityGrade = null,
     qualityConfidence = null,
     qualityRiskReward = null,
+    smallAccountMode = false,
+    smallAccountThreshold = undefined,
   } = input
 
   if (!Number.isFinite(accountEquity) || accountEquity <= 0) return { ok: false, reason: `Invalid accountEquity: ${accountEquity}` }
@@ -97,6 +106,26 @@ export function computeCryptoSize(input: CryptoSizingInput): CryptoSizingOutcome
 
   const perUnitRisk = Math.abs(entryPrice - stopPrice)
   if (perUnitRisk <= 0) return { ok: false, reason: 'Stop equals entry — per-unit risk is zero' }
+
+  // ── Small-account mode: conviction-scaled allocation instead of risk-parity ──
+  if (isSmallAccount(smallAccountMode, accountEquity, smallAccountThreshold)) {
+    const floor = Math.max(minTradeNotional ?? 0, minNotional ?? 0, 1)
+    const sa = computeSmallAccountNotional({
+      accountEquity, entryPrice, stopPrice, minViableNotional: floor,
+      qualityGrade, qualityConfidence, qualityRiskReward,
+    })
+    if (!sa.ok) return { ok: false, reason: sa.reason ?? 'small-account sizing failed' }
+    let saUnits = Math.floor((sa.notionalUsd! / entryPrice) * 1_000_000) / 1_000_000
+    if (saUnits <= 0) return { ok: false, reason: 'small-account sized to 0 units' }
+    return {
+      ok: true,
+      units: saUnits,
+      notionalUsd: saUnits * entryPrice,
+      dollarRisk: sa.dollarRisk ?? 0,
+      qualityMultiplier: undefined,
+      rationale: sa.rationale ?? 'small-account',
+    }
+  }
 
   const stopWidthPct = perUnitRisk / entryPrice
   if (stopWidthPct < 0.001) return { ok: false, reason: `Stop too tight: ${(stopWidthPct * 100).toFixed(3)}%` }

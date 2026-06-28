@@ -1,3 +1,4 @@
+import { isSmallAccount, computeSmallAccountNotional } from './small-account-sizing'
 // =============================================================
 // app/lib/trading/sizing.ts
 //
@@ -52,6 +53,10 @@ export interface SizingInput {
   qualityGrade?: 'A' | 'B' | 'C' | null
   qualityConfidence?: number | null
   qualityRiskReward?: number | null
+
+  // Small-account mode (June 28, 2026)
+  smallAccountMode?: boolean
+  smallAccountThreshold?: number
 }
 
 export type SizingOutcome =
@@ -75,48 +80,9 @@ export type SizingOutcome =
  *
  * Returns null if any input is missing — caller treats as 1.0 (no scaling).
  */
-export function computeQualityMultiplier(args: {
-  grade: 'A' | 'B' | 'C' | null | undefined
-  confidence: number | null | undefined
-  riskReward: number | null | undefined
-}): { multiplier: number; rationale: string } | null {
-  const { grade, confidence, riskReward } = args
-  if (!grade || confidence === null || confidence === undefined ||
-      riskReward === null || riskReward === undefined) {
-    return null
-  }
-  if (!Number.isFinite(confidence) || !Number.isFinite(riskReward)) {
-    return null
-  }
+import { computeQualityMultiplier } from './quality-multiplier'
+export { computeQualityMultiplier }
 
-  // Grade factor — A is canonical 1.0, B and C step down
-  const gradeMult = grade === 'A' ? 1.0
-                  : grade === 'B' ? 0.75
-                  : 0.5
-
-  // Confidence factor — high conviction gets full size
-  const confMult = confidence >= 80 ? 1.0
-                 : confidence >= 70 ? 0.85
-                 : confidence >= 60 ? 0.70
-                 : 0.55
-
-  // R:R factor — better risk/reward earns size, marginal R:R shrinks size
-  const rrMult = riskReward >= 3.0 ? 1.2
-               : riskReward >= 2.0 ? 1.0
-               : riskReward >= 1.5 ? 0.75
-               : 0.5
-
-  const raw = gradeMult * confMult * rrMult
-  // Clamp to defensible bounds — keeps a Grade-C trade from going below 25%
-  // of normal (still meaningful) and an A-grade from going above 150%
-  // (avoid overconcentration when stars align).
-  const multiplier = Math.max(0.25, Math.min(1.5, raw))
-
-  return {
-    multiplier,
-    rationale: `quality ${multiplier.toFixed(2)}x (grade=${grade}:${gradeMult}, conf=${confidence}%:${confMult}, R:R=${riskReward.toFixed(1)}:${rrMult.toFixed(2)})`,
-  }
-}
 
 export function computePositionSize(input: SizingInput): SizingOutcome {
   const {
@@ -136,6 +102,8 @@ export function computePositionSize(input: SizingInput): SizingOutcome {
     qualityGrade = null,
     qualityConfidence = null,
     qualityRiskReward = null,
+    smallAccountMode = false,
+    smallAccountThreshold = undefined,
   } = input
 
   // Defensive validation — these should be caught upstream but we double-check
@@ -165,6 +133,29 @@ export function computePositionSize(input: SizingInput): SizingOutcome {
   const perShareRisk = Math.abs(entryPrice - stopPrice)
   if (perShareRisk <= 0) {
     return { ok: false, reason: 'Stop equals entry — per-share risk is zero' }
+  }
+
+  // ── Small-account mode: conviction-scaled allocation (fractional shares) ──
+  // Runs BEFORE the "account too small" risk-floor reject so small accounts can
+  // participate. Produces a fractional position; the executor must use the
+  // fractional path (no atomic bracket — monitor owns the stop).
+  if (isSmallAccount(smallAccountMode, accountEquity, smallAccountThreshold)) {
+    const floor = Math.max(minTradeNotional ?? 0, 1)
+    const sa = computeSmallAccountNotional({
+      accountEquity, entryPrice, stopPrice, minViableNotional: floor,
+      qualityGrade, qualityConfidence, qualityRiskReward,
+    })
+    if (!sa.ok) return { ok: false, reason: sa.reason ?? 'small-account sizing failed' }
+    const qty = sa.notionalUsd! / entryPrice   // fractional
+    if (qty <= 0) return { ok: false, reason: 'small-account sized to 0 shares' }
+    return {
+      ok: true,
+      qty,
+      dollarRisk: sa.dollarRisk ?? 0,
+      positionDollar: sa.notionalUsd!,
+      fractional: true,
+      rationale: sa.rationale ?? 'small-account',
+    }
   }
 
   // Reject absurdly tight stops (would create infinite leverage). If stop is

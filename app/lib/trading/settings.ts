@@ -91,6 +91,10 @@ export interface UserTradingSettings {
   minTradeNotional: number | null
   maxTradeNotional: number | null
 
+  // Small-account mode (Migration: small_account). Lets small accounts participate.
+  smallAccountMode: boolean
+  smallAccountThreshold: number
+
   // Position-monitor tuning (Migration 14). Defaults conservative.
   // See migration 14 SQL comments for behavioral effect.
   positionMonitorEnabled: boolean
@@ -152,6 +156,8 @@ export const DEFAULT_TRADING_SETTINGS: Omit<UserTradingSettings, 'id' | 'userId'
   maxDollarRiskPerTrade: null,
   minTradeNotional: null,
   maxTradeNotional: null,
+  smallAccountMode: false,
+  smallAccountThreshold: 1000,
   positionMonitorEnabled: true,
   pmExitThreshold15m: 3,
   pmExitThreshold5m: 4,
@@ -161,6 +167,8 @@ export const DEFAULT_TRADING_SETTINGS: Omit<UserTradingSettings, 'id' | 'userId'
 }
 
 interface DbRow {
+  small_account_mode?: boolean | null
+  small_account_threshold?: number | string | null
   id: string; user_id: string; enabled: boolean; mode: string
   halted: boolean; halt_reason: string | null; halted_at: string | null
   broker: string
@@ -265,6 +273,8 @@ function rowToSettings(row: DbRow): UserTradingSettings {
       ? Number(row.min_trade_notional) : null,
     maxTradeNotional: row.max_trade_notional !== null && row.max_trade_notional !== undefined
       ? Number(row.max_trade_notional) : null,
+    smallAccountMode: row.small_account_mode ?? false,
+    smallAccountThreshold: row.small_account_threshold !== null && row.small_account_threshold !== undefined ? Number(row.small_account_threshold) : 1000,
     positionMonitorEnabled: row.position_monitor_enabled ?? true,
     pmExitThreshold15m: row.pm_exit_threshold_15m ?? 3,
     pmExitThreshold5m: row.pm_exit_threshold_5m ?? 4,
@@ -324,6 +334,8 @@ export async function upsertUserTradingSettings(
     maxDollarRiskPerTrade: 'max_dollar_risk_per_trade',
     minTradeNotional: 'min_trade_notional',
     maxTradeNotional: 'max_trade_notional',
+    smallAccountMode: 'small_account_mode',
+    smallAccountThreshold: 'small_account_threshold',
     positionMonitorEnabled: 'position_monitor_enabled',
     pmExitThreshold15m: 'pm_exit_threshold_15m',
     pmExitThreshold5m: 'pm_exit_threshold_5m',

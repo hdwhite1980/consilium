@@ -27,7 +27,7 @@ import { loadBrokerCredentialForUse, loadCoinbaseCredential } from '@/app/lib/tr
 import { makeAlpacaCryptoClient, type AlpacaCryptoClient, type AlpacaCryptoPosition } from '@/app/lib/trading/alpaca-crypto-client'
 import { makeCoinbaseClient, type CoinbaseClient, type CoinbasePosition } from '@/app/lib/trading/coinbase-client'
 import { computeCryptoSize } from '@/app/lib/trading/crypto-sizing'
-import { sizeCryptoTradeForCoinbase } from '@/app/lib/trading/crypto-product-sizing'
+import { sizeCryptoTradeForCoinbase, toCoinbaseProductId } from '@/app/lib/trading/crypto-product-sizing'
 import { routeTicker } from '@/app/lib/trading/asset-router'
 import { haltUserAccount } from '@/app/lib/trading/kill-switches'
 
@@ -326,6 +326,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
           // Convert symbol to broker-specific form (BTC/USD → BTC-USD for Coinbase)
           let brokerSymbol = broker.symbolFor(route.normalizedSymbol)
+          // Coinbase needs canonical dash form ("AAVE-USD"); symbolFor only
+          // swaps '/' for '-', so a dashless council ticker ("AAVEUSD") would
+          // leak through and 404. Normalize for Coinbase only (Alpaca wants slash).
+          if (broker.kind === 'coinbase') brokerSymbol = toCoinbaseProductId(brokerSymbol)
 
           // Verify tradability via the active broker
           let tradable = await broker.assetTradable(brokerSymbol)
@@ -393,6 +397,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             qualityConfidence: verdict.confidence !== null ? Number(verdict.confidence) : null,
             qualityRiskReward: verdict.trader_risk_reward !== null && verdict.trader_risk_reward !== undefined
               ? Number(verdict.trader_risk_reward) : null,
+            smallAccountMode: settings.smallAccountMode,
+            smallAccountThreshold: settings.smallAccountThreshold,
           }
 
           // Use Coinbase-product-aware sizing when broker is Coinbase.

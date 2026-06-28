@@ -1,3 +1,4 @@
+import { isSmallAccount, computeSmallAccountNotional } from './small-account-sizing'
 // =============================================================
 // app/lib/trading/forex-sizing.ts
 //
@@ -41,6 +42,13 @@ export interface ForexSizingInput {
   pipLocation: number               // typically -4 (or -2 for JPY pairs)
   minimumTradeSize: number          // OANDA's reported minimum
   traderPositionSizePct?: number    // 0-1
+
+  // Quality + small-account inputs (June 28, 2026) — parity with stock/crypto.
+  qualityGrade?: 'A' | 'B' | 'C' | null
+  qualityConfidence?: number | null
+  qualityRiskReward?: number | null
+  smallAccountMode?: boolean
+  smallAccountThreshold?: number
 }
 
 export type ForexSizingOutcome =
@@ -103,6 +111,8 @@ export function computeForexSize(input: ForexSizingInput): ForexSizingOutcome {
     accountEquity, riskPerTradePct, maxPositionPct,
     entryPrice, stopPrice, instrument, pipLocation,
     minimumTradeSize, traderPositionSizePct = 1,
+    qualityGrade = null, qualityConfidence = null, qualityRiskReward = null,
+    smallAccountMode = false, smallAccountThreshold = undefined,
   } = input
 
   if (!Number.isFinite(accountEquity) || accountEquity <= 0) return { ok: false, reason: `Invalid accountEquity: ${accountEquity}` }
@@ -126,6 +136,30 @@ export function computeForexSize(input: ForexSizingInput): ForexSizingOutcome {
   const pipValueUsd = pipValuePerUnitUsd(instrument, pipSize, entryPrice)
   if (pipValueUsd === null || pipValueUsd <= 0) {
     return { ok: false, reason: `Cannot compute pip value for ${instrument}` }
+  }
+
+  // ── Small-account mode: conviction-scaled allocation ──
+  if (isSmallAccount(smallAccountMode, accountEquity, smallAccountThreshold)) {
+    const sa = computeSmallAccountNotional({
+      accountEquity, entryPrice, stopPrice, minViableNotional: 1,
+      qualityGrade, qualityConfidence, qualityRiskReward,
+    })
+    if (!sa.ok) return { ok: false, reason: sa.reason ?? 'small-account sizing failed' }
+    // USD notional → units: quote=USD → /price; base=USD → 1:1; cross → /price.
+    const usdPerUnit = pair.quote === 'USD' ? entryPrice : pair.base === 'USD' ? 1 : entryPrice
+    let saUnits = sa.notionalUsd! / usdPerUnit
+    if (minimumTradeSize > 0) saUnits = Math.floor(saUnits / minimumTradeSize) * minimumTradeSize
+    if (saUnits < Math.max(minimumTradeSize, 1)) {
+      return { ok: false, reason: `small-account units ${saUnits} below minimum ${minimumTradeSize}` }
+    }
+    return {
+      ok: true,
+      units: saUnits,
+      signedUnits: saUnits,
+      dollarRisk: saUnits * stopPips * pipValueUsd,
+      stopPips,
+      rationale: sa.rationale ?? 'small-account',
+    }
   }
 
   let dollarRisk = accountEquity * riskPerTradePct * traderPositionSizePct

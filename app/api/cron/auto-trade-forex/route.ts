@@ -39,7 +39,7 @@ interface VerdictRow {
   id: number; user_id: string; ticker: string; signal: string
   confidence: number | string | null
   entry_price: number | string | null; stop_loss: number | string | null; take_profit: number | string | null
-  trader_decision: string | null; trader_grade: string | null
+  trader_decision: string | null; trader_grade: string | null; trader_risk_reward: number | string | null
   trader_position_size: number | string | null
   created_at: string
 }
@@ -203,6 +203,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             maxDollarRiskPerTrade: settingsAny.maxDollarRiskPerTrade ?? null,
             minTradeNotional: settingsAny.minTradeNotional ?? null,
             maxTradeNotional: settingsAny.maxTradeNotional ?? null,
+            qualityGrade: (verdict.trader_grade === 'A' || verdict.trader_grade === 'B' || verdict.trader_grade === 'C') ? verdict.trader_grade : null,
+            qualityConfidence: verdict.confidence !== null && verdict.confidence !== undefined ? Number(verdict.confidence) : null,
+            qualityRiskReward: verdict.trader_risk_reward !== null && verdict.trader_risk_reward !== undefined ? Number(verdict.trader_risk_reward) : null,
+            smallAccountMode: settings.smallAccountMode,
+            smallAccountThreshold: settings.smallAccountThreshold,
           } as Parameters<typeof computeForexSize>[0])
           if (!sizing.ok) {
             await logSkipped(verdict, settings, route.normalizedSymbol, `forex sizing: ${sizing.reason}`)
@@ -303,7 +308,7 @@ async function fetchNewForexVerdicts(userId: string, watermark: number): Promise
   const cutoff = new Date(Date.now() - VERDICT_AGE_HOURS * 3_600_000).toISOString()
   const { data, error } = await admin
     .from('verdict_log')
-    .select('id, user_id, ticker, signal, confidence, entry_price, stop_loss, take_profit, trader_decision, trader_grade, trader_position_size, created_at')
+    .select('id, user_id, ticker, signal, confidence, entry_price, stop_loss, take_profit, trader_decision, trader_grade, trader_risk_reward, trader_position_size, created_at')
     .eq('user_id', userId)
     .gt('id', watermark)
     .eq('trader_decision', 'TAKE')

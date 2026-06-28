@@ -460,6 +460,8 @@ export async function decideForUser(args: {
     qualityConfidence: verdict.confidence !== null ? Number(verdict.confidence) : null,
     qualityRiskReward: verdict.trader_risk_reward !== null && verdict.trader_risk_reward !== undefined
       ? Number(verdict.trader_risk_reward) : null,
+    smallAccountMode: settings.smallAccountMode,
+    smallAccountThreshold: settings.smallAccountThreshold,
   })
   if (!sizing.ok) {
     return { kind: 'skip', reason: `sizing: ${sizing.reason}`, shouldHalt: false }
