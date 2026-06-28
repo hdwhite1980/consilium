@@ -141,6 +141,7 @@ async function runUser(settings: UserTradingSettings, dryRun: boolean) {
       const order = await broker.marketEntry({ symbol: brokerSymbol, notionalUsd: sized.notionalUsd!, side: 'buy', clientOrderId })
       const units = sized.notionalUsd! / entry
       await recordAttempt(settings.userId, v, 'placed', {
+        ticker: brokerSymbol,
         mode: broker.effectiveMode, broker: broker.brokerName,
         broker_order_id: order.id, broker_client_id: clientOrderId,
         qty: units, entry_price_est: entry,

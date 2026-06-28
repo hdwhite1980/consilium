@@ -406,6 +406,7 @@ async function fetchOpenCryptoAttempts(userId: string): Promise<CryptoOpenAttemp
     `)
     .eq('user_id', userId)
     .eq('asset_class', 'crypto')
+    .or('signal_source.is.null,signal_source.neq.day_shark')
     .in('outcome', ['placed', 'filled', 'partial_fill'])
     .gte('created_at', cutoff)
 
