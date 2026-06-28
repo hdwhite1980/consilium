@@ -88,10 +88,16 @@ async function fetchCandles(
         `?timeframe=1Day&start=${startStr}&end=${endStr}` +
         `&limit=10000&adjustment=all&feed=${feed}`
       const res = await fetch(url, { headers, cache: 'no-store' })
-      if (!res.ok) continue
+      if (!res.ok) {
+        console.warn(`[backtest-resolver] ${ticker} feed=${feed} HTTP ${res.status} ${res.statusText}`)
+        continue
+      }
       const data = await res.json()
       const bars = (data.bars ?? []) as AlpacaBar[]
-      if (bars.length === 0) continue
+      if (bars.length === 0) {
+        console.warn(`[backtest-resolver] ${ticker} feed=${feed} returned 0 bars (${startStr}->${endStr})`)
+        continue
+      }
       // Convert to Finnhub-shape arrays
       return {
         c: bars.map(b => b.c),
@@ -100,10 +106,11 @@ async function fetchCandles(
         o: bars.map(b => b.o),
         t: bars.map(b => Math.floor(new Date(b.t).getTime() / 1000)),
       }
-    } catch {
-      // try next feed
+    } catch (e) {
+      console.warn(`[backtest-resolver] ${ticker} feed=${feed} threw: ${(e as Error).message}`)
     }
   }
+  console.error(`[backtest-resolver] ${ticker}: ALL feeds failed (${startStr}->${endStr})`)
   return null
 }
 
