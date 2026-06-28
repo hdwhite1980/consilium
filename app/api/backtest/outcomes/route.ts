@@ -60,16 +60,20 @@ interface CandleResponse {
   t: number[]
 }
 
+type FetchResult =
+  | { ok: true; candles: CandleResponse }
+  | { ok: false; reason: 'nodata' | 'error' }
+
 async function fetchCandles(
   ticker: string,
   fromUnix: number,
   toUnix: number,
-): Promise<CandleResponse | null> {
+): Promise<FetchResult> {
   const apiKey = process.env.ALPACA_API_KEY
   const apiSecret = process.env.ALPACA_SECRET_KEY
   if (!apiKey || !apiSecret) {
     console.warn('[backtest-resolver] ALPACA_API_KEY/SECRET missing')
-    return null
+    return { ok: false, reason: 'error' }
   }
 
   const headers = {
@@ -81,6 +85,10 @@ async function fetchCandles(
   const startStr = new Date(fromUnix * 1000).toISOString().split('T')[0]
   const endStr = new Date(toUnix * 1000).toISOString().split('T')[0]
 
+  // Distinguish a transient failure (HTTP error / network throw — retry next run)
+  // from a clean "no data exists" (200 OK + 0 bars — permanent: non-stock, delisted).
+  let sawTransientError = false
+
   // Try SIP first, fall back to IEX
   for (const feed of ['sip', 'iex']) {
     try {
@@ -90,6 +98,7 @@ async function fetchCandles(
       const res = await fetch(url, { headers, cache: 'no-store' })
       if (!res.ok) {
         console.warn(`[backtest-resolver] ${ticker} feed=${feed} HTTP ${res.status} ${res.statusText}`)
+        sawTransientError = true
         continue
       }
       const data = await res.json()
@@ -100,18 +109,23 @@ async function fetchCandles(
       }
       // Convert to Finnhub-shape arrays
       return {
-        c: bars.map(b => b.c),
-        h: bars.map(b => b.h),
-        l: bars.map(b => b.l),
-        o: bars.map(b => b.o),
-        t: bars.map(b => Math.floor(new Date(b.t).getTime() / 1000)),
+        ok: true,
+        candles: {
+          c: bars.map(b => b.c),
+          h: bars.map(b => b.h),
+          l: bars.map(b => b.l),
+          o: bars.map(b => b.o),
+          t: bars.map(b => Math.floor(new Date(b.t).getTime() / 1000)),
+        },
       }
     } catch (e) {
       console.warn(`[backtest-resolver] ${ticker} feed=${feed} threw: ${(e as Error).message}`)
+      sawTransientError = true
     }
   }
-  console.error(`[backtest-resolver] ${ticker}: ALL feeds failed (${startStr}->${endStr})`)
-  return null
+  // Both feeds exhausted. If any feed errored, treat as transient (retry).
+  // If all feeds cleanly returned 0 bars, the data does not exist → permanent.
+  return { ok: false, reason: sawTransientError ? 'error' : 'nodata' }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -353,11 +367,28 @@ async function processHorizon(
       (verdictDate.getTime() + (horizon.windowDays + 2) * 86400000) / 1000
     )
 
-    const candles = await fetchCandles(v.ticker, fromUnix, toUnix)
-    if (!candles || candles.c.length === 0) {
-      errors++
+    const candleResult = await fetchCandles(v.ticker, fromUnix, toUnix)
+    if (!candleResult.ok) {
+      if (candleResult.reason === 'nodata') {
+        // No bars exist for this symbol (non-stock pair, delisted, warrant). It will
+        // NEVER be resolvable on the stocks endpoint — expire it so it stops looping
+        // as a permanent error and stops polluting the pending count.
+        const update: Record<string, unknown> = {
+          [horizon.strictColumn]: 'expired',
+          [horizon.directionalColumn]: 'pending',
+          [horizon.computedAtColumn]: now.toISOString(),
+        }
+        if (horizon.legacyColumn) update[horizon.legacyColumn] = 'expired'
+        await admin.from('verdict_log').update(update).eq('id', v.id)
+        console.log(`[backtest-resolver] ${v.ticker}: no stock data — marked expired (non-equity/delisted)`)
+        expired++
+      } else {
+        // Transient (HTTP error / network) — leave pending, retry next run.
+        errors++
+      }
       continue
     }
+    const candles = candleResult.candles
 
     const outcomes = computeOutcome(
       v.signal,
