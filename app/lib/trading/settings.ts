@@ -95,6 +95,11 @@ export interface UserTradingSettings {
   smallAccountMode: boolean
   smallAccountThreshold: number
 
+  // Day-shark (Max) per-asset allocation sliders (0..1). 0 = Max off for that asset.
+  maxAllocStockPct: number
+  maxAllocCryptoPct: number
+  maxAllocForexPct: number
+
   // Position-monitor tuning (Migration 14). Defaults conservative.
   // See migration 14 SQL comments for behavioral effect.
   positionMonitorEnabled: boolean
@@ -158,6 +163,9 @@ export const DEFAULT_TRADING_SETTINGS: Omit<UserTradingSettings, 'id' | 'userId'
   maxTradeNotional: null,
   smallAccountMode: false,
   smallAccountThreshold: 1000,
+  maxAllocStockPct: 0,
+  maxAllocCryptoPct: 0,
+  maxAllocForexPct: 0,
   positionMonitorEnabled: true,
   pmExitThreshold15m: 3,
   pmExitThreshold5m: 4,
@@ -169,6 +177,9 @@ export const DEFAULT_TRADING_SETTINGS: Omit<UserTradingSettings, 'id' | 'userId'
 interface DbRow {
   small_account_mode?: boolean | null
   small_account_threshold?: number | string | null
+  max_alloc_stock_pct?: number | string | null
+  max_alloc_crypto_pct?: number | string | null
+  max_alloc_forex_pct?: number | string | null
   id: string; user_id: string; enabled: boolean; mode: string
   halted: boolean; halt_reason: string | null; halted_at: string | null
   broker: string
@@ -275,6 +286,9 @@ function rowToSettings(row: DbRow): UserTradingSettings {
       ? Number(row.max_trade_notional) : null,
     smallAccountMode: row.small_account_mode ?? false,
     smallAccountThreshold: row.small_account_threshold !== null && row.small_account_threshold !== undefined ? Number(row.small_account_threshold) : 1000,
+    maxAllocStockPct: row.max_alloc_stock_pct !== null && row.max_alloc_stock_pct !== undefined ? Number(row.max_alloc_stock_pct) : 0,
+    maxAllocCryptoPct: row.max_alloc_crypto_pct !== null && row.max_alloc_crypto_pct !== undefined ? Number(row.max_alloc_crypto_pct) : 0,
+    maxAllocForexPct: row.max_alloc_forex_pct !== null && row.max_alloc_forex_pct !== undefined ? Number(row.max_alloc_forex_pct) : 0,
     positionMonitorEnabled: row.position_monitor_enabled ?? true,
     pmExitThreshold15m: row.pm_exit_threshold_15m ?? 3,
     pmExitThreshold5m: row.pm_exit_threshold_5m ?? 4,
@@ -336,6 +350,9 @@ export async function upsertUserTradingSettings(
     maxTradeNotional: 'max_trade_notional',
     smallAccountMode: 'small_account_mode',
     smallAccountThreshold: 'small_account_threshold',
+    maxAllocStockPct: 'max_alloc_stock_pct',
+    maxAllocCryptoPct: 'max_alloc_crypto_pct',
+    maxAllocForexPct: 'max_alloc_forex_pct',
     positionMonitorEnabled: 'position_monitor_enabled',
     pmExitThreshold15m: 'pm_exit_threshold_15m',
     pmExitThreshold5m: 'pm_exit_threshold_5m',
