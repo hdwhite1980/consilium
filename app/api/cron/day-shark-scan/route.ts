@@ -63,15 +63,20 @@ async function run(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true, skipped: `Max off for ${asset} (slider 0)`, enqueued: 0 })
   }
 
-  if (asset !== 'stock') {
-    // Crypto discovery uses the dynamic Coinbase universe — same enqueue pattern,
-    // wired in the crypto follow-up. Stock is the reference implementation.
-    return NextResponse.json({ ok: true, note: 'crypto day-shark scan not yet wired', enqueued: 0 })
+  // Candidate set per asset.
+  const SHARK_CRYPTO = ['BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'DOGEUSD', 'AVAXUSD', 'LINKUSD', 'LTCUSD', 'ADAUSD', 'DOTUSD']
+  let candidates: string[]
+  let assetType: 'stock' | 'crypto'
+  if (asset === 'crypto') {
+    assetType = 'crypto'
+    candidates = SHARK_CRYPTO.slice(0, limit)
+  } else {
+    assetType = 'stock'
+    const universe = getAllUniverseTickers()
+    const start = (slice * limit) % Math.max(1, universe.length)
+    candidates = universe.slice(start, start + limit)
   }
 
-  const universe = getAllUniverseTickers()
-  const start = (slice * limit) % Math.max(1, universe.length)
-  const candidates = universe.slice(start, start + limit)
   const seen = await getRecentlyAnalyzed(userId, maxAgeHours)
 
   let enqueued = 0
@@ -81,7 +86,7 @@ async function run(req: NextRequest): Promise<NextResponse> {
     if (seen.has(t)) { results.push({ ticker: t, status: 'recently_analyzed' }); continue }
     if (dryRun) { results.push({ ticker: t, status: 'would_enqueue' }); continue }
     const r = await enqueueCouncil({
-      userId, ticker: t, assetType: 'stock',
+      userId, ticker: t, assetType,
       source: 'day_shark', pool: 'normal', timeframe: '1D',
     })
     results.push({ ticker: t, status: String(r) })
