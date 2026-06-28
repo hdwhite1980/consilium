@@ -154,12 +154,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const stopCoverage: Record<string, {
       qty: number
       hasStop: boolean
+      stopSource: 'standalone' | 'bracket-leg' | 'none'
       stopPrice: number | null
       stopOrderId: string | null
+      stopStatus: string | null
       hasTarget: boolean
       targetPrice: number | null
       historicalStops: Array<{ id: string; status: string; stop_price: number | null; canceled_at: string | null; submitted_at: string }>
     }> = {}
+    // Alpaca order statuses that mean a stop is live and working (incl. 'held',
+    // which is the normal resting state of an OCO bracket's stop leg).
+    const LIVE_STOP = new Set(['held', 'new', 'accepted', 'pending_new', 'partially_filled'])
     for (const pos of positions) {
       const stops = openOrders.filter(o =>
         o.symbol === pos.symbol &&
@@ -171,6 +176,20 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         o.side === 'sell' &&
         o.order_type === 'limit'
       )
+      // ALSO recognise bracket stop LEGS nested in this position's filled parent
+      // buy orders. A 'held' sell-stop leg is a real, working stop — it just never
+      // appears as a standalone open order, so the old check missed it entirely.
+      const bracketStops: Array<{ id: string; stop_price: number | null; status: string }> = []
+      for (const o of [...openOrders, ...closedOrders]) {
+        if (o.symbol !== pos.symbol || o.side !== 'buy' || !o.legs) continue
+        for (const l of o.legs) {
+          if (l.side === 'sell' &&
+              (l.order_type === 'stop' || l.order_type === 'stop_limit') &&
+              LIVE_STOP.has(l.status) && !l.canceled_at) {
+            bracketStops.push({ id: l.id, stop_price: l.stop_price, status: l.status })
+          }
+        }
+      }
       // Look for historical stop orders for this symbol (canceled, filled, etc.)
       const historicalStops = closedOrders
         .filter(o =>
@@ -185,11 +204,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           canceled_at: o.canceled_at,
           submitted_at: o.submitted_at,
         }))
+      const hasStandaloneStop = stops.length > 0
+      const hasBracketStop = bracketStops.length > 0
       stopCoverage[pos.symbol] = {
         qty: pos.qty,
-        hasStop: stops.length > 0,
-        stopPrice: stops[0]?.stop_price ?? null,
-        stopOrderId: stops[0]?.id ?? null,
+        hasStop: hasStandaloneStop || hasBracketStop,
+        stopSource: hasStandaloneStop ? 'standalone' : hasBracketStop ? 'bracket-leg' : 'none',
+        stopPrice: stops[0]?.stop_price ?? bracketStops[0]?.stop_price ?? null,
+        stopOrderId: stops[0]?.id ?? bracketStops[0]?.id ?? null,
+        stopStatus: hasStandaloneStop ? stops[0].status : (bracketStops[0]?.status ?? null),
         hasTarget: targets.length > 0,
         targetPrice: targets[0]?.limit_price ?? null,
         historicalStops,

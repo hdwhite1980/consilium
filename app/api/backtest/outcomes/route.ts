@@ -27,6 +27,11 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { isCryptoPairSymbol, toCoinbaseProduct } from '@/app/lib/crypto-symbol'
+import { fetchCryptoBars } from '@/app/lib/trading/crypto-bars'
+import { makeOandaClient } from '@/app/lib/trading/oanda-client'
+import { loadBrokerCredentialForUse } from '@/app/lib/trading/credentials'
+import type { Bar } from '@/app/lib/signals/technicals'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300  // 5 min max
@@ -126,6 +131,94 @@ async function fetchCandles(
   // Both feeds exhausted. If any feed errored, treat as transient (retry).
   // If all feeds cleanly returned 0 bars, the data does not exist → permanent.
   return { ok: false, reason: sawTransientError ? 'error' : 'nodata' }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Multi-asset bar dispatch: crypto → Coinbase, forex → OANDA, else → Alpaca stocks
+// ─────────────────────────────────────────────────────────────
+
+// Shared Bar {t:string,o,h,l,c,v} → resolver's CandleResponse (arrays, t in unix sec).
+function barsToCandles(bars: Bar[]): CandleResponse {
+  return {
+    c: bars.map(b => b.c),
+    h: bars.map(b => b.h),
+    l: bars.map(b => b.l),
+    o: bars.map(b => b.o),
+    t: bars.map(b => Math.floor(new Date(b.t).getTime() / 1000)),
+  }
+}
+
+const FIAT = new Set([
+  'USD', 'EUR', 'GBP', 'JPY', 'CHF', 'CAD', 'AUD', 'NZD', 'XAU', 'XAG',
+  'HKD', 'SGD', 'NOK', 'SEK', 'MXN', 'ZAR', 'TRY', 'CNH', 'PLN', 'DKK',
+])
+function isForexPair(t: string): boolean {
+  const s = (t ?? '').toUpperCase().replace(/[-_/]/g, '')
+  return s.length === 6 && FIAT.has(s.slice(0, 3)) && FIAT.has(s.slice(3, 6))
+}
+function toOandaInstrument(t: string): string {
+  const s = (t ?? '').toUpperCase().replace(/[-_/]/g, '')
+  return `${s.slice(0, 3)}_${s.slice(3, 6)}`
+}
+
+// Coinbase daily candles for crypto pairs (public market endpoint — no creds).
+async function fetchCryptoCandles(ticker: string, fromUnix: number, toUnix: number): Promise<FetchResult> {
+  try {
+    const product = toCoinbaseProduct(ticker)   // BTCUSD → BTC-USD
+    const bars = await fetchCryptoBars({
+      symbol: product, granularity: 'ONE_DAY', startUnix: fromUnix, endUnix: toUnix, limit: 300,
+    })
+    if (!bars || bars.length === 0) {
+      console.warn(`[backtest-resolver] ${ticker} (crypto ${product}) returned 0 bars`)
+      return { ok: false, reason: 'nodata' }
+    }
+    return { ok: true, candles: barsToCandles(bars) }
+  } catch (e) {
+    console.warn(`[backtest-resolver] ${ticker} crypto fetch threw: ${(e as Error).message}`)
+    return { ok: false, reason: 'error' }
+  }
+}
+
+// OANDA daily candles for forex pairs (needs the user's OANDA credential).
+async function fetchForexCandles(
+  ticker: string, fromUnix: number, toUnix: number, userId: string | null,
+): Promise<FetchResult> {
+  try {
+    if (!userId) return { ok: false, reason: 'error' }
+    const cred = await loadBrokerCredentialForUse(userId, 'oanda', 'paper', 'forex')
+    if (!cred) {
+      console.warn(`[backtest-resolver] ${ticker} forex: no OANDA credential for user ${userId}`)
+      return { ok: false, reason: 'error' }   // missing cred is transient, not "no data"
+    }
+    const client = makeOandaClient(cred.keyId, cred.secret, 'paper')
+    const instrument = toOandaInstrument(ticker)
+    // OANDA candles() returns the most-recent N — fetch enough to cover the window.
+    const nowUnix = Math.floor(Date.now() / 1000)
+    const daysBack = Math.ceil((nowUnix - fromUnix) / 86400) + 5
+    const count = Math.min(500, Math.max(20, daysBack))
+    const bars = await client.candles(instrument, 'D', count)
+    const inWindow = bars.filter(b => {
+      const u = Math.floor(new Date(b.t).getTime() / 1000)
+      return u >= fromUnix && u <= toUnix
+    })
+    if (inWindow.length === 0) {
+      console.warn(`[backtest-resolver] ${ticker} (forex ${instrument}) 0 bars in window`)
+      return { ok: false, reason: 'nodata' }
+    }
+    return { ok: true, candles: barsToCandles(inWindow) }
+  } catch (e) {
+    console.warn(`[backtest-resolver] ${ticker} forex fetch threw: ${(e as Error).message}`)
+    return { ok: false, reason: 'error' }
+  }
+}
+
+// Route a verdict to the right bar source by asset class.
+async function fetchBarsForVerdict(
+  ticker: string, fromUnix: number, toUnix: number, userId: string | null,
+): Promise<FetchResult> {
+  if (isCryptoPairSymbol(ticker)) return fetchCryptoCandles(ticker, fromUnix, toUnix)
+  if (isForexPair(ticker))        return fetchForexCandles(ticker, fromUnix, toUnix, userId)
+  return fetchCandles(ticker, fromUnix, toUnix)   // stocks/ETFs; futures fall through → nodata → expired
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -303,6 +396,7 @@ interface VerdictRow {
   stop_loss: number | null
   take_profit: number | null
   verdict_date: string
+  user_id: string | null
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -317,7 +411,7 @@ async function processHorizon(
 
   let baseQuery = admin
     .from('verdict_log')
-    .select('id, ticker, signal, entry_price, stop_loss, take_profit, verdict_date')
+    .select('id, ticker, signal, entry_price, stop_loss, take_profit, verdict_date, user_id')
     .eq(horizon.strictColumn, 'pending')
     .lte('verdict_date', cutoff)
 
@@ -367,7 +461,7 @@ async function processHorizon(
       (verdictDate.getTime() + (horizon.windowDays + 2) * 86400000) / 1000
     )
 
-    const candleResult = await fetchCandles(v.ticker, fromUnix, toUnix)
+    const candleResult = await fetchBarsForVerdict(v.ticker, fromUnix, toUnix, v.user_id)
     if (!candleResult.ok) {
       if (candleResult.reason === 'nodata') {
         // No bars exist for this symbol (non-stock pair, delisted, warrant). It will
