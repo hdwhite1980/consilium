@@ -33,6 +33,7 @@ export type SignalBundle = {
   timeframe: string
   timestamp: string
   persona?: 'balanced' | 'technical' | 'fundamental'
+  source?: string   // analysis lane (e.g. 'day_shark') — drives Max-mode decision profile
 
   // Raw data
   bars: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }>

@@ -418,6 +418,8 @@ export async function POST(req: NextRequest) {
         })()
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ;(bundle as any).persona = persona ?? 'balanced'
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ;(bundle as any).source = source ?? 'manual'
 
         // ── Post-bundle integrity gate (May 2026, Bug 29) ──────────
         // If the bundle came back empty (price = 0 AND no bars), the

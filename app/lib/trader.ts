@@ -75,6 +75,10 @@ const TRADER_RULES = {
     '1W': { C: 1.5, B: 2.0, A: 3.0 },
     '1M': { C: 2.0, B: 3.0, A: 5.0 },
     '3M': { C: 3.0, B: 5.0, A: 8.0 },
+    // Max mode (day_shark): day-trade momentum/continuation profile. Lower floor
+    // than the swing-built 1D bar so quicker, higher-probability pops aren't
+    // auto-PASSed. Still positive expectancy — 1.2:1 is the floor, not the target.
+    'day_shark': { C: 1.2, B: 1.6, A: 2.4 },
   } as Record<string, { C: number; B: number; A: number }>,
 
   // Confidence floors per setup type (verdict against trend = higher floor)
@@ -297,7 +301,12 @@ function applyRules(
   const setupType = classifySetup(signal, bundle)
   const conflicts = detectConflicts(signal, confidence, bundle)
 
-  const tfRules = TRADER_RULES.rrThresholds[timeframe] ?? TRADER_RULES.rrThresholds['1W']
+  // Max mode: day_shark verdicts use the day-trade R:R profile instead of the
+  // swing-built timeframe floor. Falls back to the timeframe rules if absent.
+  const ruleKey = bundle.source === 'day_shark' ? 'day_shark' : timeframe
+  const tfRules = TRADER_RULES.rrThresholds[ruleKey]
+    ?? TRADER_RULES.rrThresholds[timeframe]
+    ?? TRADER_RULES.rrThresholds['1W']
   const confFloor = TRADER_RULES.confidenceFloors[setupType] ?? TRADER_RULES.confidenceFloors.unknown
 
   const diagnostics: TraderVerdict['diagnostics'] = {
