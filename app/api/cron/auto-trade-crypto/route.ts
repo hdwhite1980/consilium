@@ -23,9 +23,8 @@ import {
   isAssetClassEnabled,
   type UserTradingSettings,
 } from '@/app/lib/trading/settings'
-import { loadBrokerCredentialForUse, loadCoinbaseCredential } from '@/app/lib/trading/credentials'
-import { makeAlpacaCryptoClient, type AlpacaCryptoClient, type AlpacaCryptoPosition } from '@/app/lib/trading/alpaca-crypto-client'
-import { makeCoinbaseClient, type CoinbaseClient, type CoinbasePosition } from '@/app/lib/trading/coinbase-client'
+import { selectCryptoBroker, type CryptoBrokerHandle } from '@/app/lib/trading/crypto-broker'
+import { type CoinbaseClient } from '@/app/lib/trading/coinbase-client'
 import { computeCryptoSize } from '@/app/lib/trading/crypto-sizing'
 import { sizeCryptoTradeForCoinbase, toCoinbaseProductId } from '@/app/lib/trading/crypto-product-sizing'
 import { routeTicker } from '@/app/lib/trading/asset-router'
@@ -124,95 +123,6 @@ function classifyWaitBypassCrypto(verdict: VerdictRow): BypassInfo | null {
 //   3. Else → no broker, skip user
 // ─────────────────────────────────────────────────────────────
 
-type BrokerKind = 'alpaca' | 'coinbase'
-
-interface CryptoBrokerHandle {
-  kind: BrokerKind
-  brokerName: 'alpaca' | 'coinbase'
-  effectiveMode: 'paper' | 'live'
-  symbolFor(canonicalSymbol: string): string
-  client: AlpacaCryptoClient | CoinbaseClient
-  account: () => Promise<{ status: string; cash: number; equity: number }>
-  positions: () => Promise<Array<{ symbol: string; qty: number }>>
-  assetTradable: (sym: string) => Promise<{ tradable: boolean; reason?: string }>
-  marketEntry: (input: { symbol: string; notionalUsd: number; side: 'buy'; clientOrderId: string }) => Promise<{ id: string; client_order_id: string }>
-}
-
-/**
- * Select the crypto broker for a user. Coinbase takes precedence if
- * configured because it's the user's explicit opt-in to live crypto
- * trading; Alpaca crypto is the legacy default. Returns null if no
- * crypto broker is configured.
- *
- * Coinbase mode override: Coinbase has no paper environment. If a user's
- * settings.mode is 'paper' but they're using Coinbase, we still trade
- * LIVE — but we explicitly require tradeCrypto AND a present Coinbase
- * credential to confirm intent. The mode reported in trade_attempts.mode
- * is set to 'live' for Coinbase trades regardless of settings.mode.
- */
-async function selectCryptoBroker(settings: UserTradingSettings): Promise<CryptoBrokerHandle | null> {
-  const coinbase = await loadCoinbaseCredential(settings.userId)
-  if (coinbase) {
-    const client = makeCoinbaseClient(coinbase.keyName, coinbase.privateKey)
-    return {
-      kind: 'coinbase',
-      brokerName: 'coinbase',
-      effectiveMode: 'live',  // Coinbase is always live
-      symbolFor: (canonical: string) => canonical.replace('/', '-'),  // BTC/USD → BTC-USD
-      client,
-      account: async () => {
-        const a = await client.account()
-        return { status: a.status, cash: a.cash, equity: a.equity }
-      },
-      positions: async () => {
-        const pos = await client.positions()
-        return pos.map(p => ({ symbol: p.symbol, qty: p.qty }))
-      },
-      assetTradable: (sym: string) => client.assetTradable(sym),
-      marketEntry: async (input) => {
-        const order = await client.marketEntry({
-          symbol: input.symbol,
-          notionalUsd: input.notionalUsd,
-          side: 'buy',
-          clientOrderId: input.clientOrderId,
-        })
-        return { id: order.id, client_order_id: order.client_order_id }
-      },
-    }
-  }
-
-  const alpacaCred = await loadBrokerCredentialForUse(settings.userId, 'alpaca', settings.mode, 'crypto')
-  if (alpacaCred) {
-    const client = makeAlpacaCryptoClient(alpacaCred.keyId, alpacaCred.secret, settings.mode)
-    return {
-      kind: 'alpaca',
-      brokerName: 'alpaca',
-      effectiveMode: settings.mode,
-      symbolFor: (canonical: string) => canonical,  // BTC/USD stays BTC/USD on Alpaca
-      client,
-      account: async () => {
-        const a = await client.account()
-        return { status: a.status, cash: a.cash, equity: a.equity }
-      },
-      positions: async () => {
-        const pos = await client.positions()
-        return pos.map((p: AlpacaCryptoPosition) => ({ symbol: p.symbol, qty: p.qty }))
-      },
-      assetTradable: (sym: string) => client.assetTradable(sym),
-      marketEntry: async (input) => {
-        const order = await client.marketEntry({
-          symbol: input.symbol,
-          notionalUsd: input.notionalUsd,
-          side: 'buy',
-          clientOrderId: input.clientOrderId,
-        })
-        return { id: order.id, client_order_id: order.client_order_id }
-      },
-    }
-  }
-
-  return null
-}
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const auth = req.headers.get('authorization') ?? ''
