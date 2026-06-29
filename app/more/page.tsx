@@ -13,7 +13,7 @@ import Link from 'next/link'
 import {
   ArrowLeft, Search, Target, LineChart, Globe, Coins,
   Calendar, Scale, Trophy, BookOpen, ClipboardList,
-  Settings, CreditCard,
+  Settings, CreditCard, Waves,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 
@@ -64,6 +64,7 @@ const SECTIONS: NavSection[] = [
     title: 'Account',
     items: [
       { label: 'Settings',  href: '/settings',  icon: <Settings size={18} />,    color: '#94a3b8', description: 'Theme, font size, account' },
+      { label: 'Day Shark', href: '/auto-trader/day-shark', icon: <Waves size={18} />, color: '#f59e0b', description: "Max's aggressive 1-day lane" },
       { label: 'Pricing',   href: '/subscribe', icon: <CreditCard size={18} />,  color: '#34d399', description: 'View plans and upgrade' },
     ],
   },

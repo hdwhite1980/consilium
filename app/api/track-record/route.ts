@@ -15,14 +15,19 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = new URL(req.url)
   const checkOutcomes = searchParams.get('check') === 'true'
+  const source = searchParams.get('source')
 
   // Check and update pending outcomes
   if (checkOutcomes) await updatePendingOutcomes(user.id)
 
-  const { data: verdicts } = await admin()
+  let vq = admin()
     .from('verdict_log')
     .select('*')
     .eq('user_id', user.id)
+  // Max (day_shark) is measured separately — exclude by default; opt in via ?source=day_shark
+  if (source === 'day_shark') vq = vq.eq('source', 'day_shark')
+  else vq = vq.or('source.is.null,source.neq.day_shark')
+  const { data: verdicts } = await vq
     .order('verdict_date', { ascending: false })
     .limit(100)
 

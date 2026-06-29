@@ -17,7 +17,7 @@ import ReentryWatchCard from '@/app/components/ReentryWatchCard'
 import {
   Activity, AlertTriangle, RefreshCw, CheckCircle, XCircle, Pause,
   TrendingUp, TrendingDown, Zap, Target, Shield, DollarSign, Clock,
-  ChevronDown, ChevronUp, Settings, ExternalLink,
+  ChevronDown, ChevronUp, Settings, ExternalLink, Waves,
 } from 'lucide-react'
 
 // ─────────────────────────────────────────────────────────────
@@ -469,6 +469,17 @@ export default function AutoTraderDashboardPage() {
               }}>
               <Settings size={12} />
               Settings
+            </button>
+            <button
+              onClick={() => router.push('/auto-trader/day-shark')}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all hover:opacity-80"
+              style={{
+                background: 'rgba(245,158,11,0.1)',
+                color: '#f59e0b',
+                border: '1px solid rgba(245,158,11,0.3)',
+              }}>
+              <Waves size={12} />
+              Day Shark
             </button>
           </div>
         </div>

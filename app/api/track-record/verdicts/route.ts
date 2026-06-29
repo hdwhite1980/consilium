@@ -110,6 +110,11 @@ export async function GET(req: NextRequest) {
       // Only directional calls — NEUTRAL verdicts have no trade plan
       .in('signal', ['BULLISH', 'BEARISH'])
 
+    // Max (day_shark) is measured separately — exclude by default; opt in via ?source=day_shark
+    const sourceParam = url.searchParams.get('source')
+    if (sourceParam === 'day_shark') q = q.eq('source', 'day_shark')
+    else q = q.or('source.is.null,source.neq.day_shark')
+
     if (versionParam !== 'all') {
       const n = parseInt(versionParam, 10)
       if (!Number.isNaN(n)) {

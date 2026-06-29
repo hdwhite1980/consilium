@@ -59,6 +59,7 @@ export async function GET(req: NextRequest) {
 
     const url = new URL(req.url)
     const versionParam = url.searchParams.get('version') ?? 'current'
+    const sourceParam = url.searchParams.get('source')
 
     // Resolve to a version metadata object (or null for all-time)
     let version: SystemVersion | null = null
@@ -77,7 +78,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const stats = await computeStats(version)
+    const stats = await computeStats(version, sourceParam)
     return NextResponse.json(stats, {
       // Public, short-lived cache: response is identical for all visitors,
       // graded outcomes don't change minute-to-minute (cron grades 1x daily).
@@ -93,12 +94,16 @@ export async function GET(req: NextRequest) {
 
 // ─────────────────────────────────────────────────────────────
 
-async function computeStats(version: SystemVersion | null): Promise<Stats> {
+async function computeStats(version: SystemVersion | null, source?: string | null): Promise<Stats> {
   const admin = getAdmin()
   let q = admin
     .from('verdict_log')
     .select('outcome_1w_strict, outcome_1w_directional')
     .in('signal', ['BULLISH', 'BEARISH'])
+
+  // Max (day_shark) is measured separately — exclude by default; opt in via ?source=day_shark
+  if (source === 'day_shark') q = q.eq('source', 'day_shark')
+  else q = q.or('source.is.null,source.neq.day_shark')
 
   if (version) {
     q = q.eq('version_number', version.number)
