@@ -1,15 +1,15 @@
 // =============================================================
 // app/lib/trading/day-shark.ts
 //
-// "Max" — the day_shark lane. A SEPARATE, fast, aggressive 1-day mode that runs
+// "Max" - the day_shark lane. A SEPARATE, fast, aggressive 1-day mode that runs
 // on its own virtual slice of each account's capital (the per-asset allocation
 // sliders), alongside the slow accumulation strategy. Max uses the same council/
 // signals/patterns but pointed at a 1D horizon, sized hot when conviction is high.
 //
 // This module is the FOUNDATION (Phase 1): budget math, sizing, persona, and
-// milestones. It does not place trades — the Max executor (Phase 2) wires it in.
+// milestones. It does not place trades - the Max executor (Phase 2) wires it in.
 //
-// IMPORTANT — virtual budget: brokers expose ONE pool of cash, not sub-accounts.
+// IMPORTANT - virtual budget: brokers expose ONE pool of cash, not sub-accounts.
 // "30% to Max" is a budget this code enforces itself: Max's deployed capital is
 // capped at his slice so he can never spend the slow lane's cash, and vice versa.
 // =============================================================
@@ -18,7 +18,7 @@ import { computeQualityMultiplier } from './quality-multiplier'
 
 export type SharkAsset = 'stock' | 'crypto' | 'forex'
 
-// Aggression band — conviction scales per-trade risk between these (system decides).
+// Aggression band - conviction scales per-trade risk between these (system decides).
 export const SHARK_MIN_RISK_PCT = 0.02   // marginal setup
 export const SHARK_MAX_RISK_PCT = 0.08   // A+ conviction; hard ceiling, never exceeded
 // One trade may use at most this fraction of Max's sleeve (prevents all-in on one bite).
@@ -27,7 +27,7 @@ export const SHARK_MAX_POSITION_PCT_OF_SLEEVE = 0.50
 // ── Budget ledger ────────────────────────────────────────────
 
 export interface SharkBudget {
-  sleeve: number          // allocationPct × accountEquity — Max's total capital for this asset
+  sleeve: number          // allocationPct × accountEquity - Max's total capital for this asset
   deployed: number        // current market value of Max's open positions in this asset
   available: number       // sleeve − deployed (never negative)
   allocationPct: number
@@ -127,17 +127,17 @@ export function milestoneProgress(currentEquity: number, startingEquity: number)
 }
 
 // ── Max's persona ────────────────────────────────────────────
-// Confident, hungry, ruthless on losers — but NO performance promises or
+// Confident, hungry, ruthless on losers - but NO performance promises or
 // guarantees (that's both dishonest and legally fraught). Ambition, not a pledge.
 
 export const MAX_PERSONA_SYSTEM = `You are "Max," an aggressive momentum day-trader persona running the day_shark lane.
 
-VOICE: cocky, hungry, fast-talking, a little trash-talk. You live for momentum and clean breakouts. You celebrate every milestone toward doubling the account. You are RUTHLESS on losers — you cut them instantly, no ego, no hoping. That discipline is exactly why you survive to compound.
+VOICE: cocky, hungry, fast-talking, a little trash-talk. You live for momentum and clean breakouts. You celebrate every milestone toward doubling the account. You are RUTHLESS on losers - you cut them instantly, no ego, no hoping. That discipline is exactly why you survive to compound.
 
 HARD RULES (never break, even in character):
-- You NEVER promise or guarantee returns, profits, or outcomes. You talk about your MISSION to grow the account and your read on a setup — never a promise it will work. No "guaranteed," no "can't lose," no "the best."
+- You NEVER promise or guarantee returns, profits, or outcomes. You talk about your MISSION to grow the account and your read on a setup - never a promise it will work. No "guaranteed," no "can't lose," no "the best."
 - You state your conviction and your plan; you never overstate certainty.
-- When you cut a loser, you own it flatly and move on — that's the job.
+- When you cut a loser, you own it flatly and move on - that's the job.
 - You are a persona narrating decisions an automated system already made on a 1-day horizon. You do not invent trades or override the system's risk limits.
 
 STYLE: short, punchy, energetic. One or two lines. You can name the milestone you're chasing.`
@@ -149,7 +149,7 @@ export function maxNarrationContext(currentEquity: number, startingEquity: numbe
 }
 
 // ── Max's voice ─────────────────────────────────────────────
-// Deterministic narration — captures Max's cocky, ruthless-on-losers persona
+// Deterministic narration - captures Max's cocky, ruthless-on-losers persona
 // with zero LLM cost or latency in the money path. Honors MAX_PERSONA_SYSTEM's
 // hard rules: states the plan and the milestone he's chasing, NEVER promises an
 // outcome, owns losers flatly. Computed at event time from the trade data.
@@ -171,11 +171,11 @@ export function maxNarration(i: MaxNarrationInput): string {
   const g = i.grade ? `${i.grade}-grade` : 'setup'
   const up = i.gainPct !== null && i.gainPct !== undefined ? ` (+${(i.gainPct * 100).toFixed(1)}%)` : ''
   switch (i.event) {
-    case 'entry':    return `🦈 Biting ${i.ticker} — ${g}, ${rr}. Stop's set; I'm gone the second it cracks.${chasing}`
-    case 'target':   return `${i.ticker} tagged target${up} — banked. That's how you compound.${chasing}`
-    case 'stop':     return `Cut ${i.ticker} at the stop. No ego, no hoping — next.`
-    case 'max_hold': return `${i.ticker} rode its night${up} — off the table. Day trade, not a marriage.${chasing}`
-    case 'eod_cut':  return `${i.ticker} went nowhere into the close — cut. Losers don't sleep over.`
-    case 'ride':     return `${i.ticker}'s green and strong${up} — it earns a night. Riding it.`
+    case 'entry':    return `🦈 Biting ${i.ticker} - ${g}, ${rr}. Stop's set; I'm gone the second it cracks.${chasing}`
+    case 'target':   return `${i.ticker} tagged target${up} - banked. That's how you compound.${chasing}`
+    case 'stop':     return `Cut ${i.ticker} at the stop. No ego, no hoping - next.`
+    case 'max_hold': return `${i.ticker} rode its night${up} - off the table. Day trade, not a marriage.${chasing}`
+    case 'eod_cut':  return `${i.ticker} went nowhere into the close - cut. Losers don't sleep over.`
+    case 'ride':     return `${i.ticker}'s green and strong${up} - it earns a night. Riding it.`
   }
 }
