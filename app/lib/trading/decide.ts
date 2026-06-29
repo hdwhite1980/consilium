@@ -17,6 +17,7 @@ import type { UserTradingSettings } from './settings'
 import type { AlpacaClient, AlpacaAccount, AlpacaPosition } from './alpaca-client'
 import { evaluateKillSwitches } from './kill-switches'
 import { computePositionSize } from './sizing'
+import { isCryptoPairSymbol } from '@/app/lib/crypto-symbol'
 
 export interface VerdictForTrade {
   id: number
@@ -71,15 +72,13 @@ function isForexTicker(ticker: string): boolean {
   return /^[A-Z]{6}$/.test(ticker) && /USD|EUR|GBP|JPY|AUD|CAD|CHF|NZD|MXN/.test(ticker)
 }
 
-function isCryptoTicker(ticker: string): boolean {
-  // BTC/USD or BTCUSD
-  return /^[A-Z]{3,4}\/?USD$/.test(ticker) && !/^[A-Z]{1,5}$/.test(ticker)
-}
-
 function detectAssetClass(ticker: string): 'stock' | 'forex' | 'crypto' | 'unknown' {
   const t = ticker.toUpperCase()
+  // Crypto FIRST — the canonical check knows real coin bases (XRP, ADA…) and
+  // excludes fiat (EUR, GBP…), so 6-letter coin pairs like XRPUSD aren't mistaken
+  // for forex by the naive 6-letter rule below.
+  if (isCryptoPairSymbol(t)) return 'crypto'
   if (isForexTicker(t)) return 'forex'
-  if (isCryptoTicker(t)) return 'crypto'
   if (isStockTicker(t)) return 'stock'
   return 'unknown'
 }
