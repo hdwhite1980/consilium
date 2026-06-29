@@ -36,7 +36,17 @@ interface VersionStats {
   avgWinR?: number | null
   totalR?: number | null
   avgReturnPct?: number | null
+  medianReturnPct?: number | null
+  byAsset?: { stock: AssetBucket; crypto: AssetBucket; forex: AssetBucket }
   versionLabel: string
+}
+
+interface AssetBucket {
+  gradedVerdicts: number
+  hitRate1w: number | null
+  expectancyR: number | null
+  profitFactor: number | null
+  medianReturnPct: number | null
 }
 
 export default function TrackRecordPage() {
@@ -322,6 +332,33 @@ function VersionCard({
                     Expectancy = average R won per trade (target = +R, stop = −1R). Above 0 means a real edge;
                     profit factor above 1 means winners outweigh losers. These — not hit rate — decide whether the edge makes money.
                   </p>
+                  {stats.byAsset && (
+                    <div className="mt-3 pt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                      <div className="text-[9px] font-mono uppercase tracking-widest text-white/30 mb-1.5">by asset class</div>
+                      <div className="space-y-1">
+                        {(['stock', 'crypto', 'forex'] as const).map(a => {
+                          const b = stats.byAsset![a]
+                          if (!b || b.gradedVerdicts === 0) return null
+                          return (
+                            <div key={a} className="flex items-center justify-between text-[10px] font-mono">
+                              <span className="text-white/55 capitalize w-14">{a}</span>
+                              <span className="text-white/30 w-16">{b.gradedVerdicts} graded</span>
+                              <span className="w-20" style={{ color: (b.expectancyR ?? 0) > 0 ? '#34d399' : '#f87171' }}>
+                                {b.expectancyR === null ? '—' : `${b.expectancyR > 0 ? '+' : ''}${b.expectancyR}R`}
+                              </span>
+                              <span className="w-16" style={{ color: (b.profitFactor ?? 0) >= 1 ? '#34d399' : '#f87171' }}>
+                                {b.profitFactor === null ? '—' : `${b.profitFactor}×`}
+                              </span>
+                              <span className="text-white/40 w-16 text-right">
+                                {b.medianReturnPct === null ? '—' : `${b.medianReturnPct > 0 ? '+' : ''}${b.medianReturnPct}%`}
+                              </span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                      <p className="text-[9px] font-mono text-white/25 mt-1.5">cols: graded · expectancy · profit factor · median 1W return</p>
+                    </div>
+                  )}
                 </>
               )}
             </div>

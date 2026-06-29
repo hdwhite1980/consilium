@@ -12,6 +12,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient as createAdmin } from '@supabase/supabase-js'
+import { isCryptoPairSymbol } from '@/app/lib/crypto-symbol'
 import {
   getCurrentVersion,
   getVersionByNumber,
@@ -23,20 +24,24 @@ export const maxDuration = 10
 
 const MIN_GRADED_FOR_MATURE = 30  // below this, return preview note
 
-interface Stats {
+interface BucketStats {
   hitRate1w: number | null
   directionAcc1w: number | null
   totalVerdicts: number
   gradedVerdicts: number
-  // Expectancy suite — the metrics that actually decide profitability
   expectancyR: number | null      // mean R per trade (target=+R, stop=−1R); >0 = edge
   profitFactor: number | null     // gross win R / gross loss R; >1 = profitable
   payoffRatio: number | null      // avg win R / avg loss R (avg loss = 1R)
   avgWinR: number | null
   totalR: number | null           // cumulative R captured across resolved trades
-  avgReturnPct: number | null     // mean realized 1W directional return per verdict
+  avgReturnPct: number | null     // mean realized 1W directional return (outlier-prone)
+  medianReturnPct: number | null  // median realized 1W return (honest middle)
+}
+
+interface Stats extends BucketStats {
   sampleNote: string | null
   versionLabel: string
+  byAsset: { stock: BucketStats; crypto: BucketStats; forex: BucketStats }
 }
 
 function getAdmin() {
@@ -101,112 +106,108 @@ export async function GET(req: NextRequest) {
 
 // ─────────────────────────────────────────────────────────────
 
+type VRow = {
+  outcome_1w_strict: string | null
+  outcome_1w_directional: string | null
+  outcome_1w_price: number | string | null
+  signal: string | null
+  entry_price: number | string | null
+  stop_loss: number | string | null
+  take_profit: number | string | null
+  ticker: string | null
+}
+
+function assetOf(ticker: string | null): 'crypto' | 'forex' | 'stock' {
+  if (!ticker) return 'stock'
+  if (isCryptoPairSymbol(ticker)) return 'crypto'
+  if (/^[A-Z]{6}$/.test(ticker)) return 'forex'
+  return 'stock'
+}
+
+function median(xs: number[]): number | null {
+  if (xs.length === 0) return null
+  const s = [...xs].sort((a, b) => a - b)
+  const m = Math.floor(s.length / 2)
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
+}
+
+const round = (x: number | null, d = 2): number | null => (x === null ? null : Number(x.toFixed(d)))
+
+// Compute the full expectancy suite for any subset of verdict rows.
+function bucketStats(rows: VRow[]): BucketStats {
+  let wins = 0, losses = 0, dirC = 0, dirI = 0
+  let grossWinR = 0, grossLossR = 0, winCountR = 0, lossCountR = 0
+  const rets: number[] = []
+
+  for (const r of rows) {
+    if (r.outcome_1w_strict === 'win') wins++
+    else if (r.outcome_1w_strict === 'loss') losses++
+    if (r.outcome_1w_directional === 'win') dirC++
+    else if (r.outcome_1w_directional === 'loss') dirI++
+
+    const entry = Number(r.entry_price), stop = Number(r.stop_loss), tgt = Number(r.take_profit)
+    const risk = Math.abs(entry - stop)
+    const validRisk = entry > 0 && risk > 0 && risk / entry >= 0.001   // guard junk (entry≈stop)
+    if (validRisk && r.outcome_1w_strict === 'win' && tgt > 0) {
+      grossWinR += Math.min(10, Math.abs(tgt - entry) / risk); winCountR++   // cap absurd outliers
+    } else if (validRisk && r.outcome_1w_strict === 'loss') {
+      grossLossR += 1; lossCountR++
+    }
+
+    const p1w = Number(r.outcome_1w_price)
+    if (entry > 0 && p1w > 0) rets.push((r.signal === 'BEARISH' ? -1 : 1) * ((p1w - entry) / entry) * 100)
+  }
+
+  const graded = wins + losses
+  const dirGraded = dirC + dirI
+  const nR = winCountR + lossCountR
+  const avgWinR = winCountR > 0 ? grossWinR / winCountR : null
+  return {
+    hitRate1w: graded > 0 ? round((wins / graded) * 100) : null,
+    directionAcc1w: dirGraded > 0 ? round((dirC / dirGraded) * 100) : null,
+    totalVerdicts: rows.length,
+    gradedVerdicts: graded,
+    expectancyR: nR > 0 ? round((grossWinR - grossLossR) / nR, 3) : null,
+    profitFactor: grossLossR > 0 ? round(grossWinR / grossLossR) : null,
+    payoffRatio: round(avgWinR),
+    avgWinR: round(avgWinR),
+    totalR: nR > 0 ? round(grossWinR - grossLossR, 1) : null,
+    avgReturnPct: rets.length > 0 ? round(rets.reduce((a, b) => a + b, 0) / rets.length) : null,
+    medianReturnPct: round(median(rets)),
+  }
+}
+
 async function computeStats(version: SystemVersion | null, source?: string | null): Promise<Stats> {
   const admin = getAdmin()
   let q = admin
     .from('verdict_log')
-    .select('outcome_1w_strict, outcome_1w_directional, outcome_1w_price, signal, entry_price, stop_loss, take_profit')
+    .select('outcome_1w_strict, outcome_1w_directional, outcome_1w_price, signal, entry_price, stop_loss, take_profit, ticker')
     .in('signal', ['BULLISH', 'BEARISH'])
 
   // Max (day_shark) is measured separately — exclude by default; opt in via ?source=day_shark
   if (source === 'day_shark') q = q.eq('source', 'day_shark')
   else q = q.or('source.is.null,source.neq.day_shark')
 
-  if (version) {
-    q = q.eq('version_number', version.number)
-  }
+  if (version) q = q.eq('version_number', version.number)
 
   const { data, error } = await q
   if (error) throw new Error(`stats query failed: ${error.message}`)
 
-  const rows = data ?? []
-  const totalVerdicts = rows.length
-
-  // Hit rate: target hit / (target hit + stop hit), excluding expired
-  // Direction accuracy: price moved in predicted direction at 1W mark.
-  //   Both columns use the same vocabulary: 'win' | 'loss' | 'pending' | 'expired'
-  //   - outcome_1w_strict: 'win' = target hit first, 'loss' = stop hit first, 'expired' = neither hit within 1W
-  //   - outcome_1w_directional: 'win' = price moved in predicted direction, 'loss' = opposite direction
-  //     (Naming is a bit confusing — the column is named "directional" but uses the same
-  //      win/loss vocabulary as the strict column, just with a looser definition of "win.")
-  let wins = 0
-  let losses = 0
-  let directionCorrect = 0
-  let directionIncorrect = 0
-
-  for (const r of rows) {
-    if (r.outcome_1w_strict === 'win') wins++
-    else if (r.outcome_1w_strict === 'loss') losses++
-
-    if (r.outcome_1w_directional === 'win') directionCorrect++
-    else if (r.outcome_1w_directional === 'loss') directionIncorrect++
+  const rows = (data ?? []) as VRow[]
+  const overall = bucketStats(rows)
+  const byAsset = {
+    stock: bucketStats(rows.filter(r => assetOf(r.ticker) === 'stock')),
+    crypto: bucketStats(rows.filter(r => assetOf(r.ticker) === 'crypto')),
+    forex: bucketStats(rows.filter(r => assetOf(r.ticker) === 'forex')),
   }
-
-  const gradedVerdicts = wins + losses
-  const directionGraded = directionCorrect + directionIncorrect
-
-  const hitRate1w = gradedVerdicts === 0
-    ? null
-    : (wins / gradedVerdicts) * 100
-
-  const directionAcc1w = directionGraded === 0
-    ? null
-    : (directionCorrect / directionGraded) * 100
 
   // Honest sample-size note
   let sampleNote: string | null = null
-  if (gradedVerdicts === 0 && totalVerdicts > 0) {
-    sampleNote = `${totalVerdicts} verdicts logged, none graded yet — outcomes need ~5 trading days to resolve`
-  } else if (gradedVerdicts < MIN_GRADED_FOR_MATURE) {
-    sampleNote = `Preview — only ${gradedVerdicts} graded outcomes, too small to draw conclusions yet`
+  if (overall.gradedVerdicts === 0 && overall.totalVerdicts > 0) {
+    sampleNote = `${overall.totalVerdicts} verdicts logged, none graded yet — outcomes need ~5 trading days to resolve`
+  } else if (overall.gradedVerdicts < MIN_GRADED_FOR_MATURE) {
+    sampleNote = `Preview — only ${overall.gradedVerdicts} graded outcomes, too small to draw conclusions yet`
   }
 
-  // ── Expectancy suite ────────────────────────────────────────
-  // R-multiple per resolved trade: target hit = +targetR, stop hit = −1R.
-  // Expectancy = mean R per trade. Profit factor = gross win R / gross loss R.
-  // Realized return = mean directional 1W move (includes trades that expired
-  // without hitting either level — the honest "what actually happened" figure).
-  let grossWinR = 0, grossLossR = 0, winCountR = 0, lossCountR = 0
-  let retSum = 0, retCount = 0
-  for (const r of rows) {
-    const entry = Number(r.entry_price), stop = Number(r.stop_loss), tgt = Number(r.take_profit)
-    const risk = Math.abs(entry - stop)
-    const validRisk = entry > 0 && risk > 0 && risk / entry >= 0.001   // guard junk (entry≈stop)
-
-    if (validRisk && r.outcome_1w_strict === 'win' && tgt > 0) {
-      const targetR = Math.min(10, Math.abs(tgt - entry) / risk)       // cap absurd outliers
-      grossWinR += targetR; winCountR++
-    } else if (validRisk && r.outcome_1w_strict === 'loss') {
-      grossLossR += 1; lossCountR++
-    }
-
-    // realized directional 1W return (bearish profits when price falls)
-    const p1w = Number(r.outcome_1w_price)
-    if (entry > 0 && p1w > 0) {
-      const raw = (p1w - entry) / entry
-      retSum += (r.signal === 'BEARISH' ? -raw : raw); retCount++
-    }
-  }
-  const nR = winCountR + lossCountR
-  const avgWinR = winCountR > 0 ? grossWinR / winCountR : null
-  const expectancyR = nR > 0 ? (grossWinR - grossLossR) / nR : null
-  const profitFactor = grossLossR > 0 ? grossWinR / grossLossR : (grossWinR > 0 ? null : null)
-  const payoffRatio = avgWinR  // avg win R ÷ avg loss R, and avg loss R = 1 by definition
-  const totalR = nR > 0 ? grossWinR - grossLossR : null
-  const avgReturnPct = retCount > 0 ? (retSum / retCount) * 100 : null
-
-  return {
-    hitRate1w,
-    directionAcc1w,
-    totalVerdicts,
-    gradedVerdicts,
-    expectancyR: expectancyR === null ? null : Number(expectancyR.toFixed(3)),
-    profitFactor: profitFactor === null ? null : Number(profitFactor.toFixed(2)),
-    payoffRatio: payoffRatio === null ? null : Number(payoffRatio.toFixed(2)),
-    avgWinR: avgWinR === null ? null : Number(avgWinR.toFixed(2)),
-    totalR: totalR === null ? null : Number(totalR.toFixed(1)),
-    avgReturnPct: avgReturnPct === null ? null : Number(avgReturnPct.toFixed(2)),
-    sampleNote,
-    versionLabel: version?.label ?? 'All time',
-  }
+  return { ...overall, byAsset, sampleNote, versionLabel: version?.label ?? 'All time' }
 }
