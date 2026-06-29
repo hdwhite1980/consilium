@@ -46,15 +46,36 @@ export async function GET(): Promise<NextResponse> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
 
-  const { data } = await admin()
+  // Main query. CRITICAL: capture the error — a non-existent column silently
+  // returns data:null, which previously zeroed the whole dashboard. If the full
+  // select fails, fall back to columns known to exist so the cards still populate.
+  let rows: Row[] = []
+  let rowsError: string | null = null
+  const FULL = 'id, ticker, asset_class, side, outcome, qty, entry_price_est, filled_avg_price, stop_price, target_price, realized_pnl, exit_price, closure_kind, created_at, closed_at'
+  const SAFE = 'id, ticker, asset_class, side, outcome, qty, entry_price_est, filled_avg_price, stop_price, target_price, realized_pnl, created_at, closed_at'
+
+  const res = await admin()
     .from('trade_attempts')
-    .select('id, ticker, asset_class, side, outcome, qty, entry_price_est, filled_avg_price, stop_price, target_price, realized_pnl, exit_price, closure_kind, created_at, closed_at')
+    .select(FULL)
     .eq('user_id', user.id)
     .eq('signal_source', 'day_shark')
     .order('created_at', { ascending: false })
     .limit(500)
 
-  const rows = (data ?? []) as Row[]
+  if (res.error) {
+    rowsError = res.error.message
+    const res2 = await admin()
+      .from('trade_attempts')
+      .select(SAFE)
+      .eq('user_id', user.id)
+      .eq('signal_source', 'day_shark')
+      .order('created_at', { ascending: false })
+      .limit(500)
+    rows = (res2.data ?? []) as Row[]
+  } else {
+    rows = (res.data ?? []) as Row[]
+  }
+
   const openRows = rows.filter(r => OPEN.includes(r.outcome))
   const closedRows = rows.filter(r => r.outcome === 'closed_win' || r.outcome === 'closed_loss')
 
@@ -156,6 +177,7 @@ export async function GET(): Promise<NextResponse> {
       openCountForThisUser: openRows.length,
       globalOpenDaySharkRows: globalDayShark ?? null,
       sampleOpenRowsAnyUser: sampleAny ?? [],
+      fullSelectError: rowsError,
     },
   })
 }
