@@ -20,7 +20,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { enqueueCouncil } from '@/app/lib/trading/council-queue'
 import { loadUserTradingSettings } from '@/app/lib/trading/settings'
-import { getAllUniverseTickers } from '@/app/lib/scanner-universe'
 import { allocationPctFor } from '@/app/lib/trading/day-shark-budget'
 import { createClient } from '@supabase/supabase-js'
 
@@ -54,7 +53,6 @@ async function run(req: NextRequest): Promise<NextResponse> {
   const asset = (url.searchParams.get('asset') ?? 'stock') as 'stock' | 'crypto' | 'forex'
   const limit = Math.max(1, Math.min(20, Number(url.searchParams.get('limit') ?? '8')))
   const maxAgeHours = Number(url.searchParams.get('maxAgeHours') ?? '12')
-  const slice = Math.max(0, Number(url.searchParams.get('slice') ?? '0'))
   const dryRun = url.searchParams.get('dryRun') === '1'
 
   const settings = await loadUserTradingSettings(userId)
@@ -78,9 +76,21 @@ async function run(req: NextRequest): Promise<NextResponse> {
     candidates = SHARK_FOREX.slice(0, limit)
   } else {
     assetType = 'stock'
-    const universe = getAllUniverseTickers()
-    const start = (slice * limit) % Math.max(1, universe.length)
-    candidates = universe.slice(start, start + limit)
+    // Same scanner the regular auto-trade lane uses, so Max looks at the same
+    // dynamically-ranked movers (top fast_movers by composite) rather than a
+    // static universe slice. Take the strongest `limit` picks.
+    const { runScan } = await import('@/app/lib/scanner-engine')
+    const scan = await runScan({
+      universe: 'sp500',
+      filter: { priceMin: 5 },
+      mode: 'bullish',
+      limit: 50,
+      newsBoost: true,
+      scanType: 'fast_movers',
+      horizon: 'day',
+      priceCeiling: 1000,
+    })
+    candidates = scan.picks.slice(0, limit).map(p => String(p.ticker).toUpperCase())
   }
 
   const seen = await getRecentlyAnalyzed(userId, maxAgeHours)
