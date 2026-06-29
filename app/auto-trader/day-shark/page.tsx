@@ -37,8 +37,8 @@ export default function DaySharkDashboard() {
     setLoading(true); setError(null)
     try {
       const [dashRes, allocRes] = await Promise.all([
-        fetch('/api/auto-trader/day-shark'),
-        fetch('/api/user/day-shark-settings'),
+        fetch('/api/auto-trader/day-shark', { cache: 'no-store' }),
+        fetch('/api/user/day-shark-settings', { cache: 'no-store' }),
       ])
       if (!dashRes.ok) throw new Error(`load failed (${dashRes.status})`)
       setD(await dashRes.json())
@@ -49,7 +49,91 @@ export default function DaySharkDashboard() {
     } catch (e) { setError(e instanceof Error ? e.message : 'failed to load') }
     finally { setLoading(false) }
   }, [])
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    void load()
+    const t = setInterval(() => { void load() }, 30_000)  // keep open positions current
+    return () => clearInterval(t)
+  }, [load])
+
+  // ── Talk to Max ──
+  type MaxAction = { type: 'close_one'; ticker: string } | { type: 'close_all' } | null
+  type ChatMsg = { role: 'user' | 'assistant'; content: string; action?: MaxAction; executed?: boolean }
+  const [chat, setChat] = useState<ChatMsg[]>([])
+  const [chatInput, setChatInput] = useState('')
+  const [maxThinking, setMaxThinking] = useState(false)
+  const [executing, setExecuting] = useState(false)
+
+  // Read-only fresh read on a held position. Runs automatically (no money moves).
+  const runReeval = useCallback(async (ticker: string) => {
+    setMaxThinking(true)
+    try {
+      const res = await fetch('/api/auto-trader/day-shark/max-reeval', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker }),
+      })
+      const data = await res.json()
+      // The re-eval reply may itself carry a close_one action (broken thesis) → confirm button.
+      setChat(c => [...c, { role: 'assistant', content: res.ok ? data.reply : (data.error ?? 'Re-check failed.'), action: res.ok ? data.action : null }])
+    } catch {
+      setChat(c => [...c, { role: 'assistant', content: 'Re-check failed to run \u2014 try me again.' }])
+    } finally { setMaxThinking(false) }
+  }, [])
+
+  const askMax = useCallback(async (text: string) => {
+    const msg = text.trim()
+    if (!msg || maxThinking) return
+    const history = chat.slice(-8).map(m => ({ role: m.role, content: m.content }))
+    setChat(c => [...c, { role: 'user', content: msg }])
+    setChatInput('')
+    setMaxThinking(true)
+    try {
+      const res = await fetch('/api/auto-trader/day-shark/max-chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg, history }),
+      })
+      const data = await res.json()
+      if (res.ok && data.action?.type === 'reeval' && typeof data.action.ticker === 'string') {
+        // "On it" line (no button), then auto-run the real thesis check.
+        setChat(c => [...c, { role: 'assistant', content: data.reply }])
+        setMaxThinking(false)
+        void runReeval(data.action.ticker)
+        return
+      }
+      setChat(c => [...c, { role: 'assistant', content: res.ok ? data.reply : (data.error ?? 'Max went quiet.'), action: res.ok ? data.action : null }])
+    } catch {
+      setChat(c => [...c, { role: 'assistant', content: 'Lost the connection \u2014 try me again.' }])
+    } finally { setMaxThinking(false) }
+  }, [chat, maxThinking, runReeval])
+
+  // Explicit-confirm execution. THIS is the only thing that closes real positions.
+  const confirmClose = useCallback(async (idx: number, action: MaxAction) => {
+    if (!action || executing) return
+    setExecuting(true)
+    setChat(c => c.map((m, i) => i === idx ? { ...m, executed: true } : m))
+    try {
+      const res = await fetch('/api/auto-trader/day-shark/max-action', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: action.type, ticker: action.type === 'close_one' ? action.ticker : undefined, confirm: true }),
+      })
+      const data = await res.json()
+      let line: string
+      if (!res.ok) {
+        line = data.error ?? 'Close failed.'
+      } else {
+        const closed = (data.closed ?? []) as Array<{ ticker: string; price: number; pnl: number | null }>
+        const errs = (data.errors ?? []) as Array<{ ticker: string; error: string }>
+        const wins = closed.map(c => `${c.ticker} flat @ ${c.price}${c.pnl != null ? ` (${c.pnl >= 0 ? '+' : ''}$${c.pnl})` : ''}`)
+        line = wins.length ? `Done \u2014 ${wins.join('; ')}.` : 'Nothing closed.'
+        if (errs.length) line += ` Couldn\u2019t close: ${errs.map(e => `${e.ticker} (${e.error})`).join('; ')}.`
+      }
+      setChat(c => [...c, { role: 'assistant', content: line }])
+    } catch {
+      setChat(c => [...c, { role: 'assistant', content: 'Close request failed to send \u2014 check the dashboard before retrying.' }])
+    } finally {
+      setExecuting(false)
+      void load()  // refresh positions after a close
+    }
+  }, [executing, load])
 
   async function saveAlloc() {
     setSavingAlloc(true); setAllocSaved(false)
@@ -130,6 +214,78 @@ export default function DaySharkDashboard() {
               {alloc.crypto >= 1 || alloc.stock >= 1 || alloc.forex >= 1 ? (
                 <p className="text-[10px] text-white/40 mt-2">100% lets Max deploy that entire balance — the most concentrated setting.</p>
               ) : null}
+            </div>
+
+            {/* ── Talk to Max ── */}
+            <div className="rounded-2xl border p-3" style={{ background: 'rgba(245,158,11,0.04)', borderColor: 'rgba(245,158,11,0.2)' }}>
+              <div className="flex items-center gap-2 mb-2">
+                <Waves size={14} style={{ color: ACCENT }} />
+                <span className="text-sm font-bold" style={{ color: ACCENT }}>Talk to Max</span>
+                <span className="text-[10px] font-mono text-white/30">he knows his open book</span>
+              </div>
+
+              <div className="space-y-2 max-h-72 overflow-y-auto mb-2">
+                {chat.length === 0 && (
+                  <div className="text-[11px] text-white/40 italic px-1 py-2">
+                    Ask Max what he&apos;s holding, why he took a name, or what he&apos;s chasing. Try the chips below.
+                  </div>
+                )}
+                {chat.map((m, i) => (
+                  <div key={i} className={m.role === 'user' ? 'flex justify-end' : 'flex flex-col items-start'}>
+                    <div className="max-w-[85%] rounded-xl px-3 py-2 text-[12px] leading-relaxed"
+                      style={m.role === 'user'
+                        ? { background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.85)' }
+                        : { background: 'rgba(245,158,11,0.1)', color: '#fde9c8', border: '1px solid rgba(245,158,11,0.2)' }}>
+                      {m.content}
+                    </div>
+                    {m.role === 'assistant' && m.action && !m.executed && (
+                      <div className="flex items-center gap-2 mt-1.5">
+                        <button onClick={() => void confirmClose(i, m.action ?? null)} disabled={executing}
+                          className="text-[11px] font-bold px-3 py-1.5 rounded-lg disabled:opacity-40"
+                          style={{ background: '#f87171', color: '#0a0a0b' }}>
+                          {executing ? 'Closing…' : m.action.type === 'close_all' ? 'Confirm: close ALL' : `Confirm: close ${m.action.ticker}`}
+                        </button>
+                        <button onClick={() => setChat(c => c.map((x, j) => j === i ? { ...x, executed: true } : x))} disabled={executing}
+                          className="text-[11px] px-3 py-1.5 rounded-lg border disabled:opacity-40"
+                          style={{ borderColor: 'rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.6)' }}>
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {maxThinking && (
+                  <div className="flex justify-start">
+                    <div className="rounded-xl px-3 py-2 text-[12px] italic" style={{ background: 'rgba(245,158,11,0.1)', color: '#fde9c8' }}>
+                      Max is reading the tape&hellip;
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {chat.length === 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {["What are you holding?", "What's the plan today?", "How close to the next milestone?", "Why'd you take that one?"].map(q => (
+                    <button key={q} onClick={() => void askMax(q)} disabled={maxThinking}
+                      className="text-[10px] font-mono px-2 py-1 rounded-full border disabled:opacity-40"
+                      style={{ borderColor: 'rgba(245,158,11,0.3)', color: ACCENT }}>{q}</button>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <input
+                  value={chatInput}
+                  onChange={e => setChatInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') void askMax(chatInput) }}
+                  placeholder="Say something to Max…"
+                  className="flex-1 rounded-xl px-3 py-2 text-[12px] outline-none"
+                  style={{ background: 'rgba(255,255,255,0.05)', color: 'white', border: '1px solid rgba(255,255,255,0.1)' }}
+                />
+                <button onClick={() => void askMax(chatInput)} disabled={maxThinking || !chatInput.trim()}
+                  className="rounded-xl px-3 py-2 text-[12px] font-bold disabled:opacity-40"
+                  style={{ background: ACCENT, color: '#0a0a0b' }}>Send</button>
+              </div>
             </div>
 
             {/* Top stats */}
