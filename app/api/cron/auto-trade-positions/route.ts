@@ -317,6 +317,7 @@ async function deriveEquityUpdate(att: AttemptRow, order: EquityOrderShape, open
       return {
         outcome,
         realized_pnl: Number(pnl.toFixed(2)),
+        exit_price: exitFill,
         closed_at: filledLeg.filled_at ?? new Date().toISOString(),
         closure_kind: closureKind,
       }
@@ -434,6 +435,7 @@ async function processCryptoAttempt(
           await applyUpdate(att.id, {
             outcome,
             realized_pnl: Number(pnl.toFixed(2)),
+            exit_price: exitFill,
             closed_at: stopOrder.filled_at ?? new Date().toISOString(),
             closure_kind: 'stop_fired',
           })
@@ -524,6 +526,7 @@ async function closeCryptoOnTargetHit(
   await applyUpdate(att.id, {
     outcome: realizedPnl !== null && realizedPnl > 0 ? 'closed_win' : 'closed_be',
     realized_pnl: realizedPnl ?? undefined,
+    exit_price: exitPrice,
     closed_at: closeFilledAt ?? new Date().toISOString(),
     closure_kind: 'target_hit',
     target_reached_at: new Date().toISOString(),
@@ -684,6 +687,7 @@ async function processFuturesAttempt(
     await applyUpdate(att.id, {
       outcome,
       realized_pnl: realizedPnl ?? undefined,
+      exit_price: exitPrice ?? undefined,
       closed_at: exitAt,
       closure_kind: closureKind,
     })
@@ -707,6 +711,7 @@ interface UpdatePayload {
   filled_at?: string
   closed_at?: string
   realized_pnl?: number
+  exit_price?: number
   closure_kind?: 'stop_fired' | 'target_hit' | 'closed_external' | 'reeval_exit'
   target_reached_at?: string
   stop_cancelled_at?: string

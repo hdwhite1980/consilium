@@ -414,6 +414,7 @@ async function recordClosure(
 
   const patch: Record<string, unknown> = { outcome, closed_at: new Date().toISOString(), closure_kind: 'monitor_exit' }
   if (pnl !== null) patch.realized_pnl = Math.round(pnl * 100) / 100
+  if (exitPrice !== null && Number.isFinite(exitPrice)) patch.exit_price = exitPrice
   await admin.from('trade_attempts').update(patch).eq('id', att.id)
   console.log(`[forex-monitor] closed ${att.ticker}: ${outcome}${pnl !== null ? ` pnl ${pnl.toFixed(2)}` : ''} (${closureKind})`)
 }

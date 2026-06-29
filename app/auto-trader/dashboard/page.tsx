@@ -17,7 +17,7 @@ import ReentryWatchCard from '@/app/components/ReentryWatchCard'
 import {
   Activity, AlertTriangle, RefreshCw, CheckCircle, XCircle, Pause,
   TrendingUp, TrendingDown, Zap, Target, Shield, DollarSign, Clock,
-  ChevronDown, ChevronUp, Settings, ExternalLink, Waves,
+  ChevronDown, ChevronUp, Settings, ExternalLink, Waves, ArrowLeft, Home,
 } from 'lucide-react'
 
 // ─────────────────────────────────────────────────────────────
@@ -119,6 +119,19 @@ interface SkipBreakdownRow {
   sample: string
 }
 
+interface RecentClose {
+  id: string
+  ticker: string
+  source: string
+  outcome: string
+  win: boolean
+  pnl: number | null
+  entryPrice: number | null
+  exitPrice: number | null
+  closureKind: string | null
+  closedAt: string | null
+}
+
 interface DashboardData {
   ok: boolean
   notSetup?: boolean
@@ -127,6 +140,7 @@ interface DashboardData {
   broker?: DashboardBroker
   todayKpis?: DashboardKpis
   summary30d?: Summary30d
+  recentCloses?: RecentClose[]
   recent?: RecentAttempt[]
   skipBreakdown?: SkipBreakdownRow[]
 }
@@ -438,6 +452,20 @@ export default function AutoTraderDashboardPage() {
         {/* Header */}
         <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => router.back()}
+              title="Back"
+              className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-all hover:opacity-80"
+              style={{ background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)' }}>
+              <ArrowLeft size={14} />
+            </button>
+            <button
+              onClick={() => router.push('/')}
+              title="Wali-OS home"
+              className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-all hover:opacity-80"
+              style={{ background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)' }}>
+              <Home size={14} />
+            </button>
             <Zap size={24} style={{ color: '#fbbf24' }} />
             <div>
               <h1 className="text-xl font-bold" style={{ color: 'var(--text)' }}>Auto Trader Dashboard</h1>
@@ -633,6 +661,19 @@ export default function AutoTraderDashboardPage() {
                 <TrackRecord30 summary={data.summary30d} />
               </Section>
             )}
+
+            {/* Recent closes — what closed, P&L, exit price, how, and when */}
+            {data.recentCloses && data.recentCloses.length > 0 && (
+              <Section
+                title="Recent Closes"
+                icon={<CheckCircle size={14} />}
+                expanded={expandedSection === 'closes'}
+                onToggle={() => setExpandedSection(expandedSection === 'closes' ? null : 'closes')}
+                count={data.recentCloses.length}
+                color="#34d399">
+                <RecentClosesPanel closes={data.recentCloses} />
+              </Section>
+            )}
           </>
         )}
       </div>
@@ -643,6 +684,45 @@ export default function AutoTraderDashboardPage() {
 // ─────────────────────────────────────────────────────────────
 // Subcomponents
 // ─────────────────────────────────────────────────────────────
+
+function RecentClosesPanel({ closes }: { closes: RecentClose[] }) {
+  const fmtPrice = (n: number | null) =>
+    n != null ? `$${n.toLocaleString(undefined, { maximumFractionDigits: n < 10 ? 4 : 2 })}` : '—'
+  const fmtPnl = (n: number | null) =>
+    n == null ? '—' : `${n >= 0 ? '+' : '-'}$${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+  const kindLabel: Record<string, string> = {
+    target_hit: 'target', stop_fired: 'stop', monitor_exit: 'monitor',
+    manual_close: 'manual', closed_external: 'external', reeval_exit: 'reeval',
+  }
+  const fmtWhen = (s: string | null) => {
+    if (!s) return ''
+    const d = new Date(s)
+    return `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {closes.map(c => (
+        <div key={c.id} className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg"
+          style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="font-bold text-sm" style={{ color: 'var(--text)' }}>{c.ticker}</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: 'var(--bg)', color: 'var(--text3)' }}>{c.source}</span>
+            <span className="text-[10px]" style={{ color: 'var(--text3)' }}>{kindLabel[c.closureKind ?? ''] ?? c.closureKind ?? ''}</span>
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            <span className="text-[11px] font-mono" style={{ color: 'var(--text3)' }}>
+              {fmtPrice(c.entryPrice)} → {fmtPrice(c.exitPrice)}
+            </span>
+            <span className="text-sm font-bold" style={{ color: c.pnl == null ? 'var(--text3)' : c.pnl >= 0 ? '#34d399' : '#f87171', minWidth: 70, textAlign: 'right' }}>
+              {fmtPnl(c.pnl)}
+            </span>
+            <span className="text-[10px] hidden sm:inline" style={{ color: 'var(--text3)', minWidth: 84, textAlign: 'right' }}>{fmtWhen(c.closedAt)}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 function StatusBanner({
   settings, broker, onClearHalt, clearingHalt,

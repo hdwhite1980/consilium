@@ -58,6 +58,7 @@ export async function GET(): Promise<NextResponse> {
       .from('trade_attempts')
       .select('outcome, signal_source, realized_pnl, council_signal')
       .eq('user_id', userId)
+      .or('signal_source.is.null,signal_source.neq.day_shark')  // Max measured separately
       .gte('created_at', todayIso)
 
     const todayRows = (todayAttempts ?? []) as Array<{
@@ -98,6 +99,7 @@ export async function GET(): Promise<NextResponse> {
       .from('trade_attempts')
       .select('id, created_at, ticker, signal_source, council_signal, outcome, side, qty, entry_price_est, stop_price, target_price, filled_avg_price, realized_pnl, reject_reason, mode, broker_order_id, reeval_count, last_reeval_at')
       .eq('user_id', userId)
+      .or('signal_source.is.null,signal_source.neq.day_shark')  // Max measured separately
       .order('created_at', { ascending: false })
       .limit(50)
 
@@ -107,6 +109,7 @@ export async function GET(): Promise<NextResponse> {
       .from('trade_attempts')
       .select('reject_reason')
       .eq('user_id', userId)
+      .or('signal_source.is.null,signal_source.neq.day_shark')  // Max measured separately
       .eq('outcome', 'skipped')
       .gte('created_at', last7Iso)
       .limit(200)
@@ -118,6 +121,7 @@ export async function GET(): Promise<NextResponse> {
       .from('trade_attempts')
       .select('outcome, signal_source, realized_pnl')
       .eq('user_id', userId)
+      .or('signal_source.is.null,signal_source.neq.day_shark')  // Max measured separately
       .in('outcome', ['closed_win', 'closed_loss', 'closed_be'])
       .gte('created_at', last30Iso)
 
@@ -149,8 +153,37 @@ export async function GET(): Promise<NextResponse> {
       },
     }
 
+    // Recent closes (last 25) — ticker, P&L, how it closed, exit price, when.
+    // Council/scanner only (Max measured separately on his own dashboard).
+    const { data: recentClosesRows } = await admin
+      .from('trade_attempts')
+      .select('id, ticker, signal_source, outcome, side, qty, filled_avg_price, realized_pnl, exit_price, closure_kind, closed_at')
+      .eq('user_id', userId)
+      .or('signal_source.is.null,signal_source.neq.day_shark')
+      .in('outcome', ['closed_win', 'closed_loss', 'closed_be'])
+      .order('closed_at', { ascending: false, nullsFirst: false })
+      .limit(25)
+
+    const recentCloses = ((recentClosesRows ?? []) as Array<{
+      id: string; ticker: string; signal_source: string | null; outcome: string
+      side: string | null; qty: number | string | null; filled_avg_price: number | string | null
+      realized_pnl: number | string | null; exit_price: number | null; closure_kind: string | null; closed_at: string | null
+    }>).map(r => ({
+      id: r.id,
+      ticker: r.ticker,
+      source: r.signal_source ?? 'council',
+      outcome: r.outcome,
+      win: r.outcome === 'closed_win',
+      pnl: r.realized_pnl !== null && r.realized_pnl !== undefined ? Number(r.realized_pnl) : null,
+      entryPrice: r.filled_avg_price !== null && r.filled_avg_price !== undefined ? Number(r.filled_avg_price) : null,
+      exitPrice: r.exit_price !== null && r.exit_price !== undefined ? Number(r.exit_price) : null,
+      closureKind: r.closure_kind,
+      closedAt: r.closed_at,
+    }))
+
     return NextResponse.json({
       ok: true,
+      recentCloses,
       settings: {
         enabled: settings.enabled,
         mode: settings.mode,

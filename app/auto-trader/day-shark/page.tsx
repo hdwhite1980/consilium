@@ -381,6 +381,13 @@ export default function DaySharkDashboard() {
                         <span className="text-sm font-mono font-bold" style={{ color: pnlColor(c.pnl) }}>{money(c.pnl)}</span>
                       </div>
                       <p className="text-[11px] text-white/45 italic">{c.voice}</p>
+                      {(c.exitPrice != null || c.closedAt) && (
+                        <p className="text-[10px] font-mono text-white/30 mt-1">
+                          {c.exitPrice != null ? `exit $${c.exitPrice.toLocaleString(undefined, { maximumFractionDigits: c.exitPrice < 10 ? 4 : 2 })}` : ''}
+                          {c.exitPrice != null && c.closedAt ? ' · ' : ''}
+                          {c.closedAt ? new Date(c.closedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''}
+                        </p>
+                      )}
                     </div>
                   ))}
                 </div>
