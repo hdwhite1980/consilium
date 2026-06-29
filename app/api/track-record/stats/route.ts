@@ -36,7 +36,8 @@ interface BucketStats {
   totalR: number | null           // cumulative R captured across resolved trades
   avgReturnPct: number | null     // mean realized 1W directional return (outlier-prone)
   medianReturnPct: number | null  // median realized 1W return (honest middle)
-  avgAlphaPct: number | null      // mean (strategy return − SPY return) per verdict
+  avgAlphaPct: number | null      // mean (strategy return − SPY return) — outlier-prone
+  medianAlphaPct: number | null   // median alpha — the honest middle
   beatSpyRate: number | null      // % of benchmarked verdicts that beat SPY
   benchmarkedCount: number        // how many verdicts have a SPY benchmark
 }
@@ -187,6 +188,7 @@ function bucketStats(rows: VRow[]): BucketStats {
     avgReturnPct: rets.length > 0 ? round(rets.reduce((a, b) => a + b, 0) / rets.length) : null,
     medianReturnPct: round(median(rets)),
     avgAlphaPct: alphas.length > 0 ? round(alphas.reduce((a, b) => a + b, 0) / alphas.length) : null,
+    medianAlphaPct: round(median(alphas)),
     beatSpyRate: alphas.length > 0 ? round((alphas.filter(a => a > 0).length / alphas.length) * 100) : null,
     benchmarkedCount: alphas.length,
   }

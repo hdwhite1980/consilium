@@ -38,6 +38,7 @@ interface VersionStats {
   avgReturnPct?: number | null
   medianReturnPct?: number | null
   avgAlphaPct?: number | null
+  medianAlphaPct?: number | null
   beatSpyRate?: number | null
   benchmarkedCount?: number
   byAsset?: { stock: AssetBucket; crypto: AssetBucket; forex: AssetBucket }
@@ -326,19 +327,19 @@ function VersionCard({
               </div>
               {(stats.expectancyR != null || stats.profitFactor != null) && (
                 <>
-                  {stats.avgAlphaPct != null && (stats.benchmarkedCount ?? 0) > 0 && (
+                  {stats.beatSpyRate != null && (stats.benchmarkedCount ?? 0) > 0 && (
                     <div className="rounded-lg p-3 mb-3 flex items-center justify-between"
-                      style={{ background: (stats.avgAlphaPct > 0 ? 'rgba(52,211,153,0.07)' : 'rgba(248,113,113,0.07)'), border: `1px solid ${stats.avgAlphaPct > 0 ? 'rgba(52,211,153,0.25)' : 'rgba(248,113,113,0.2)'}` }}>
+                      style={{ background: (stats.beatSpyRate >= 50 ? 'rgba(52,211,153,0.07)' : 'rgba(248,113,113,0.07)'), border: `1px solid ${stats.beatSpyRate >= 50 ? 'rgba(52,211,153,0.25)' : 'rgba(248,113,113,0.2)'}` }}>
                       <div>
-                        <div className="text-[10px] font-mono uppercase tracking-widest text-white/35">vs. S&amp;P 500</div>
-                        <div className="text-lg font-bold font-mono" style={{ color: stats.avgAlphaPct > 0 ? '#34d399' : '#f87171' }}>
-                          {stats.avgAlphaPct > 0 ? '+' : ''}{stats.avgAlphaPct}%<span className="text-[11px] font-normal text-white/40"> per call</span>
+                        <div className="text-[10px] font-mono uppercase tracking-widest text-white/35">beat the S&amp;P 500</div>
+                        <div className="text-lg font-bold font-mono" style={{ color: stats.beatSpyRate >= 50 ? '#34d399' : '#f87171' }}>
+                          {stats.beatSpyRate}%<span className="text-[11px] font-normal text-white/40"> of calls</span>
                         </div>
                       </div>
                       <div className="text-right">
-                        <div className="text-[10px] font-mono uppercase tracking-widest text-white/35">beat the index</div>
-                        <div className="text-lg font-bold font-mono text-white/80">
-                          {stats.beatSpyRate ?? '—'}%<span className="text-[11px] font-normal text-white/40"> of calls</span>
+                        <div className="text-[10px] font-mono uppercase tracking-widest text-white/35">median edge vs index</div>
+                        <div className="text-lg font-bold font-mono" style={{ color: (stats.medianAlphaPct ?? 0) > 0 ? '#34d399' : '#f87171' }}>
+                          {stats.medianAlphaPct == null ? '—' : `${stats.medianAlphaPct > 0 ? '+' : ''}${stats.medianAlphaPct}%`}
                         </div>
                       </div>
                     </div>
