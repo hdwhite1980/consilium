@@ -524,10 +524,21 @@ async function processHorizon(
 // Route handlers
 // ─────────────────────────────────────────────────────────────
 
+// Auth: accept the cron secret via X-Cron-Secret OR Authorization, with or
+// without a "Bearer " prefix. QStash forwards the secret as a header whose value
+// sometimes carries a "Bearer " prefix; stripping it (and accepting either
+// header) keeps this aligned with every other cron and avoids silent 401s.
+function isCronAuthorized(req: NextRequest): boolean {
+  const expected = process.env.CRON_SECRET
+  if (!expected) return false
+  const strip = (v: string | null) => (v ?? '').replace(/^Bearer\s+/i, '').trim()
+  return strip(req.headers.get('x-cron-secret')) === expected
+      || strip(req.headers.get('authorization')) === expected
+}
+
 export async function POST(req: NextRequest) {
   // Auth
-  const secret = req.headers.get('x-cron-secret')
-  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
+  if (!isCronAuthorized(req)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   }
 
@@ -579,8 +590,7 @@ export async function POST(req: NextRequest) {
 // GET — manual diagnostic. Returns counts of pending verdicts WITHOUT updating.
 // Useful for sanity-checking before running a real resolution pass.
 export async function GET(req: NextRequest) {
-  const secret = req.headers.get('x-cron-secret')
-  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
+  if (!isCronAuthorized(req)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   }
 
