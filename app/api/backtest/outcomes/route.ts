@@ -441,8 +441,10 @@ async function processHorizon(
   let resolved = 0
 
   for (const v of rows) {
-    // Skip verdicts that have no entry price — can't compute anything
-    if (!v.entry_price || !v.signal) {
+    // A signal is the only hard requirement — entry_price can be missing and is
+    // derived from the verdict-date bar below, so directional calls logged
+    // without a recorded entry still resolve instead of silently expiring.
+    if (!v.signal) {
       const update: Record<string, unknown> = {
         [horizon.strictColumn]: 'expired',
         [horizon.directionalColumn]: 'pending',
@@ -484,9 +486,33 @@ async function processHorizon(
     }
     const candles = candleResult.candles
 
+    // Derive the entry from the verdict-date bar when the verdict was logged
+    // without one (some directional / active-story verdicts don't capture an
+    // entry price). The first in-window bar's open is the price on verdict day.
+    let entryPrice: number | null = v.entry_price != null ? Number(v.entry_price) : null
+    let derivedEntry = false
+    if (entryPrice === null || !Number.isFinite(entryPrice) || entryPrice <= 0) {
+      const firstOpen = candles.o?.[0]
+      if (firstOpen != null && Number.isFinite(firstOpen) && firstOpen > 0) {
+        entryPrice = firstOpen
+        derivedEntry = true
+      } else {
+        // No usable price anywhere — genuinely can't score it.
+        const update: Record<string, unknown> = {
+          [horizon.strictColumn]: 'expired',
+          [horizon.directionalColumn]: 'pending',
+          [horizon.computedAtColumn]: now.toISOString(),
+        }
+        if (horizon.legacyColumn) update[horizon.legacyColumn] = 'expired'
+        await admin.from('verdict_log').update(update).eq('id', v.id)
+        expired++
+        continue
+      }
+    }
+
     const outcomes = computeOutcome(
       v.signal,
-      v.entry_price,
+      entryPrice,
       v.stop_loss,
       v.take_profit,
       candles,
@@ -499,6 +525,8 @@ async function processHorizon(
       [horizon.priceColumn]: outcomes.closePrice,
       [horizon.computedAtColumn]: now.toISOString(),
     }
+    // Persist the derived entry so the record is complete and the dashboard shows it.
+    if (derivedEntry && entryPrice !== null) update.entry_price = entryPrice
     // Keep legacy 1w/1m columns in sync
     if (horizon.legacyColumn) update[horizon.legacyColumn] = outcomes.strict
 
