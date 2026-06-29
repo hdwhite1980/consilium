@@ -24,6 +24,9 @@ interface Monitored {
   maxStaleMin: number
   // UTC active window (optional). Outside it, the cron is expected idle.
   window?: { startUtc: number; endUtc: number; days: number[] }  // days: 0=Sun..6=Sat
+  // sparse crons (run a few fixed times/day) skip the open-edge guard, since
+  // their runs may precede the window rather than start at it.
+  sparse?: boolean
 }
 
 const MONITORED: Monitored[] = [
@@ -31,6 +34,11 @@ const MONITORED: Monitored[] = [
   { name: 'auto-trade-positions', maxStaleMin: 15 },
   // attach-stops only matters when stock orders fill → market hours (≈9am–5pm ET)
   { name: 'auto-trade-attach-stops', maxStaleMin: 12, window: { startUtc: 13, endUtc: 21, days: [1, 2, 3, 4, 5] } },
+  // hourly 14:00–21:00 UTC weekdays — routes stories (incl. forex) to the council
+  { name: 'auto-council-trigger', maxStaleMin: 80, window: { startUtc: 14, endUtc: 22, days: [1, 2, 3, 4, 5] } },
+  // 3x/day at session opens; coarse weekday-afternoon check that the forex
+  // feeder isn't fully dead (alerts if no run in ~9h during a trading day)
+  { name: 'active-stories-forex', maxStaleMin: 540, window: { startUtc: 14, endUtc: 22, days: [1, 2, 3, 4, 5] }, sparse: true },
 ]
 
 const ALERT_COOLDOWN_MIN = 360  // re-alert at most every 6h while still down
@@ -51,7 +59,7 @@ function shouldBeRunning(m: Monitored, now: Date): boolean {
   if (!m.window.days.includes(day)) return false
   const h = now.getUTCHours() + now.getUTCMinutes() / 60
   if (h < m.window.startUtc || h >= m.window.endUtc) return false
-  if ((h - m.window.startUtc) * 60 < m.maxStaleMin) return false
+  if (!m.sparse && (h - m.window.startUtc) * 60 < m.maxStaleMin) return false
   return true
 }
 

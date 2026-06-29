@@ -38,6 +38,7 @@ import {
   buildForexCotContext,
 } from '@/app/lib/active-stories-forex-classifier'
 import { fetchForexRate } from '@/app/lib/data/forex'
+import { recordHeartbeat } from '@/app/lib/cron-heartbeat'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -163,5 +164,6 @@ async function runCron(req: NextRequest): Promise<NextResponse> {
     }
   }
 
+  await recordHeartbeat('active-stories-forex', 'ok')
   return NextResponse.json(summary)
 }

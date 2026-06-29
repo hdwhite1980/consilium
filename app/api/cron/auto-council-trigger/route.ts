@@ -35,6 +35,7 @@ import { enqueueCouncil, type CouncilTimeframe } from '@/app/lib/trading/council
 import { cryptoBaseOf } from '@/app/lib/crypto-symbol'
 import { listEnabledTradingUsers } from '@/app/lib/trading/settings'
 import { runScan } from '@/app/lib/scanner-engine'
+import { recordHeartbeat } from '@/app/lib/cron-heartbeat'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -218,6 +219,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   summary.durationMs = Date.now() - startedAt
   console.log(`[auto-council-trigger cron] done in ${summary.durationMs}ms users=${summary.users} newsCands=${summary.newsCandidates} scannerCands=${summary.scannerCandidates} merged=${summary.mergedUnique} triggered=${summary.triggered} dedupSkipped=${summary.dedupSkipped} errors=${summary.errors}`)
+  await recordHeartbeat('auto-council-trigger', summary.errors > 0 ? 'error' : 'ok', { triggered: summary.triggered, merged: summary.mergedUnique })
   return NextResponse.json(summary)
 }
 
