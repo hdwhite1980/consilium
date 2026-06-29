@@ -163,7 +163,7 @@ export default function DaySharkDashboard() {
             {/* What Max is watching — proves he's evaluating even when not trading */}
             {d.watching && d.watching.length > 0 && (
               <div>
-                <div className="text-[10px] font-mono text-white/30 mb-2 px-1">what max is watching · last {d.watching.length}</div>
+                <div className="text-[10px] font-mono text-white/30 mb-2 px-1">trader verdicts · max takes any ≥1.2 R:R · last {d.watching.length}</div>
                 <div className="space-y-1">
                   {d.watching.map((w, i) => {
                     const took = w.decision === 'TAKE'
@@ -234,8 +234,8 @@ export default function DaySharkDashboard() {
             {d.aggregates.totalTrades === 0 && d.open.length === 0 && (
               <div className="text-center text-white/30 text-sm py-12">
                 {d.watching && d.watching.length > 0
-                  ? 'Max is hunting — evaluating setups above, but none have cleared his bar yet. No trade is the right call when nothing qualifies.'
-                  : 'Max hasn\u2019t evaluated anything yet. Check the sliders are above 0 and the scan schedules are firing.'}
+                  ? 'Max re-decides on the trader\u2019s verdicts above with his own 1.2 R:R bar — he\u2019ll open a day-trade on any that clear it, including ones the trader passed, when budget and sliders allow.'
+                  : 'No trader verdicts yet for Max to evaluate.'}
               </div>
             )}
           </>

@@ -1,9 +1,12 @@
 // =============================================================
 // app/api/cron/day-shark-trade/route.ts
 //
-// Max's executor — MULTI-ASSET. Reads source='day_shark' TAKE verdicts, sizes
-// them within Max's per-asset virtual budget, places through the right broker,
-// and records the fill tagged signal_source='day_shark'.
+// Max's executor — MULTI-ASSET. Re-decides on the NORMAL trader's verdicts with
+// his own looser R:R bar (Max fires no councils of his own): any directional
+// verdict clearing SHARK_RR_FLOOR is fair game — including ones the trader passed
+// for being below ITS stricter bar. Sized within Max's per-asset virtual budget,
+// placed through the right broker, exited by his own EOD/max-hold monitor, and
+// tagged signal_source='day_shark' so he runs beside (not on top of) the trader.
 //
 //   crypto → Coinbase/Alpaca (selectCryptoBroker), notional market entry.
 //            Real money. Soft stop enforced by day-shark-monitor.
@@ -69,15 +72,21 @@ interface SharkVerdict {
   trader_risk_reward: number | string | null
 }
 
+// Max's own bar — looser than the normal trader's. He re-decides on the trader's
+// analysis (no new council): any directional verdict whose R:R clears this floor
+// is fair game, even ones the trader passed for being below ITS stricter bar.
+const SHARK_RR_FLOOR = 1.2
+
 async function loadSharkVerdicts(userId: string, asset: SharkAsset): Promise<SharkVerdict[]> {
   const db = admin()
-  const cutoff = new Date(Date.now() - 24 * 3_600_000).toISOString()
+  // Fresh normal-trader analysis only — a day-old signal's move is usually already done.
+  const cutoff = new Date(Date.now() - 4 * 3_600_000).toISOString()
   const { data: verdicts } = await db
     .from('verdict_log')
     .select('id, ticker, signal, confidence, entry_price, stop_loss, take_profit, trader_grade, trader_risk_reward')
     .eq('user_id', userId)
-    .eq('source', 'day_shark')
-    .eq('trader_decision', 'TAKE')
+    .or('source.is.null,source.neq.day_shark')   // the NORMAL trader's verdicts — Max no longer fires his own
+    .in('signal', ['BULLISH', 'BEARISH'])         // directional only; Max re-decides regardless of trader_decision
     .gte('created_at', cutoff)
     .order('id', { ascending: true })
   if (!verdicts || verdicts.length === 0) return []
@@ -90,7 +99,12 @@ async function loadSharkVerdicts(userId: string, asset: SharkAsset): Promise<Sha
     .eq('signal_source', 'day_shark')
     .in('verdict_log_id', ids)
   const doneSet = new Set((done ?? []).map(r => r.verdict_log_id))
-  return (verdicts as SharkVerdict[]).filter(v => !doneSet.has(v.id) && assetOf(v.ticker) === asset)
+  return (verdicts as SharkVerdict[]).filter(v =>
+    !doneSet.has(v.id) &&
+    assetOf(v.ticker) === asset &&
+    v.trader_risk_reward != null &&
+    Number(v.trader_risk_reward) >= SHARK_RR_FLOOR    // Max's looser bar — takes what the trader passed on R:R
+  )
 }
 
 async function recordAttempt(

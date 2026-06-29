@@ -105,14 +105,15 @@ export async function GET(): Promise<NextResponse> {
     }
   })
 
-  // What Max is watching — recent day_shark verdicts, including the ones he passed on.
-  // This is why the dashboard can look "empty": Max evaluates constantly but only
-  // executes when a setup clears the bar. Surfacing passes proves he's working.
+  // What Max is evaluating — the normal trader's recent directional verdicts.
+  // Max re-decides on these with his own looser bar, so he may take ones the
+  // trader passed. The decision badge here shows the TRADER's call.
   const { data: vData } = await admin()
     .from('verdict_log')
     .select('ticker, signal, trader_decision, trader_risk_reward, trader_pass_reasons, created_at')
     .eq('user_id', user.id)
-    .eq('source', 'day_shark')
+    .or('source.is.null,source.neq.day_shark')
+    .in('signal', ['BULLISH', 'BEARISH'])
     .order('created_at', { ascending: false })
     .limit(20)
 
