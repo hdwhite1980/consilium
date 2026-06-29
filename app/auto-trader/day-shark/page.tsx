@@ -19,6 +19,7 @@ interface DashData {
   milestone: { cryptoStake: number; next: number; pct: number }
   open: Array<{ ticker: string; asset: string | null; side: string; entry: number | null; stop: number | null; target: number | null; qty: number; ageHours: number }>
   closed: Array<{ ticker: string; asset: string | null; outcome: string; pnl: number; exitPrice: number | null; win: boolean; closedAt: string | null; voice: string }>
+  watching?: Array<{ ticker: string; signal: string | null; decision: string | null; rr: number | null; reason: string | null; at: string; ageHours: number }>
 }
 
 const money = (n: number) => `${n < 0 ? '-' : ''}$${Math.abs(n).toFixed(2)}`
@@ -159,6 +160,33 @@ export default function DaySharkDashboard() {
               </div>
             </div>
 
+            {/* What Max is watching — proves he's evaluating even when not trading */}
+            {d.watching && d.watching.length > 0 && (
+              <div>
+                <div className="text-[10px] font-mono text-white/30 mb-2 px-1">what max is watching · last {d.watching.length}</div>
+                <div className="space-y-1">
+                  {d.watching.map((w, i) => {
+                    const took = w.decision === 'TAKE'
+                    const wait = w.decision === 'WAIT'
+                    const col = took ? '#34d399' : wait ? '#f59e0b' : 'rgba(255,255,255,0.35)'
+                    return (
+                      <div key={i} className="rounded-lg border p-2.5 flex items-center justify-between" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.06)' }}>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-[11px] font-mono px-1.5 py-0.5 rounded shrink-0" style={{ background: `${col}1f`, color: col }}>{w.decision ?? '—'}</span>
+                          <span className="text-sm font-semibold text-white shrink-0">{w.ticker}</span>
+                          {w.reason && <span className="text-[10px] text-white/35 truncate">{w.reason}</span>}
+                        </div>
+                        <div className="flex items-center gap-2.5 text-[10px] font-mono text-white/30 shrink-0">
+                          {w.rr != null && <span>R:R {w.rr}</span>}
+                          <span>{w.ageHours < 1 ? `${Math.round(w.ageHours * 60)}m` : `${Math.round(w.ageHours)}h`} ago</span>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* Open positions */}
             {d.open.length > 0 && (
               <div>
@@ -204,7 +232,11 @@ export default function DaySharkDashboard() {
             )}
 
             {d.aggregates.totalTrades === 0 && d.open.length === 0 && (
-              <div className="text-center text-white/30 text-sm py-12">Max hasn&apos;t taken a trade yet. Set a slider and let him hunt.</div>
+              <div className="text-center text-white/30 text-sm py-12">
+                {d.watching && d.watching.length > 0
+                  ? 'Max is hunting — evaluating setups above, but none have cleared his bar yet. No trade is the right call when nothing qualifies.'
+                  : 'Max hasn\u2019t evaluated anything yet. Check the sliders are above 0 and the scan schedules are firing.'}
+              </div>
             )}
           </>
         )}

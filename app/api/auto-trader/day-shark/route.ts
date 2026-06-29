@@ -105,10 +105,34 @@ export async function GET(): Promise<NextResponse> {
     }
   })
 
+  // What Max is watching — recent day_shark verdicts, including the ones he passed on.
+  // This is why the dashboard can look "empty": Max evaluates constantly but only
+  // executes when a setup clears the bar. Surfacing passes proves he's working.
+  const { data: vData } = await admin()
+    .from('verdict_log')
+    .select('ticker, signal, trader_decision, trader_risk_reward, trader_pass_reasons, created_at')
+    .eq('user_id', user.id)
+    .eq('source', 'day_shark')
+    .order('created_at', { ascending: false })
+    .limit(20)
+
+  const watching = (vData ?? []).map((v: {
+    ticker: string | null; signal: string | null; trader_decision: string | null
+    trader_risk_reward: number | string | null; trader_pass_reasons: string[] | null; created_at: string
+  }) => ({
+    ticker: v.ticker,
+    signal: v.signal,
+    decision: v.trader_decision,                       // TAKE | PASS | WAIT
+    rr: v.trader_risk_reward == null ? null : Number(Number(v.trader_risk_reward).toFixed(2)),
+    reason: Array.isArray(v.trader_pass_reasons) && v.trader_pass_reasons.length > 0 ? v.trader_pass_reasons[0] : null,
+    at: v.created_at,
+    ageHours: Number(((Date.now() - new Date(v.created_at).getTime()) / 3_600_000).toFixed(1)),
+  }))
+
   return NextResponse.json({
     aggregates: { totalPnl: Number(totalPnl.toFixed(2)), wins, losses, winRate, openCount: openRows.length, totalTrades: closedRows.length },
     perAsset,
     milestone: { cryptoStake: Number(cryptoStake.toFixed(2)), next: milestoneTarget, pct: Number(milestonePct.toFixed(0)) },
-    open, closed,
+    open, closed, watching,
   })
 }
