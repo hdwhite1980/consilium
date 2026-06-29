@@ -45,6 +45,7 @@ import { makeAlpacaClient } from '@/app/lib/trading/alpaca-client'
 import { makeAlpacaCryptoClient, type AlpacaCryptoClient } from '@/app/lib/trading/alpaca-crypto-client'
 import { makeTradovateClient, type TradovateClient } from '@/app/lib/trading/tradovate-client'
 import { randomBytes } from 'crypto'
+import { recordHeartbeat } from '@/app/lib/cron-heartbeat'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -127,6 +128,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   summary.durationMs = Date.now() - startedAt
   console.log(`[auto-trade-positions cron] done in ${summary.durationMs}ms equity=${summary.equityChecked}(${summary.equityFillsUpdated}+${summary.equityClosesRecorded}) crypto=${summary.cryptoChecked}(stop:${summary.cryptoStopFired}+tgt:${summary.cryptoTargetHit}) futures=${summary.futuresChecked}(stop:${summary.futuresStopFired}+closed:${summary.futuresPositionClosed})`)
+  await recordHeartbeat('auto-trade-positions', summary.errors > 0 ? 'error' : 'ok', {
+    equityChecked: summary.equityChecked, fills: summary.equityFillsUpdated, closes: summary.equityClosesRecorded, errors: summary.errors,
+  })
   return NextResponse.json(summary)
 }
 

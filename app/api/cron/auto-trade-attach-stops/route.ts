@@ -48,6 +48,7 @@ import { makeAlpacaCryptoClient, type AlpacaCryptoClient } from '@/app/lib/tradi
 import { makeCoinbaseClient, type CoinbaseClient } from '@/app/lib/trading/coinbase-client'
 import { makeTradovateClient, type TradovateClient } from '@/app/lib/trading/tradovate-client'
 import { randomBytes } from 'crypto'
+import { recordHeartbeat } from '@/app/lib/cron-heartbeat'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -215,6 +216,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   summary.durationMs = Date.now() - startedAt
   console.log(`[attach-stops cron] done in ${summary.durationMs}ms pending=${summary.pending} attached=${summary.attached} deferred=${summary.deferred} failed=${summary.failed} gaveUp=${summary.gaveUp}`)
+  await recordHeartbeat('auto-trade-attach-stops', summary.errors > 0 ? 'error' : 'ok', {
+    pending: summary.pending, attached: summary.attached, failed: summary.failed,
+  })
   return NextResponse.json(summary)
 }
 
