@@ -326,7 +326,7 @@ function VersionCard({
                   <div className="grid grid-cols-3 gap-3 mt-3">
                     <Stat label="Expectancy" value={stats.expectancyR ?? null} suffix="R" accent={(stats.expectancyR ?? 0) > 0 ? '#34d399' : '#f87171'} detail="per trade" />
                     <Stat label="Profit factor" value={stats.profitFactor ?? null} suffix="" accent={(stats.profitFactor ?? 0) >= 1 ? '#34d399' : '#f87171'} detail={(stats.profitFactor ?? 0) >= 1 ? 'profitable' : 'unprofitable'} />
-                    <Stat label="Avg return" value={stats.avgReturnPct ?? null} suffix="%" accent={(stats.avgReturnPct ?? 0) > 0 ? '#34d399' : '#f87171'} detail="per verdict, 1W" />
+                    <Stat label="Median return" value={stats.medianReturnPct ?? null} suffix="%" accent={(stats.medianReturnPct ?? 0) > 0 ? '#34d399' : '#f87171'} detail="typical week" />
                   </div>
                   <p className="text-[9px] font-mono text-white/30 mt-2 leading-relaxed">
                     Expectancy = average R won per trade (target = +R, stop = −1R). Above 0 means a real edge;
