@@ -37,7 +37,6 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
 const MAX_HOLD_HOURS = 30
-const RIDE_THRESHOLD = 0.02
 
 function admin() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
@@ -170,8 +169,12 @@ async function runUser(settings: UserTradingSettings, asset: SharkAsset, isEod: 
     if (targetHit) { await doClose('target', 'target'); continue }
     if (ageHours >= MAX_HOLD_HOURS) { await doClose('max_hold', 'max_hold'); continue }
     if (isEod) {
-      if (gainPct >= RIDE_THRESHOLD) { r.ridden++; say('ride', pos.ticker, gainPct) }
-      else { await doClose('eod_flat', 'eod_cut') }
+      // Strict day-trade discipline: flatten ALL stock positions at the close —
+      // no overnight ride (gap risk + no working stop after hours, and multi-day
+      // holds are the council swing lane's job, not the shark's). Crypto (24/7)
+      // and forex (24/5) have no EOD; they keep running on stop/target/max-hold.
+      if (asset === 'stock') { await doClose('eod_flat', 'eod_cut') }
+      else { r.held++ }
       continue
     }
     r.held++
