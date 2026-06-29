@@ -99,11 +99,17 @@ async function loadSharkVerdicts(userId: string, asset: SharkAsset): Promise<Sha
     .eq('signal_source', 'day_shark')
     .in('verdict_log_id', ids)
   const doneSet = new Set((done ?? []).map(r => r.verdict_log_id))
+  // Crypto can't be shorted on Coinbase spot, and Alpaca has no fractional shorts
+  // (Max uses fractional orders) — so those two lanes are long-only. Forex can
+  // short (OANDA signed units), so it takes both directions. Without this guard a
+  // BEARISH verdict would make Max BUY — a backwards trade.
+  const canShort = asset === 'forex'
   return (verdicts as SharkVerdict[]).filter(v =>
     !doneSet.has(v.id) &&
     assetOf(v.ticker) === asset &&
     v.trader_risk_reward != null &&
-    Number(v.trader_risk_reward) >= SHARK_RR_FLOOR    // Max's looser bar — takes what the trader passed on R:R
+    Number(v.trader_risk_reward) >= SHARK_RR_FLOOR &&        // Max's looser bar — takes what the trader passed on R:R
+    (canShort || (v.signal ?? '').toUpperCase() === 'BULLISH')  // crypto/stock: long-only
   )
 }
 
