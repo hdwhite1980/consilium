@@ -115,7 +115,7 @@ async function loadSharkVerdicts(userId: string, asset: SharkAsset): Promise<Sha
 
 async function recordAttempt(
   userId: string, verdict: SharkVerdict, asset: SharkAsset, side: 'buy' | 'sell',
-  outcome: string, details: Record<string, unknown>,
+  outcome: string, mode: string, broker: string, details: Record<string, unknown>,
 ): Promise<string | null> {
   const { error } = await admin().from('trade_attempts').insert({
     user_id: userId,
@@ -127,6 +127,8 @@ async function recordAttempt(
     outcome,
     signal_source: 'day_shark',
     side,
+    mode,        // NOT NULL — the lane's real broker mode (paper/live/practice)
+    broker,      // NOT NULL — the lane's real broker name
     ...details,
   })
   if (error) {
@@ -230,7 +232,7 @@ async function runUser(settings: UserTradingSettings, asset: SharkAsset, dryRun:
     })
     if (!sized.ok) {
       if (!dryRun) {
-        const recErr = await recordAttempt(settings.userId, v, asset, 'buy', 'skipped', { reject_reason: sized.reason })
+        const recErr = await recordAttempt(settings.userId, v, asset, 'buy', 'skipped', lane.mode, lane.brokerName, { reject_reason: sized.reason })
         if (recErr && !result.notes.some(n => n.startsWith('record failed'))) result.notes.push(`record failed: ${recErr}`)
       }
       result.skipped++; continue
@@ -246,8 +248,8 @@ async function runUser(settings: UserTradingSettings, asset: SharkAsset, dryRun:
     const clientOrderId = `wos-shark-${v.id}`
     try {
       const fill = await lane.place(v, sized.notionalUsd!, entry, stop, v.take_profit, clientOrderId)
-      const recErr = await recordAttempt(settings.userId, v, asset, fill.side, 'placed', {
-        ticker: fill.brokerSymbol, mode: lane.mode, broker: lane.brokerName,
+      const recErr = await recordAttempt(settings.userId, v, asset, fill.side, 'placed', lane.mode, lane.brokerName, {
+        ticker: fill.brokerSymbol,
         broker_order_id: fill.orderId, broker_client_id: clientOrderId,
         qty: fill.qty, entry_price_est: entry,
         council_entry: entry, council_stop: stop, council_target: v.take_profit,
@@ -266,7 +268,7 @@ async function runUser(settings: UserTradingSettings, asset: SharkAsset, dryRun:
       }
       console.log(`[day-shark-trade:${asset}] MAX ${fill.side.toUpperCase()} $${sized.notionalUsd!.toFixed(2)} ${fill.brokerSymbol} (${sized.rationale})`)
     } catch (e) {
-      const recErr = await recordAttempt(settings.userId, v, asset, 'buy', 'rejected', { reject_reason: e instanceof Error ? e.message : String(e), broker_client_id: clientOrderId })
+      const recErr = await recordAttempt(settings.userId, v, asset, 'buy', 'rejected', lane.mode, lane.brokerName, { reject_reason: e instanceof Error ? e.message : String(e), broker_client_id: clientOrderId })
       if (recErr) result.notes.push(`record-reject failed for ${v.ticker}: ${recErr}`)
       result.errors++
     }
