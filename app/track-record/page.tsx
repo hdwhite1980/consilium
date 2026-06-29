@@ -30,6 +30,12 @@ interface VersionStats {
   totalVerdicts: number
   gradedVerdicts: number
   sampleNote: string | null
+  expectancyR?: number | null
+  profitFactor?: number | null
+  payoffRatio?: number | null
+  avgWinR?: number | null
+  totalR?: number | null
+  avgReturnPct?: number | null
   versionLabel: string
 }
 
@@ -305,6 +311,19 @@ function VersionCard({
                 <Stat label="Direction" value={stats.directionAcc1w} suffix="%" accent="#60a5fa" icon={<TrendingUp size={11} />} />
                 <Stat label="Verdicts" value={stats.totalVerdicts} suffix="" accent="rgba(255,255,255,0.65)" detail={`${stats.gradedVerdicts} graded`} />
               </div>
+              {(stats.expectancyR != null || stats.profitFactor != null) && (
+                <>
+                  <div className="grid grid-cols-3 gap-3 mt-3">
+                    <Stat label="Expectancy" value={stats.expectancyR ?? null} suffix="R" accent={(stats.expectancyR ?? 0) > 0 ? '#34d399' : '#f87171'} detail="per trade" />
+                    <Stat label="Profit factor" value={stats.profitFactor ?? null} suffix="" accent={(stats.profitFactor ?? 0) >= 1 ? '#34d399' : '#f87171'} detail={(stats.profitFactor ?? 0) >= 1 ? 'profitable' : 'unprofitable'} />
+                    <Stat label="Avg return" value={stats.avgReturnPct ?? null} suffix="%" accent={(stats.avgReturnPct ?? 0) > 0 ? '#34d399' : '#f87171'} detail="per verdict, 1W" />
+                  </div>
+                  <p className="text-[9px] font-mono text-white/30 mt-2 leading-relaxed">
+                    Expectancy = average R won per trade (target = +R, stop = −1R). Above 0 means a real edge;
+                    profit factor above 1 means winners outweigh losers. These — not hit rate — decide whether the edge makes money.
+                  </p>
+                </>
+              )}
             </div>
           )}
 

@@ -28,6 +28,13 @@ interface Stats {
   directionAcc1w: number | null
   totalVerdicts: number
   gradedVerdicts: number
+  // Expectancy suite — the metrics that actually decide profitability
+  expectancyR: number | null      // mean R per trade (target=+R, stop=−1R); >0 = edge
+  profitFactor: number | null     // gross win R / gross loss R; >1 = profitable
+  payoffRatio: number | null      // avg win R / avg loss R (avg loss = 1R)
+  avgWinR: number | null
+  totalR: number | null           // cumulative R captured across resolved trades
+  avgReturnPct: number | null     // mean realized 1W directional return per verdict
   sampleNote: string | null
   versionLabel: string
 }
@@ -98,7 +105,7 @@ async function computeStats(version: SystemVersion | null, source?: string | nul
   const admin = getAdmin()
   let q = admin
     .from('verdict_log')
-    .select('outcome_1w_strict, outcome_1w_directional')
+    .select('outcome_1w_strict, outcome_1w_directional, outcome_1w_price, signal, entry_price, stop_loss, take_profit')
     .in('signal', ['BULLISH', 'BEARISH'])
 
   // Max (day_shark) is measured separately — exclude by default; opt in via ?source=day_shark
@@ -154,11 +161,51 @@ async function computeStats(version: SystemVersion | null, source?: string | nul
     sampleNote = `Preview — only ${gradedVerdicts} graded outcomes, too small to draw conclusions yet`
   }
 
+  // ── Expectancy suite ────────────────────────────────────────
+  // R-multiple per resolved trade: target hit = +targetR, stop hit = −1R.
+  // Expectancy = mean R per trade. Profit factor = gross win R / gross loss R.
+  // Realized return = mean directional 1W move (includes trades that expired
+  // without hitting either level — the honest "what actually happened" figure).
+  let grossWinR = 0, grossLossR = 0, winCountR = 0, lossCountR = 0
+  let retSum = 0, retCount = 0
+  for (const r of rows) {
+    const entry = Number(r.entry_price), stop = Number(r.stop_loss), tgt = Number(r.take_profit)
+    const risk = Math.abs(entry - stop)
+    const validRisk = entry > 0 && risk > 0 && risk / entry >= 0.001   // guard junk (entry≈stop)
+
+    if (validRisk && r.outcome_1w_strict === 'win' && tgt > 0) {
+      const targetR = Math.min(10, Math.abs(tgt - entry) / risk)       // cap absurd outliers
+      grossWinR += targetR; winCountR++
+    } else if (validRisk && r.outcome_1w_strict === 'loss') {
+      grossLossR += 1; lossCountR++
+    }
+
+    // realized directional 1W return (bearish profits when price falls)
+    const p1w = Number(r.outcome_1w_price)
+    if (entry > 0 && p1w > 0) {
+      const raw = (p1w - entry) / entry
+      retSum += (r.signal === 'BEARISH' ? -raw : raw); retCount++
+    }
+  }
+  const nR = winCountR + lossCountR
+  const avgWinR = winCountR > 0 ? grossWinR / winCountR : null
+  const expectancyR = nR > 0 ? (grossWinR - grossLossR) / nR : null
+  const profitFactor = grossLossR > 0 ? grossWinR / grossLossR : (grossWinR > 0 ? null : null)
+  const payoffRatio = avgWinR  // avg win R ÷ avg loss R, and avg loss R = 1 by definition
+  const totalR = nR > 0 ? grossWinR - grossLossR : null
+  const avgReturnPct = retCount > 0 ? (retSum / retCount) * 100 : null
+
   return {
     hitRate1w,
     directionAcc1w,
     totalVerdicts,
     gradedVerdicts,
+    expectancyR: expectancyR === null ? null : Number(expectancyR.toFixed(3)),
+    profitFactor: profitFactor === null ? null : Number(profitFactor.toFixed(2)),
+    payoffRatio: payoffRatio === null ? null : Number(payoffRatio.toFixed(2)),
+    avgWinR: avgWinR === null ? null : Number(avgWinR.toFixed(2)),
+    totalR: totalR === null ? null : Number(totalR.toFixed(1)),
+    avgReturnPct: avgReturnPct === null ? null : Number(avgReturnPct.toFixed(2)),
     sampleNote,
     versionLabel: version?.label ?? 'All time',
   }
