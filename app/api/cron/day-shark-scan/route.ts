@@ -49,7 +49,7 @@ async function run(req: NextRequest): Promise<NextResponse> {
   const url = new URL(req.url)
   const userId = url.searchParams.get('userId')
   if (!userId) return NextResponse.json({ error: 'userId required' }, { status: 400 })
-  const asset = (url.searchParams.get('asset') ?? 'stock') as 'stock' | 'crypto'
+  const asset = (url.searchParams.get('asset') ?? 'stock') as 'stock' | 'crypto' | 'forex'
   const limit = Math.max(1, Math.min(20, Number(url.searchParams.get('limit') ?? '8')))
   const maxAgeHours = Number(url.searchParams.get('maxAgeHours') ?? '12')
   const slice = Math.max(0, Number(url.searchParams.get('slice') ?? '0'))
@@ -65,11 +65,15 @@ async function run(req: NextRequest): Promise<NextResponse> {
 
   // Candidate set per asset.
   const SHARK_CRYPTO = ['BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'DOGEUSD', 'AVAXUSD', 'LINKUSD', 'LTCUSD', 'ADAUSD', 'DOTUSD']
+  const SHARK_FOREX = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'NZDUSD', 'EURJPY', 'GBPJPY']
   let candidates: string[]
-  let assetType: 'stock' | 'crypto'
+  let assetType: 'stock' | 'crypto' | 'forex'
   if (asset === 'crypto') {
     assetType = 'crypto'
     candidates = SHARK_CRYPTO.slice(0, limit)
+  } else if (asset === 'forex') {
+    assetType = 'forex'
+    candidates = SHARK_FOREX.slice(0, limit)
   } else {
     assetType = 'stock'
     const universe = getAllUniverseTickers()

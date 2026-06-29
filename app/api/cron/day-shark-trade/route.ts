@@ -1,21 +1,25 @@
 // =============================================================
 // app/api/cron/day-shark-trade/route.ts
 //
-// Max's executor (Phase 2b) — CRYPTO. Reads source='day_shark' TAKE verdicts,
-// sizes them HOT within Max's virtual budget, places through the verified
-// selectCryptoBroker, and records the fill tagged signal_source='day_shark' so:
-//   (a) computeSharkDeployed counts it against his sleeve next run, and
-//   (b) the existing crypto-position-monitor enforces its stop (baseline
-//       protection; Max's EOD exit discipline is Phase 3 on top).
+// Max's executor — MULTI-ASSET. Reads source='day_shark' TAKE verdicts, sizes
+// them within Max's per-asset virtual budget, places through the right broker,
+// and records the fill tagged signal_source='day_shark'.
 //
-// SAFETY:
-//   - Budget gate: never deploys past Max's available sleeve (can't touch the
-//     slow lane's cash). Running budget is decremented within the run too.
-//   - Dedup: skips any verdict that already has a day_shark attempt (re-run safe),
-//     and uses a deterministic client_order_id.
-//   - Buying-power gate: notional must fit live cash with a safety margin.
+//   crypto → Coinbase/Alpaca (selectCryptoBroker), notional market entry.
+//            Real money. Soft stop enforced by day-shark-monitor.
+//   stock  → Alpaca PAPER, fractional market order (qty). Market-hours gated.
+//            Soft stop enforced by day-shark-monitor.
+//   forex  → OANDA PRACTICE, signed-units market order with NATIVE TP/SL — the
+//            broker holds the stop/target; the monitor only does EOD cut/ride.
 //
-// Auth: Authorization: Bearer ${CRON_SECRET}   ?userId=<uuid>  &dryRun=1
+// SAFETY (same spine for all three):
+//   - Budget gate: never deploys past Max's available sleeve for that asset.
+//   - Dedup: skips verdicts that already have a day_shark attempt (re-run safe);
+//     deterministic client_order_id wos-shark-{id}.
+//   - Per-run running budget so multiple fills in one run can't overspend.
+//
+// Auth: Authorization: Bearer ${CRON_SECRET}
+//   ?asset=stock|crypto|forex|all (default crypto)  &userId=<uuid>  &dryRun=1
 // =============================================================
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -23,8 +27,11 @@ import { createClient } from '@supabase/supabase-js'
 import { listEnabledTradingUsers, isAssetClassEnabled, type UserTradingSettings } from '@/app/lib/trading/settings'
 import { selectCryptoBroker } from '@/app/lib/trading/crypto-broker'
 import { getSharkBudget, allocationPctFor } from '@/app/lib/trading/day-shark-budget'
-import { computeSharkSize, maxNarration } from '@/app/lib/trading/day-shark'
+import { computeSharkSize, maxNarration, type SharkAsset } from '@/app/lib/trading/day-shark'
 import { isCryptoPairSymbol } from '@/app/lib/crypto-symbol'
+import { makeAlpacaClient } from '@/app/lib/trading/alpaca-client'
+import { makeOandaClient } from '@/app/lib/trading/oanda-client'
+import { loadBrokerCredentialForUse } from '@/app/lib/trading/credentials'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -39,6 +46,17 @@ function isAuthorized(req: NextRequest): boolean {
   return !!process.env.CRON_SECRET && auth === `Bearer ${process.env.CRON_SECRET}`
 }
 
+// Asset classification from the verdict ticker. Crypto first (BTCUSD is crypto,
+// not forex), then 6-letter fiat pairs are forex, everything else is stock.
+function assetOf(ticker: string): SharkAsset {
+  if (isCryptoPairSymbol(ticker)) return 'crypto'
+  if (/^[A-Z]{6}$/.test(ticker)) return 'forex'
+  return 'stock'
+}
+function oandaInstrument(ticker: string): string {
+  return ticker.length === 6 ? `${ticker.slice(0, 3)}_${ticker.slice(3)}` : ticker
+}
+
 interface SharkVerdict {
   id: number
   ticker: string
@@ -51,8 +69,7 @@ interface SharkVerdict {
   trader_risk_reward: number | string | null
 }
 
-// day_shark TAKE verdicts for this user that haven't been executed yet.
-async function loadSharkVerdicts(userId: string): Promise<SharkVerdict[]> {
+async function loadSharkVerdicts(userId: string, asset: SharkAsset): Promise<SharkVerdict[]> {
   const db = admin()
   const cutoff = new Date(Date.now() - 24 * 3_600_000).toISOString()
   const { data: verdicts } = await db
@@ -65,7 +82,6 @@ async function loadSharkVerdicts(userId: string): Promise<SharkVerdict[]> {
     .order('id', { ascending: true })
   if (!verdicts || verdicts.length === 0) return []
 
-  // Drop any that already have a day_shark attempt (re-run safe).
   const ids = verdicts.map(v => v.id)
   const { data: done } = await db
     .from('trade_attempts')
@@ -74,96 +90,149 @@ async function loadSharkVerdicts(userId: string): Promise<SharkVerdict[]> {
     .eq('signal_source', 'day_shark')
     .in('verdict_log_id', ids)
   const doneSet = new Set((done ?? []).map(r => r.verdict_log_id))
-  return (verdicts as SharkVerdict[]).filter(v => !doneSet.has(v.id) && isCryptoPairSymbol(v.ticker))
+  return (verdicts as SharkVerdict[]).filter(v => !doneSet.has(v.id) && assetOf(v.ticker) === asset)
 }
 
 async function recordAttempt(
-  userId: string, verdict: SharkVerdict, outcome: string,
-  details: Record<string, unknown>,
+  userId: string, verdict: SharkVerdict, asset: SharkAsset, side: 'buy' | 'sell',
+  outcome: string, details: Record<string, unknown>,
 ): Promise<void> {
   await admin().from('trade_attempts').insert({
     user_id: userId,
     verdict_log_id: verdict.id,
     ticker: verdict.ticker,
-    asset_class: 'crypto',
+    asset_class: asset,
     council_signal: verdict.signal,
     council_confidence: verdict.confidence !== null ? Math.round(Number(verdict.confidence)) : null,
     outcome,
     signal_source: 'day_shark',
-    side: 'buy',
+    side,
     ...details,
   })
 }
 
-async function runUser(settings: UserTradingSettings, dryRun: boolean) {
-  const result = { ticker: '', placed: 0, skipped: 0, errors: 0, notes: [] as string[] }
-  if (allocationPctFor(settings, 'crypto') <= 0) { result.notes.push('Max off for crypto'); return result }
-  if (!isAssetClassEnabled(settings, 'crypto')) { result.notes.push('crypto disabled'); return result }
+interface LaneCtx {
+  equity: number
+  cash: number
+  brokerName: string
+  mode: string
+  place: (v: SharkVerdict, notionalUsd: number, entry: number, stop: number, target: number | null, clientOrderId: string)
+    => Promise<{ orderId: string; brokerSymbol: string; qty: number; side: 'buy' | 'sell' }>
+}
 
-  const broker = await selectCryptoBroker(settings)
-  if (!broker) { result.notes.push('no crypto broker'); return result }
+async function setupLane(settings: UserTradingSettings, asset: SharkAsset): Promise<LaneCtx | { error: string }> {
+  if (asset === 'crypto') {
+    const broker = await selectCryptoBroker(settings)
+    if (!broker) return { error: 'no crypto broker' }
+    const acct = await broker.account()
+    return {
+      equity: acct.equity || acct.cash, cash: acct.cash, brokerName: broker.brokerName, mode: broker.effectiveMode,
+      place: async (v, notionalUsd, entry, _stop, _target, clientOrderId) => {
+        const brokerSymbol = broker.symbolFor(v.ticker.includes('/') ? v.ticker : v.ticker.replace(/USD$/, '/USD'))
+        const order = await broker.marketEntry({ symbol: brokerSymbol, notionalUsd, side: 'buy', clientOrderId })
+        return { orderId: order.id, brokerSymbol, qty: notionalUsd / entry, side: 'buy' }
+      },
+    }
+  }
 
-  const account = await broker.account()
-  const equity = account.equity || account.cash
-  const budget = await getSharkBudget(settings, 'crypto', equity)
+  if (asset === 'stock') {
+    const cred = await loadBrokerCredentialForUse(settings.userId, 'alpaca', settings.mode, 'stock')
+    if (!cred) return { error: 'no alpaca stock broker' }
+    const alpaca = makeAlpacaClient(cred.keyId, cred.secret, settings.mode)
+    const clock = await alpaca.getClock()
+    if (!clock.isOpen) return { error: 'market closed' }   // Max day-trades RTH only
+    const acct = await alpaca.account()
+    return {
+      equity: acct.equity || acct.cash, cash: acct.cash, brokerName: 'alpaca', mode: settings.mode,
+      place: async (v, notionalUsd, entry, _stop, _target, clientOrderId) => {
+        const qty = Number((notionalUsd / entry).toFixed(6))   // fractional shares
+        const order = await alpaca.fractionalMarketOrder({ symbol: v.ticker, qty, side: 'buy', clientOrderId })
+        return { orderId: order.id, brokerSymbol: v.ticker, qty, side: 'buy' }
+      },
+    }
+  }
+
+  // forex — OANDA practice, native TP/SL (both required)
+  const cred = await loadBrokerCredentialForUse(settings.userId, 'oanda', settings.mode, 'forex')
+  if (!cred) return { error: 'no oanda broker' }
+  const oanda = makeOandaClient(cred.keyId, cred.secret, settings.mode)  // keyId=accountId, secret=token
+  const acct = await oanda.accountSummary()
+  return {
+    equity: acct.equity || acct.balance, cash: acct.marginAvailable || acct.balance, brokerName: 'oanda', mode: settings.mode,
+    place: async (v, notionalUsd, entry, stop, target, clientOrderId) => {
+      const instrument = oandaInstrument(v.ticker)
+      const long = !(v.signal?.toUpperCase().includes('BEAR'))
+      const units = Math.max(1, Math.round(notionalUsd / entry))   // base-currency units (practice approx)
+      const res = await oanda.marketOrder({
+        instrument, units: long ? units : -units,
+        takeProfitPrice: target as number,   // guarded non-null before place() is called
+        stopLossPrice: stop,
+        clientOrderId,
+      })
+      if (res.errorMessage) throw new Error(`OANDA: ${res.errorMessage}`)
+      const fillId = res.orderFillTransaction?.tradeOpened?.tradeID ?? res.lastTransactionID ?? `oanda-${v.id}`
+      return { orderId: String(fillId), brokerSymbol: instrument, qty: units, side: long ? 'buy' : 'sell' }
+    },
+  }
+}
+
+async function runUser(settings: UserTradingSettings, asset: SharkAsset, dryRun: boolean) {
+  const result = { asset, placed: 0, skipped: 0, errors: 0, notes: [] as string[] }
+  if (allocationPctFor(settings, asset) <= 0) { result.notes.push(`Max off for ${asset}`); return result }
+  if (!isAssetClassEnabled(settings, asset)) { result.notes.push(`${asset} disabled`); return result }
+
+  const lane = await setupLane(settings, asset)
+  if ('error' in lane) { result.notes.push(lane.error); return result }
+
+  const budget = await getSharkBudget(settings, asset, lane.equity)
   if (budget.available <= 0) { result.notes.push(`Max out of budget (sleeve $${budget.sleeve.toFixed(2)})`); return result }
 
-  const verdicts = await loadSharkVerdicts(settings.userId)
+  const verdicts = await loadSharkVerdicts(settings.userId, asset)
   let remaining = budget.available
-  let safeCash = account.cash * SAFETY_MARGIN
+  let safeCash = lane.cash * SAFETY_MARGIN
 
   for (const v of verdicts) {
     const entry = v.entry_price, stop = v.stop_loss
-    if (!entry || !stop) { result.skipped++; continue }
+    // forex needs BOTH stop and target (OANDA native TP/SL are required fields)
+    if (!entry || !stop || (asset === 'forex' && !v.take_profit)) { result.skipped++; continue }
 
     const sized = computeSharkSize({
       budget: { ...budget, available: Math.min(remaining, safeCash) },
-      entryPrice: entry,
-      stopPrice: stop,
-      minViableNotional: 1,
+      entryPrice: entry, stopPrice: stop, minViableNotional: 1,
       qualityGrade: (v.trader_grade === 'A' || v.trader_grade === 'B' || v.trader_grade === 'C') ? v.trader_grade : null,
       qualityConfidence: v.confidence !== null ? Number(v.confidence) : null,
       qualityRiskReward: v.trader_risk_reward !== null && v.trader_risk_reward !== undefined ? Number(v.trader_risk_reward) : null,
     })
     if (!sized.ok) {
-      if (!dryRun) await recordAttempt(settings.userId, v, 'skipped', { reject_reason: sized.reason })
+      if (!dryRun) await recordAttempt(settings.userId, v, asset, 'buy', 'skipped', { reject_reason: sized.reason })
       result.skipped++; continue
     }
 
+    const rr = v.trader_risk_reward !== null && v.trader_risk_reward !== undefined ? Number(v.trader_risk_reward) : null
     if (dryRun) {
-      result.notes.push(maxNarration({
-        event: 'entry', ticker: v.ticker, grade: v.trader_grade,
-        riskReward: v.trader_risk_reward !== null && v.trader_risk_reward !== undefined ? Number(v.trader_risk_reward) : null,
-        equity,
-      }) + ` [would place $${sized.notionalUsd!.toFixed(2)}]`)
+      result.notes.push(maxNarration({ event: 'entry', ticker: v.ticker, grade: v.trader_grade, riskReward: rr, equity: lane.equity })
+        + ` [would place $${sized.notionalUsd!.toFixed(2)}]`)
       result.placed++; continue
     }
 
-    const brokerSymbol = broker.symbolFor(v.ticker.includes('/') ? v.ticker : v.ticker.replace(/USD$/, '/USD'))
     const clientOrderId = `wos-shark-${v.id}`
     try {
-      const order = await broker.marketEntry({ symbol: brokerSymbol, notionalUsd: sized.notionalUsd!, side: 'buy', clientOrderId })
-      const units = sized.notionalUsd! / entry
-      await recordAttempt(settings.userId, v, 'placed', {
-        ticker: brokerSymbol,
-        mode: broker.effectiveMode, broker: broker.brokerName,
-        broker_order_id: order.id, broker_client_id: clientOrderId,
-        qty: units, entry_price_est: entry,
+      const fill = await lane.place(v, sized.notionalUsd!, entry, stop, v.take_profit, clientOrderId)
+      await recordAttempt(settings.userId, v, asset, fill.side, 'placed', {
+        ticker: fill.brokerSymbol, mode: lane.mode, broker: lane.brokerName,
+        broker_order_id: fill.orderId, broker_client_id: clientOrderId,
+        qty: fill.qty, entry_price_est: entry,
         council_entry: entry, council_stop: stop, council_target: v.take_profit,
         stop_price: stop, target_price: v.take_profit,
-        risk_dollar_amount: sized.dollarRisk, account_equity_at: equity,
+        risk_dollar_amount: sized.dollarRisk, account_equity_at: lane.equity,
       })
       remaining -= sized.notionalUsd!
       safeCash -= sized.notionalUsd!
       result.placed++
-      result.notes.push(maxNarration({
-        event: 'entry', ticker: brokerSymbol, grade: v.trader_grade,
-        riskReward: v.trader_risk_reward !== null && v.trader_risk_reward !== undefined ? Number(v.trader_risk_reward) : null,
-        equity,
-      }))
-      console.log(`[day-shark-trade] MAX BUY $${sized.notionalUsd!.toFixed(2)} ${brokerSymbol} (${sized.rationale})`)
+      result.notes.push(maxNarration({ event: 'entry', ticker: fill.brokerSymbol, grade: v.trader_grade, riskReward: rr, equity: lane.equity }))
+      console.log(`[day-shark-trade:${asset}] MAX ${fill.side.toUpperCase()} $${sized.notionalUsd!.toFixed(2)} ${fill.brokerSymbol} (${sized.rationale})`)
     } catch (e) {
-      await recordAttempt(settings.userId, v, 'rejected', { reject_reason: e instanceof Error ? e.message : String(e), broker_client_id: clientOrderId })
+      await recordAttempt(settings.userId, v, asset, 'buy', 'rejected', { reject_reason: e instanceof Error ? e.message : String(e), broker_client_id: clientOrderId })
       result.errors++
     }
   }
@@ -175,17 +244,23 @@ async function run(req: NextRequest): Promise<NextResponse> {
   const url = new URL(req.url)
   const onlyUser = url.searchParams.get('userId')
   const dryRun = url.searchParams.get('dryRun') === '1'
+  const assetParam = (url.searchParams.get('asset') ?? 'crypto').toLowerCase()
+  const assets: SharkAsset[] = assetParam === 'all' ? ['stock', 'crypto', 'forex']
+    : (['stock', 'crypto', 'forex'] as SharkAsset[]).includes(assetParam as SharkAsset) ? [assetParam as SharkAsset]
+    : ['crypto']
 
   const users = (await listEnabledTradingUsers()).filter(s => !onlyUser || s.userId === onlyUser)
-  const summary = { users: users.length, placed: 0, skipped: 0, errors: 0, perUser: [] as unknown[] }
+  const summary = { assets, users: users.length, placed: 0, skipped: 0, errors: 0, perUser: [] as unknown[] }
   for (const settings of users) {
-    try {
-      const r = await runUser(settings, dryRun)
-      summary.placed += r.placed; summary.skipped += r.skipped; summary.errors += r.errors
-      summary.perUser.push({ userId: settings.userId, ...r })
-    } catch (e) {
-      summary.errors++
-      summary.perUser.push({ userId: settings.userId, error: e instanceof Error ? e.message : String(e) })
+    for (const asset of assets) {
+      try {
+        const r = await runUser(settings, asset, dryRun)
+        summary.placed += r.placed; summary.skipped += r.skipped; summary.errors += r.errors
+        summary.perUser.push({ userId: settings.userId, ...r })
+      } catch (e) {
+        summary.errors++
+        summary.perUser.push({ userId: settings.userId, asset, error: e instanceof Error ? e.message : String(e) })
+      }
     }
   }
   return NextResponse.json({ ok: true, ...summary })

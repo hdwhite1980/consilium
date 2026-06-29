@@ -166,6 +166,8 @@ async function fetchOpenAttempts(userId: string, assetClass: 'stocks' | 'crypto'
     .in('outcome', ['placed', 'partial_fill', 'filled'])
     .gte('created_at', cutoff)
     .not('broker_order_id', 'is', null)
+    // Max (day_shark) positions are owned exclusively by day-shark-monitor.
+    .or('signal_source.is.null,signal_source.neq.day_shark')
 
   if (assetClass === 'stocks') {
     // trade_attempts stores asset_class='stock' (singular, matches the
