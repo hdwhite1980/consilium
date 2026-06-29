@@ -57,6 +57,7 @@ interface PositionsSummary {
   equityChecked: number
   equityFillsUpdated: number
   equityClosesRecorded: number
+  equityExternalReconciled: number
   // crypto
   cryptoChecked: number
   cryptoFillsUpdated: number
@@ -81,7 +82,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const startedAt = Date.now()
   const summary: PositionsSummary = {
     users: 0,
-    equityChecked: 0, equityFillsUpdated: 0, equityClosesRecorded: 0,
+    equityChecked: 0, equityFillsUpdated: 0, equityClosesRecorded: 0, equityExternalReconciled: 0,
     cryptoChecked: 0, cryptoFillsUpdated: 0, cryptoStopFired: 0, cryptoTargetHit: 0,
     futuresChecked: 0, futuresFillsUpdated: 0, futuresStopFired: 0, futuresPositionClosed: 0,
     errors: 0, durationMs: 0,
@@ -232,6 +233,26 @@ async function processEquityAttempts(
     openSymbols = null
   }
 
+  // Best-effort exit fills for externally-closed positions (e.g. a manual sell in
+  // the broker, or a close outside our bracket): most recent filled order per
+  // symbol today. One call per run; null means we couldn't read it → reconcile
+  // without a price rather than blocking.
+  let lastExitBySymbol: Map<string, { price: number; at: string }> | null = null
+  try {
+    const closed = await alpaca.closedOrdersToday()
+    const m = new Map<string, { price: number; at: string }>()
+    for (const o of closed) {
+      if ((o.status ?? '').toLowerCase() !== 'filled' || o.filled_avg_price == null || o.filled_at == null) continue
+      const sym = o.symbol?.toUpperCase()
+      if (!sym) continue
+      const prev = m.get(sym)
+      if (!prev || new Date(o.filled_at as string).getTime() > new Date(prev.at).getTime()) {
+        m.set(sym, { price: Number(o.filled_avg_price), at: o.filled_at as string })
+      }
+    }
+    lastExitBySymbol = m
+  } catch { lastExitBySymbol = null }
+
   for (const att of attempts) {
     if (!att.broker_order_id) continue
     try {
@@ -241,6 +262,17 @@ async function processEquityAttempts(
         await applyUpdate(att.id, update)
         if (update.outcome === 'filled' || update.outcome === 'partial_fill') summary.equityFillsUpdated++
         if (update.outcome?.startsWith('closed_')) summary.equityClosesRecorded++
+        continue
+      }
+      // EXTERNAL-CLOSE RECONCILIATION: our bracket didn't close this, but the
+      // broker no longer shows the position (manual sell, or a close outside our
+      // tracking). Mark it closed_external so the monitor stops managing a ghost.
+      const recon = reconcileExternalClose(att, openSymbols, lastExitBySymbol)
+      if (recon) {
+        await applyUpdate(att.id, recon)
+        summary.equityClosesRecorded++
+        summary.equityExternalReconciled++
+        console.log(`[auto-trade-positions] RECONCILE ${att.ticker} attempt=${att.id} closed_external — broker shows position gone`)
       }
     } catch (e) {
       summary.errors++
@@ -324,6 +356,45 @@ async function deriveEquityUpdate(att: AttemptRow, order: EquityOrderShape, open
     }
   }
   return null
+}
+
+/** External-close reconciliation: the broker no longer shows a position our DB
+ *  still considers open (e.g. a manual sell in the broker, or any close outside
+ *  our bracket tracking). Returns a closed_external update, or null when it's not
+ *  safe to reconcile. Guards: only HELD positions, only when the broker snapshot
+ *  is trustworthy (non-null) and confirms the symbol is gone, and only after a
+ *  grace window so a just-placed fill the broker hasn't surfaced yet can't be
+ *  mistaken for an external close. */
+function reconcileExternalClose(
+  att: AttemptRow,
+  openSymbols: Set<string> | null,
+  lastExitBySymbol: Map<string, { price: number; at: string }> | null,
+): UpdatePayload | null {
+  if (att.outcome !== 'filled' && att.outcome !== 'partial_fill') return null
+  if (openSymbols === null) return null                    // can't verify → never close on uncertainty
+  const sym = att.ticker.toUpperCase()
+  if (openSymbols.has(sym)) return null                    // broker still holds it → not closed
+  const placedAt = att.created_at ? new Date(att.created_at).getTime() : null
+  if (placedAt !== null && (Date.now() - placedAt) < 5 * 60_000) return null  // grace window
+
+  const ex = lastExitBySymbol?.get(sym) ?? null
+  const entry = att.filled_avg_price != null ? Number(att.filled_avg_price) : null
+  const qty = att.qty != null ? Number(att.qty) : 0
+  const isLong = att.side === 'buy'
+  let pnl: number | null = null
+  if (entry !== null && ex && qty > 0) {
+    pnl = Number(((isLong ? ex.price - entry : entry - ex.price) * qty).toFixed(2))
+  }
+  let outcome: 'closed_win' | 'closed_loss' | 'closed_be' = 'closed_be'
+  if (pnl !== null) outcome = pnl > 0.005 ? 'closed_win' : pnl < -0.005 ? 'closed_loss' : 'closed_be'
+
+  return {
+    outcome,
+    exit_price: ex?.price,
+    realized_pnl: pnl ?? undefined,
+    closure_kind: 'closed_external',
+    closed_at: ex?.at ?? new Date().toISOString(),
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
