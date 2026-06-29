@@ -147,3 +147,35 @@ export function maxNarrationContext(currentEquity: number, startingEquity: numbe
   const p = milestoneProgress(currentEquity, startingEquity)
   return `Account: $${currentEquity.toFixed(2)} | chasing $${p.next.toFixed(0)} (${(p.pctToNext * 100).toFixed(0)}% there from $${p.prev.toFixed(0)})`
 }
+
+// ── Max's voice ─────────────────────────────────────────────
+// Deterministic narration — captures Max's cocky, ruthless-on-losers persona
+// with zero LLM cost or latency in the money path. Honors MAX_PERSONA_SYSTEM's
+// hard rules: states the plan and the milestone he's chasing, NEVER promises an
+// outcome, owns losers flatly. Computed at event time from the trade data.
+
+export type MaxEvent = 'entry' | 'target' | 'stop' | 'max_hold' | 'eod_cut' | 'ride'
+
+export interface MaxNarrationInput {
+  event: MaxEvent
+  ticker: string
+  grade?: string | null
+  riskReward?: number | null
+  gainPct?: number | null
+  equity?: number
+}
+
+export function maxNarration(i: MaxNarrationInput): string {
+  const chasing = i.equity && i.equity > 0 ? ` Chasing $${nextMilestone(i.equity, 0).toFixed(0)}.` : ''
+  const rr = i.riskReward !== null && i.riskReward !== undefined ? `${i.riskReward.toFixed(1)}:1` : '?:1'
+  const g = i.grade ? `${i.grade}-grade` : 'setup'
+  const up = i.gainPct !== null && i.gainPct !== undefined ? ` (+${(i.gainPct * 100).toFixed(1)}%)` : ''
+  switch (i.event) {
+    case 'entry':    return `🦈 Biting ${i.ticker} — ${g}, ${rr}. Stop's set; I'm gone the second it cracks.${chasing}`
+    case 'target':   return `${i.ticker} tagged target${up} — banked. That's how you compound.${chasing}`
+    case 'stop':     return `Cut ${i.ticker} at the stop. No ego, no hoping — next.`
+    case 'max_hold': return `${i.ticker} rode its night${up} — off the table. Day trade, not a marriage.${chasing}`
+    case 'eod_cut':  return `${i.ticker} went nowhere into the close — cut. Losers don't sleep over.`
+    case 'ride':     return `${i.ticker}'s green and strong${up} — it earns a night. Riding it.`
+  }
+}

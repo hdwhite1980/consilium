@@ -28,6 +28,7 @@ import { createClient } from '@supabase/supabase-js'
 import { listEnabledTradingUsers, type UserTradingSettings } from '@/app/lib/trading/settings'
 import { selectCryptoBroker } from '@/app/lib/trading/crypto-broker'
 import { allocationPctFor } from '@/app/lib/trading/day-shark-budget'
+import { maxNarration, type MaxEvent } from '@/app/lib/trading/day-shark'
 import type { CoinbaseClient } from '@/app/lib/trading/coinbase-client'
 import type { AlpacaCryptoClient } from '@/app/lib/trading/alpaca-crypto-client'
 
@@ -109,6 +110,11 @@ async function runUser(settings: UserTradingSettings, isEod: boolean, dryRun: bo
   const broker = await selectCryptoBroker(settings)
   if (!broker) return r
 
+  let equity = 0
+  try { equity = (await broker.account()).equity } catch { /* milestone tag optional */ }
+  const say = (event: MaxEvent, ticker: string, gp: number) =>
+    r.notes.push(maxNarration({ event, ticker, gainPct: gp, equity }))
+
   const positions = await loadOpen(settings.userId)
   r.open = positions.length
   const now = Date.now()
@@ -124,22 +130,22 @@ async function runUser(settings: UserTradingSettings, isEod: boolean, dryRun: bo
 
     // 1. hard stop
     if (pos.stop_price && price <= pos.stop_price) {
-      await closeOut(broker, pos, price, entry, 'stop', dryRun); r.closed++; continue
+      await closeOut(broker, pos, price, entry, 'stop', dryRun); say('stop', pos.ticker, gainPct); r.closed++; continue
     }
     // 2. target
     if (pos.target_price && price >= pos.target_price) {
-      await closeOut(broker, pos, price, entry, 'target', dryRun); r.closed++; continue
+      await closeOut(broker, pos, price, entry, 'target', dryRun); say('target', pos.ticker, gainPct); r.closed++; continue
     }
     // 3. max hold — rode its night, force out
     if (ageHours >= MAX_HOLD_HOURS) {
-      await closeOut(broker, pos, price, entry, 'max_hold', dryRun); r.closed++; continue
+      await closeOut(broker, pos, price, entry, 'max_hold', dryRun); say('max_hold', pos.ticker, gainPct); r.closed++; continue
     }
     // 4. EOD checkpoint
     if (isEod) {
       if (gainPct >= RIDE_THRESHOLD) {
-        r.ridden++; r.notes.push(`${pos.ticker}: rides (+${(gainPct * 100).toFixed(1)}%)`)
+        r.ridden++; say('ride', pos.ticker, gainPct)
       } else {
-        await closeOut(broker, pos, price, entry, 'eod_flat', dryRun); r.closed++
+        await closeOut(broker, pos, price, entry, 'eod_flat', dryRun); say('eod_cut', pos.ticker, gainPct); r.closed++
       }
       continue
     }

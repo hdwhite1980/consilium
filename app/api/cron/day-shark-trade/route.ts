@@ -23,7 +23,7 @@ import { createClient } from '@supabase/supabase-js'
 import { listEnabledTradingUsers, isAssetClassEnabled, type UserTradingSettings } from '@/app/lib/trading/settings'
 import { selectCryptoBroker } from '@/app/lib/trading/crypto-broker'
 import { getSharkBudget, allocationPctFor } from '@/app/lib/trading/day-shark-budget'
-import { computeSharkSize } from '@/app/lib/trading/day-shark'
+import { computeSharkSize, maxNarration } from '@/app/lib/trading/day-shark'
 import { isCryptoPairSymbol } from '@/app/lib/crypto-symbol'
 
 export const dynamic = 'force-dynamic'
@@ -131,7 +131,11 @@ async function runUser(settings: UserTradingSettings, dryRun: boolean) {
     }
 
     if (dryRun) {
-      result.notes.push(`${v.ticker}: would place $${sized.notionalUsd!.toFixed(2)} (${sized.rationale})`)
+      result.notes.push(maxNarration({
+        event: 'entry', ticker: v.ticker, grade: v.trader_grade,
+        riskReward: v.trader_risk_reward !== null && v.trader_risk_reward !== undefined ? Number(v.trader_risk_reward) : null,
+        equity,
+      }) + ` [would place $${sized.notionalUsd!.toFixed(2)}]`)
       result.placed++; continue
     }
 
@@ -152,6 +156,11 @@ async function runUser(settings: UserTradingSettings, dryRun: boolean) {
       remaining -= sized.notionalUsd!
       safeCash -= sized.notionalUsd!
       result.placed++
+      result.notes.push(maxNarration({
+        event: 'entry', ticker: brokerSymbol, grade: v.trader_grade,
+        riskReward: v.trader_risk_reward !== null && v.trader_risk_reward !== undefined ? Number(v.trader_risk_reward) : null,
+        equity,
+      }))
       console.log(`[day-shark-trade] MAX BUY $${sized.notionalUsd!.toFixed(2)} ${brokerSymbol} (${sized.rationale})`)
     } catch (e) {
       await recordAttempt(settings.userId, v, 'rejected', { reject_reason: e instanceof Error ? e.message : String(e), broker_client_id: clientOrderId })
