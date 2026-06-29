@@ -36,6 +36,9 @@ interface BucketStats {
   totalR: number | null           // cumulative R captured across resolved trades
   avgReturnPct: number | null     // mean realized 1W directional return (outlier-prone)
   medianReturnPct: number | null  // median realized 1W return (honest middle)
+  avgAlphaPct: number | null      // mean (strategy return − SPY return) per verdict
+  beatSpyRate: number | null      // % of benchmarked verdicts that beat SPY
+  benchmarkedCount: number        // how many verdicts have a SPY benchmark
 }
 
 interface Stats extends BucketStats {
@@ -115,6 +118,7 @@ type VRow = {
   stop_loss: number | string | null
   take_profit: number | string | null
   ticker: string | null
+  spy_return_1w: number | string | null
 }
 
 function assetOf(ticker: string | null): 'crypto' | 'forex' | 'stock' {
@@ -138,6 +142,7 @@ function bucketStats(rows: VRow[]): BucketStats {
   let wins = 0, losses = 0, dirC = 0, dirI = 0
   let grossWinR = 0, grossLossR = 0, winCountR = 0, lossCountR = 0
   const rets: number[] = []
+  const alphas: number[] = []
 
   for (const r of rows) {
     if (r.outcome_1w_strict === 'win') wins++
@@ -155,7 +160,14 @@ function bucketStats(rows: VRow[]): BucketStats {
     }
 
     const p1w = Number(r.outcome_1w_price)
-    if (entry > 0 && p1w > 0) rets.push((r.signal === 'BEARISH' ? -1 : 1) * ((p1w - entry) / entry) * 100)
+    if (entry > 0 && p1w > 0) {
+      const stratRet = (r.signal === 'BEARISH' ? -1 : 1) * ((p1w - entry) / entry) * 100
+      rets.push(stratRet)
+      // Alpha vs SPY over the same window (only where the benchmark is cached)
+      if (r.spy_return_1w !== null && r.spy_return_1w !== undefined) {
+        alphas.push(stratRet - Number(r.spy_return_1w) * 100)
+      }
+    }
   }
 
   const graded = wins + losses
@@ -174,6 +186,9 @@ function bucketStats(rows: VRow[]): BucketStats {
     totalR: nR > 0 ? round(grossWinR - grossLossR, 1) : null,
     avgReturnPct: rets.length > 0 ? round(rets.reduce((a, b) => a + b, 0) / rets.length) : null,
     medianReturnPct: round(median(rets)),
+    avgAlphaPct: alphas.length > 0 ? round(alphas.reduce((a, b) => a + b, 0) / alphas.length) : null,
+    beatSpyRate: alphas.length > 0 ? round((alphas.filter(a => a > 0).length / alphas.length) * 100) : null,
+    benchmarkedCount: alphas.length,
   }
 }
 
@@ -181,7 +196,7 @@ async function computeStats(version: SystemVersion | null, source?: string | nul
   const admin = getAdmin()
   let q = admin
     .from('verdict_log')
-    .select('outcome_1w_strict, outcome_1w_directional, outcome_1w_price, signal, entry_price, stop_loss, take_profit, ticker')
+    .select('outcome_1w_strict, outcome_1w_directional, outcome_1w_price, signal, entry_price, stop_loss, take_profit, ticker, spy_return_1w')
     .in('signal', ['BULLISH', 'BEARISH'])
 
   // Max (day_shark) is measured separately — exclude by default; opt in via ?source=day_shark
