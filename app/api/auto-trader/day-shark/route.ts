@@ -64,6 +64,7 @@ export async function GET(): Promise<NextResponse> {
 
   if (res.error) {
     rowsError = res.error.message
+    console.warn('[day-shark dashboard] full select failed, using safe fallback:', rowsError)
     const res2 = await admin()
       .from('trade_attempts')
       .select(SAFE)
@@ -151,33 +152,12 @@ export async function GET(): Promise<NextResponse> {
     ageHours: Number(((Date.now() - new Date(v.created_at).getTime()) / 3_600_000).toFixed(1)),
   }))
 
-  // ── TEMP DEBUG ── reveals whether the auth user matches the trade rows.
-  const outcomesForUser = Array.from(new Set(rows.map(r => r.outcome)))
-  const { count: globalDayShark } = await admin()
-    .from('trade_attempts')
-    .select('id', { count: 'exact', head: true })
-    .eq('signal_source', 'day_shark')
-    .in('outcome', OPEN)
-  const { data: sampleAny } = await admin()
-    .from('trade_attempts')
-    .select('user_id, ticker, outcome')
-    .eq('signal_source', 'day_shark')
-    .in('outcome', OPEN)
-    .limit(3)
+  void rowsError  // surfaced via console.warn above if the schema ever drifts again
 
   return NextResponse.json({
     aggregates: { totalPnl: Number(totalPnl.toFixed(2)), wins, losses, winRate, openCount: openRows.length, totalTrades: closedRows.length },
     perAsset,
     milestone: { cryptoStake: Number(cryptoStake.toFixed(2)), next: milestoneTarget, pct: Number(milestonePct.toFixed(0)) },
     open, closed, watching,
-    _debug: {
-      authUserId: user.id,
-      rowsForThisUser: rows.length,
-      outcomesForThisUser: outcomesForUser,
-      openCountForThisUser: openRows.length,
-      globalOpenDaySharkRows: globalDayShark ?? null,
-      sampleOpenRowsAnyUser: sampleAny ?? [],
-      fullSelectError: rowsError,
-    },
   })
 }
