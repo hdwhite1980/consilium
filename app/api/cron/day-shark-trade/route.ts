@@ -170,7 +170,10 @@ async function setupLane(settings: UserTradingSettings, asset: SharkAsset): Prom
     if (!clock.isOpen) return { error: 'market closed' }   // Max day-trades RTH only
     const acct = await alpaca.account()
     return {
-      equity: acct.equity || acct.cash, cash: acct.cash, brokerName: 'alpaca', mode: settings.mode,
+      // Max shares this account with the normal trader, which spends the free cash
+      // on its own positions. Gate Max on buying_power (margin purchasing power) so
+      // he can still trade beside it; his virtual sleeve remains the primary cap.
+      equity: acct.equity || acct.cash, cash: acct.buying_power || acct.cash, brokerName: 'alpaca', mode: settings.mode,
       place: async (v, notionalUsd, entry, _stop, _target, clientOrderId) => {
         const qty = Number((notionalUsd / entry).toFixed(6))   // fractional shares
         const order = await alpaca.fractionalMarketOrder({ symbol: v.ticker, qty, side: 'buy', clientOrderId })
