@@ -40,7 +40,9 @@ async function getRecentlyAnalyzed(userId: string, hours: number): Promise<Set<s
   const cutoff = new Date(Date.now() - hours * 3_600_000).toISOString()
   const { data } = await admin()
     .from('verdict_log').select('ticker')
-    .eq('user_id', userId).gte('created_at', cutoff)
+    .eq('user_id', userId)
+    .eq('source', 'day_shark')        // only skip names MAX recently analyzed — the regular
+    .gte('created_at', cutoff)        // bots constantly touch these tickers and were starving him
   return new Set((data ?? []).map(r => String(r.ticker).toUpperCase()))
 }
 
