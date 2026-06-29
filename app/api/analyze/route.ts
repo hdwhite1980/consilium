@@ -606,7 +606,11 @@ export async function POST(req: NextRequest) {
                 ticker: symbol,
                 signal: result.judge.signal,
                 confidence: result.judge.confidence ?? null,
-                entry_price: parseP(result.judge.entryPrice),
+                // Entry: prefer the Judge's stated entry; when it's missing or
+                // not in a parseable $-format (bare number, range, prose, or a
+                // pure directional call), fall back to the price the council
+                // actually analyzed at, so the verdict is always scoreable.
+                entry_price: parseP(result.judge.entryPrice) ?? (bundle.currentPrice > 0 ? bundle.currentPrice : null),
                 stop_loss: parseP(result.judge.stopLoss),
                 take_profit: parseP(result.judge.takeProfit),
                 time_horizon: result.judge.timeHorizon ?? null,
