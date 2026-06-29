@@ -106,7 +106,7 @@ async function setupMonLane(settings: UserTradingSettings, asset: SharkAsset): P
           return ps.find(p => p.symbol === ticker)?.current_price ?? null
         } catch { return null }
       },
-      close: async (ticker) => { await alpaca.closePosition(ticker) },
+      close: async (ticker) => { await alpaca.closePositionSafe(ticker) },
     }
   }
 
@@ -124,7 +124,7 @@ async function setupMonLane(settings: UserTradingSettings, asset: SharkAsset): P
 }
 
 async function runUser(settings: UserTradingSettings, asset: SharkAsset, isEod: boolean, dryRun: boolean) {
-  const r = { asset, open: 0, closed: 0, ridden: 0, held: 0, noPrice: 0, notes: [] as string[] }
+  const r = { asset, open: 0, closed: 0, ridden: 0, held: 0, noPrice: 0, failed: 0, notes: [] as string[] }
   if (allocationPctFor(settings, asset) <= 0) return r
 
   const lane = await setupMonLane(settings, asset)
@@ -136,6 +136,7 @@ async function runUser(settings: UserTradingSettings, asset: SharkAsset, isEod: 
   const say = (event: MaxEvent, ticker: string, gp: number) => r.notes.push(maxNarration({ event, ticker, gainPct: gp }))
 
   for (const pos of positions) {
+   try {
     const entry = pos.filled_avg_price ?? pos.entry_price_est
     if (!entry || entry <= 0) { r.held++; continue }
     const price = await lane.price(pos.ticker)
@@ -153,7 +154,17 @@ async function runUser(settings: UserTradingSettings, asset: SharkAsset, isEod: 
       const qty = pos.qty != null ? Number(pos.qty) : 0
       const realizedPnl = qty > 0 ? Number((gainPct * entry * qty).toFixed(2)) : null
       if (!dryRun) {
-        await lane.close(pos.ticker, side)
+        try {
+          await lane.close(pos.ticker, side)
+        } catch (e) {
+          // One position failing to close must NOT abort the rest of the batch.
+          // Record it and move on; the next run (or a manual close) will retry.
+          const msg = e instanceof Error ? e.message : String(e)
+          r.failed++
+          r.notes.push(`${pos.ticker}: close failed (${reason}) — ${msg}`)
+          console.error(`[day-shark-monitor:${asset}] CLOSE FAILED ${pos.ticker} (${reason}): ${msg}`)
+          return
+        }
         await admin().from('trade_attempts').update({
           outcome: win ? 'closed_win' : 'closed_loss',
           exit_price: price, realized_pnl: realizedPnl,
@@ -178,6 +189,14 @@ async function runUser(settings: UserTradingSettings, asset: SharkAsset, isEod: 
       continue
     }
     r.held++
+   } catch (e) {
+     // Backstop: anything unexpected on one position (pricing, DB, broker)
+     // is logged and skipped so the remaining positions still get processed.
+     const msg = e instanceof Error ? e.message : String(e)
+     r.failed++
+     r.notes.push(`${pos.ticker}: error — ${msg}`)
+     console.error(`[day-shark-monitor:${asset}] ERROR ${pos.ticker}: ${msg}`)
+   }
   }
   return r
 }
@@ -194,12 +213,12 @@ async function run(req: NextRequest): Promise<NextResponse> {
     : ['crypto']
 
   const users = (await listEnabledTradingUsers()).filter(s => !onlyUser || s.userId === onlyUser)
-  const summary = { mode: isEod ? 'eod-checkpoint' : 'intraday', assets, users: users.length, closed: 0, ridden: 0, perUser: [] as unknown[] }
+  const summary = { mode: isEod ? 'eod-checkpoint' : 'intraday', assets, users: users.length, closed: 0, ridden: 0, failed: 0, perUser: [] as unknown[] }
   for (const settings of users) {
     for (const asset of assets) {
       try {
         const ur = await runUser(settings, asset, isEod, dryRun)
-        summary.closed += ur.closed; summary.ridden += ur.ridden
+        summary.closed += ur.closed; summary.ridden += ur.ridden; summary.failed += ur.failed
         summary.perUser.push({ userId: settings.userId, ...ur })
       } catch (e) {
         summary.perUser.push({ userId: settings.userId, asset, error: e instanceof Error ? e.message : String(e) })

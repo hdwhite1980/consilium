@@ -56,7 +56,7 @@ export async function setupSharkLane(
           return ps.find(p => p.symbol === ticker)?.current_price ?? null
         } catch { return null }
       },
-      close: async (ticker) => { await alpaca.closePosition(ticker) },
+      close: async (ticker) => { await alpaca.closePositionSafe(ticker) },
     }
   }
 

@@ -335,6 +335,22 @@ export class AlpacaClient {
     await this.request('DELETE', `/v2/positions/${encodeURIComponent(symbol)}`)
   }
 
+  /** Cancel any working orders on the symbol, then liquidate the position.
+   *  A working sell (stop/target leg, or a prior partial close) reserves shares,
+   *  which makes a plain closePosition fail with HTTP 403 "insufficient qty
+   *  available". Cancelling those orders frees the shares so the close can take
+   *  the full position. Best-effort on the cancels; always attempts the close. */
+  async closePositionSafe(symbol: string): Promise<void> {
+    try {
+      const open = await this.openOrders(symbol)
+      for (const o of open) {
+        if (o.id) await this.cancelOrder(o.id).catch(() => { /* already filled/cancelled */ })
+      }
+      if (open.length > 0) await new Promise(res => setTimeout(res, 500))  // let cancels settle at the broker
+    } catch { /* best-effort — still attempt the close below */ }
+    await this.closePosition(symbol)
+  }
+
   private toOrder(raw: Record<string, unknown>): AlpacaOrder {
     const legs = Array.isArray(raw.legs) ? raw.legs as Array<Record<string, unknown>> : null
     return {
