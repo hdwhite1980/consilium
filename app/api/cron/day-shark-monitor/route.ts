@@ -72,6 +72,12 @@ async function loadOpen(userId: string, asset: SharkAsset): Promise<OpenPos[]> {
 interface MonLane {
   price: (ticker: string) => Promise<number | null>
   close: (ticker: string, side: 'buy' | 'sell') => Promise<void>
+  // Symbols the broker CURRENTLY holds (UPPERCASE). null = couldn't determine
+  // (broker error, or asset not yet supported) → reconciliation is skipped.
+  openSymbols?: () => Promise<Set<string> | null>
+  // Best-effort exit fill for a position the broker no longer shows (e.g. a
+  // manual sell). null = unknown → reconcile without a price.
+  lastExit?: (ticker: string) => Promise<{ price: number; at: string } | null>
 }
 
 async function setupMonLane(settings: UserTradingSettings, asset: SharkAsset): Promise<MonLane | { error: string }> {
@@ -107,6 +113,24 @@ async function setupMonLane(settings: UserTradingSettings, asset: SharkAsset): P
         } catch { return null }
       },
       close: async (ticker) => { await alpaca.closePositionSafe(ticker) },
+      openSymbols: async () => {
+        try {
+          const ps = await alpaca.positions()
+          return new Set(ps.filter(p => Number(p.qty) !== 0).map(p => p.symbol.toUpperCase()))
+        } catch { return null }   // broker unreachable → skip reconciliation this run
+      },
+      lastExit: async (ticker) => {
+        try {
+          const orders = await alpaca.closedOrdersToday()
+          const fills = orders
+            .filter(o => o.symbol?.toUpperCase() === ticker.toUpperCase()
+                      && (o.status ?? '').toLowerCase() === 'filled'
+                      && o.filled_avg_price != null && o.filled_at != null)
+            .sort((a, b) => new Date(b.filled_at as string).getTime() - new Date(a.filled_at as string).getTime())
+          const f = fills[0]
+          return f ? { price: Number(f.filled_avg_price), at: f.filled_at as string } : null
+        } catch { return null }
+      },
     }
   }
 
@@ -124,7 +148,7 @@ async function setupMonLane(settings: UserTradingSettings, asset: SharkAsset): P
 }
 
 async function runUser(settings: UserTradingSettings, asset: SharkAsset, isEod: boolean, dryRun: boolean) {
-  const r = { asset, open: 0, closed: 0, ridden: 0, held: 0, noPrice: 0, failed: 0, notes: [] as string[] }
+  const r = { asset, open: 0, closed: 0, ridden: 0, held: 0, noPrice: 0, failed: 0, reconciled: 0, notes: [] as string[] }
   if (allocationPctFor(settings, asset) <= 0) return r
 
   const lane = await setupMonLane(settings, asset)
@@ -135,8 +159,46 @@ async function runUser(settings: UserTradingSettings, asset: SharkAsset, isEod: 
   const now = Date.now()
   const say = (event: MaxEvent, ticker: string, gp: number) => r.notes.push(maxNarration({ event, ticker, gainPct: gp }))
 
+  // Reconciliation snapshot: which symbols does the broker still hold? null means
+  // we can't tell (broker error, or asset not supported) → reconciliation is skipped.
+  const brokerOpen = lane.openSymbols ? await lane.openSymbols() : null
+
   for (const pos of positions) {
    try {
+    // EXTERNAL-CLOSE RECONCILIATION: the broker no longer shows this position
+    // (e.g. it was sold manually in the broker). Mark it closed_external so the
+    // monitor stops treating it as open. Guards: only when the snapshot is
+    // trustworthy (non-null), and not for brand-new positions (the broker may
+    // not reflect a just-placed fill yet — avoid a false close on an open-race).
+    if (brokerOpen !== null && !brokerOpen.has(pos.ticker.toUpperCase())) {
+      const ageMin = (now - new Date(pos.created_at).getTime()) / 60_000
+      if (ageMin < 3) { r.held++; continue }
+      const recEntry = pos.filled_avg_price ?? pos.entry_price_est
+      const recQty = pos.qty != null ? Number(pos.qty) : 0
+      const recIsLong = pos.side !== 'sell'
+      const ex = lane.lastExit ? await lane.lastExit(pos.ticker) : null
+      const recExit = ex?.price ?? null
+      let recPnl: number | null = null
+      if (recEntry && recEntry > 0 && recExit !== null && recQty > 0) {
+        recPnl = Number(((recIsLong ? recExit - recEntry : recEntry - recExit) * recQty).toFixed(2))
+      }
+      let recOutcome: 'closed_win' | 'closed_loss' | 'closed_be' = 'closed_be'
+      if (recPnl !== null) recOutcome = recPnl > 0.005 ? 'closed_win' : recPnl < -0.005 ? 'closed_loss' : 'closed_be'
+      if (!dryRun) {
+        await admin().from('trade_attempts').update({
+          outcome: recOutcome,
+          exit_price: recExit,
+          realized_pnl: recPnl,
+          closure_kind: 'closed_external',
+          closed_at: ex?.at ?? new Date().toISOString(),
+        }).eq('id', pos.id)
+      }
+      r.reconciled++
+      r.notes.push(`${pos.ticker}: reconciled closed_external${recExit !== null ? ` @ ${recExit}` : ' (exit unknown)'}${recPnl !== null ? ` pnl ${recPnl}` : ''}`)
+      console.log(`[day-shark-monitor:${asset}] RECONCILE ${pos.ticker} closed_external — broker shows position gone${dryRun ? ' [dry]' : ''}`)
+      continue
+    }
+
     const entry = pos.filled_avg_price ?? pos.entry_price_est
     if (!entry || entry <= 0) { r.held++; continue }
     const price = await lane.price(pos.ticker)
@@ -213,12 +275,12 @@ async function run(req: NextRequest): Promise<NextResponse> {
     : ['crypto']
 
   const users = (await listEnabledTradingUsers()).filter(s => !onlyUser || s.userId === onlyUser)
-  const summary = { mode: isEod ? 'eod-checkpoint' : 'intraday', assets, users: users.length, closed: 0, ridden: 0, failed: 0, perUser: [] as unknown[] }
+  const summary = { mode: isEod ? 'eod-checkpoint' : 'intraday', assets, users: users.length, closed: 0, ridden: 0, failed: 0, reconciled: 0, perUser: [] as unknown[] }
   for (const settings of users) {
     for (const asset of assets) {
       try {
         const ur = await runUser(settings, asset, isEod, dryRun)
-        summary.closed += ur.closed; summary.ridden += ur.ridden; summary.failed += ur.failed
+        summary.closed += ur.closed; summary.ridden += ur.ridden; summary.failed += ur.failed; summary.reconciled += ur.reconciled
         summary.perUser.push({ userId: settings.userId, ...ur })
       } catch (e) {
         summary.perUser.push({ userId: settings.userId, asset, error: e instanceof Error ? e.message : String(e) })
