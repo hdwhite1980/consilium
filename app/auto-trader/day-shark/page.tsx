@@ -28,17 +28,37 @@ export default function DaySharkDashboard() {
   const [d, setD] = useState<DashData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [alloc, setAlloc] = useState<Record<'stock' | 'crypto' | 'forex', number>>({ stock: 0, crypto: 0, forex: 0 })
+  const [savingAlloc, setSavingAlloc] = useState(false)
+  const [allocSaved, setAllocSaved] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true); setError(null)
     try {
-      const res = await fetch('/api/auto-trader/day-shark')
-      if (!res.ok) throw new Error(`load failed (${res.status})`)
-      setD(await res.json())
+      const [dashRes, allocRes] = await Promise.all([
+        fetch('/api/auto-trader/day-shark'),
+        fetch('/api/user/day-shark-settings'),
+      ])
+      if (!dashRes.ok) throw new Error(`load failed (${dashRes.status})`)
+      setD(await dashRes.json())
+      if (allocRes.ok) {
+        const a = await allocRes.json() as Record<'stock' | 'crypto' | 'forex', number>
+        setAlloc({ stock: a.stock ?? 0, crypto: a.crypto ?? 0, forex: a.forex ?? 0 })
+      }
     } catch (e) { setError(e instanceof Error ? e.message : 'failed to load') }
     finally { setLoading(false) }
   }, [])
   useEffect(() => { void load() }, [load])
+
+  async function saveAlloc() {
+    setSavingAlloc(true); setAllocSaved(false)
+    try {
+      const res = await fetch('/api/user/day-shark-settings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(alloc),
+      })
+      if (res.ok) setAllocSaved(true)
+    } finally { setSavingAlloc(false) }
+  }
 
   const pnlColor = (n: number) => (n > 0 ? '#34d399' : n < 0 ? '#f87171' : 'rgba(255,255,255,0.4)')
 
@@ -76,6 +96,39 @@ export default function DaySharkDashboard() {
               <div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.08)' }}>
                 <div className="h-full rounded-full transition-all" style={{ width: `${d.milestone.pct}%`, background: ACCENT }} />
               </div>
+            </div>
+
+            {/* Allocation sliders */}
+            <div className="rounded-xl border p-4" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.08)' }}>
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-[10px] font-mono text-white/30">allocation — share of each balance Max may deploy</span>
+                <button onClick={() => { void saveAlloc() }} disabled={savingAlloc}
+                  className="text-[11px] font-semibold px-3 py-1 rounded-lg disabled:opacity-40"
+                  style={{ background: ACCENT, color: '#0a0a0b' }}>
+                  {savingAlloc ? 'Saving…' : allocSaved ? 'Saved' : 'Save'}
+                </button>
+              </div>
+              <div className="space-y-3">
+                {(['crypto', 'stock', 'forex'] as const).map(a => {
+                  const pct = Math.round(alloc[a] * 100)
+                  const on = alloc[a] > 0
+                  const note = a === 'crypto' ? 'real funds' : a === 'stock' ? 'paper' : 'practice'
+                  return (
+                    <div key={a}>
+                      <div className="flex items-baseline justify-between mb-1">
+                        <span className="text-xs text-white/70 capitalize">{a} <span className="text-[10px] font-mono text-white/25">{note}</span></span>
+                        <span className="text-xs font-mono font-bold" style={{ color: on ? ACCENT : 'rgba(255,255,255,0.3)' }}>{pct === 0 ? 'OFF' : `${pct}%`}</span>
+                      </div>
+                      <input type="range" min={0} max={100} step={5} value={pct}
+                        onChange={e => { setAllocSaved(false); setAlloc(prev => ({ ...prev, [a]: Number(e.target.value) / 100 })) }}
+                        className="w-full cursor-pointer" style={{ accentColor: ACCENT }} />
+                    </div>
+                  )
+                })}
+              </div>
+              {alloc.crypto >= 1 || alloc.stock >= 1 || alloc.forex >= 1 ? (
+                <p className="text-[10px] text-white/40 mt-2">100% lets Max deploy that entire balance — the most concentrated setting.</p>
+              ) : null}
             </div>
 
             {/* Top stats */}
