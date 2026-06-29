@@ -165,9 +165,9 @@ export class AlpacaClient {
    * Verify an asset is tradable on Alpaca. Catches symbol normalization
    * issues (BRK.B vs BRK-B vs BRKB) before order placement.
    */
-  async assetTradable(symbol: string): Promise<{ tradable: boolean; shortable?: boolean; easyToBorrow?: boolean; reason?: string }> {
+  async assetTradable(symbol: string): Promise<{ tradable: boolean; fractionable?: boolean; shortable?: boolean; easyToBorrow?: boolean; reason?: string }> {
     try {
-      const raw = await this.request<{ tradable?: boolean; status?: string; shortable?: boolean; easy_to_borrow?: boolean }>(
+      const raw = await this.request<{ tradable?: boolean; status?: string; fractionable?: boolean; shortable?: boolean; easy_to_borrow?: boolean }>(
         'GET', `/v2/assets/${encodeURIComponent(symbol)}`
       )
       if (raw.tradable !== true) {
@@ -175,6 +175,7 @@ export class AlpacaClient {
       }
       return {
         tradable: true,
+        fractionable: raw.fractionable === true,
         shortable: raw.shortable === true,
         easyToBorrow: raw.easy_to_borrow === true,
       }

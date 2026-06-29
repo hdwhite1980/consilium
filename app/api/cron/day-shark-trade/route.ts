@@ -175,7 +175,15 @@ async function setupLane(settings: UserTradingSettings, asset: SharkAsset): Prom
       // he can still trade beside it; his virtual sleeve remains the primary cap.
       equity: acct.equity || acct.cash, cash: acct.buying_power || acct.cash, brokerName: 'alpaca', mode: settings.mode,
       place: async (v, notionalUsd, entry, _stop, _target, clientOrderId) => {
-        const qty = Number((notionalUsd / entry).toFixed(6))   // fractional shares
+        const rawQty = notionalUsd / entry
+        let qty = Number(rawQty.toFixed(6))   // fractional shares by default
+        // Some names (e.g. SLS) aren't fractionable — Alpaca rejects fractional
+        // qty (40310000). Floor to whole shares; skip if it can't afford one.
+        const a = await alpaca.assetTradable(v.ticker)
+        if (a.fractionable === false) {
+          qty = Math.floor(rawQty)
+          if (qty < 1) throw new Error(`$${notionalUsd.toFixed(2)} too small for 1 whole share of non-fractionable ${v.ticker} (~$${entry.toFixed(2)}/sh)`)
+        }
         const order = await alpaca.fractionalMarketOrder({ symbol: v.ticker, qty, side: 'buy', clientOrderId })
         return { orderId: order.id, brokerSymbol: v.ticker, qty, side: 'buy' }
       },
