@@ -27,6 +27,11 @@ export interface KillSwitchContext {
   account: AlpacaAccount
   positions: AlpacaPosition[]
   ticker: string  // upper-case canonical
+  /** Optional override for the max-concurrent check. When set (e.g. a grade A/B
+   *  verdict eligible for bounded overflow), this ceiling replaces
+   *  settings.maxConcurrentPos for check #4 only. The auto-trade route still
+   *  enforces the cash-only funding gate on any slot past maxConcurrentPos. */
+  concurrentCapOverride?: number
 }
 
 export type KillSwitchResult =
@@ -62,12 +67,15 @@ export async function evaluateKillSwitches(ctx: KillSwitchContext): Promise<Kill
     return { allowed: false, reason: `already have an open position in ${ticker}`, shouldHalt: false }
   }
 
-  // 4. Max concurrent positions
+  // 4. Max concurrent positions (honors an optional overflow override — see
+  //    KillSwitchContext.concurrentCapOverride. Funding for overflow slots is
+  //    separately gated cash-only in the auto-trade route.)
+  const concurrentCap = ctx.concurrentCapOverride ?? settings.maxConcurrentPos
   const activeCount = positions.filter(p => p.qty !== 0).length
-  if (activeCount >= settings.maxConcurrentPos) {
+  if (activeCount >= concurrentCap) {
     return {
       allowed: false,
-      reason: `at max concurrent positions (${activeCount}/${settings.maxConcurrentPos})`,
+      reason: `at max concurrent positions (${activeCount}/${concurrentCap})`,
       shouldHalt: false,
     }
   }

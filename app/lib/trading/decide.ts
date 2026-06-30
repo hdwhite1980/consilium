@@ -393,11 +393,22 @@ export async function decideForUser(args: {
   }
 
   // 10. Kill switches
+  // Grade A/B verdicts are eligible for bounded overflow past the base concurrent
+  // cap (up to OVERFLOW_HARD_CAP). The kill-switch concurrent check honors this
+  // higher ceiling; the auto-trade route enforces the cash-only funding gate on
+  // any slot beyond settings.maxConcurrentPos. Keep these in sync with the route.
+  const OVERFLOW_HARD_CAP = 13
+  const OVERFLOW_GRADES = new Set(['A', 'B'])
+  const vGrade = (verdict.trader_grade ?? '').toUpperCase()
+  const concurrentCapOverride = OVERFLOW_GRADES.has(vGrade)
+    ? Math.max(settings.maxConcurrentPos, OVERFLOW_HARD_CAP)
+    : undefined
   const killCheck = await evaluateKillSwitches({
     settings,
     account,
     positions,
     ticker: symbol,
+    concurrentCapOverride,
   })
   if (!killCheck.allowed) {
     return killCheck.shouldHalt

@@ -34,6 +34,17 @@ const MAX_VERDICTS_PER_USER_PER_RUN = 20  // safety cap
 // remaining verdicts defer to the next run (re-decided, deterministic id so no
 // duplicate). Concurrent-position cap (kill switch) still applies on top.
 const MAX_NEW_POSITIONS_PER_RUN = 5
+// ── Bounded cash-only overflow ──
+// The concurrent-position cap (settings.maxConcurrentPos, typically 10) is a
+// risk control: N positions at ~1% risk each = bounded portfolio risk. But a
+// high-conviction setup shouldn't be blocked by a full book of weaker ones. So:
+// a grade A or B setup MAY open past the base cap, up to a HARD ceiling of
+// OVERFLOW_HARD_CAP — and ONLY if the position is fully covered by SETTLED CASH
+// (no margin). This keeps the worst case a known, cash-funded position count
+// rather than an unbounded margin book. Below the base cap, any grade may enter
+// as normal; only the overflow slots (cap → OVERFLOW_HARD_CAP) carry these gates.
+const OVERFLOW_HARD_CAP = 13
+const OVERFLOW_GRADES = new Set(['A', 'B'])
 // How many times a verdict that keeps ERRORING (transient throw / broker 5xx)
 // may be retried across runs before we give up and advance past it, so one bad
 // verdict can never wedge the watermark for everything newer than it.
@@ -120,16 +131,30 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         let advanceTo = watermark
         let blocked = false
         let placedThisRun = 0
+        let cashUsedThisRun = 0   // cumulative cost of overflow placements this run (cash-only gate)
         // Concurrent-cap headroom (#2): evaluateKillSwitches reads live Alpaca
         // positions, which lag intra-run — brackets placed earlier this run
         // aren't positions yet — so the per-run cap alone can overshoot
         // maxConcurrentPos. Cap new placements this run to the real headroom.
         let runCap = MAX_NEW_POSITIONS_PER_RUN
+        let openNow = 0
+        let settledCash = 0
         try {
-          const openNow = (await alpaca.positions()).filter(p => p.qty !== 0).length
-          runCap = Math.max(0, Math.min(MAX_NEW_POSITIONS_PER_RUN, settings.maxConcurrentPos - openNow))
+          openNow = (await alpaca.positions()).filter(p => p.qty !== 0).length
+          // Headroom is computed against the OVERFLOW ceiling, not the base cap,
+          // so A/B setups can reach the overflow slots this run. Each placement
+          // past the base cap is independently gated on grade + settled cash below.
+          runCap = Math.max(0, Math.min(MAX_NEW_POSITIONS_PER_RUN, OVERFLOW_HARD_CAP - openNow))
         } catch (e) {
           console.warn(`[auto-trade] headroom check failed; falling back to per-run cap: ${e instanceof Error ? e.message : e}`)
+        }
+        // Settled cash for the cash-only overflow gate. buying_power (margin) is
+        // deliberately NOT used — overflow positions must be fully cash-funded.
+        try {
+          settledCash = (await alpaca.account()).cash
+        } catch (e) {
+          console.warn(`[auto-trade] account cash fetch failed; overflow disabled this run: ${e instanceof Error ? e.message : e}`)
+          settledCash = 0
         }
         const resolve = (id: number) => { if (!blocked) advanceTo = id }
 
@@ -188,19 +213,61 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             break
           }
 
-          // Per-run new-position cap (#9): stop opening positions once we hit
-          // the cap and defer the rest to the next run (do NOT advance past
-          // them, so they get reconsidered). break is safe: deterministic ids
-          // mean a re-decided verdict can't double-place.
+          // Per-run throttle: never open more than runCap new positions in one
+          // run (bounds correlated burst entries). break is safe — deterministic
+          // ids mean a re-decided verdict can't double-place.
           if (placedThisRun >= runCap) {
             blocked = true
             userSummary.decisions.push({
               verdictId: verdict.id, ticker: verdict.ticker, outcome: 'deferred',
-              reason: runCap < MAX_NEW_POSITIONS_PER_RUN
-                ? `at concurrent-cap headroom (${runCap} slot(s) free of ${settings.maxConcurrentPos}); deferring`
-                : `per-run cap reached (${MAX_NEW_POSITIONS_PER_RUN}); deferring to next run`,
+              reason: `per-run new-position cap (${runCap}) reached; deferring to next run`,
             })
             break
+          }
+
+          // ── Position-cap gate with bounded cash-only overflow ──
+          // Live position count = run-start snapshot + what we've placed so far.
+          const effectiveOpen = openNow + placedThisRun
+
+          // Hard ceiling: nothing opens past OVERFLOW_HARD_CAP, ever.
+          if (effectiveOpen >= OVERFLOW_HARD_CAP) {
+            blocked = true
+            userSummary.decisions.push({
+              verdictId: verdict.id, ticker: verdict.ticker, outcome: 'deferred',
+              reason: `overflow ceiling (${OVERFLOW_HARD_CAP}) reached; deferring`,
+            })
+            break
+          }
+
+          // Overflow zone: at/above the base cap but below the hard ceiling. Only
+          // grade A/B fully covered by SETTLED CASH (no margin) may take a slot.
+          if (effectiveOpen >= settings.maxConcurrentPos) {
+            const grade = (verdict.trader_grade ?? '').toUpperCase()
+            if (!OVERFLOW_GRADES.has(grade)) {
+              // Not eligible for overflow — defer THIS one but keep scanning; a
+              // later A/B can still legitimately take an overflow slot. (blocked
+              // holds the watermark; idempotent ids make out-of-order placement safe.)
+              blocked = true
+              userSummary.decisions.push({
+                verdictId: verdict.id, ticker: verdict.ticker, outcome: 'deferred',
+                reason: `at base cap (${settings.maxConcurrentPos}); grade ${grade || '—'} not A/B — no overflow; deferring`,
+              })
+              continue
+            }
+            const positionCost = decision.qty * decision.entryPrice
+            const cashLeft = settledCash - cashUsedThisRun
+            if (positionCost > cashLeft) {
+              blocked = true
+              userSummary.decisions.push({
+                verdictId: verdict.id, ticker: verdict.ticker, outcome: 'deferred',
+                reason: `A/B overflow (slot ${effectiveOpen + 1}) needs $${positionCost.toFixed(0)} settled cash, only $${cashLeft.toFixed(0)} left — deferring`,
+              })
+              continue
+            }
+            // Approved overflow — reserve the cash so later overflow placements
+            // this run see it as committed.
+            cashUsedThisRun += positionCost
+            console.log(`[auto-trade] ${verdict.ticker} OVERFLOW grade ${grade} slot ${effectiveOpen + 1}/${OVERFLOW_HARD_CAP} cash-funded $${positionCost.toFixed(0)} (cash left $${(cashLeft - positionCost).toFixed(0)})`)
           }
 
           // decision.kind === 'place' — actually place the order.
