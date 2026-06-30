@@ -84,7 +84,11 @@ async function run(req: NextRequest): Promise<NextResponse> {
   const { data: coils, error } = await admin
     .from('stock_accumulation_scan')
     .select('symbol, band, sector, strength, phase, bias, has_history, scanned_at')
-    .eq('phase', 'accumulation')
+    // Trade confirmed-breakout (markup) AND coiled (accumulation) setups. The
+    // classifier almost never emits 'accumulation' at tradeable strength, so an
+    // accumulation-only filter left this lane permanently empty; markup is where
+    // the bullish, strength-qualified names actually are.
+    .in('phase', ['markup', 'accumulation'])
     .eq('bias', 'bullish')
     .eq('has_history', true)
     .gte('strength', minStrength)
