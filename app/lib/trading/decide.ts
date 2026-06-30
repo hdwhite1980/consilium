@@ -34,6 +34,7 @@ export interface VerdictForTrade {
   trader_position_size: number | string | null
   trader_risk_reward: number | string | null
   trader_pass_reasons: string[] | null
+  source: string | null
   created_at: string
 }
 

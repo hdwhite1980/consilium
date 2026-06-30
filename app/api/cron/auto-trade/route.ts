@@ -443,7 +443,7 @@ async function fetchNewVerdicts(userId: string, watermark: number): Promise<Verd
   // and earnings-window passes become bypass placements at half size.
   const { data, error } = await admin
     .from('verdict_log')
-    .select('id, user_id, ticker, signal, confidence, entry_price, stop_loss, take_profit, timeframe, trader_decision, trader_grade, trader_position_size, trader_risk_reward, trader_pass_reasons, created_at')
+    .select('id, user_id, ticker, signal, confidence, entry_price, stop_loss, take_profit, timeframe, trader_decision, trader_grade, trader_position_size, trader_risk_reward, trader_pass_reasons, source, created_at')
     .eq('user_id', userId)
     .gt('id', watermark)
     .in('trader_decision', ['TAKE', 'PASS'])
@@ -484,6 +484,7 @@ async function logTradeAttempt(
     verdict_log_id: verdict.id,           // link back to verdict_log row for thesis-check
     analysis_id: null,
     ticker: verdict.ticker,
+    signal_source: verdict.source ?? 'council',   // tag origin: stock_accumulation / earnings_runup / active_story / council
     council_signal: verdict.signal,
     council_confidence: verdict.confidence !== null ? Math.round(Number(verdict.confidence)) : null,
     council_entry: verdict.entry_price !== null ? Number(verdict.entry_price) : null,

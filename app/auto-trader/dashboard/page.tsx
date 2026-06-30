@@ -984,15 +984,24 @@ function OpenPositionsTable({ positions }: { positions: PositionRow[] }) {
                 {p.unrealizedPlPct >= 0 ? '+' : ''}{p.unrealizedPlPct.toFixed(2)}%
               </Td>
               <Td>
-                {p.signalSource && (
-                  <span className="text-xs px-1.5 py-0.5 rounded font-mono"
-                    style={{
-                      background: p.signalSource === 'council' ? 'rgba(167,139,250,0.15)' : 'rgba(251,191,36,0.15)',
-                      color: p.signalSource === 'council' ? '#a78bfa' : '#fbbf24',
-                    }}>
-                    {p.signalSource}
-                  </span>
-                )}
+                {p.signalSource && (() => {
+                  const SRC: Record<string, { label: string; bg: string; fg: string }> = {
+                    stock_accumulation: { label: 'Accumulation', bg: 'rgba(52,211,153,0.15)', fg: '#34d399' },
+                    earnings_runup:     { label: 'Earnings',     bg: 'rgba(244,114,182,0.15)', fg: '#f472b6' },
+                    active_story:       { label: 'Story',        bg: 'rgba(96,165,250,0.15)',  fg: '#60a5fa' },
+                    day_shark:          { label: 'Max',          bg: 'rgba(248,113,113,0.15)', fg: '#f87171' },
+                    council:            { label: 'Council',      bg: 'rgba(167,139,250,0.15)', fg: '#a78bfa' },
+                    scanner:            { label: 'Scanner',      bg: 'rgba(167,139,250,0.15)', fg: '#a78bfa' },
+                    reeval_add:         { label: 'Re-eval',      bg: 'rgba(167,139,250,0.15)', fg: '#a78bfa' },
+                  }
+                  const m = SRC[p.signalSource] ?? { label: p.signalSource, bg: 'rgba(148,163,184,0.15)', fg: '#94a3b8' }
+                  return (
+                    <span className="text-xs px-1.5 py-0.5 rounded font-medium"
+                      style={{ background: m.bg, color: m.fg }}>
+                      {m.label}
+                    </span>
+                  )
+                })()}
               </Td>
               <Td>
                 {p.reevalCount !== undefined && p.reevalCount > 0
