@@ -58,6 +58,75 @@ const MAX_REENTRIES = 2
 // Minimum directional 5m signals required to call it a fresh entry setup.
 const REENTRY_MIN_SIGNALS = 2
 
+// ── Stale-chop eviction (swing only) ──
+// A swing position squatting on one of the limited position slots while going
+// nowhere is dead capital. If a position has been open at least
+// STALE_MIN_TRADING_DAYS, is trading in a tight range (recent range small vs
+// ATR — true chop, not a trend that's pausing), AND is flat-or-losing (we never
+// evict a green position; the trailing stop manages winners), evict it to free
+// the slot for a fresh setup. Day positions are exempt — they already flatten EOD.
+const STALE_MIN_TRADING_DAYS = 5          // ~1 trading week open before eligible
+const STALE_RANGE_ATR_MULT = 1.5          // recent high-low span < 1.5×ATR = chop
+const STALE_LOOKBACK_BARS = 26            // ~1 week of the slow (daily-ish) feed
+const STALE_GREEN_EPS = 0.005             // +0.5% or more = "green", protected
+// Calendar days that comfortably cover STALE_MIN_TRADING_DAYS trading days
+// (5 trading days ≈ 7 calendar days, allowing for a weekend).
+const STALE_MIN_CALENDAR_DAYS = 7
+
+/**
+ * True when a swing position is "sideways enough" to evict: open long enough,
+ * range-bound (tight high-low vs ATR over the lookback), and not green.
+ * Pure read of data the monitor already has — no extra fetches.
+ */
+function isStaleChop(args: {
+  openedAt: string | null
+  bars: Array<{ h?: number; l?: number; c?: number }>
+  atr: number
+  entry: number | null
+  currentPrice: number
+}): { stale: boolean; reason: string } {
+  const { openedAt, bars, atr, entry, currentPrice } = args
+
+  // 1) Age gate — must have been open long enough to count as "stalled".
+  if (!openedAt) return { stale: false, reason: 'no open time' }
+  const ageDays = (Date.now() - Date.parse(openedAt)) / 86_400_000
+  if (!Number.isFinite(ageDays) || ageDays < STALE_MIN_CALENDAR_DAYS) {
+    return { stale: false, reason: `age ${ageDays.toFixed(1)}d < ${STALE_MIN_CALENDAR_DAYS}d` }
+  }
+
+  // 2) Green protection — never evict a winner; the trailing stop owns winners.
+  if (entry && entry > 0) {
+    const gainPct = (currentPrice - entry) / entry
+    if (gainPct >= STALE_GREEN_EPS) {
+      return { stale: false, reason: `green +${(gainPct * 100).toFixed(1)}%` }
+    }
+  }
+
+  // 3) Range gate — tight high-low over the lookback vs ATR = true chop.
+  if (!(atr > 0)) return { stale: false, reason: 'no atr' }
+  const window = bars.slice(-STALE_LOOKBACK_BARS)
+  if (window.length < Math.min(STALE_LOOKBACK_BARS, 10)) {
+    return { stale: false, reason: 'insufficient bars for range' }
+  }
+  let hi = -Infinity, lo = Infinity
+  for (const b of window) {
+    const h = typeof b.h === 'number' ? b.h : (typeof b.c === 'number' ? b.c : NaN)
+    const l = typeof b.l === 'number' ? b.l : (typeof b.c === 'number' ? b.c : NaN)
+    if (Number.isFinite(h)) hi = Math.max(hi, h)
+    if (Number.isFinite(l)) lo = Math.min(lo, l)
+  }
+  if (!Number.isFinite(hi) || !Number.isFinite(lo)) return { stale: false, reason: 'bad bars' }
+  const span = hi - lo
+  if (span >= atr * STALE_RANGE_ATR_MULT) {
+    return { stale: false, reason: `range ${span.toFixed(2)} ≥ ${(atr * STALE_RANGE_ATR_MULT).toFixed(2)} (still moving)` }
+  }
+
+  return {
+    stale: true,
+    reason: `chop ${ageDays.toFixed(0)}d open, range ${span.toFixed(2)} < ${(atr * STALE_RANGE_ATR_MULT).toFixed(2)} (${STALE_RANGE_ATR_MULT}×ATR), flat/red`,
+  }
+}
+
 interface OpenAttempt {
   id: string
   user_id: string
@@ -74,6 +143,7 @@ interface OpenAttempt {
   outcome: string
   asset_class: string | null
   monitor_owned_stop: boolean | null
+  created_at: string | null   // position open time — for stale/no-progress eviction
 }
 
 interface PerUserSummary {
@@ -458,6 +528,49 @@ async function processPosition(
 
   // Execute
   if (ruling.decision === 'HOLD') {
+    // ── Stale-chop eviction (swing only) ──────────────────────
+    // Before settling into a HOLD, check whether this position is squatting on a
+    // slot while going nowhere: open long enough, range-bound vs ATR, flat/red.
+    // If so, evict it so a fresh setup can take the slot. Winners are protected
+    // (green check inside isStaleChop); day positions are exempt (EOD flatten).
+    if (config.mode === 'swing') {
+      const stale = isStaleChop({
+        openedAt: att.created_at,
+        bars: bars15m as Array<{ h?: number; l?: number; c?: number }>,
+        atr: t15m.atr14,
+        entry: att.filled_avg_price ?? att.entry_price_est,
+        currentPrice: pos.current_price,
+      })
+      if (stale.stale) {
+        if (isWithinMarketCloseWindow()) {
+          console.log(`[${monTag()}] ${ticker} STALE-EXIT deferred — within 5 min of close (${stale.reason})`)
+          await logR(ticker, {
+            ok: true, decision: 'EXIT', actionTaken: 'stale_exit_deferred_close_window',
+            snap5m, snap15m, currentPrice: pos.current_price, currentStop: att.stop_price,
+            errorReason: stale.reason,
+          })
+          userSummary.holds++
+          return true
+        }
+        const result = await applyExit(alpaca, pos)
+        userSummary.exits++
+        console.log(`[${monTag()}] ${ticker} STALE-EXIT (${stale.reason}) → freeing slot`)
+        await logR(ticker, {
+          ok: result.ok, decision: 'EXIT',
+          actionTaken: result.ok ? 'stale_exit' : 'stale_exit_failed',
+          snap5m, snap15m, currentPrice: pos.current_price, currentStop: att.stop_price,
+          errorReason: result.ok ? stale.reason : result.reason,
+        })
+        if (result.ok) {
+          // Intentionally do NOT add to the re-entry watch — we evicted because the
+          // thesis went nowhere; re-entering the same chop defeats the purpose.
+          // (Watch membership is opt-in via addToReentryWatch elsewhere; by simply
+          // not calling it here, this ticker won't be re-entered.)
+        }
+        return true
+      }
+    }
+
     userSummary.holds++
     // Profit trailing: even on a HOLD, ratchet the stop up to lock in gains at
     // R-multiple milestones (breakeven at +1R, +0.5R at +2R, etc.). This is the
@@ -1512,8 +1625,8 @@ async function fetchOpenAttempts(userId: string, mode: MonitorMode = 'swing'): P
   // missing (migration not run yet / stale PostgREST cache), retry WITHOUT it
   // instead of failing the whole query and blinding the monitor to every
   // position. The row mapping defaults any absent column safely.
-  const COLS_FULL = 'id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, initial_stop, outcome, asset_class, monitor_owned_stop'
-  const COLS_BASE = 'id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, initial_stop, outcome, asset_class'
+  const COLS_FULL = 'id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, initial_stop, outcome, asset_class, monitor_owned_stop, created_at'
+  const COLS_BASE = 'id, user_id, ticker, side, qty, filled_avg_price, entry_price_est, stop_price, target_price, broker_order_id, verdict_log_id, initial_stop, outcome, asset_class, created_at'
 
   const isMissingColumn = (err: { code?: string; message?: string } | null): boolean => {
     if (!err) return false
@@ -1590,6 +1703,7 @@ async function fetchOpenAttempts(userId: string, mode: MonitorMode = 'swing'): P
         ? Number(row.initial_stop) : null,
       outcome: String(row.outcome),
       asset_class: row.asset_class !== null && row.asset_class !== undefined ? String(row.asset_class) : null,
+      created_at: row.created_at !== null && row.created_at !== undefined ? String(row.created_at) : null,
     }
     map.set(att.ticker.toUpperCase(), att)
   }
