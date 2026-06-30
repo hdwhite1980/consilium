@@ -73,11 +73,15 @@ const TF_META: Record<TF, string> = {
 
 function sourceLabel(src: string | null): { label: string; isAuto: boolean } {
   switch (src) {
-    case 'day_shark':  return { label: 'Max · auto', isAuto: true }
-    case 'council':    return { label: 'Wali · auto', isAuto: true }
-    case 'scanner':    return { label: 'Wali · scanner', isAuto: true }
-    case 'reeval_add': return { label: 'Wali · re-eval', isAuto: true }
-    default:           return { label: 'Manual', isAuto: false }
+    case 'day_shark':            return { label: 'Max · auto', isAuto: true }
+    case 'active_story':         return { label: 'Wali · stories', isAuto: true }
+    case 'live_movers_crypto':   return { label: 'Wali · crypto movers', isAuto: true }
+    case 'live_movers_futures':  return { label: 'Wali · futures movers', isAuto: true }
+    case 'council':              return { label: 'Wali · auto', isAuto: true }
+    case 'scanner':              return { label: 'Wali · scanner', isAuto: true }
+    case 'reeval_add':           return { label: 'Wali · re-eval', isAuto: true }
+    case 'legacy':               return { label: 'Manual', isAuto: false }
+    default:                     return { label: 'Manual', isAuto: false }
   }
 }
 
