@@ -1718,10 +1718,7 @@ export async function runTargetedResearch(
     : ''
 
   const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro']
-  for (const modelName of GEMINI_MODELS) {
-    try {
-      const model = getGenAI().getGenerativeModel({ model: modelName })
-      const result = await model.generateContent(`You are the News Scout providing urgent real-time research during a live stock debate about ${bundle.ticker} (currently $${bundle.currentPrice.toFixed(2)}).
+  const researchPrompt = `You are the News Scout providing urgent real-time research during a live stock debate about ${bundle.ticker} (currently $${bundle.currentPrice.toFixed(2)}).
 DEBATE TIMEFRAME: ${bundle.timeframe} --- keep your answer relevant to this horizon.
 
 A council member has asked: "${question}"
@@ -1730,12 +1727,33 @@ ${liveData}
 SIGNAL DATA FROM BUNDLE:
 ${sections.join('\n\n')}
 
-Answer in 2-4 sentences using the freshest data available, prioritizing the LIVE DATA section if present. When FRESH HEADLINES are shown, cite at least one by timestamp if it's directly relevant. When LIVE X SENTIMENT is shown, reference it explicitly. Include specific numbers, dates, and percentages. Be direct and decisive --- this goes straight into the debate. If the data genuinely doesn't support the question, say so clearly.${smartMoneyGuardrail}`)
+Answer in 2-4 sentences using the freshest data available, prioritizing the LIVE DATA section if present. When FRESH HEADLINES are shown, cite at least one by timestamp if it's directly relevant. When LIVE X SENTIMENT is shown, reference it explicitly. Include specific numbers, dates, and percentages. Be direct and decisive --- this goes straight into the debate. If the data genuinely doesn't support the question, say so clearly.${smartMoneyGuardrail}`
+  for (const modelName of GEMINI_MODELS) {
+    try {
+      const model = getGenAI().getGenerativeModel({ model: modelName })
+      const result = await model.generateContent(researchPrompt)
       return result.response.text().trim().slice(0, 700)
     } catch (e) {
       const msg = (e as Error).message ?? ''
-      if (!msg.includes('503') && !msg.includes('overload') && !msg.includes('404')) throw e
+      // Transient (503 / overload / 404 model-not-found): try the next Gemini model.
+      // Hard error (403 billing-deny / 401 auth): looping won't help (same project +
+      // billing), so stop and cross to a non-Gemini provider instead of throwing —
+      // an uncaught throw here kills the whole council run mid-debate.
+      if (!msg.includes('503') && !msg.includes('overload') && !msg.includes('404')) {
+        console.warn(`[targeted-research] hard Gemini error (${msg.slice(0, 80)}) — crossing to non-Gemini provider`)
+        break
+      }
     }
+  }
+  // Gemini exhausted or hard-failed — cross-provider fallback (non-grounded → Claude/OpenAI).
+  try {
+    const fb = await geminiCrossProviderFallback({
+      prompt: researchPrompt, caller: 'targeted-research', grounded: false,
+      maxOutputTokens: 800, temperature: 0.3,
+    })
+    return fb.text.trim().slice(0, 700)
+  } catch (e) {
+    console.warn(`[targeted-research] cross-provider fallback failed: ${e instanceof Error ? e.message : e}`)
   }
   return 'Research unavailable at this time.'
 }
