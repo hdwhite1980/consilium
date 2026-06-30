@@ -19,7 +19,7 @@ interface VerdictRow {
   stop_loss: number | null
   take_profit: number | null
   timeframe: string | null
-  signal_source: string | null
+  source: string | null
   verdict_date: string | null
   created_at: string | null
   outcome_1d_directional: string | null
@@ -105,7 +105,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .from('verdict_log')
       .select(
         'id, ticker, signal, confidence, entry_price, stop_loss, take_profit, timeframe, ' +
-        'signal_source, verdict_date, created_at, ' +
+        'source, verdict_date, created_at, ' +
         'outcome_1d_directional, outcome_1w_directional, outcome_1m_directional, ' +
         'outcome_1d_strict, outcome_1w_strict, outcome_1m_strict',
       )
@@ -129,7 +129,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       if (!tf) continue
       const ticker = (v.ticker ?? '').toUpperCase()
       if (!ticker) continue
-      const { label, isAuto } = sourceLabel(v.signal_source)
+      const { label, isAuto } = sourceLabel(v.source)
       const oc = outcomeForTF(v, tf)
       const pv: PublicVerdict = {
         id: v.id,
@@ -139,7 +139,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         entryPrice: v.entry_price != null ? Number(v.entry_price) : null,
         stopLoss: v.stop_loss != null ? Number(v.stop_loss) : null,
         takeProfit: v.take_profit != null ? Number(v.take_profit) : null,
-        source: v.signal_source ?? 'manual',
+        source: v.source ?? 'manual',
         sourceLabel: label,
         isAuto,
         verdictDate: v.verdict_date,
