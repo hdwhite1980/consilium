@@ -258,12 +258,37 @@ export async function generateWithFallback(
         const isLastTryThisModel = attempt === triesForThisModel - 1
         const isLastModel = modelIdx === models.length - 1
 
-        // Permanent errors (auth, bad input, etc.): don't retry, don't fall back
+        // Permanent / hard error (auth, 403 billing-deny, bad project). Pro→Flash
+        // share the same Google project + billing, so retrying or falling to Flash
+        // can't help — both die together. Instead of throwing (which kills the whole
+        // council run), cross to a DIFFERENT vendor. Grounded calls already returned
+        // to Perplexity above, so anything here is non-grounded and safe to send to
+        // Claude / OpenAI.
         if (!isTransientError(err)) {
           console.warn(
-            `[gemini:${opts.caller}] PERMANENT error on ${modelName}: ${msg}`
+            `[gemini:${opts.caller}] HARD error on ${modelName} (${msg}) — crossing to non-Gemini provider`
           )
-          throw err
+          try {
+            const fb = await geminiCrossProviderFallback({
+              prompt: opts.prompt,
+              caller: opts.caller,
+              grounded: opts.useGoogleSearchGrounding,
+              maxOutputTokens: opts.maxOutputTokens,
+              temperature: opts.temperature,
+            })
+            return {
+              text: fb.text,
+              modelUsed: fb.modelUsed,
+              attemptsMade: attemptsMade + 1,
+              elapsedMs: Date.now() - startedAt,
+              rawResponse: fb.rawResponse,
+            }
+          } catch (fbErr) {
+            console.error(
+              `[gemini:${opts.caller}] cross-provider fallback ALSO failed: ${(fbErr as Error).message?.slice(0, 160)}`
+            )
+            throw err // surface the original Gemini error
+          }
         }
 
         // Transient error: log and decide whether to retry / fall back / give up
@@ -345,6 +370,38 @@ export async function geminiCrossProviderFallback(opts: {
     })
     console.warn(`[${opts.caller}] Gemini down → Sonar fallback (${r.modelUsed})`)
     return { text: r.text, modelUsed: r.modelUsed, rawResponse: r.rawResponse }
+  }
+  // Non-grounded: prefer Claude (a different vendor + billing from Gemini), so a
+  // Gemini account-level outage can't take the council down. OpenAI remains as a
+  // deeper safety net below if Anthropic isn't configured or also fails.
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      const { default: Anthropic } = await import('@anthropic-ai/sdk')
+      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+      const model =
+        process.env.GEMINI_FALLBACK_CLAUDE_MODEL ??
+        process.env.ANTHROPIC_SONNET_MODEL ??
+        'claude-sonnet-4-6'
+      const resp = await client.messages.create({
+        model,
+        max_tokens: opts.maxOutputTokens ?? 4000,
+        temperature: opts.temperature ?? 0.1,
+        messages: [{ role: 'user', content: opts.prompt }],
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const text = resp.content
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .map((b: any) => (b?.type === 'text' ? b.text : ''))
+        .join('')
+        .trim()
+      console.warn(`[${opts.caller}] Gemini down → Claude fallback (${model})`)
+      return { text, modelUsed: model }
+    } catch (claudeErr) {
+      console.warn(
+        `[${opts.caller}] Claude fallback failed (${(claudeErr as Error).message?.slice(0, 120)}), trying OpenAI`
+      )
+      // fall through to OpenAI
+    }
   }
   if (process.env.OPENAI_API_KEY) {
     const { openaiChat } = await import('./pipeline/llm')
