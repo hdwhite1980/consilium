@@ -26,10 +26,27 @@ interface TimeframeGroup {
   timeframe: TF; label: string; companies: CompanyGroup[]
   totalVerdicts: number; wins: number; losses: number; graded: number
 }
+interface VersionTab {
+  number: number | null
+  label: string
+  subtitle: string
+  maturity: string
+  count: number
+  isCurrent: boolean
+}
+interface SelectedVersion {
+  number: number
+  label: string
+  subtitle: string
+  summary: string
+  maturity: string
+}
 interface Feed {
   ok: boolean
   groups: TimeframeGroup[]
   stats: { totalVerdicts: number; totalGraded: number; totalWins: number; hitRate: number | null }
+  versions: VersionTab[]
+  selectedVersion: SelectedVersion | null
 }
 
 const fmtPrice = (n: number | null) =>
@@ -153,22 +170,26 @@ export default function VerdictsPage() {
   const [feed, setFeed] = useState<Feed | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
+  // null = All-time; a number selects a specific system version
+  const [version, setVersion] = useState<number | null>(null)
 
   useEffect(() => {
     let alive = true
+    setLoading(true)
     ;(async () => {
       try {
-        const res = await fetch('/api/verdicts/feed', { cache: 'no-store' })
+        const qs = version != null ? `?version=${version}` : ''
+        const res = await fetch(`/api/verdicts/feed${qs}`, { cache: 'no-store' })
         const json = await res.json()
         if (!alive) return
         if (!json.ok) { setErr('Could not load verdicts.'); setLoading(false); return }
-        setFeed(json); setLoading(false)
+        setErr(null); setFeed(json); setLoading(false)
       } catch {
         if (alive) { setErr('Could not load verdicts.'); setLoading(false) }
       }
     })()
     return () => { alive = false }
-  }, [])
+  }, [version])
 
   return (
     <div className="min-h-screen" style={{ background: '#0a0a0f', color: '#fff' }}>
@@ -193,6 +214,49 @@ export default function VerdictsPage() {
           <p className="text-[13px] text-white/50">
             Every call Max and Wali make — auto-traded and manual — with the entry, stop, target, and how it resolved.
           </p>
+
+          {/* Version tabs */}
+          {feed?.versions && feed.versions.length > 1 && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {feed.versions.map(v => {
+                const active = v.number === version
+                return (
+                  <button
+                    key={v.number ?? 'all'}
+                    onClick={() => setVersion(v.number)}
+                    className="px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
+                    style={{
+                      background: active ? '#3b82f6' : 'rgba(255,255,255,0.04)',
+                      color: active ? '#fff' : 'rgba(255,255,255,0.6)',
+                      border: active ? '1px solid #3b82f6' : '1px solid rgba(255,255,255,0.1)',
+                    }}>
+                    {v.label}
+                    <span className="ml-1.5 opacity-60">{v.count}</span>
+                    {v.isCurrent && (
+                      <span className="ml-1.5 text-[9px] uppercase tracking-wide" style={{ color: active ? 'rgba(255,255,255,0.8)' : '#34d399' }}>
+                        current
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
+          {/* Selected version subtitle */}
+          {feed?.selectedVersion && (
+            <div className="mt-3">
+              <p className="text-[13px] text-white/70 font-medium">{feed.selectedVersion.subtitle}</p>
+              <p className="text-[12px] text-white/40 mt-0.5">{feed.selectedVersion.summary}</p>
+              {feed.selectedVersion.maturity === 'preview' && (
+                <span className="inline-block mt-1.5 text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full text-amber-300/90"
+                  style={{ background: 'rgba(252,211,77,0.08)', border: '1px solid rgba(252,211,77,0.2)' }}>
+                  preview — small sample
+                </span>
+              )}
+            </div>
+          )}
+
           {feed?.stats && (
             <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2">
               <div>

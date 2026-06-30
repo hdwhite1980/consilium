@@ -5,6 +5,7 @@
 // the page applies the email gate for UX.
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/app/lib/admin/admin-auth'
+import { SYSTEM_VERSIONS, getVersionsNewestFirst, getCurrentVersion } from '@/app/lib/system-versions'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,6 +21,7 @@ interface VerdictRow {
   take_profit: number | null
   timeframe: string | null
   source: string | null
+  version_number: number | null
   verdict_date: string | null
   created_at: string | null
   outcome_1d_directional: string | null
@@ -105,16 +107,23 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const url = new URL(req.url)
     const limit = Math.min(1000, Math.max(50, Number(url.searchParams.get('limit') ?? '400')))
 
-    const { data, error } = await admin
+    // Version selection: 'all' (default) or a specific version number.
+    const versionParam = url.searchParams.get('version') ?? 'all'
+    const versionNum = versionParam !== 'all' ? parseInt(versionParam, 10) : null
+    const filterVersion = versionNum !== null && Number.isFinite(versionNum)
+
+    let q = admin
       .from('verdict_log')
       .select(
         'id, ticker, signal, confidence, entry_price, stop_loss, take_profit, timeframe, ' +
-        'source, verdict_date, created_at, ' +
+        'source, version_number, verdict_date, created_at, ' +
         'outcome_1d_directional, outcome_1w_directional, outcome_1m_directional, ' +
         'outcome_1d_strict, outcome_1w_strict, outcome_1m_strict',
       )
       .not('signal', 'is', null)
       .not('ticker', 'is', null)
+    if (filterVersion) q = q.eq('version_number', versionNum)
+    const { data, error } = await q
       .order('verdict_date', { ascending: false, nullsFirst: false })
       .limit(limit)
 
@@ -122,6 +131,36 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       console.error('[verdicts/feed] query error:', error.message)
       return NextResponse.json({ ok: false, error: 'query failed' }, { status: 500 })
     }
+
+    // Version tabs: count verdicts per version so the UI can show All-time + each
+    // version with its size. One lightweight pass over recent verdicts.
+    const { data: vcRows } = await admin
+      .from('verdict_log')
+      .select('version_number')
+      .not('signal', 'is', null)
+      .not('ticker', 'is', null)
+      .limit(5000)
+    const counts = new Map<number, number>()
+    let allCount = 0
+    for (const r of (vcRows ?? []) as Array<{ version_number: number | null }>) {
+      allCount++
+      const vn = r.version_number
+      if (vn != null) counts.set(vn, (counts.get(vn) ?? 0) + 1)
+    }
+    const versions = [
+      { number: null as number | null, label: 'All-time', subtitle: '', maturity: 'mature' as string, count: allCount, isCurrent: false },
+      ...getVersionsNewestFirst().map(v => ({
+        number: v.number,
+        label: v.label,
+        subtitle: v.subtitle ?? '',
+        maturity: v.maturity,
+        count: counts.get(v.number) ?? 0,
+        isCurrent: v.number === getCurrentVersion().number,
+      })),
+    ]
+    const selectedVersion = filterVersion
+      ? (SYSTEM_VERSIONS.find(v => v.number === versionNum) ?? null)
+      : null
 
     const rows = (data ?? []) as unknown as VerdictRow[]
     const buckets: Record<TF, Map<string, PublicVerdict[]>> = {
@@ -188,6 +227,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         totalWins,
         hitRate: totalGraded > 0 ? Number(((totalWins / totalGraded) * 100).toFixed(1)) : null,
       },
+      versions,
+      selectedVersion: selectedVersion
+        ? {
+            number: selectedVersion.number,
+            label: selectedVersion.label,
+            subtitle: selectedVersion.subtitle ?? '',
+            summary: selectedVersion.summary,
+            maturity: selectedVersion.maturity,
+          }
+        : null,
     })
   } catch (e) {
     console.error('[verdicts/feed] error:', e instanceof Error ? e.message : e)
