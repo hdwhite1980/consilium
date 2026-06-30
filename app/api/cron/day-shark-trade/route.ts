@@ -229,7 +229,39 @@ async function runUser(settings: UserTradingSettings, asset: SharkAsset, dryRun:
   let remaining = budget.available
   let safeCash = lane.cash * SAFETY_MARGIN
 
+  // Anti-pyramid: don't open a second (or third) position in a ticker Max already
+  // holds. Multiple Council verdicts on the same name (different runs) used to
+  // each become a fresh entry — that's how 3× KEEL happened. Build the set of
+  // tickers with an OPEN day_shark attempt for this user, and skip any verdict
+  // whose ticker is already in it. Tracks within-run entries too (heldThisRun).
+  const heldSymbols = new Set<string>()
+  try {
+    const { data: openAtt } = await admin()
+      .from('trade_attempts')
+      .select('ticker')
+      .eq('user_id', settings.userId)
+      .eq('signal_source', 'day_shark')
+      .eq('asset_class', asset)
+      .in('outcome', ['placed', 'filled', 'partial_fill'])
+    for (const r of (openAtt ?? []) as Array<{ ticker: string }>) {
+      if (r.ticker) heldSymbols.add(r.ticker.toUpperCase())
+    }
+  } catch (e) {
+    console.warn(`[day-shark-trade:${asset}] held-symbols fetch failed (anti-pyramid degraded): ${e instanceof Error ? e.message : e}`)
+  }
+
   for (const v of verdicts) {
+    const tickerUpper = (v.ticker ?? '').toUpperCase()
+    // Anti-pyramid guard — already holding this name, don't stack another.
+    if (heldSymbols.has(tickerUpper)) {
+      if (!dryRun) {
+        await recordAttempt(settings.userId, v, asset, 'buy', 'skipped', lane.mode, lane.brokerName,
+          { reject_reason: `already holding ${tickerUpper} (anti-pyramid)` }).catch(() => {})
+      }
+      result.skipped++
+      continue
+    }
+
     const entry = v.entry_price, stop = v.stop_loss
     // forex needs BOTH stop and target (OANDA native TP/SL are required fields)
     if (!entry || !stop || (asset === 'forex' && !v.take_profit)) { result.skipped++; continue }
@@ -269,6 +301,7 @@ async function runUser(settings: UserTradingSettings, asset: SharkAsset, dryRun:
       })
       remaining -= sized.notionalUsd!
       safeCash -= sized.notionalUsd!
+      heldSymbols.add(tickerUpper)   // within-run anti-pyramid: block a 2nd verdict for this name this run
       result.placed++
       if (recErr) {
         // CRITICAL: order is live at the broker but not in our DB → the monitor
