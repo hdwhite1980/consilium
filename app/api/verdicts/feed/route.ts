@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/app/lib/admin/admin-auth'
 import { SYSTEM_VERSIONS, getVersionsNewestFirst, getCurrentVersion } from '@/app/lib/system-versions'
+import { bucketStats, type VRow } from '@/app/lib/track-record/stats-core'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,6 +25,8 @@ interface VerdictRow {
   version_number: number | null
   verdict_date: string | null
   created_at: string | null
+  outcome_1w_price: number | string | null
+  spy_return_1w: number | string | null
   outcome_1d_directional: string | null
   outcome_1w_directional: string | null
   outcome_1m_directional: string | null
@@ -116,7 +119,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .from('verdict_log')
       .select(
         'id, ticker, signal, confidence, entry_price, stop_loss, take_profit, timeframe, ' +
-        'source, version_number, verdict_date, created_at, ' +
+        'source, version_number, verdict_date, created_at, outcome_1w_price, spy_return_1w, ' +
         'outcome_1d_directional, outcome_1w_directional, outcome_1m_directional, ' +
         'outcome_1d_strict, outcome_1w_strict, outcome_1m_strict',
       )
@@ -213,19 +216,29 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       return { timeframe: tf, label: TF_META[tf], companies, totalVerdicts, wins, losses, graded: wins + losses }
     })
 
-    const totalVerdicts = groups.reduce((s, g) => s + g.totalVerdicts, 0)
-    const totalGraded = groups.reduce((s, g) => s + g.graded, 0)
-    const totalWins = groups.reduce((s, g) => s + g.wins, 0)
+    // ── Headline stats: computed with the SAME shared function and the SAME
+    // population as the track-record page (BULLISH/BEARISH, Max/day_shark excluded
+    // — Max is measured separately). This guarantees the top-line hit rate and
+    // graded count MATCH the track-record page and can't silently drift. The
+    // per-company detail below is separate: it shows every verdict (incl. Max),
+    // directional, across all timeframes, as a browsable scoreboard.
+    const officialRows = rows.filter(
+      r => (r.signal === 'BULLISH' || r.signal === 'BEARISH') && r.source !== 'day_shark',
+    ) as unknown as VRow[]
+    const bs = bucketStats(officialRows)
 
     return NextResponse.json({
       ok: true,
       generatedAt: new Date().toISOString(),
       groups,
       stats: {
-        totalVerdicts,
-        totalGraded,
-        totalWins,
-        hitRate: totalGraded > 0 ? Number(((totalWins / totalGraded) * 100).toFixed(1)) : null,
+        // Unified with the track-record page:
+        totalVerdicts: bs.totalVerdicts,
+        totalGraded: bs.gradedVerdicts,
+        hitRate: bs.hitRate1w,            // strict: target hit before stop (1W)
+        directionAcc: bs.directionAcc1w,  // directional: was the call's direction right (1W)
+        expectancyR: bs.expectancyR,
+        profitFactor: bs.profitFactor,
       },
       versions,
       selectedVersion: selectedVersion

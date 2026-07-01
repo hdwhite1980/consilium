@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient as createAdmin } from '@supabase/supabase-js'
 import { isCryptoPairSymbol } from '@/app/lib/crypto-symbol'
+import { bucketStats, type VRow, type BucketStats, MIN_ASSET_GRADED } from '@/app/lib/track-record/stats-core'
 import {
   getCurrentVersion,
   getVersionByNumber,
@@ -24,24 +25,7 @@ export const maxDuration = 10
 
 const MIN_GRADED_FOR_MATURE = 30  // below this, return preview note
 
-interface BucketStats {
-  hitRate1w: number | null
-  directionAcc1w: number | null
-  totalVerdicts: number
-  gradedVerdicts: number
-  expectancyR: number | null      // mean R per trade (target=+R, stop=−1R); >0 = edge
-  profitFactor: number | null     // gross win R / gross loss R; >1 = profitable
-  payoffRatio: number | null      // avg win R / avg loss R (avg loss = 1R)
-  avgWinR: number | null
-  totalR: number | null           // cumulative R captured across resolved trades
-  avgReturnPct: number | null     // mean realized 1W directional return (outlier-prone)
-  medianReturnPct: number | null  // median realized 1W return (honest middle)
-  avgAlphaPct: number | null      // mean (strategy return − SPY return) — outlier-prone
-  medianAlphaPct: number | null   // median alpha — the honest middle
-  beatSpyRate: number | null      // % of benchmarked verdicts that beat SPY
-  benchmarkedCount: number        // how many verdicts have a SPY benchmark
-}
-
+// BucketStats is imported from the shared stats-core (single source of truth).
 interface Stats extends BucketStats {
   sampleNote: string | null
   versionLabel: string
@@ -109,89 +93,16 @@ export async function GET(req: NextRequest) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Stats math lives in the shared core so this page and the public verdict feed
+// compute identical numbers. Only the local asset classifier is kept (it uses
+// the project's isCryptoPairSymbol helper for the per-asset breakdown).
 
-type VRow = {
-  outcome_1w_strict: string | null
-  outcome_1w_directional: string | null
-  outcome_1w_price: number | string | null
-  signal: string | null
-  entry_price: number | string | null
-  stop_loss: number | string | null
-  take_profit: number | string | null
-  ticker: string | null
-  spy_return_1w: number | string | null
-}
 
 function assetOf(ticker: string | null): 'crypto' | 'forex' | 'stock' {
   if (!ticker) return 'stock'
   if (isCryptoPairSymbol(ticker)) return 'crypto'
   if (/^[A-Z]{6}$/.test(ticker)) return 'forex'
   return 'stock'
-}
-
-function median(xs: number[]): number | null {
-  if (xs.length === 0) return null
-  const s = [...xs].sort((a, b) => a - b)
-  const m = Math.floor(s.length / 2)
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
-}
-
-const round = (x: number | null, d = 2): number | null => (x === null ? null : Number(x.toFixed(d)))
-
-// Compute the full expectancy suite for any subset of verdict rows.
-function bucketStats(rows: VRow[]): BucketStats {
-  let wins = 0, losses = 0, dirC = 0, dirI = 0
-  let grossWinR = 0, grossLossR = 0, winCountR = 0, lossCountR = 0
-  const rets: number[] = []
-  const alphas: number[] = []
-
-  for (const r of rows) {
-    if (r.outcome_1w_strict === 'win') wins++
-    else if (r.outcome_1w_strict === 'loss') losses++
-    if (r.outcome_1w_directional === 'win') dirC++
-    else if (r.outcome_1w_directional === 'loss') dirI++
-
-    const entry = Number(r.entry_price), stop = Number(r.stop_loss), tgt = Number(r.take_profit)
-    const risk = Math.abs(entry - stop)
-    const validRisk = entry > 0 && risk > 0 && risk / entry >= 0.001   // guard junk (entry≈stop)
-    if (validRisk && r.outcome_1w_strict === 'win' && tgt > 0) {
-      grossWinR += Math.min(10, Math.abs(tgt - entry) / risk); winCountR++   // cap absurd outliers
-    } else if (validRisk && r.outcome_1w_strict === 'loss') {
-      grossLossR += 1; lossCountR++
-    }
-
-    const p1w = Number(r.outcome_1w_price)
-    if (entry > 0 && p1w > 0) {
-      const stratRet = (r.signal === 'BEARISH' ? -1 : 1) * ((p1w - entry) / entry) * 100
-      rets.push(stratRet)
-      // Alpha vs SPY over the same window (only where the benchmark is cached)
-      if (r.spy_return_1w !== null && r.spy_return_1w !== undefined) {
-        alphas.push(stratRet - Number(r.spy_return_1w) * 100)
-      }
-    }
-  }
-
-  const graded = wins + losses
-  const dirGraded = dirC + dirI
-  const nR = winCountR + lossCountR
-  const avgWinR = winCountR > 0 ? grossWinR / winCountR : null
-  return {
-    hitRate1w: graded > 0 ? round((wins / graded) * 100) : null,
-    directionAcc1w: dirGraded > 0 ? round((dirC / dirGraded) * 100) : null,
-    totalVerdicts: rows.length,
-    gradedVerdicts: graded,
-    expectancyR: nR > 0 ? round((grossWinR - grossLossR) / nR, 3) : null,
-    profitFactor: grossLossR > 0 ? round(grossWinR / grossLossR) : null,
-    payoffRatio: round(avgWinR),
-    avgWinR: round(avgWinR),
-    totalR: nR > 0 ? round(grossWinR - grossLossR, 1) : null,
-    avgReturnPct: rets.length > 0 ? round(rets.reduce((a, b) => a + b, 0) / rets.length) : null,
-    medianReturnPct: round(median(rets)),
-    avgAlphaPct: alphas.length > 0 ? round(alphas.reduce((a, b) => a + b, 0) / alphas.length) : null,
-    medianAlphaPct: round(median(alphas)),
-    beatSpyRate: alphas.length > 0 ? round((alphas.filter(a => a > 0).length / alphas.length) * 100) : null,
-    benchmarkedCount: alphas.length,
-  }
 }
 
 async function computeStats(version: SystemVersion | null, source?: string | null): Promise<Stats> {
@@ -212,10 +123,17 @@ async function computeStats(version: SystemVersion | null, source?: string | nul
 
   const rows = (data ?? []) as VRow[]
   const overall = bucketStats(rows)
+  // Per-asset breakdown — but blank out any asset with too few graded outcomes.
+  // A single crypto sample producing a "-98060% median return" is noise that
+  // erodes trust on a customer-facing page, so it's suppressed until meaningful.
+  const assetBucket = (r: VRow[]) => {
+    const b = bucketStats(r)
+    return b.gradedVerdicts >= MIN_ASSET_GRADED ? b : { ...b, lowSample: true }
+  }
   const byAsset = {
-    stock: bucketStats(rows.filter(r => assetOf(r.ticker) === 'stock')),
-    crypto: bucketStats(rows.filter(r => assetOf(r.ticker) === 'crypto')),
-    forex: bucketStats(rows.filter(r => assetOf(r.ticker) === 'forex')),
+    stock: assetBucket(rows.filter(r => assetOf(r.ticker) === 'stock')),
+    crypto: assetBucket(rows.filter(r => assetOf(r.ticker) === 'crypto')),
+    forex: assetBucket(rows.filter(r => assetOf(r.ticker) === 'forex')),
   }
 
   // Honest sample-size note

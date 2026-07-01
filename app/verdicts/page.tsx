@@ -44,7 +44,7 @@ interface SelectedVersion {
 interface Feed {
   ok: boolean
   groups: TimeframeGroup[]
-  stats: { totalVerdicts: number; totalGraded: number; totalWins: number; hitRate: number | null }
+  stats: { totalVerdicts: number; totalGraded: number; hitRate: number | null; directionAcc: number | null; expectancyR: number | null; profitFactor: number | null }
   versions: VersionTab[]
   selectedVersion: SelectedVersion | null
 }
@@ -261,7 +261,11 @@ export default function VerdictsPage() {
             <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2">
               <div>
                 <div className="text-2xl font-bold">{feed.stats.hitRate != null ? `${feed.stats.hitRate}%` : '—'}</div>
-                <div className="text-[10px] uppercase tracking-wide text-white/40">directional hit rate</div>
+                <div className="text-[10px] uppercase tracking-wide text-white/40">hit rate (1W target)</div>
+              </div>
+              <div>
+                <div className="text-2xl font-bold">{feed.stats.directionAcc != null ? `${feed.stats.directionAcc}%` : '—'}</div>
+                <div className="text-[10px] uppercase tracking-wide text-white/40">direction</div>
               </div>
               <div>
                 <div className="text-2xl font-bold">{feed.stats.totalGraded}</div>
