@@ -102,6 +102,11 @@ export function anthropic(): Anthropic {
       apiKey: process.env.ANTHROPIC_API_KEY,
       maxRetries: LLM_MAX_RETRIES,
       timeout: LLM_TIMEOUT_MS,
+      // Egress instability 2026-07-01: large gzipped response streams were
+      // truncated mid-read (Premature close inside Gunzip). Uncompressed
+      // responses are bigger but plain — sidesteps whatever is mangling
+      // compressed chunked streams on the network path.
+      defaultHeaders: { 'accept-encoding': 'identity' },
     })
   }
   return _anthropic
@@ -114,6 +119,7 @@ export function openai(): OpenAI {
       apiKey: process.env.OPENAI_API_KEY,
       maxRetries: LLM_MAX_RETRIES,
       timeout: LLM_TIMEOUT_MS,
+      defaultHeaders: { 'accept-encoding': 'identity' },  // see anthropic() note
     })
   }
   return _openai
