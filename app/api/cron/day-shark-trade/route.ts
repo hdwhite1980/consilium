@@ -145,6 +145,12 @@ interface LaneCtx {
   mode: string
   place: (v: SharkVerdict, notionalUsd: number, entry: number, stop: number, target: number | null, clientOrderId: string)
     => Promise<{ orderId: string; brokerSymbol: string; qty: number; side: 'buy' | 'sell' }>
+  /** Symbols the BROKER currently holds (any lane — council, scanner, Max).
+   *  Cross-lane anti-collision: the broker nets all lots into one position
+   *  per symbol, so Max entering a name the council already holds creates
+   *  colliding brackets and un-attributable qty (the AFRM/GLW incidents).
+   *  Stock lane populates this from alpaca.positions(); undefined = unavailable. */
+  brokerHeldSymbols?: Set<string>
 }
 
 async function setupLane(settings: UserTradingSettings, asset: SharkAsset): Promise<LaneCtx | { error: string }> {
@@ -169,7 +175,15 @@ async function setupLane(settings: UserTradingSettings, asset: SharkAsset): Prom
     const clock = await alpaca.getClock()
     if (!clock.isOpen) return { error: 'market closed' }   // Max day-trades RTH only
     const acct = await alpaca.account()
+    // Cross-lane guard input: every symbol the broker holds, regardless of
+    // which lane opened it. Best-effort — on failure Max still trades, with
+    // only same-lane anti-pyramid protection.
+    let brokerHeldSymbols: Set<string> | undefined
+    try {
+      brokerHeldSymbols = new Set((await alpaca.positions()).filter(p => Number(p.qty) !== 0).map(p => p.symbol.toUpperCase()))
+    } catch { brokerHeldSymbols = undefined }
     return {
+      brokerHeldSymbols,
       // Max shares this account with the normal trader, which spends the free cash
       // on its own positions. Gate Max on buying_power (margin purchasing power) so
       // he can still trade beside it; his virtual sleeve remains the primary cap.
@@ -248,6 +262,13 @@ async function runUser(settings: UserTradingSettings, asset: SharkAsset, dryRun:
     }
   } catch (e) {
     console.warn(`[day-shark-trade:${asset}] held-symbols fetch failed (anti-pyramid degraded): ${e instanceof Error ? e.message : e}`)
+  }
+  // Cross-lane anti-collision: also skip any symbol the BROKER holds via any
+  // other lane (council/scanner). Two lanes on one netted symbol = colliding
+  // brackets + un-attributable shares (AFRM/GLW). Max forfeits the occasional
+  // legitimate dual-lane setup until per-lot tracking exists — cheap insurance.
+  if (lane.brokerHeldSymbols) {
+    for (const sym of lane.brokerHeldSymbols) heldSymbols.add(sym)
   }
 
   for (const v of verdicts) {

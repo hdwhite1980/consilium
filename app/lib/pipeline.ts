@@ -23,6 +23,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { GoogleGenerativeAI } from '@google/generative-ai'
+import { parsePrice } from './trading/parse-price'
 import {
   anthropic, openaiChat,
   COUNCIL_MODELS, COUNCIL_TEMPS,
@@ -3312,8 +3313,11 @@ function logJudgeCorrection(
 }
 
 function extractPrice(s: string): number | null {
-  const m = s?.match(/\$(\d{1,6}(?:\.\d{1,2})?)/)
-  return m ? parseFloat(m[1]) : null
+  // Delegates to the shared parser (app/lib/trading/parse-price.ts), which
+  // handles thousands separators, sub-penny decimals, and bare numeric
+  // strings — the old inline regex silently parsed "$1,698.50" as $1 and
+  // truncated "$0.0345" to $0.03, corrupting the sanitize/realism math.
+  return parsePrice(s)
 }
 
 /**

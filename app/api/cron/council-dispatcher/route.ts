@@ -56,7 +56,34 @@ async function runAnalyze(job: Job): Promise<{ ok: boolean; error?: string }> {
       }),
       signal: AbortSignal.timeout(ANALYZE_TIMEOUT_MS),
     })
-    return res.ok ? { ok: true } : { ok: false, error: `analyze HTTP ${res.status}` }
+    if (!res.ok) return { ok: false, error: `analyze HTTP ${res.status}` }
+    // /api/analyze streams SSE and returns 200 the moment the stream OPENS —
+    // before the pipeline has done anything. Marking `done` on res.ok alone
+    // recorded every mid-flight pipeline death as a success (jobs silently
+    // lost during the Gemini + node-fetch outages, recoverable only by
+    // manual SQL). Two-step fix:
+    //   1. Drain the body so we wait for the run to actually finish (or die).
+    //   2. Verify a verdict actually landed before declaring the job done.
+    try { await res.text() } catch { /* stream died mid-run — verdict check below decides */ }
+    try {
+      const db = admin()
+      const since = new Date(Date.now() - 60 * 60 * 1000).toISOString() // cache window:
+      // a fresh cache hit legitimately serves a <60min-old verdict without
+      // writing a new row — that still satisfies the job.
+      const { data } = await db
+        .from('verdict_log')
+        .select('id')
+        .eq('user_id', job.user_id)
+        .ilike('ticker', job.ticker)
+        .gte('created_at', since)
+        .limit(1)
+      if (data && data.length > 0) return { ok: true }
+      return { ok: false, error: 'analyze HTTP 200 but no verdict written (pipeline died mid-run)' }
+    } catch (verifyErr) {
+      // Verification itself failed (DB blip) — don't punish the job for it.
+      console.warn(`[dispatcher] verdict verification failed for ${job.ticker}: ${verifyErr instanceof Error ? verifyErr.message : verifyErr}`)
+      return { ok: true }
+    }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }

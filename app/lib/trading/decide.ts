@@ -14,6 +14,7 @@
 // =============================================================
 
 import type { UserTradingSettings } from './settings'
+import { OVERFLOW_HARD_CAP, OVERFLOW_GRADES } from './constants'
 import type { AlpacaClient, AlpacaAccount, AlpacaPosition } from './alpaca-client'
 import { evaluateKillSwitches } from './kill-switches'
 import { computePositionSize } from './sizing'
@@ -395,11 +396,10 @@ export async function decideForUser(args: {
 
   // 10. Kill switches
   // Grade A/B verdicts are eligible for bounded overflow past the base concurrent
+  // (caps + grades defined once in app/lib/trading/constants.ts)
   // cap (up to OVERFLOW_HARD_CAP). The kill-switch concurrent check honors this
   // higher ceiling; the auto-trade route enforces the cash-only funding gate on
   // any slot beyond settings.maxConcurrentPos. Keep these in sync with the route.
-  const OVERFLOW_HARD_CAP = 13
-  const OVERFLOW_GRADES = new Set(['A', 'B'])
   const vGrade = (verdict.trader_grade ?? '').toUpperCase()
   const concurrentCapOverride = OVERFLOW_GRADES.has(vGrade)
     ? Math.max(settings.maxConcurrentPos, OVERFLOW_HARD_CAP)

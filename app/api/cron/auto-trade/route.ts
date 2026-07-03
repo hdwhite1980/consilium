@@ -22,6 +22,7 @@ import { listEnabledTradingUsers, setWorkerWatermark } from '@/app/lib/trading/s
 import { loadBrokerCredentialForUse } from '@/app/lib/trading/credentials'
 import { makeAlpacaClient } from '@/app/lib/trading/alpaca-client'
 import { decideForUser, type VerdictForTrade, type Decision } from '@/app/lib/trading/decide'
+import { OVERFLOW_HARD_CAP, OVERFLOW_GRADES } from '@/app/lib/trading/constants'
 import { haltUserAccount } from '@/app/lib/trading/kill-switches'
 
 export const runtime = 'nodejs'
@@ -43,8 +44,7 @@ const MAX_NEW_POSITIONS_PER_RUN = 5
 // (no margin). This keeps the worst case a known, cash-funded position count
 // rather than an unbounded margin book. Below the base cap, any grade may enter
 // as normal; only the overflow slots (cap → OVERFLOW_HARD_CAP) carry these gates.
-const OVERFLOW_HARD_CAP = 13
-const OVERFLOW_GRADES = new Set(['A', 'B'])
+// OVERFLOW_HARD_CAP / OVERFLOW_GRADES: shared in app/lib/trading/constants.ts
 // How many times a verdict that keeps ERRORING (transient throw / broker 5xx)
 // may be retried across runs before we give up and advance past it, so one bad
 // verdict can never wedge the watermark for everything newer than it.

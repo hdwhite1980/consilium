@@ -225,12 +225,36 @@ async function processEquityAttempts(
   // null = positions read failed → skip close detection this run (still do
   // fill transitions), so a transient API blip can never cause a false close.
   let openSymbols: Set<string> | null = null
+  const brokerQtyBySymbol = new Map<string, number>()
   try {
     const positions = await alpaca.positions()
     openSymbols = new Set(positions.filter(p => Number(p.qty) !== 0).map(p => p.symbol.toUpperCase()))
+    for (const p of positions) brokerQtyBySymbol.set(p.symbol.toUpperCase(), Math.abs(Number(p.qty)))
   } catch (e) {
     console.warn('[auto-trade-positions] equity positions() read failed; updating fills but skipping close reconciliation this run:', e instanceof Error ? e.message : e)
     openSymbols = null
+  }
+
+  // Open-lot counts per ticker across ALL signal sources (incl. day_shark,
+  // which the attempts list above deliberately excludes). Needed for lot-aware
+  // close reconciliation: when this lot's bracket leg filled but the broker
+  // still shows the symbol, a SECOND open lot (e.g. Max's) explains the
+  // residual — the broker nets both lots into one position. Without this,
+  // the close is blocked forever (the GLW permanent-DISCREPANCY loop).
+  const openLotCountByTicker = new Map<string, number>()
+  try {
+    const adminDb = await getSupabaseAdmin()
+    const { data: allOpen } = await adminDb
+      .from('trade_attempts')
+      .select('ticker')
+      .eq('user_id', settings.userId)
+      .in('outcome', ['placed', 'partial_fill', 'filled'])
+    for (const r of (allOpen ?? []) as Array<{ ticker: string | null }>) {
+      const t = (r.ticker ?? '').toUpperCase()
+      if (t) openLotCountByTicker.set(t, (openLotCountByTicker.get(t) ?? 0) + 1)
+    }
+  } catch (e) {
+    console.warn('[auto-trade-positions] open-lot count query failed (lot-aware reconciliation degraded):', e instanceof Error ? e.message : e)
   }
 
   // Best-effort exit fills for externally-closed positions (e.g. a manual sell in
@@ -257,7 +281,7 @@ async function processEquityAttempts(
     if (!att.broker_order_id) continue
     try {
       const order = await alpaca.getOrder(att.broker_order_id)
-      const update = await deriveEquityUpdate(att, order as unknown as EquityOrderShape, openSymbols)
+      const update = await deriveEquityUpdate(att, order as unknown as EquityOrderShape, openSymbols, brokerQtyBySymbol, openLotCountByTicker)
       if (update) {
         await applyUpdate(att.id, update)
         if (update.outcome === 'filled' || update.outcome === 'partial_fill') summary.equityFillsUpdated++
@@ -281,7 +305,7 @@ async function processEquityAttempts(
   }
 }
 
-async function deriveEquityUpdate(att: AttemptRow, order: EquityOrderShape, openSymbols: Set<string> | null): Promise<UpdatePayload | null> {
+async function deriveEquityUpdate(att: AttemptRow, order: EquityOrderShape, openSymbols: Set<string> | null, brokerQtyBySymbol?: Map<string, number>, openLotCountByTicker?: Map<string, number>): Promise<UpdatePayload | null> {
   const s = (order.status ?? '').toLowerCase()
 
   if ((s === 'filled' || s === 'partially_filled') && att.outcome === 'placed') {
@@ -313,8 +337,22 @@ async function deriveEquityUpdate(att: AttemptRow, order: EquityOrderShape, open
       return null
     }
     if (openSymbols.has(symbolUpper)) {
-      console.warn(`[auto-trade-positions] DISCREPANCY ${att.ticker} attempt=${att.id}: bracket leg reports filled but broker still shows an OPEN position — NOT recording close this run`)
-      return null
+      // Lot-aware reconciliation: the broker nets multiple lots into ONE
+      // position per symbol. This lot's bracket leg filled — if the residual
+      // broker position is explained by ANOTHER open lot (cross-lane, e.g.
+      // Max + council both holding), or the broker's remaining qty is
+      // clearly smaller than this lot (our shares are gone), record THIS
+      // lot's close. Blocking on mere symbol presence left closes
+      // unrecorded forever (the GLW permanent-DISCREPANCY loop).
+      const otherLotOpen = (openLotCountByTicker?.get(symbolUpper) ?? 0) > 1
+      const brokerQty = brokerQtyBySymbol?.get(symbolUpper) ?? Number.POSITIVE_INFINITY
+      const attQty = att.qty !== null && att.qty !== undefined ? Number(att.qty) : 0
+      const ourSharesGone = attQty > 0 && brokerQty <= attQty * 0.5
+      if (!otherLotOpen && !ourSharesGone) {
+        console.warn(`[auto-trade-positions] DISCREPANCY ${att.ticker} attempt=${att.id}: bracket leg reports filled but broker still shows an OPEN position (qty=${Number.isFinite(brokerQty) ? brokerQty : '?'}) with no other open lot — NOT recording close this run`)
+        return null
+      }
+      console.log(`[auto-trade-positions] ${att.ticker} attempt=${att.id}: bracket leg filled; broker residual (qty=${Number.isFinite(brokerQty) ? brokerQty : '?'}) attributed to ${otherLotOpen ? 'another open lot on this ticker' : 'partial residue below half this lot'} — recording THIS lot's close`)
     }
 
     // Entry fill: prefer the stored fill, fall back to the parent order's

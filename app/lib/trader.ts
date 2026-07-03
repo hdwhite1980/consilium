@@ -24,6 +24,7 @@
 // ═════════════════════════════════════════════════════════════
 
 import Anthropic from '@anthropic-ai/sdk'
+import { parsePrice } from './trading/parse-price'
 import type { SignalBundle } from './aggregator'
 import type { JudgeResult, Signal } from './pipeline'
 
@@ -121,11 +122,9 @@ const TRADER_RULES = {
  * Same regex pattern used in app/page.tsx and analyze/route.ts.
  */
 function extractPrice(s: string | undefined | null): number | null {
-  if (!s) return null
-  const match = String(s).match(/\$(\d{1,6}(?:\.\d{1,2})?)/)
-  if (!match) return null
-  const num = parseFloat(match[1])
-  return Number.isFinite(num) && num > 0 ? num : null
+  // Shared parser: fixes comma ("$1,698.50" → 1), sub-penny truncation, and
+  // bare-number cases the old inline regex got wrong. See parse-price.ts.
+  return parsePrice(typeof s === 'string' ? s : null)
 }
 
 /**
