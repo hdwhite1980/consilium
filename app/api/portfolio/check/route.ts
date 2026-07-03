@@ -1662,7 +1662,7 @@ async function enrichWithAI(checks: PositionCheck[]): Promise<PositionCheck[]> {
   if (!enrichable.length) return checks
 
   try {
-    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY!, fetch: globalThis.fetch as any })
 
     const snapshot = enrichable.map(c => {
       // Build a "Council bundle indicators" line. Sourced from the most recent
@@ -1758,7 +1758,7 @@ RULE 5 — Council alignment does not save a structurally broken contract
 These rules apply to the "action" field. The "reason" field can include nuance and explain the alignment with Council, the save-path probability, and the structural timing problem. But the action must be a clear, EV-positive instruction.`
 
     const msg = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
       max_tokens: 1500,
       system: systemPrompt,
       messages: [{

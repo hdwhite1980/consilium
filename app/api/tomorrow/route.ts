@@ -34,7 +34,7 @@ import { fetchInternationalQuotes, formatQuotesForPrompt, buildInternationalSnap
 import { fetchGroundTruthPrices, formatGroundTruthForPrompt, buildGroundTruthMap, type GroundTruthQuote } from '@/app/lib/ground-truth-prices'
 import { validateWatchlist, summarizeValidation, type PriceCheckResult } from '@/app/lib/watchlist-validator'
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, fetch: globalThis.fetch as any })
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
 
 const getAdminClient = () => createAdmin(
@@ -442,7 +442,7 @@ Rules:
 - Be specific. Vague setups aren't useful.`
 
   const msg = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
     max_tokens: 5000,
     system,
     messages: [{ role: 'user', content: user }],
@@ -604,7 +604,7 @@ Rules:
 - Be specific. Vague setups aren't useful.`
 
   const msg = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
     max_tokens: 6000,
     system,
     messages: [{ role: 'user', content: user }],

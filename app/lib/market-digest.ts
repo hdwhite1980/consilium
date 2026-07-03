@@ -310,7 +310,7 @@ export async function runMarketDigest(digestDate?: string): Promise<{ id: string
   console.log(`[digest] Context assembled (${sections.length} chars), running Claude analysis...`)
   const analyzeStart = Date.now()
 
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY!, fetch: globalThis.fetch as any })
 
   const prompt = `You are a senior market analyst writing an end-of-day institutional market digest for ${targetDate}.
 
@@ -373,7 +373,7 @@ CRITICAL for JSON values:
 Be specific with numbers. Reference actual tickers and percentages. This analysis will be read by AI models, not humans, so precision and completeness matter more than readability.`
 
   const claudePromise = anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
     max_tokens: 6000,
     messages: [{ role: 'user', content: prompt }],
   })
@@ -424,7 +424,7 @@ Be specific with numbers. Reference actual tickers and percentages. This analysi
       key_levels: {},
       catalysts_tomorrow: { tickers: structuredData.tickers_to_watch },
       full_analysis: fullText,
-      model_used: 'claude-sonnet-4-6',
+      model_used: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
     }, { onConflict: 'digest_date' })
     .select('id')
     .single()
@@ -461,7 +461,7 @@ export async function generatePremarketBrief(briefDate?: string): Promise<void> 
     fetchDayNews(),
   ])
 
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY!, fetch: globalThis.fetch as any })
 
   const prompt = `You are generating a pre-market brief for ${targetDate} for institutional traders.
 
@@ -515,7 +515,7 @@ End with JSON:
 CRITICAL: All string values must be human-readable sentences or proper names, never underscore_slugs.`
 
   const claudePromise = anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
     max_tokens: 3000,
     messages: [{ role: 'user', content: prompt }],
   })
@@ -550,7 +550,7 @@ CRITICAL: All string values must be human-readable sentences or proper names, ne
     sectors_bearish: structured.sectors_bearish || [],
     tickers_to_watch: structured.tickers_to_watch || [],
     digest_id: digest.id,
-    model_used: 'claude-sonnet-4-6',
+    model_used: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
   }, { onConflict: 'brief_date' })
 
   console.log(`[premarket] Brief saved for ${targetDate}`)

@@ -27,7 +27,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import type { SignalBundle } from './aggregator'
 import type { JudgeResult, Signal } from './pipeline'
 
-function getAnthropic() { return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) }
+function getAnthropic() { return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, fetch: globalThis.fetch as any }) }
 
 // ─────────────────────────────────────────────────────────────
 // Types

@@ -177,7 +177,7 @@ interface PostmortemRequest {
 
 async function generatePostmortem(req: PostmortemRequest): Promise<Record<string, unknown> | null> {
   try {
-    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, fetch: globalThis.fetch as any })
 
     const isOption = req.positionType === 'option'
     const tradeDesc = isOption

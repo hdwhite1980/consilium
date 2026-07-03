@@ -17,7 +17,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { TechnicalSignals } from '@/app/lib/signals/technicals'
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, fetch: globalThis.fetch as any })
 
 export interface ReentryOriginalVerdict {
   signal: string

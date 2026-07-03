@@ -2,7 +2,7 @@
 // ─────────────────────────────────────────────────────────────
 // Centralized LLM access for the Council pipeline.
 //
-// Replaces ~14 inline `new Anthropic()/new OpenAI()` + raw
+// Replaces ~14 inline `new Anthropic({ fetch: globalThis.fetch as any })/new OpenAI()` + raw
 // `.create()` + `parseJSON()` call sites that previously lived in
 // pipeline.ts. Fixes three classes of latent failure:
 //
@@ -92,7 +92,7 @@ const LLM_TIMEOUT_MS  = Number(process.env.LLM_TIMEOUT_MS  ?? '90000')
 const LLM_MAX_RETRIES = Number(process.env.LLM_MAX_RETRIES ?? '3')
 
 // ── Memoized, configured SDK clients ────────────────────────
-// One client per process instead of `new Anthropic()` on every
+// One client per process instead of `new Anthropic({ fetch: globalThis.fetch as any })` on every
 // call. The SDK's built-in retry handles transient HTTP errors
 // (429 / 5xx / connection resets) with exponential backoff.
 let _anthropic: Anthropic | null = null
@@ -102,11 +102,11 @@ export function anthropic(): Anthropic {
       apiKey: process.env.ANTHROPIC_API_KEY,
       maxRetries: LLM_MAX_RETRIES,
       timeout: LLM_TIMEOUT_MS,
-      // Egress instability 2026-07-01: large gzipped response streams were
-      // truncated mid-read (Premature close inside Gunzip). Uncompressed
-      // responses are bigger but plain — sidesteps whatever is mangling
-      // compressed chunked streams on the network path.
-      defaultHeaders: { 'accept-encoding': 'identity' },
+      // 2026-07-01 outage root cause: the SDK's bundled node-fetch@2 throws
+      // ERR_STREAM_PREMATURE_CLOSE in its Gunzip stage on gzipped completion
+      // bodies (provider edge changed connection-close behavior). Passing
+      // Node's native fetch (undici) bypasses node-fetch entirely.
+      fetch: globalThis.fetch as any,
     })
   }
   return _anthropic
@@ -119,7 +119,7 @@ export function openai(): OpenAI {
       apiKey: process.env.OPENAI_API_KEY,
       maxRetries: LLM_MAX_RETRIES,
       timeout: LLM_TIMEOUT_MS,
-      defaultHeaders: { 'accept-encoding': 'identity' },  // see anthropic() note
+      fetch: globalThis.fetch as any,  // see anthropic() note
     })
   }
   return _openai

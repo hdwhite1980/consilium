@@ -43,7 +43,7 @@ function pplx(): OpenAI {
       baseURL: 'https://api.perplexity.ai',
       maxRetries: 2,
       timeout: SONAR_TIMEOUT_MS,
-      defaultHeaders: { 'accept-encoding': 'identity' },  // see llm.ts note — gzip streams truncating
+      fetch: globalThis.fetch as any,  // see llm.ts note — bypass node-fetch Gunzip bug
     })
   }
   return _pplx

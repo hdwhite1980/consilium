@@ -224,7 +224,7 @@ Rules for the analysis:
 6. grade must be one of: A+, A, A-, B+, B, B-, C+, C, C-, D, F
 7. processScore is 0–100 (should roughly map: A=85–100, B=70–84, C=55–69, D=40–54, F=0–39)`
 
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, fetch: globalThis.fetch as any })
 
   let grade = 'C'
   let processScore = 60
@@ -238,7 +238,7 @@ Rules for the analysis:
 
   try {
     const msg = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
       max_tokens: 1200,
       system: `You are a trading coach. You grade process, not outcome. You are direct but not harsh. Your output is STRICT JSON matching the requested schema — no markdown, no commentary outside the JSON.`,
       messages: [{ role: 'user', content: prompt }],

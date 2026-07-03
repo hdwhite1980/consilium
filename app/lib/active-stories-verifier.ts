@@ -30,7 +30,7 @@ import type {
 } from '@/app/lib/types/active-stories'
 
 const VERIFIER_TIMEOUT_MS = 8_000
-const VERIFIER_MODEL = 'claude-sonnet-4-6'
+const VERIFIER_MODEL = process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6'
 const MAX_BATCH_SIZE = 10                 // suspicious stories per LLM call
 const UNVERIFIED_CONF_CAP = 60            // cap confidence when unverified
 const UNVERIFIED_MARKER = '[UNVERIFIED] ' // prepended to flagged fields
@@ -481,7 +481,7 @@ export async function verifyActiveStories(params: VerifyParams): Promise<VerifyR
 
   // ──────────── Stage 2 ────────────
   stats.stage2Called = true
-  const anthropic = new Anthropic({ apiKey })
+  const anthropic = new Anthropic({ apiKey, fetch: globalThis.fetch as any })
 
   // Batch into MAX_BATCH_SIZE chunks
   const verdicts: VerifierVerdict[] = []

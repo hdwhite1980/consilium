@@ -339,7 +339,7 @@ export async function POST(req: NextRequest) {
     const bestContracts = selectBestContractsWithLevels(contracts, signal, currentPrice, timeHorizon || '30 days', judgeEntry, judgeStop, judgeTarget)
 
     // ── AI strategy recommendation ────────────────────────────
-    const anthropic = new Anthropic()
+    const anthropic = new Anthropic({ fetch: globalThis.fetch as any })
 
     const contractSummary = bestContracts.length > 0
       ? bestContracts.map(c =>
@@ -348,7 +348,7 @@ export async function POST(req: NextRequest) {
       : 'No live options chain available'
 
     const msg = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
       max_tokens: 1200,
       system: `You are an options trading expert providing specific, actionable options recommendations. Always explain in plain English that a complete beginner can understand. Never assume prior knowledge of options. Be honest about risks.`,
       messages: [{

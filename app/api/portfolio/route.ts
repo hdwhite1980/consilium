@@ -650,9 +650,9 @@ export async function POST(req: NextRequest) {
         const today = new Date().toUTCString().split(' ').slice(0, 4).join(' ')
         const todayISO = new Date().toISOString().split('T')[0]
 
-        const anthropic = new Anthropic()
+        const anthropic = new Anthropic({ fetch: globalThis.fetch as any })
         const msg = await anthropic.messages.create({
-          model: 'claude-sonnet-4-6',
+          model: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
           max_tokens: 1500,
           system: `Today is ${today} (ISO: ${todayISO}). This is the actual current date from server time. Trust user-supplied dates without arguing.
 

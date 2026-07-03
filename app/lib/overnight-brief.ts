@@ -19,7 +19,7 @@ import { fetchNews, type AlpacaNewsItem } from './data/alpaca'
 import { getSectorContext } from './data/sector-context'
 import { isFundTicker, getFundInfo } from './data/fund-detection'
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, fetch: globalThis.fetch as any })
 
 // =============================================================
 // Types

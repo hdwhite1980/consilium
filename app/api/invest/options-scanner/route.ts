@@ -27,7 +27,7 @@ import { getActiveCouncilCandidates } from '@/app/lib/council-candidates'
 import { getMarketRegime, type MarketRegime } from '@/app/lib/market-regime'
 import { autoAddOptionToWatchlist } from '@/app/lib/watchlist-auto-add'
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, fetch: globalThis.fetch as any })
 
 const getAdmin = () => createAdmin(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -352,7 +352,7 @@ Rules:
 
   try {
     const msg = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
       max_tokens: 4000,
       system,
       messages: [{ role: 'user', content: user }],

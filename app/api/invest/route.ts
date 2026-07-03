@@ -143,7 +143,7 @@ If none of the candidates fit the premium budget, return: { "options": [] }`
 
   try {
     const msg = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
       max_tokens: 1500,
       system: 'You estimate option plays. All numeric fields are plain numbers — no $ signs, no commas.',
       messages: [{ role: 'user', content: prompt }],
@@ -332,10 +332,10 @@ export async function POST(req: NextRequest) {
       ).join('\n')
     : `No screener data available — use your knowledge of current $${minPrice.toFixed(2)}–$${maxPrice.toFixed(2)} stocks`
 
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, fetch: globalThis.fetch as any })
 
   const msg = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
     max_tokens: 2000,
     system: `You are the Wali-OS AI Council's journey guide for investors at all levels. You recommend stage-appropriate stocks using live sector performance data.
 

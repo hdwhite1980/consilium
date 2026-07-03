@@ -24,7 +24,7 @@ import { createClient as createAdmin } from '@supabase/supabase-js'
 import { fetchMultiSourceNews, formatNewsForPrompt, type NewsItem } from '@/app/lib/multi-source-news'
 import { getMarketRegime, type MarketRegime } from '@/app/lib/market-regime'
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, fetch: globalThis.fetch as any })
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
 
 const getAdminClient = () => createAdmin(
@@ -229,7 +229,7 @@ Rules:
 - Tickers must be uppercase US equity or major crypto symbols`
 
   const msg = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
     max_tokens: 4000,
     system,
     messages: [{ role: 'user', content: user }],

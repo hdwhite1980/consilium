@@ -21,7 +21,7 @@ import { fetchBars } from '@/app/lib/data/alpaca'
 import { calculateTechnicals, type TechnicalSignals } from '@/app/lib/signals/technicals'
 import { createClient as createAdmin } from '@supabase/supabase-js'
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, fetch: globalThis.fetch as any })
 
 const getAdmin = () => createAdmin(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -198,7 +198,7 @@ Return JSON:
 
   try {
     const msg = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
       max_tokens: 600,
       system,
       messages: [{ role: 'user', content: user }],

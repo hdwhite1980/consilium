@@ -178,14 +178,14 @@ async function analyzeSignals(
 }>> {
   if (!hits.length) return []
 
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY!, fetch: globalThis.fetch as any })
 
   const items = hits.map((h, i) =>
     `[${i + 1}] ${h.person.label}:\nHeadline: ${h.headline}\nSummary: ${h.summary || 'N/A'}`
   ).join('\n\n')
 
   const msg = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
     max_tokens: 2000,
     messages: [{
       role: 'user',

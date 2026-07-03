@@ -137,7 +137,7 @@ function getAnthropic(): Anthropic {
   if (!_anthropic) {
     const key = process.env.ANTHROPIC_API_KEY
     if (!key) throw new Error('ANTHROPIC_API_KEY not configured')
-    _anthropic = new Anthropic({ apiKey: key })
+    _anthropic = new Anthropic({ apiKey: key, fetch: globalThis.fetch as any })
   }
   return _anthropic
 }
@@ -460,7 +460,7 @@ export async function POST(req: NextRequest) {
     const systemPrompt = buildSystemPrompt(ctx)
 
     const response = await getAnthropic().messages.create({
-      model: 'claude-sonnet-4-6',
+      model: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
       max_tokens: 1500,
       system: systemPrompt,
       messages,

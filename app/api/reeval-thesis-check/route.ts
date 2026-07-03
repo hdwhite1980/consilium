@@ -238,9 +238,9 @@ interface LLMResult {
 async function callAnthropic(prompt: string): Promise<LLMResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set')
-  const client = new Anthropic({ apiKey })
+  const client = new Anthropic({ apiKey, fetch: globalThis.fetch as any })
   const res = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
     max_tokens: 1500,
     temperature: 0.2,
     messages: [{ role: 'user', content: prompt }],

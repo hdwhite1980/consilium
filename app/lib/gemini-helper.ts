@@ -377,7 +377,7 @@ export async function geminiCrossProviderFallback(opts: {
   if (process.env.ANTHROPIC_API_KEY) {
     try {
       const { default: Anthropic } = await import('@anthropic-ai/sdk')
-      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, fetch: globalThis.fetch as any })
       const model =
         process.env.GEMINI_FALLBACK_CLAUDE_MODEL ??
         process.env.ANTHROPIC_SONNET_MODEL ??

@@ -148,9 +148,9 @@ export async function POST(req: NextRequest) {
         // Head-to-head AI comparison
         send('status', { message: 'Running head-to-head comparison...' })
 
-        const anthropic = new Anthropic()
+        const anthropic = new Anthropic({ fetch: globalThis.fetch as any })
         const compMsg = await anthropic.messages.create({
-          model: 'claude-sonnet-4-6',
+          model: process.env.ANTHROPIC_SONNET_MODEL ?? 'claude-sonnet-4-6',
           max_tokens: 1000,
           system: `You are a senior portfolio analyst comparing two investment opportunities. Be decisive. Give a clear recommendation. Use specific data.`,
           messages: [{

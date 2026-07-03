@@ -603,7 +603,7 @@ export async function classifyActiveStories(
 ): Promise<LLMClassificationOutput> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set')
-  const anthropic = new Anthropic({ apiKey })
+  const anthropic = new Anthropic({ apiKey, fetch: globalThis.fetch as any })
 
   const system = buildSystemPrompt()
   const user = buildUserPrompt({
