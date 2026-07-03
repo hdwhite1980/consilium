@@ -71,7 +71,7 @@ async function loadOpen(userId: string, asset: SharkAsset): Promise<OpenPos[]> {
 
 interface MonLane {
   price: (ticker: string) => Promise<number | null>
-  close: (ticker: string, side: 'buy' | 'sell') => Promise<void>
+  close: (ticker: string, side: 'buy' | 'sell', qty?: number) => Promise<void>
   // Symbols the broker CURRENTLY holds (UPPERCASE). null = couldn't determine
   // (broker error, or asset not yet supported) → reconciliation is skipped.
   openSymbols?: () => Promise<Set<string> | null>
@@ -92,8 +92,10 @@ async function setupMonLane(settings: UserTradingSettings, asset: SharkAsset): P
           return ps.find(x => x.symbol === ticker)?.current_price ?? null
         } catch { return null }
       },
-      close: async (ticker) => {
-        if (broker.kind === 'coinbase') await (broker.client as CoinbaseClient).closePosition(ticker)
+      close: async (ticker, _side, qty) => {
+        // Pass the tranche qty through — Coinbase closePosition sells the
+        // ENTIRE base balance otherwise (other lots / personal holdings too).
+        if (broker.kind === 'coinbase') await (broker.client as CoinbaseClient).closePosition(ticker, qty)
         else await (broker.client as AlpacaCryptoClient).closePosition(ticker)
       },
     }
@@ -217,7 +219,7 @@ async function runUser(settings: UserTradingSettings, asset: SharkAsset, isEod: 
       const realizedPnl = qty > 0 ? Number((gainPct * entry * qty).toFixed(2)) : null
       if (!dryRun) {
         try {
-          await lane.close(pos.ticker, side)
+          await lane.close(pos.ticker, side, pos.qty != null ? Number(pos.qty) : undefined)
         } catch (e) {
           // One position failing to close must NOT abort the rest of the batch.
           // Record it and move on; the next run (or a manual close) will retry.

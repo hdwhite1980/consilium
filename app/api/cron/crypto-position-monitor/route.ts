@@ -148,11 +148,53 @@ async function processUser(
 // Coinbase monitoring
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Stop-integrity backstop (crypto has no stop-market; the protective order is
+ * a stop-LIMIT). Two dangerous states this catches:
+ *   • stop order CANCELLED/EXPIRED/FAILED while the position is still open
+ *     (incl. the old .toFixed(2) rejections) → re-place the stop.
+ *   • stop TRIGGERED but the limit leg never filled in a fast drop
+ *     (gap-through) → shows as a terminal-not-filled order with the position
+ *     still open → re-place; the fresh stop at the same level re-arms
+ *     protection, and the exit logic handles anything already through it.
+ * Never throws — a backstop failing must not break the monitor pass.
+ */
+async function ensureStopIntegrity(
+  att: CryptoOpenAttempt,
+  client: CoinbaseClient,
+): Promise<void> {
+  if (!att.stop_order_id || !att.stop_price || !att.qty) return
+  try {
+    const order = await client.getOrder(att.stop_order_id)
+    const st = (order.status ?? '').toUpperCase()
+    const deadStates = ['CANCELLED', 'EXPIRED', 'FAILED', 'REJECTED']
+    if (!deadStates.includes(st)) return
+    // Stop order is dead but this attempt is still open → naked position.
+    console.warn(`[crypto-position-monitor] ${att.ticker}: protective stop ${att.stop_order_id} is ${st} while position is OPEN — re-placing stop at ${att.stop_price}`)
+    const newStop = await client.stopLimitSell({
+      symbol: att.ticker.replace('/', '-'),
+      qty: Number(att.qty),
+      stopPrice: Number(att.stop_price),
+      clientOrderId: `wos-restop-${att.id.slice(0, 8)}-${Date.now().toString(36)}`,
+    })
+    const adminDb = await getSupabaseAdmin()
+    await adminDb.from('trade_attempts').update({ stop_order_id: newStop.id }).eq('id', att.id)
+    console.log(`[crypto-position-monitor] ${att.ticker}: stop re-armed → ${newStop.id}`)
+  } catch (e) {
+    console.warn(`[crypto-position-monitor] ${att.ticker}: stop-integrity check failed (non-fatal): ${e instanceof Error ? e.message : e}`)
+  }
+}
+
 async function monitorCoinbasePosition(
   att: CryptoOpenAttempt,
   client: CoinbaseClient,
   summary: { trailingAdvanced: number; noChange: number; signalExits: number },
 ): Promise<void> {
+  // Backstop first: if the protective stop order died (cancelled/expired/
+  // rejected — incl. old .toFixed(2) precision rejections) while the position
+  // is open, re-arm it before doing anything else.
+  await ensureStopIntegrity(att, client)
+
   // Get current spot price
   const currentPrice = await client.getSpotPrice(att.ticker).catch(() => null)
   if (currentPrice === null || currentPrice <= 0) {
@@ -206,7 +248,7 @@ async function monitorCoinbasePosition(
       if (att.stop_order_id) {
         await client.cancelOrder(att.stop_order_id).catch(() => null)
       }
-      await client.closePosition(att.ticker)
+      await client.closePosition(att.ticker)  // alpaca-crypto client (paper): whole-position close, no tranche param
       await logResult(att, 'EXIT', `signal_exit: score5=${score5} score15=${score15} bear5=${bear5} bear15=${bear15} bull15=${bull15}`, currentPrice, null)
       console.log(`[crypto-position-monitor] coinbase SIGNAL EXIT ${att.ticker} score5=${score5} score15=${score15} bear5=${bear5} bear15=${bear15}`)
       summary.signalExits++
@@ -319,7 +361,7 @@ async function monitorAlpacaPosition(
       if (att.stop_order_id) {
         await client.cancelOrder(att.stop_order_id).catch(() => null)
       }
-      await client.closePosition(att.ticker)
+      await client.closePosition(att.ticker)  // alpaca-crypto client (paper): whole-position close, no tranche param
       await logResult(att, 'EXIT', `signal_exit: score5=${score5} score15=${score15} bear5=${bear5} bear15=${bear15} bull15=${bull15}`, currentPrice, null)
       console.log(`[crypto-position-monitor] alpaca SIGNAL EXIT ${att.ticker} score5=${score5} score15=${score15}`)
       summary.signalExits++

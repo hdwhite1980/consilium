@@ -77,6 +77,7 @@ export interface CryptoEntryInput {
   qty?: number                    // base size (market sell base_size)
   side: 'buy' | 'sell'
   clientOrderId: string
+  baseIncrement?: number          // optional: skip the product fetch on sells
 }
 
 export interface CryptoStopInput {
@@ -84,6 +85,40 @@ export interface CryptoStopInput {
   qty: number
   stopPrice: number
   clientOrderId: string
+  /** Product increments (from crypto-product-sizing). When omitted the client
+   *  fetches the product itself — prices/qty are ALWAYS formatted to the
+   *  product's real precision, never blindly .toFixed(2). A 2dp round turned
+   *  a $0.0295 stop into "$0.03"/"$0.02" and sub-penny stops into "$0.00"
+   *  (rejected → naked position). */
+  quoteIncrement?: number
+  baseIncrement?: number
+}
+
+/** Decimal places implied by an increment (handles 1e-8 style toString). */
+function decimalsOf(inc: number): number {
+  if (!Number.isFinite(inc) || inc <= 0) return 8
+  const s = inc.toString()
+  if (s.includes('e-')) {
+    const [mant, exp] = s.split('e-')
+    return Number(exp) + ((mant.split('.')[1] ?? '').length)
+  }
+  return (s.split('.')[1] ?? '').length
+}
+
+/** Snap DOWN to the increment and render as a plain decimal string (never
+ *  scientific notation — "1e-7".toString() gets rejected by the API). Down
+ *  is the conservative direction everywhere this is used: a lower sell-stop
+ *  never instant-triggers, and a smaller base_size never oversells. */
+function formatToIncrement(value: number, increment: number): string {
+  const d = Math.min(decimalsOf(increment), 12)
+  // Snap DOWN to the increment — but treat a quotient within 1e-6 of an
+  // integer as exactly aligned (float division of already-snapped values
+  // produces e.g. 123456788.99999999, which a naive floor would knock one
+  // increment low). Non-aligned values still floor: conservative direction.
+  const q = value / increment
+  const r = Math.round(q)
+  const units = Math.abs(q - r) < 1e-6 ? r : Math.floor(q)
+  return (units * increment).toFixed(d)
 }
 
 // ─── Futures (CFM) types ───────────────────────────────────────
@@ -489,7 +524,17 @@ export class CoinbaseClient {
     } else {
       // sell: prefer qty (base_size); fall back to notional
       if (input.qty !== undefined) {
-        orderConfig.market_market_ioc = { base_size: input.qty.toString() }
+        // Format base_size to the product's base_increment. Raw
+        // Number.toString() can emit scientific notation for tiny quantities
+        // ("1e-7"), which Coinbase rejects.
+        let baseInc = input.baseIncrement
+        if (baseInc === undefined) {
+          try {
+            const prod = await this.getProduct(input.symbol)
+            baseInc = Number(prod.base_increment) || 1e-8
+          } catch { baseInc = 1e-8 }
+        }
+        orderConfig.market_market_ioc = { base_size: formatToIncrement(input.qty, baseInc) }
       } else if (input.notionalUsd !== undefined) {
         // selling by USD notional — Coinbase allows quote_size on sells too
         orderConfig.market_market_ioc = { quote_size: input.notionalUsd.toFixed(2) }
@@ -532,16 +577,29 @@ export class CoinbaseClient {
    *   - STOP_DIRECTION_STOP_UP: triggers when price rises to/above stop (protective stop on short — not used here)
    */
   async stopLimitSell(input: CryptoStopInput): Promise<CoinbaseOrder> {
-    const limitPrice = (input.stopPrice * 0.995).toFixed(2)
+    // Resolve product increments (caller-provided or fetched) so stop/limit
+    // prices and base_size are formatted to the product's REAL precision.
+    let quoteInc = input.quoteIncrement
+    let baseInc = input.baseIncrement
+    if (quoteInc === undefined || baseInc === undefined) {
+      try {
+        const prod = await this.getProduct(input.symbol)
+        quoteInc = quoteInc ?? (Number(prod.quote_increment) || 0.01)
+        baseInc = baseInc ?? (Number(prod.base_increment) || 1e-8)
+      } catch {
+        quoteInc = quoteInc ?? 0.01
+        baseInc = baseInc ?? 1e-8
+      }
+    }
     const body = {
       client_order_id: input.clientOrderId,
       product_id: input.symbol,
       side: 'SELL',
       order_configuration: {
         stop_limit_stop_limit_gtc: {
-          base_size: input.qty.toString(),
-          limit_price: limitPrice,
-          stop_price: input.stopPrice.toFixed(2),
+          base_size: formatToIncrement(input.qty, baseInc),
+          limit_price: formatToIncrement(input.stopPrice * 0.995, quoteInc),
+          stop_price: formatToIncrement(input.stopPrice, quoteInc),
           stop_direction: 'STOP_DIRECTION_STOP_DOWN',
         },
       },
@@ -576,11 +634,14 @@ export class CoinbaseClient {
    * a placement succeeded when the POST response was unclear (e.g. timeout).
    * Returns null when not found.
    */
-  async getOrderByClientId(clientOrderId: string): Promise<CoinbaseOrder | null> {
+  async getOrderByClientId(clientOrderId: string, productId?: string): Promise<CoinbaseOrder | null> {
     try {
+      // limit=50 (was 10): on a busy cycle the target order could scroll past
+      // a 10-order window, making the timeout-verify miss it and risking a
+      // duplicate placement on retry. Optional product filter narrows further.
       const raw = await this.request<{ orders?: Array<Record<string, unknown>> }>(
         'GET',
-        `/orders/historical/batch?limit=10&order_status=OPEN,FILLED,CANCELLED,EXPIRED`,
+        `/orders/historical/batch?limit=50&order_status=OPEN,FILLED,CANCELLED,EXPIRED${productId ? `&product_id=${encodeURIComponent(productId)}` : ''}`,
       )
       const orders = raw.orders ?? []
       const match = orders.find(o => String(o.client_order_id ?? '') === clientOrderId)
@@ -623,17 +684,27 @@ export class CoinbaseClient {
    * Close a crypto position by placing a market sell for the entire base balance.
    * Used by reeval EARLY_EXIT and target-hit detection.
    */
-  async closePosition(symbol: string): Promise<CoinbaseOrder> {
+  async closePosition(symbol: string, trancheQty?: number): Promise<CoinbaseOrder> {
     // Find current position size
     const positions = await this.positions()
     const pos = positions.find(p => p.symbol === symbol)
     if (!pos || pos.qty <= 0) {
       throw new Error(`Coinbase closePosition: no position in ${symbol}`)
     }
+    // Sell only THIS position's tranche when the caller knows it. The account
+    // balance can include personal holdings or another lane's lot — selling
+    // pos.qty (the whole balance) would liquidate coins this position never
+    // owned. Full-balance close only when no tranche is supplied (and loudly).
+    let sellQty = pos.qty
+    if (trancheQty !== undefined && Number.isFinite(trancheQty) && trancheQty > 0) {
+      sellQty = Math.min(trancheQty, pos.qty)
+    } else {
+      console.warn(`[coinbase] closePosition(${symbol}) called without trancheQty — selling ENTIRE balance (${pos.qty}). Pass the attempt qty to avoid liquidating other lots/holdings.`)
+    }
     const clientOrderId = `wos-close-${randomBytes(8).toString('hex')}`
     return this.marketEntry({
       symbol,
-      qty: pos.qty,
+      qty: sellQty,
       side: 'sell',
       clientOrderId,
     })

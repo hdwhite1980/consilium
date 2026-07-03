@@ -42,6 +42,7 @@
 // =============================================================
 
 import { NextRequest, NextResponse } from 'next/server'
+import { sendAlertEmail } from '@/app/lib/notifications'
 import { getSupabaseAdmin } from '@/app/lib/admin/admin-auth'
 import { loadBrokerCredentialForUse, loadTradovateSession, saveTradovateTokenCache, loadCoinbaseCredential } from '@/app/lib/trading/credentials'
 import { makeAlpacaCryptoClient, type AlpacaCryptoClient } from '@/app/lib/trading/alpaca-crypto-client'
@@ -132,7 +133,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           for (const row of cryptoAlpacaRows) {
             try {
               const result = await processCryptoAttempt(row, alpaca)
-              countResult(summary, result)
+              countResult(summary, result, row)
             } catch (e) {
               summary.errors++
               console.error(`[attach-stops] alpaca crypto attempt=${row.id} unexpected error:`, e instanceof Error ? e.message : e)
@@ -152,7 +153,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           for (const row of cryptoCoinbaseRows) {
             try {
               const result = await processCoinbaseAttempt(row, coinbase)
-              countResult(summary, result)
+              countResult(summary, result, row)
             } catch (e) {
               summary.errors++
               console.error(`[attach-stops] coinbase attempt=${row.id} unexpected error:`, e instanceof Error ? e.message : e)
@@ -200,7 +201,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             for (const row of futuresRows) {
               try {
                 const result = await processFuturesAttempt(row, tradovate, positions)
-                countResult(summary, result)
+                countResult(summary, result, row)
               } catch (e) {
                 summary.errors++
                 console.error(`[attach-stops] futures attempt=${row.id} unexpected error:`, e instanceof Error ? e.message : e)
@@ -222,12 +223,38 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   return NextResponse.json(summary)
 }
 
-function countResult(summary: AttachSummary, result: ProcessResult): void {
+interface GaveUpRow { id: string; user_id: string; ticker: string; council_stop?: number | string | null }
+
+function alertGaveUp(row: GaveUpRow, reason?: string): void {
+  const alertEmail = process.env.ALERT_EMAIL
+  if (alertEmail) {
+    void sendAlertEmail({
+      userId: row.user_id,
+      email: alertEmail,
+      ticker: row.ticker,
+      severity: 'urgent',
+      title: `NAKED POSITION: ${row.ticker} stop attachment gave up`,
+      message: `Stop attachment for ${row.ticker} (attempt ${row.id}) exhausted all retries. The position is OPEN with NO protective stop. Set a stop manually at the broker now. Reason: ${reason ?? 'unknown'}`,
+      price: row.council_stop != null ? Number(row.council_stop) : null,
+    }).catch(e => console.error('[attach-stops] gave_up alert failed:', e instanceof Error ? e.message : e))
+  } else {
+    console.error(`[attach-stops] GAVE UP on ${row.ticker} (attempt ${row.id}) — OPEN POSITION WITH NO STOP. Set ALERT_EMAIL env to receive urgent alerts.`)
+  }
+}
+
+function countResult(summary: AttachSummary, result: ProcessResult, row: GaveUpRow): void {
   switch (result.kind) {
     case 'attached':  summary.attached++; break
     case 'deferred':  summary.deferred++; break
     case 'failed':    summary.failed++; break
-    case 'gave_up':   summary.gaveUp++; break
+    case 'gave_up': {
+      summary.gaveUp++
+      // A gave_up row is an OPEN position with NO protective stop — the single
+      // most dangerous silent state in the system (live Coinbase especially).
+      // It previously surfaced only as a log counter. Alert the operator.
+      alertGaveUp(row, result.reason)
+      break
+    }
   }
 }
 

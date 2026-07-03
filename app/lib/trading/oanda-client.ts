@@ -236,7 +236,24 @@ export class OandaClient {
    * Place market order with attached TP and SL.
    * `units` is signed: positive = long (buy base), negative = short (sell base).
    */
+  private precisionCache = new Map<string, number>()
+
+  /** Per-instrument display precision for TP/SL price formatting. JPY pairs
+   *  use 3 decimals — the old hardcoded .toFixed(5) produced prices OANDA
+   *  rejects with PRICE_PRECISION_EXCEEDED, failing the whole order. */
+  private async pricePrecision(instrument: string): Promise<number> {
+    const cached = this.precisionCache.get(instrument)
+    if (cached !== undefined) return cached
+    try {
+      const inst = await this.instrument(instrument)
+      const p = inst?.displayPrecision ?? 5
+      this.precisionCache.set(instrument, p)
+      return p
+    } catch { return 5 }
+  }
+
   async marketOrder(input: MarketOrderInput): Promise<OandaOrderResult> {
+    const prec = await this.pricePrecision(input.instrument)
     const body = {
       order: {
         type: 'MARKET',
@@ -250,11 +267,11 @@ export class OandaClient {
         },
         takeProfitOnFill: {
           timeInForce: 'GTC',
-          price: input.takeProfitPrice.toFixed(5),
+          price: input.takeProfitPrice.toFixed(prec),
         },
         stopLossOnFill: {
           timeInForce: 'GTC',
-          price: input.stopLossPrice.toFixed(5),
+          price: input.stopLossPrice.toFixed(prec),
         },
       },
     }
