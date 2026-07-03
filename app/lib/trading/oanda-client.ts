@@ -317,6 +317,33 @@ export class OandaClient {
   }
 
   /** Open trades with their attached stop-loss order — needed to trail. */
+  /**
+   * Recently CLOSED trades for an instrument — carries OANDA's authoritative
+   * realizedPL and averageClosePrice. Used by the monitor's reconcile path so
+   * a TP-hit win is recorded as a WIN at the real close price (previously the
+   * exit was guessed as the STOP price, mislabeling every take-profit win as
+   * a loss).
+   */
+  async closedTrades(instrument: string, count = 10): Promise<Array<{
+    id: string; instrument: string; initialUnits: number
+    realizedPL: number | null; averageClosePrice: number | null
+    openTime: string | null; closeTime: string | null
+  }>> {
+    const raw = await this.request<{ trades?: Array<Record<string, unknown>> }>(
+      'GET',
+      `/v3/accounts/${encodeURIComponent(this.accountId)}/trades?instrument=${encodeURIComponent(instrument)}&state=CLOSED&count=${count}`,
+    )
+    return (raw.trades ?? []).map(t => ({
+      id: String(t.id ?? ''),
+      instrument: String(t.instrument ?? ''),
+      initialUnits: Number(t.initialUnits ?? 0),
+      realizedPL: t.realizedPL != null ? Number(t.realizedPL) : null,
+      averageClosePrice: t.averageClosePrice != null ? Number(t.averageClosePrice) : null,
+      openTime: t.openTime != null ? String(t.openTime) : null,
+      closeTime: t.closeTime != null ? String(t.closeTime) : null,
+    }))
+  }
+
   async openTrades(): Promise<OandaTrade[]> {
     const raw = await this.request<{ trades?: Array<Record<string, unknown>> }>(
       'GET', `/v3/accounts/${encodeURIComponent(this.accountId)}/openTrades`,

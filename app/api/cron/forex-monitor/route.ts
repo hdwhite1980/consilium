@@ -44,6 +44,7 @@ interface FxOpenAttempt {
   ticker: string                 // OANDA instrument, e.g. "USD_CAD"
   side: string | null
   qty: number | null
+  created_at: string | null
   filled_avg_price: number | null
   entry_price_est: number | null
   stop_price: number | null
@@ -154,8 +155,34 @@ async function monitorPosition(
 ): Promise<void> {
   // ── RECONCILE: OANDA flat for this instrument but DB still open. ──
   if (!pos || pos.side === 'flat') {
-    await recordClosure(att, att.stop_price ?? att.entry_price_est ?? null, null, 'reconcile_flat')
-    await logResult(att, 'EXIT', 'reconcile: OANDA flat, marking closed', null, null)
+    // Ask OANDA WHY it closed rather than guessing. The old path recorded the
+    // exit at the STOP price with no P&L — deriving outcome from the stop —
+    // which labeled every take-profit win as closed_loss. Match the closed
+    // trade by instrument + size (±2%) + opened after this attempt.
+    let exitPrice: number | null = att.stop_price ?? att.entry_price_est ?? null
+    let realizedPL: number | null = null
+    let kind = 'reconcile_flat_unmatched'
+    try {
+      const closedList = await client.closedTrades(att.ticker, 10)
+      const attQty = att.qty != null ? Math.abs(Number(att.qty)) : null
+      const attOpened = att.created_at ? Date.parse(att.created_at) : null
+      const match = closedList.find(t => {
+        const sizeOk = attQty == null || attQty <= 0
+          || Math.abs(Math.abs(t.initialUnits) - attQty) <= attQty * 0.02
+        const timeOk = attOpened == null || t.openTime == null
+          || Date.parse(t.openTime) >= attOpened - 5 * 60_000
+        return sizeOk && timeOk
+      })
+      if (match) {
+        exitPrice = match.averageClosePrice ?? exitPrice
+        realizedPL = match.realizedPL
+        kind = 'reconcile_flat'
+      }
+    } catch (e) {
+      console.warn(`[forex-monitor] ${att.ticker}: closed-trade lookup failed (falling back to stop-price estimate): ${e instanceof Error ? e.message : e}`)
+    }
+    await recordClosure(att, exitPrice, realizedPL, kind)
+    await logResult(att, 'EXIT', `reconcile: OANDA flat, marking closed (${kind}${realizedPL != null ? `, pl=${realizedPL}` : ''})`, exitPrice, null)
     summary.reconciled++
     return
   }
@@ -365,6 +392,7 @@ async function fetchOpenForexAttempts(userId: string): Promise<FxOpenAttempt[]> 
       id: String(row.id),
       user_id: String(row.user_id),
       ticker: String(row.ticker),
+      created_at: (row.created_at as string | null) ?? null,
       side: (row.side as string | null) ?? null,
       qty: row.qty !== null && row.qty !== undefined ? Number(row.qty) : null,
       filled_avg_price: row.filled_avg_price !== null && row.filled_avg_price !== undefined ? Number(row.filled_avg_price) : null,
@@ -412,7 +440,7 @@ async function recordClosure(
     pnl = null
   }
 
-  const patch: Record<string, unknown> = { outcome, closed_at: new Date().toISOString(), closure_kind: 'monitor_exit' }
+  const patch: Record<string, unknown> = { outcome, closed_at: new Date().toISOString(), closure_kind: closureKind }
   if (pnl !== null) patch.realized_pnl = Math.round(pnl * 100) / 100
   if (exitPrice !== null && Number.isFinite(exitPrice)) patch.exit_price = exitPrice
   await admin.from('trade_attempts').update(patch).eq('id', att.id)

@@ -395,8 +395,40 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             summary.placed++
             console.log(`[auto-trade-crypto] PLACED user=${settings.userId} broker=${broker.brokerName} BUY $${sizing.notionalUsd.toFixed(2)} ${brokerSymbol} stop=${effectiveStop} tp=${target} mode=${broker.effectiveMode}`)
           } catch (e) {
-            await logRejected(verdict, settings, clientOrderId, e instanceof Error ? e.message : String(e), broker.brokerName)
-            summary.errors++
+            const msg = e instanceof Error ? e.message : String(e)
+            // Timeout-orphan guard: a network timeout can throw AFTER Coinbase
+            // accepted the order — logging 'rejected' then would leave a LIVE
+            // position with no row, no stop, no monitor. Verify by the
+            // deterministic client_order_id before declaring rejection.
+            let recovered = false
+            if (broker.kind === 'coinbase' && /timeout|premature|abort|network|socket/i.test(msg)) {
+              try {
+                const found = await (broker.client as CoinbaseClient).getOrderByClientId(clientOrderId, brokerSymbol)
+                if (found && found.id) {
+                  console.warn(`[auto-trade-crypto] ${brokerSymbol}: placement threw ("${msg.slice(0, 80)}") but order ${found.id} EXISTS at broker — recording as placed`)
+                  await logPlaced(verdict, settings, {
+                    clientOrderId,
+                    brokerOrderId: found.id,
+                    units: found.filled_qty > 0 ? found.filled_qty : sizing.units,
+                    notionalUsd: sizing.notionalUsd,
+                    entryPrice: found.filled_avg_price ?? entry,
+                    stopPrice: effectiveStop,
+                    targetPrice: target,
+                    dollarRisk: sizing.dollarRisk,
+                    accountEquity: effectiveEquity,
+                    normalizedSymbol: brokerSymbol,
+                    brokerName: broker.brokerName,
+                    effectiveMode: broker.effectiveMode,
+                  })
+                  summary.placed++
+                  recovered = true
+                }
+              } catch { /* verify failed — fall through to rejected */ }
+            }
+            if (!recovered) {
+              await logRejected(verdict, settings, clientOrderId, msg, broker.brokerName)
+              summary.errors++
+            }
           }
         }
 

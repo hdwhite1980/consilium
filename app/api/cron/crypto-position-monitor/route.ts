@@ -149,39 +149,114 @@ async function processUser(
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Stop-integrity backstop (crypto has no stop-market; the protective order is
- * a stop-LIMIT). Two dangerous states this catches:
- *   • stop order CANCELLED/EXPIRED/FAILED while the position is still open
- *     (incl. the old .toFixed(2) rejections) → re-place the stop.
- *   • stop TRIGGERED but the limit leg never filled in a fast drop
- *     (gap-through) → shows as a terminal-not-filled order with the position
- *     still open → re-place; the fresh stop at the same level re-arms
- *     protection, and the exit logic handles anything already through it.
- * Never throws — a backstop failing must not break the monitor pass.
+ * Coinbase lifecycle reconciler — runs first on every monitor pass. Coinbase
+ * council-lane positions previously had NO close-recorder at all: the stock
+ * recorder (auto-trade-positions) is Alpaca-only and day-shark-monitor covers
+ * only day_shark rows. A filled stop (a REAL live loss) left the row 'placed'
+ * forever: ghost position, permanent capacity slot, P&L and track record
+ * silently missing the trade. Three states handled, all lot-aware:
+ *
+ *   1. Stop order FILLED → record closed_win/loss/be at the stop's actual
+ *      fill price. The lifecycle finally has an ending.
+ *   2. Stop CANCELLED/EXPIRED/FAILED/REJECTED with position still held →
+ *      naked position → re-place the stop (the original backstop).
+ *   3. No stop fill but the base balance no longer covers this lot AND no
+ *      other open lot on the ticker explains it → closed_external at spot.
+ *
+ * Returns true when the attempt was closed (caller must skip management).
+ * Never throws — a reconciler failing must not break the monitor pass.
  */
-async function ensureStopIntegrity(
+async function reconcileCoinbaseLifecycle(
   att: CryptoOpenAttempt,
   client: CoinbaseClient,
-): Promise<void> {
-  if (!att.stop_order_id || !att.stop_price || !att.qty) return
+): Promise<boolean> {
+  if (!att.qty) return false
+  const entry = att.filled_avg_price != null ? Number(att.filled_avg_price)
+    : att.entry_price_est != null ? Number(att.entry_price_est) : null
+  const qty = Number(att.qty)
+
+  // ── 1+2: interrogate the protective stop order ──
+  if (att.stop_order_id) {
+    try {
+      const order = await client.getOrder(att.stop_order_id)
+      const st = (order.status ?? '').toUpperCase()
+
+      if (st === 'FILLED') {
+        const exitPrice = order.filled_avg_price != null ? Number(order.filled_avg_price)
+          : att.stop_price != null ? Number(att.stop_price) : null
+        const pnl = entry != null && exitPrice != null ? Number(((exitPrice - entry) * qty).toFixed(2)) : null
+        const eps = 0.01
+        const outcome = pnl == null ? 'closed_loss' : pnl > eps ? 'closed_win' : pnl < -eps ? 'closed_loss' : 'closed_be'
+        const adminDb = await getSupabaseAdmin()
+        await adminDb.from('trade_attempts').update({
+          outcome,
+          exit_price: exitPrice ?? undefined,
+          realized_pnl: pnl ?? undefined,
+          closed_at: new Date().toISOString(),
+          closure_kind: 'stop_fired',
+        }).eq('id', att.id)
+        console.log(`[crypto-position-monitor] ${att.ticker}: STOP FILLED → ${outcome} exit=${exitPrice} pnl=${pnl}`)
+        return true
+      }
+
+      const deadStates = ['CANCELLED', 'EXPIRED', 'FAILED', 'REJECTED']
+      if (deadStates.includes(st)) {
+        // Stop dead, position presumed open → naked. Re-arm.
+        console.warn(`[crypto-position-monitor] ${att.ticker}: protective stop ${att.stop_order_id} is ${st} while position is OPEN — re-placing stop at ${att.stop_price}`)
+        if (att.stop_price != null) {
+          const newStop = await client.stopLimitSell({
+            symbol: att.ticker.replace('/', '-'),
+            qty,
+            stopPrice: Number(att.stop_price),
+            clientOrderId: `wos-restop-${att.id.slice(0, 8)}-${Date.now().toString(36)}`,
+          })
+          const adminDb = await getSupabaseAdmin()
+          await adminDb.from('trade_attempts').update({ stop_order_id: newStop.id }).eq('id', att.id)
+          console.log(`[crypto-position-monitor] ${att.ticker}: stop re-armed → ${newStop.id}`)
+        }
+        return false
+      }
+    } catch (e) {
+      console.warn(`[crypto-position-monitor] ${att.ticker}: stop interrogation failed (non-fatal): ${e instanceof Error ? e.message : e}`)
+    }
+  }
+
+  // ── 3: balance check — position gone without a stop fill ──
   try {
-    const order = await client.getOrder(att.stop_order_id)
-    const st = (order.status ?? '').toUpperCase()
-    const deadStates = ['CANCELLED', 'EXPIRED', 'FAILED', 'REJECTED']
-    if (!deadStates.includes(st)) return
-    // Stop order is dead but this attempt is still open → naked position.
-    console.warn(`[crypto-position-monitor] ${att.ticker}: protective stop ${att.stop_order_id} is ${st} while position is OPEN — re-placing stop at ${att.stop_price}`)
-    const newStop = await client.stopLimitSell({
-      symbol: att.ticker.replace('/', '-'),
-      qty: Number(att.qty),
-      stopPrice: Number(att.stop_price),
-      clientOrderId: `wos-restop-${att.id.slice(0, 8)}-${Date.now().toString(36)}`,
-    })
+    const base = att.ticker.replace('/', '-').split('-')[0].toUpperCase()
+    const positions = await client.positions()
+    const held = positions.find(p => p.symbol.toUpperCase().startsWith(base))
+    const heldQty = held ? Number(held.qty) : 0
+    if (heldQty >= qty * 0.5) return false   // our lot is still there
+
+    // Lot-aware: if ANOTHER open coinbase attempt on this ticker exists, the
+    // balance may belong to it — we can't attribute, so don't reconcile.
     const adminDb = await getSupabaseAdmin()
-    await adminDb.from('trade_attempts').update({ stop_order_id: newStop.id }).eq('id', att.id)
-    console.log(`[crypto-position-monitor] ${att.ticker}: stop re-armed → ${newStop.id}`)
+    const { data: siblings } = await adminDb
+      .from('trade_attempts')
+      .select('id')
+      .eq('user_id', att.user_id)
+      .ilike('ticker', att.ticker)
+      .in('outcome', ['placed', 'partial_fill', 'filled'])
+      .neq('id', att.id)
+      .limit(1)
+    if (siblings && siblings.length > 0) return false
+
+    const spot = await client.getSpotPrice(att.ticker.replace('/', '-')).catch(() => null)
+    const pnl = entry != null && spot != null ? Number(((spot - entry) * qty).toFixed(2)) : null
+    const adminDb2 = await getSupabaseAdmin()
+    await adminDb2.from('trade_attempts').update({
+      outcome: pnl != null && pnl > 0 ? 'closed_win' : 'closed_loss',
+      exit_price: spot ?? undefined,
+      realized_pnl: pnl ?? undefined,
+      closed_at: new Date().toISOString(),
+      closure_kind: 'closed_external',
+    }).eq('id', att.id)
+    console.log(`[crypto-position-monitor] ${att.ticker}: RECONCILE closed_external — balance ${heldQty} < half of lot ${qty}, no sibling lot`)
+    return true
   } catch (e) {
-    console.warn(`[crypto-position-monitor] ${att.ticker}: stop-integrity check failed (non-fatal): ${e instanceof Error ? e.message : e}`)
+    console.warn(`[crypto-position-monitor] ${att.ticker}: balance reconciliation failed (non-fatal): ${e instanceof Error ? e.message : e}`)
+    return false
   }
 }
 
@@ -190,10 +265,11 @@ async function monitorCoinbasePosition(
   client: CoinbaseClient,
   summary: { trailingAdvanced: number; noChange: number; signalExits: number },
 ): Promise<void> {
-  // Backstop first: if the protective stop order died (cancelled/expired/
-  // rejected — incl. old .toFixed(2) precision rejections) while the position
-  // is open, re-arm it before doing anything else.
-  await ensureStopIntegrity(att, client)
+  // Lifecycle reconciler first: records stop-fills / external closes (this
+  // lane previously had NO close-recorder — ghost positions forever), and
+  // re-arms dead stops. If the position closed, stop managing it.
+  const closed = await reconcileCoinbaseLifecycle(att, client)
+  if (closed) { summary.signalExits += 0; summary.noChange++; return }
 
   // Get current spot price
   const currentPrice = await client.getSpotPrice(att.ticker).catch(() => null)
